@@ -42,6 +42,8 @@ type TabState = {
   soqlDraft: string;
   showDrawer: boolean;
   columnVisibility: Record<string, boolean>;
+  dirtyCellKeys: string[];
+  baselineRecords: Record<string, Record<string, unknown>>;
   notice: Notice | null;
   loading: boolean;
 };
@@ -210,6 +212,8 @@ export default function App() {
       soqlDraft: "",
       showDrawer: false,
       columnVisibility: {},
+      dirtyCellKeys: [],
+      baselineRecords: {},
       notice: null,
       loading: true
     };
@@ -291,6 +295,8 @@ export default function App() {
         selectedRecordIds: [],
         currentSoql: soql,
         soqlDraft: soql,
+        dirtyCellKeys: [],
+        baselineRecords: buildBaselineRecords(result.records),
         notice: { type: "success", message: `${objectName} 查询成功，共 ${result.totalSize} 条。` }
       }));
     } catch (error) {
@@ -352,6 +358,8 @@ export default function App() {
         selectedRecordIds: [],
         currentSoql: activeTab.soqlDraft,
         columnVisibility: nextVisibility,
+        dirtyCellKeys: [],
+        baselineRecords: buildBaselineRecords(result.records),
         whereClause: extractWhereClause(activeTab.soqlDraft, activeTab.objectName) ?? item.whereClause,
         notice: { type: "success", message: `${activeTab.objectName} 执行 SOQL 成功，共 ${result.totalSize} 条。` }
       }));
@@ -399,26 +407,77 @@ export default function App() {
     }
   }
 
-  async function createRecordQuickly() {
-    if (!selectedSourceId || !activeTab) return;
+  function createRecordQuickly() {
+    if (!activeTab) return;
+
+    const tempId = `new-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    patchTab(activeTab.objectName, (item) => ({
+      ...item,
+      result: {
+        ...item.result,
+        records: [{ __localId: tempId, __isNew: true }, ...item.result.records]
+      },
+      notice: { type: "success", message: "已新增一行，请填写后点击执行更新。" }
+    }));
+  }
+
+  async function applyPendingChanges() {
+    if (!selectedSourceId || !activeTab || !activeTab.describe) return;
+    if (!hasPendingChanges(activeTab)) return;
+
+    const editableFields = new Set(activeTab.describe.fields.map((field) => field.name));
+    const dirtyCellSet = new Set(activeTab.dirtyCellKeys);
 
     patchTab(activeTab.objectName, (item) => ({ ...item, loading: true }));
     try {
-      await api.createRecord({
-        sourceId: selectedSourceId,
-        objectName: activeTab.objectName,
-        values: {}
-      });
+      for (let rowIndex = 0; rowIndex < activeTab.result.records.length; rowIndex += 1) {
+        const record = activeTab.result.records[rowIndex];
+        const recordKey = getRecordKey(record, rowIndex);
+        const isNewRow = Boolean(record.__isNew);
+
+        if (isNewRow) {
+          const values: Record<string, unknown> = {};
+          Object.entries(record).forEach(([field, raw]) => {
+            if (field.startsWith("__") || field === "Id" || !editableFields.has(field)) return;
+            if (raw === null || raw === undefined || String(raw).trim() === "") return;
+            values[field] = raw;
+          });
+          await api.createRecord({
+            sourceId: selectedSourceId,
+            objectName: activeTab.objectName,
+            values
+          });
+          continue;
+        }
+
+        const recordId = String(record.Id ?? "");
+        if (!recordId) continue;
+
+        const values: Record<string, unknown> = {};
+        dirtyCellSet.forEach((cellKey) => {
+          const splitIndex = cellKey.indexOf(":");
+          if (splitIndex < 0) return;
+          const key = cellKey.slice(0, splitIndex);
+          const field = cellKey.slice(splitIndex + 1);
+          if (key !== recordKey || field === "Id" || !editableFields.has(field)) return;
+          values[field] = record[field];
+        });
+
+        if (Object.keys(values).length > 0) {
+          await api.updateRecord(selectedSourceId, activeTab.objectName, recordId, values);
+        }
+      }
+
       await queryTabData(activeTab.objectName);
       patchTab(activeTab.objectName, (item) => ({
         ...item,
-        notice: { type: "success", message: "新建记录成功。" }
+        notice: { type: "success", message: "执行更新成功，变更已提交。" }
       }));
     } catch (error) {
       patchTab(activeTab.objectName, (item) => ({
         ...item,
         loading: false,
-        notice: { type: "error", message: `新建记录失败：${String(error)}` }
+        notice: { type: "error", message: `执行更新失败：${String(error)}` }
       }));
     }
   }
@@ -552,7 +611,7 @@ export default function App() {
                       variant="outlined"
                       startIcon={<Plus size={14} />}
                       disabled={activeTab.loading}
-                      onClick={() => void createRecordQuickly()}
+                      onClick={() => createRecordQuickly()}
                       sx={{ height: 40 }}
                     >
                       新建记录
@@ -570,8 +629,8 @@ export default function App() {
                     <Button
                       variant="outlined"
                       startIcon={<Play size={14} />}
-                      disabled={activeTab.loading || !activeTab.soqlDraft}
-                      onClick={() => void executeCustomSoql()}
+                      disabled={activeTab.loading || !hasPendingChanges(activeTab)}
+                      onClick={() => void applyPendingChanges()}
                       sx={{ height: 40 }}
                     >
                       执行更新
@@ -661,6 +720,7 @@ export default function App() {
                   <DataGrid
                     result={activeTab.result}
                     visibleColumns={getVisibleColumns(activeTab)}
+                    dirtyCellKeys={activeTab.dirtyCellKeys}
                     selectedRecordIds={activeTab.selectedRecordIds}
                     onToggleRecord={(recordId, checked) => {
                       patchTab(activeTab.objectName, (item) => ({
@@ -679,10 +739,28 @@ export default function App() {
                         const target = nextRecords[rowIndex];
                         if (!target) return item;
 
-                        nextRecords[rowIndex] = { ...target, [columnName]: value };
+                        const nextRecord = { ...target, [columnName]: value };
+                        const recordKey = getRecordKey(nextRecord, rowIndex);
+                        const cellKey = `${recordKey}:${columnName}`;
+                        const dirtySet = new Set(item.dirtyCellKeys);
+                        const isNewRow = Boolean(nextRecord.__isNew);
+                        if (isNewRow) {
+                          dirtySet.add(cellKey);
+                        } else {
+                          const baselineValue = stringifyComparableValue(item.baselineRecords[recordKey]?.[columnName]);
+                          const nextValue = stringifyComparableValue(value);
+                          if (baselineValue === nextValue) {
+                            dirtySet.delete(cellKey);
+                          } else {
+                            dirtySet.add(cellKey);
+                          }
+                        }
+
+                        nextRecords[rowIndex] = nextRecord;
                         return {
                           ...item,
-                          result: { ...item.result, records: nextRecords }
+                          result: { ...item.result, records: nextRecords },
+                          dirtyCellKeys: Array.from(dirtySet)
                         };
                       });
                     }}
@@ -927,6 +1005,36 @@ function buildQuerySoql(
   const fields = selectedFields.length > 0 ? selectedFields : ["Id"];
   const whereSegment = whereClause.trim() ? ` WHERE ${whereClause.trim()}` : "";
   return `SELECT ${fields.join(", ")} FROM ${objectName}${whereSegment} ORDER BY ${sortField} ${sortDirection} LIMIT ${limit}`;
+}
+
+function hasPendingChanges(tab: TabState): boolean {
+  const hasNewRows = tab.result.records.some((record) => Boolean(record.__isNew));
+  return hasNewRows || tab.dirtyCellKeys.length > 0;
+}
+
+function buildBaselineRecords(records: Record<string, unknown>[]): Record<string, Record<string, unknown>> {
+  const baseline: Record<string, Record<string, unknown>> = {};
+  records.forEach((record, index) => {
+    baseline[getRecordKey(record, index)] = { ...record };
+  });
+  return baseline;
+}
+
+function getRecordKey(record: Record<string, unknown>, rowIndex: number): string {
+  if (record.__localId) return String(record.__localId);
+  if (record.Id) return String(record.Id);
+  return `row-${rowIndex}`;
+}
+
+function stringifyComparableValue(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
 }
 
 
