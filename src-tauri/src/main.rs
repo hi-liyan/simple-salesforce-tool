@@ -39,6 +39,8 @@ fn main() {
             commands::create_source,
             commands::update_source,
             commands::delete_source,
+            commands::get_column_visibility,
+            commands::save_column_visibility,
             commands::list_objects,
             commands::describe_object,
             commands::query_records,

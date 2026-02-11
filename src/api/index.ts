@@ -24,6 +24,10 @@ export const api = {
   updateSource: (id: string, payload: SourceUpsertPayload) =>
     invokeApi<SalesforceSource>("update_source", { id, payload }),
   deleteSource: (id: string) => invokeApi<void>("delete_source", { id }),
+  getColumnVisibility: (sourceId: string, objectName: string) =>
+    invokeApi<Record<string, boolean>>("get_column_visibility", { sourceId, objectName }),
+  saveColumnVisibility: (sourceId: string, objectName: string, visibility: Record<string, boolean>) =>
+    invokeApi<void>("save_column_visibility", { sourceId, objectName, visibility }),
   listObjects: (sourceId: string) => invokeApi<SalesforceObject[]>("list_objects", { sourceId }),
   describeObject: (sourceId: string, objectName: string) =>
     invokeApi<ObjectDescribe>("describe_object", { sourceId, objectName }),
