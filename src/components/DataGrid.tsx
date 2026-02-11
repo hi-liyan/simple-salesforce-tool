@@ -532,6 +532,8 @@ export function DataGrid({
           height="100%"
           // 支持区域选择时读取选区单元格。
           getCellsForSelection
+          // 启用二维粘贴（按行列拆分），行为与 Excel 类似。
+          onPaste
         />
         {/* 表头字段元数据悬浮提示：仅在 hover 到 info icon 时显示。 */}
         {hoveredHeaderMeta && (
