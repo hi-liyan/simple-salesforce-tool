@@ -1,4 +1,5 @@
 ﻿import { useMemo, useState } from "react";
+import { Box, Divider, List, ListItemButton, ListItemText, TextField, Tooltip } from "@mui/material";
 import { SalesforceObject } from "../types";
 
 type Props = {
@@ -7,7 +8,7 @@ type Props = {
   onOpenObject: (objectItem: SalesforceObject) => void;
 };
 
-// 对象列表：鼠标悬停显示完整信息，点击打开对象标签页。
+// 对象列表：桌面风格的紧凑对象树。
 export function ObjectList({ objects, activeObjectName, onOpenObject }: Props) {
   const [keyword, setKeyword] = useState("");
 
@@ -20,30 +21,50 @@ export function ObjectList({ objects, activeObjectName, onOpenObject }: Props) {
   }, [keyword, objects]);
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <input
-        className="w-full rounded border border-sky-300 bg-white px-2 py-1.5 text-xs text-sky-900 outline-none focus:border-[#0176d3]"
+    <Box sx={{ height: "100%", minHeight: 0, display: "flex", flexDirection: "column" }}>
+      <TextField
+        size="small"
+        fullWidth
+        placeholder="筛选 Object"
         value={keyword}
         onChange={(event) => setKeyword(event.target.value)}
-        placeholder="筛选 Object"
       />
-
-      <div className="mt-2 min-h-0 flex-1 overflow-auto rounded border border-sky-200 bg-white">
+      <List
+        dense
+        disablePadding
+        sx={{
+          flex: "1 1 auto",
+          minHeight: 0,
+          overflow: "auto",
+          mt: 1,
+          borderTop: "1px solid",
+          borderColor: "divider"
+        }}
+      >
         {filtered.map((item) => (
-          <button
-            key={item.name}
-            type="button"
-            className={`w-full border-b border-sky-100 px-2 py-1.5 text-left text-xs hover:bg-sky-50 ${
-              item.name === activeObjectName ? "bg-sky-100 text-[#0176d3]" : "text-sky-900"
-            }`}
-            onClick={() => onOpenObject(item)}
-            title={`名称: ${item.name}\n标签: ${item.label}\n可查询: ${item.queryable}\n可新增: ${item.createable}\n可更新: ${item.updateable}\n可删除: ${item.deletable}`}
-          >
-            <div className="truncate font-medium">{item.name}</div>
-            <div className="truncate text-[10px] text-sky-600">{item.label}</div>
-          </button>
+          <div key={item.name}>
+            <Tooltip
+              arrow
+              placement="right"
+              title={`名称: ${item.name}\n标签: ${item.label}\n可查询: ${item.queryable}\n可新增: ${item.createable}\n可更新: ${item.updateable}\n可删除: ${item.deletable}`}
+            >
+              <ListItemButton
+                selected={item.name === activeObjectName}
+                onClick={() => onOpenObject(item)}
+                sx={{ py: 0.75, px: 1.5 }}
+              >
+                <ListItemText
+                  primary={item.name}
+                  secondary={item.label}
+                  primaryTypographyProps={{ fontSize: 12, noWrap: true }}
+                  secondaryTypographyProps={{ fontSize: 11, noWrap: true }}
+                />
+              </ListItemButton>
+            </Tooltip>
+            <Divider />
+          </div>
         ))}
-      </div>
-    </div>
+      </List>
+    </Box>
   );
 }
