@@ -1,5 +1,5 @@
-﻿import { useMemo, useState } from "react";
-import { Box, FormControl, Select, Tooltip, Typography } from "@mui/material";
+﻿import { useEffect, useMemo, useRef, useState } from "react";
+import { Box, FormControl, Select, Typography } from "@mui/material";
 import {
   CellClickedEventArgs,
   DataEditor,
@@ -59,15 +59,20 @@ export function DataGrid({
   const allChecked = selectableIds.length > 0 && selectableIds.every((id) => selectedRecordIds.includes(id));
   const hasAnyChecked = selectedRecordIds.some((id) => selectableIds.includes(id));
   const dirtyCellSet = useMemo(() => new Set(dirtyCellKeys), [dirtyCellKeys]);
+  const gridBodyRef = useRef<HTMLDivElement | null>(null);
+  const closeMetaTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // 列宽状态：支持用户拖拽后即时更新列宽。
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
-  // 表头悬浮信息：用于展示字段全部元数据。
+  // 表头元数据提示：鼠标经过 info icon 时展示。
   const [hoveredHeaderMeta, setHoveredHeaderMeta] = useState<{
     fieldName: string;
-    bounds: { x: number; y: number; width: number; height: number };
     metadata: Record<string, unknown>;
+    anchorClientX: number;
+    anchorClientY: number;
   } | null>(null);
+  // 鼠标是否位于元数据浮层内：用于支持从表头移动到浮层并滚动。
+  const [metaPanelHovering, setMetaPanelHovering] = useState(false);
   // 当前激活单元格：用于 provideEditor 判断是否为 picklist 编辑。
   const [activeEditorCell, setActiveEditorCell] = useState<Item | null>(null);
 
@@ -264,14 +269,20 @@ export function DataGrid({
     newValues.forEach((item) => handleCellEdited(item.location, item.value));
   };
 
-  const tooltipAnchorRect = hoveredHeaderMeta
-    ? new DOMRect(
-        hoveredHeaderMeta.bounds.x,
-        hoveredHeaderMeta.bounds.y + hoveredHeaderMeta.bounds.height,
-        hoveredHeaderMeta.bounds.width,
-        1
-      )
-    : new DOMRect(0, 0, 1, 1);
+  const cancelMetaClose = () => {
+    if (!closeMetaTimerRef.current) return;
+    clearTimeout(closeMetaTimerRef.current);
+    closeMetaTimerRef.current = null;
+  };
+
+  const scheduleMetaClose = () => {
+    cancelMetaClose();
+    closeMetaTimerRef.current = setTimeout(() => {
+      setHoveredHeaderMeta(null);
+    }, 180);
+  };
+
+  useEffect(() => () => cancelMetaClose(), []);
 
   return (
     // 表格容器：顶部统计栏 + 数据表格。
@@ -295,15 +306,22 @@ export function DataGrid({
       </Box>
 
       {/* 数据表格主体。 */}
-      <Box sx={{ flex: 1, minHeight: 0 }}>
-        {/* Glide Data Grid 组件。 */}
+      <Box ref={gridBodyRef} sx={{ flex: 1, minHeight: 0, position: "relative" }}>
+        {/* Glide Data Grid 组件：承载行列渲染、编辑、选择、列宽调整等核心交互。 */}
         <DataEditor
+          // 列定义：包含选择列、序号列和业务字段列。
           columns={columns}
+          // 行总数：与当前查询结果 records 对齐。
           rows={records.length}
+          // 单元格数据读取函数：按坐标返回对应的 GridCell。
           getCellContent={getCellContent}
+          // 单元格激活时记录位置，供自定义编辑器判断当前列类型。
           onCellActivated={(cell) => setActiveEditorCell(cell)}
+          // 单元格提交编辑时的单点更新处理。
           onCellEdited={handleCellEdited}
+          // 单元格点击事件：用于双击编辑提示等交互。
           onCellClicked={handleCellClicked}
+          // 粘贴/批量编辑时的批处理入口。
           onCellsEdited={handleCellsEdited}
           // 使用 Glide 内置 overlay 机制渲染 picklist 编辑器，避免手工定位。
           provideEditor={(cell) => {
@@ -371,7 +389,12 @@ export function DataGrid({
           // 自定义首列表头复选框样式，使其与行内复选框视觉一致。
           drawHeader={(args, drawContent) => {
             drawContent();
-            if (String(args.column.id) !== "__select") return;
+            const columnId = String(args.column.id ?? "");
+            if (columnId !== "__select") {
+              if (columnId.startsWith("__")) return;
+              drawHeaderInfoIcon(args.ctx, args.rect);
+              return;
+            }
 
             const { ctx, rect } = args;
             const size = 14;
@@ -420,119 +443,200 @@ export function DataGrid({
             ctx.restore();
           }}
           // 点击首列表头可切换全选状态。
-          onHeaderClicked={(col) => {
-            if (col !== 0) return;
-            onToggleAll(!allChecked, selectableIds);
+          onHeaderClicked={(col, event) => {
+            if (col === 0) {
+              onToggleAll(!allChecked, selectableIds);
+              return;
+            }
+
+            const columnId = String(columns[col]?.id ?? "");
+            if (!columnId || columnId.startsWith("__")) {
+              return;
+            }
+
+            // 命中 info icon 时阻止默认行为，避免触发整列选中。
+            if (isHeaderInfoIconHit(event.localEventX, event.localEventY, event.bounds)) {
+              event.preventDefault();
+            }
           }}
-          // 监听鼠标移动，鼠标位于字段表头时显示元数据提示。
+          // 鼠标经过 info icon 时展示字段元数据，离开时隐藏。
           onMouseMove={(args) => {
             if (args.kind !== "header") {
-              if (hoveredHeaderMeta) setHoveredHeaderMeta(null);
+              if (!metaPanelHovering) {
+                scheduleMetaClose();
+              }
               return;
             }
 
             const columnId = String(columns[args.location[0]]?.id ?? "");
             if (!columnId || columnId.startsWith("__")) {
-              if (hoveredHeaderMeta) setHoveredHeaderMeta(null);
+              if (!metaPanelHovering) {
+                scheduleMetaClose();
+              }
+              return;
+            }
+
+            if (!isHeaderInfoIconHit(args.localEventX, args.localEventY, args.bounds)) {
+              if (!metaPanelHovering) {
+                scheduleMetaClose();
+              }
               return;
             }
 
             const metadata = fieldMetadataMap[columnId];
             if (!metadata) {
-              if (hoveredHeaderMeta) setHoveredHeaderMeta(null);
+              if (!metaPanelHovering) {
+                scheduleMetaClose();
+              }
               return;
             }
 
-            if (hoveredHeaderMeta && hoveredHeaderMeta.fieldName === columnId) {
-              return;
-            }
+            cancelMetaClose();
+            const gridRect = gridBodyRef.current?.getBoundingClientRect();
+            if (!gridRect) return;
+            const iconSize = 11;
+            // 以 info icon 中心点下方作为锚点，转换到 viewport 坐标。
+            const iconCenterX = args.bounds.x + args.bounds.width - 9 - iconSize / 2;
+            const iconBottomY = args.bounds.y + Math.floor((args.bounds.height - iconSize) / 2) + iconSize;
+            const anchorClientX = resolveViewportAxis(iconCenterX, gridRect.left, gridRect.right);
+            const anchorClientY = resolveViewportAxis(iconBottomY, gridRect.top, gridRect.bottom);
 
             setHoveredHeaderMeta({
               fieldName: columnId,
-              bounds: {
-                x: args.bounds.x,
-                y: args.bounds.y,
-                width: args.bounds.width,
-                height: args.bounds.height
-              },
-              metadata
+              metadata,
+              anchorClientX,
+              anchorClientY
             });
           }}
+          // 双击才激活编辑，避免单击误操作。
           cellActivationBehavior="double-click"
+          // 列宽拖拽后写入本地状态，保持用户当前会话下的列宽偏好。
           onColumnResize={(column, newSize) => {
             const id = String(column.id ?? "");
             if (!id) return;
             setColumnWidths((current) => ({ ...current, [id]: Math.max(44, Math.floor(newSize)) }));
           }}
+          // 列宽边界：约束最小/最大宽度，避免布局极端变形。
           minColumnWidth={44}
           maxColumnWidth={900}
+          // 行高与表头高度：统一网格密度，贴近数据库工具风格。
           rowHeight={30}
           headerHeight={30}
+          // 平滑滚动：提升大数据量横向/纵向浏览体验。
           smoothScrollX
           smoothScrollY
+          // 容器尺寸：铺满父容器区域。
           width="100%"
           height="100%"
+          // 支持区域选择时读取选区单元格。
           getCellsForSelection
         />
-      </Box>
-
-      {/* 表头字段元数据提示：使用 Tooltip 展示字段完整元数据（中文）。 */}
-      {hoveredHeaderMeta && (
-        <Tooltip
-          open
-          placement="bottom-start"
-          arrow
-          title={
-            <Box sx={{ maxWidth: 560, minWidth: 340 }}>
-              <Typography variant="caption" sx={{ display: "block", mb: 0.75, color: "inherit", fontWeight: 700 }}>
-                {hoveredHeaderMeta.fieldName} 字段元数据
-              </Typography>
-              <Box sx={{ maxHeight: 320, overflow: "auto", pr: 0.5 }}>
-                {Object.entries(hoveredHeaderMeta.metadata).map(([key, value]) => (
-                  <Typography
-                    key={key}
-                    variant="caption"
-                    sx={{
-                      display: "block",
-                      lineHeight: 1.5,
-                      fontFamily: "'Cascadia Mono', Consolas, 'Courier New', monospace"
-                    }}
-                  >
-                    {translateFieldMetaKey(key)}: {formatFieldMetaValue(value)}
-                  </Typography>
-                ))}
-              </Box>
-            </Box>
-          }
-          slotProps={{
-            tooltip: {
-              sx: {
-                bgcolor: "#223047",
-                border: "1px solid #3a557f",
-                maxWidth: "none"
-              }
-            },
-            popper: {
-              anchorEl: {
-                getBoundingClientRect: () => tooltipAnchorRect
-              }
-            }
-          }}
-        >
+        {/* 表头字段元数据悬浮提示：仅在 hover 到 info icon 时显示。 */}
+        {hoveredHeaderMeta && (
           <Box
             sx={{
-              position: "absolute",
-              left: hoveredHeaderMeta.bounds.x,
-              top: hoveredHeaderMeta.bounds.y + hoveredHeaderMeta.bounds.height,
-              width: 1,
-              height: 1,
-              pointerEvents: "none"
+              // 使用 fixed + viewport 坐标，避免父容器偏移导致的错位问题。
+              position: "fixed",
+              left: Math.min(
+                Math.max(8, hoveredHeaderMeta.anchorClientX - 210),
+                Math.max(8, window.innerWidth - 420 - 8)
+              ),
+              top: Math.min(
+                Math.max(8, hoveredHeaderMeta.anchorClientY + 8),
+                Math.max(8, window.innerHeight - 320 - 8)
+              ),
+              width: 420,
+              maxHeight: 320,
+              overflow: "auto",
+              p: 1.2,
+              bgcolor: "#223047",
+              border: "1px solid #3a557f",
+              borderRadius: 1,
+              boxShadow: "0 10px 28px rgba(15, 23, 42, 0.35)",
+              zIndex: 20,
+              pointerEvents: "auto"
             }}
-          />
-        </Tooltip>
-      )}
+            onMouseEnter={() => {
+              cancelMetaClose();
+              setMetaPanelHovering(true);
+            }}
+            onMouseLeave={() => {
+              setMetaPanelHovering(false);
+              scheduleMetaClose();
+            }}
+          >
+            {/* 元数据标题：展示当前字段名。 */}
+            <Typography variant="caption" sx={{ display: "block", mb: 0.75, color: "white", fontWeight: 700 }}>
+              {hoveredHeaderMeta.fieldName} 字段元数据
+            </Typography>
+            {/* 元数据明细：逐条输出字段属性键值，便于核对权限与类型。 */}
+            <Box sx={{ pr: 0.5 }}>
+              {Object.entries(hoveredHeaderMeta.metadata).map(([key, value]) => (
+                <Typography
+                  key={key}
+                  variant="caption"
+                  sx={{
+                    display: "block",
+                    lineHeight: 1.5,
+                    color: "#dbe7ff",
+                    fontFamily: "'Cascadia Mono', Consolas, 'Courier New', monospace"
+                  }}
+                >
+                  {translateFieldMetaKey(key)}: {formatFieldMetaValue(value)}
+                </Typography>
+              ))}
+            </Box>
+          </Box>
+        )}
+      </Box>
     </Box>
   );
+}
+
+// 表头绘制 info 图标。
+function drawHeaderInfoIcon(ctx: CanvasRenderingContext2D, rect: { x: number; y: number; width: number; height: number }) {
+  const size = 11;
+  const x = rect.x + rect.width - size - 9;
+  const y = rect.y + Math.floor((rect.height - size) / 2);
+  const cx = x + size / 2;
+  const cy = y + size / 2;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(cx, cy, size / 2, 0, Math.PI * 2);
+  // 使用低对比度描边样式，降低所有字段都展示 icon 时的视觉干扰。
+  ctx.strokeStyle = "#9aa4b2";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.fillStyle = "#8b97a6";
+  ctx.font = "600 8px sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("i", cx, cy + 0.4);
+  ctx.restore();
+}
+
+// 判断表头点击是否命中 info icon。
+function isHeaderInfoIconHit(
+  localX: number,
+  localY: number,
+  bounds: { x: number; y: number; width: number; height: number }
+): boolean {
+  const size = 11;
+  // localEventX/localEventY 是相对当前表头单元格左上角的坐标，不能叠加 bounds.x/bounds.y。
+  const left = bounds.width - size - 9;
+  const right = left + size;
+  const top = Math.floor((bounds.height - size) / 2);
+  const bottom = top + size;
+  return localX >= left && localX <= right && localY >= top && localY <= bottom;
+}
+
+// 将 Glide 坐标转换为 viewport 坐标：兼容不同事件坐标系（已含容器偏移或未含偏移）。
+function resolveViewportAxis(value: number, containerStart: number, containerEnd: number): number {
+  if (value >= containerStart && value <= containerEnd) {
+    return value;
+  }
+  return containerStart + value;
 }
 
 // 根据元数据计算单元格样式（脏数据高亮 + 必填缺失红色提示）。

@@ -78,6 +78,17 @@ export type Notice = {
   message: string;
 };
 
+// Tab 内日志条目。
+export type TabLog = {
+  id: string;
+  timestamp: string;
+  action: "QUERY" | "SOQL" | "DELETE" | "UPSERT";
+  success: boolean;
+  request: string;
+  summary: string;
+  errorMessage?: string;
+};
+
 // 单个对象 Tab 的运行时状态。
 export type TabState = {
   objectName: string;
@@ -92,6 +103,8 @@ export type TabState = {
   currentSoql: string;
   soqlDraft: string;
   showDrawer: boolean;
+  showLogs: boolean;
+  logs: TabLog[];
   columnVisibility: Record<string, boolean>;
   dirtyCellKeys: string[];
   baselineRecords: Record<string, Record<string, unknown>>;

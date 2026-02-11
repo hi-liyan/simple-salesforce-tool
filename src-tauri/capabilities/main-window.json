@@ -3,7 +3,8 @@
   "description": "Allow main and auth windows to emit/listen events.",
   "windows": [
     "main",
-    "sf-auth"
+    "sf-auth",
+    "sf-field-meta"
   ],
   "permissions": [
     "core:default",

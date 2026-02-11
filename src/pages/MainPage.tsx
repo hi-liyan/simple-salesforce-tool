@@ -7,7 +7,7 @@ import { RightWorkspace } from "../features/main/RightWorkspace";
 import { MainLayout } from "../layouts/MainLayout";
 import { useObjectsQuery, useSourcesQuery, useSyncSourcesMutation } from "../queries/salesforce";
 import { useAppStore } from "../store/useAppStore";
-import { Notice, ObjectDescribe, QueryResult, SalesforceObject, TabState } from "../types";
+import { Notice, ObjectDescribe, QueryResult, SalesforceObject, TabLog, TabState } from "../types";
 
 // 主页面：对象列表 + 结果面板 + SOQL 抽屉。
 export function MainPage() {
@@ -217,6 +217,21 @@ export function MainPage() {
     patchTab(activeTabObjectName, (item) => ({ ...item, notice: nextNotice }));
   }
 
+  function appendTabLog(
+    objectName: string,
+    payload: Omit<TabLog, "id" | "timestamp">
+  ) {
+    const log: TabLog = {
+      id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      timestamp: new Date().toISOString(),
+      ...payload
+    };
+    patchTab(objectName, (item) => ({
+      ...item,
+      logs: [log, ...item.logs].slice(0, 200)
+    }));
+  }
+
   async function openObjectTab(objectItem: SalesforceObject) {
     if (!selectedSourceId) return;
 
@@ -239,6 +254,8 @@ export function MainPage() {
       currentSoql: "",
       soqlDraft: "",
       showDrawer: false,
+      showLogs: false,
+      logs: [],
       columnVisibility: {},
       dirtyCellKeys: [],
       baselineRecords: {},
@@ -327,12 +344,25 @@ export function MainPage() {
         baselineRecords: buildBaselineRecords(result.records),
         notice: { type: "success", message: `${objectName} 查询成功，共 ${result.totalSize} 条。` }
       }));
+      appendTabLog(objectName, {
+        action: "QUERY",
+        success: true,
+        request: soql,
+        summary: `查询成功，返回 ${result.totalSize} 条。`
+      });
     } catch (error) {
       patchTab(objectName, (item) => ({
         ...item,
         loading: false,
         notice: { type: "error", message: `${objectName} 查询失败：${String(error)}` }
       }));
+      appendTabLog(objectName, {
+        action: "QUERY",
+        success: false,
+        request: `object=${objectName}, where=${whereClause}, sort=${sortField} ${sortDirection}, limit=${limit}`,
+        summary: "查询失败。",
+        errorMessage: String(error)
+      });
     }
   }
 
@@ -357,6 +387,12 @@ export function MainPage() {
         ...item,
         notice: { type: "success", message: `已删除 ${activeTab.selectedRecordIds.length} 条记录。` }
       }));
+      appendTabLog(activeTab.objectName, {
+        action: "DELETE",
+        success: true,
+        request: `recordIds=${activeTab.selectedRecordIds.join(",")}`,
+        summary: `删除成功，影响 ${activeTab.selectedRecordIds.length} 条。`
+      });
       await queryTabData(activeTab.objectName);
     } catch (error) {
       patchTab(activeTab.objectName, (item) => ({
@@ -364,6 +400,13 @@ export function MainPage() {
         loading: false,
         notice: { type: "error", message: `批量删除失败：${String(error)}` }
       }));
+      appendTabLog(activeTab.objectName, {
+        action: "DELETE",
+        success: false,
+        request: `recordIds=${activeTab.selectedRecordIds.join(",")}`,
+        summary: "批量删除失败。",
+        errorMessage: String(error)
+      });
     }
   }
 
@@ -391,6 +434,12 @@ export function MainPage() {
         whereClause: extractWhereClause(activeTab.soqlDraft, activeTab.objectName) ?? item.whereClause,
         notice: { type: "success", message: `${activeTab.objectName} 执行 SOQL 成功，共 ${result.totalSize} 条。` }
       }));
+      appendTabLog(activeTab.objectName, {
+        action: "SOQL",
+        success: true,
+        request: activeTab.soqlDraft,
+        summary: `执行成功，返回 ${result.totalSize} 条。`
+      });
       await persistColumnVisibility(selectedSourceId, activeTab.objectName, nextVisibility);
     } catch (error) {
       patchTab(activeTab.objectName, (item) => ({
@@ -398,6 +447,13 @@ export function MainPage() {
         loading: false,
         notice: { type: "error", message: `执行 SOQL 失败：${String(error)}` }
       }));
+      appendTabLog(activeTab.objectName, {
+        action: "SOQL",
+        success: false,
+        request: activeTab.soqlDraft,
+        summary: "执行 SOQL 失败。",
+        errorMessage: String(error)
+      });
     }
   }
 
@@ -500,6 +556,12 @@ export function MainPage() {
         creates,
         updates
       });
+      appendTabLog(activeTab.objectName, {
+        action: "UPSERT",
+        success: true,
+        request: `creates=${creates.length}, updates=${updates.length}`,
+        summary: `执行更新成功，新增 ${creates.length} 条，更新 ${updates.length} 条。`
+      });
 
       await queryTabData(activeTab.objectName);
       patchTab(activeTab.objectName, (item) => ({
@@ -512,6 +574,13 @@ export function MainPage() {
         loading: false,
         notice: { type: "error", message: `执行更新失败：${String(error)}` }
       }));
+      appendTabLog(activeTab.objectName, {
+        action: "UPSERT",
+        success: false,
+        request: `creates=${creates.length}, updates=${updates.length}`,
+        summary: "执行更新失败。",
+        errorMessage: String(error)
+      });
     }
   }
 
@@ -614,6 +683,10 @@ export function MainPage() {
           onApplyPendingChanges={() => void applyPendingChanges()}
           onDiscardPendingChanges={discardPendingChanges}
           onToggleDrawer={() => void toggleDrawerForActiveTab()}
+          onToggleLogs={() => {
+            if (!activeTab) return;
+            patchTab(activeTab.objectName, (item) => ({ ...item, showLogs: !item.showLogs }));
+          }}
           onWhereChange={(value) => {
             if (!activeTab) return;
             patchTab(activeTab.objectName, (item) => ({ ...item, whereClause: value }));

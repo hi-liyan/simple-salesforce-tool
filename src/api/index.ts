@@ -24,6 +24,8 @@ export const api = {
   loginCliOrg: (instanceUrl: string) => invokeApi<string>("login_cli_org", { instanceUrl }),
   openAuthWindow: () => invokeApi<void>("open_auth_window"),
   closeAuthWindow: () => invokeApi<void>("close_auth_window"),
+  openFieldMetaWindow: (fieldName: string, metadata: Record<string, unknown>) =>
+    invokeApi<void>("open_field_meta_window", { fieldName, metadata }),
   createSource: (payload: SourceUpsertPayload) => invokeApi<SalesforceSource>("create_source", { payload }),
   updateSource: (id: string, payload: SourceUpsertPayload) =>
     invokeApi<SalesforceSource>("update_source", { id, payload }),

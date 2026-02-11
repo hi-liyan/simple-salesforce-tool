@@ -1,6 +1,6 @@
-import { ChangeEvent } from "react";
-import { Alert, Box, Button, CircularProgress, Divider, FormControl, IconButton, MenuItem, Select, SelectChangeEvent, Stack, TextField, Typography } from "@mui/material";
-import { PanelRightOpen, Play, Plus, RotateCcw, Search, Trash2, X } from "lucide-react";
+import { ChangeEvent, useEffect, useRef, useState } from "react";
+import { Alert, Box, Button, CircularProgress, Divider, FormControl, IconButton, InputAdornment, MenuItem, Select, SelectChangeEvent, Stack, TextField, Typography } from "@mui/material";
+import { PanelRightOpen, Play, Plus, RotateCcw, ScrollText, Search, Trash2, X } from "lucide-react";
 import { DataGrid } from "../../components/DataGrid";
 import { Notice, TabState } from "../../types";
 
@@ -19,6 +19,7 @@ type RightWorkspaceProps = {
   onApplyPendingChanges: () => void;
   onDiscardPendingChanges: () => void;
   onToggleDrawer: () => void;
+  onToggleLogs: () => void;
   onWhereChange: (value: string) => void;
   onLimitChange: (value: number) => void;
   onSortFieldChange: (value: string) => void;
@@ -50,6 +51,7 @@ export function RightWorkspace({
   onApplyPendingChanges,
   onDiscardPendingChanges,
   onToggleDrawer,
+  onToggleLogs,
   onWhereChange,
   onLimitChange,
   onSortFieldChange,
@@ -64,6 +66,36 @@ export function RightWorkspace({
   onSoqlChange,
   onExecuteCustomSoql
 }: RightWorkspaceProps) {
+  // 日志面板高度（可拖拽调整）。
+  const [logPanelHeight, setLogPanelHeight] = useState(220);
+  // 拖拽状态。
+  const [draggingLogResize, setDraggingLogResize] = useState(false);
+  // 拖拽起始点与起始高度。
+  const dragStartYRef = useRef(0);
+  const dragStartHeightRef = useRef(220);
+
+  useEffect(() => {
+    if (!draggingLogResize) return;
+
+    const onMouseMove = (event: MouseEvent) => {
+      const delta = dragStartYRef.current - event.clientY;
+      const next = dragStartHeightRef.current + delta;
+      const max = Math.max(260, Math.floor(window.innerHeight * 0.72));
+      setLogPanelHeight(Math.max(140, Math.min(max, next)));
+    };
+
+    const onMouseUp = () => {
+      setDraggingLogResize(false);
+    };
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+    };
+  }, [draggingLogResize]);
+
   return (
     <>
       {/* 工作区全局浮动提示：用于数据源切换等非 Tab 通知。 */}
@@ -191,6 +223,15 @@ export function RightWorkspace({
                 >
                   字段与SOQL
                 </Button>
+                <Button
+                  variant="outlined"
+                  startIcon={<ScrollText size={14} />}
+                  disabled={activeTab.loading}
+                  onClick={onToggleLogs}
+                  sx={{ height: 40 }}
+                >
+                  日志
+                </Button>
               </Stack>
             </Box>
 
@@ -198,7 +239,26 @@ export function RightWorkspace({
             <Box sx={{ px: 1.5, py: 1, borderBottom: "1px solid", borderColor: "divider" }}>
               <Stack direction="row" spacing={1} alignItems="center" flexWrap="nowrap">
                 {/* WHERE 条件输入。 */}
-                <TextField label="WHERE" value={activeTab.whereClause} sx={{ width: 320 }} onChange={(event) => onWhereChange(event.target.value)} />
+                <TextField
+                  label="WHERE"
+                  value={activeTab.whereClause}
+                  sx={{ width: 320 }}
+                  onChange={(event) => onWhereChange(event.target.value)}
+                  InputProps={{
+                    endAdornment: activeTab.whereClause ? (
+                      <InputAdornment position="end">
+                        <IconButton
+                          size="small"
+                          aria-label="清空 WHERE 条件"
+                          onClick={() => onWhereChange("")}
+                          edge="end"
+                        >
+                          <X size={13} />
+                        </IconButton>
+                      </InputAdornment>
+                    ) : undefined
+                  }}
+                />
                 {/* LIMIT 输入。 */}
                 <TextField
                   label="LIMIT"
@@ -255,6 +315,70 @@ export function RightWorkspace({
                 onShowMessage={onShowMessage}
               />
             </Box>
+
+            {/* 日志区域：展示当前 Tab 的请求与响应日志。 */}
+            {activeTab.showLogs && (
+              <Box
+                sx={{
+                  height: logPanelHeight,
+                  borderTop: "1px solid",
+                  borderColor: "divider",
+                  display: "flex",
+                  flexDirection: "column",
+                  minHeight: 0,
+                  position: "relative"
+                }}
+              >
+                {/* 拖拽手柄：调整日志区域高度。 */}
+                <Box
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    dragStartYRef.current = event.clientY;
+                    dragStartHeightRef.current = logPanelHeight;
+                    setDraggingLogResize(true);
+                  }}
+                  sx={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    height: 6,
+                    cursor: "row-resize",
+                    zIndex: 1
+                  }}
+                />
+                <Box sx={{ px: 1.5, py: 0.75, borderBottom: "1px solid", borderColor: "divider" }}>
+                  <Typography variant="caption" color="text.secondary">
+                    操作日志（当前 Tab）
+                  </Typography>
+                </Box>
+                <Box sx={{ minHeight: 0, flex: 1, overflow: "auto", px: 1.5, py: 1 }}>
+                  {activeTab.logs.length === 0 && (
+                    <Typography variant="caption" color="text.secondary">
+                      暂无日志。
+                    </Typography>
+                  )}
+                  {activeTab.logs.map((log) => (
+                    <Box key={log.id} sx={{ mb: 1, p: 1, border: "1px solid", borderColor: "divider", bgcolor: "background.paper" }}>
+                      <Typography variant="caption" sx={{ display: "block", mb: 0.5, color: log.success ? "success.main" : "error.main" }}>
+                        {formatLogTime(log.timestamp)}  [{log.action}] {log.success ? "成功" : "失败"}
+                      </Typography>
+                      <Typography variant="caption" sx={{ display: "block" }}>
+                        请求: {log.request}
+                      </Typography>
+                      <Typography variant="caption" sx={{ display: "block" }}>
+                        响应: {log.summary}
+                      </Typography>
+                      {log.errorMessage && (
+                        <Typography variant="caption" sx={{ display: "block", color: "error.main" }}>
+                          错误: {log.errorMessage}
+                        </Typography>
+                      )}
+                    </Box>
+                  ))}
+                </Box>
+              </Box>
+            )}
           </Box>
 
           {/* 右侧抽屉：字段与 SOQL。 */}
@@ -393,4 +517,10 @@ export function RightWorkspace({
       )}
     </>
   );
+}
+
+function formatLogTime(timestamp: string): string {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return timestamp;
+  return date.toLocaleString();
 }

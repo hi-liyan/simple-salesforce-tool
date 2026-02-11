@@ -1,4 +1,6 @@
 ﻿use std::collections::HashMap;
+use serde::Serialize;
+use tauri::Emitter;
 use tauri::State;
 use tauri::Manager;
 
@@ -79,6 +81,55 @@ pub fn close_auth_window(app: tauri::AppHandle) -> Result<(), String> {
     }
     Ok(())
 }
+
+#[derive(Clone, Serialize)]
+struct FieldMetaWindowPayload {
+    field_name: String,
+    metadata: HashMap<String, serde_json::Value>,
+}
+
+#[tauri::command]
+pub fn open_field_meta_window(
+    app: tauri::AppHandle,
+    field_name: String,
+    metadata: HashMap<String, serde_json::Value>,
+) -> Result<(), String> {
+    let payload = FieldMetaWindowPayload {
+        field_name: field_name.clone(),
+        metadata,
+    };
+
+    if let Some(window) = app.get_webview_window("sf-field-meta") {
+        window.show().map_err(|error| error.to_string())?;
+        window.set_focus().map_err(|error| error.to_string())?;
+        app.emit_to("sf-field-meta", "sf:field-meta-open", payload)
+            .map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+
+    tauri::WebviewWindowBuilder::new(
+        &app,
+        "sf-field-meta",
+        tauri::WebviewUrl::App("/field-meta".into()),
+    )
+    .title(format!("{field_name} 字段元数据"))
+    .inner_size(860.0, 620.0)
+    .resizable(true)
+    .build()
+    .map_err(|error| error.to_string())?;
+
+    app.emit_to("sf-field-meta", "sf:field-meta-open", payload.clone())
+        .map_err(|error| error.to_string())?;
+
+    let app_handle = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(220));
+        let _ = app_handle.emit_to("sf-field-meta", "sf:field-meta-open", payload);
+    });
+
+    Ok(())
+}
+
 
 #[tauri::command]
 pub fn create_source(
