@@ -48,6 +48,7 @@ fn main() {
             commands::describe_object,
             commands::query_records,
             commands::create_record,
+            commands::save_records,
             commands::update_record,
             commands::delete_record
         ])

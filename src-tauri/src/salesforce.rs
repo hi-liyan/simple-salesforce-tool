@@ -1,10 +1,12 @@
 ﻿use reqwest::{Client, Method, StatusCode};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
 use crate::error::AppError;
-use crate::models::{ObjectDescribe, ObjectField, QueryResult, SalesforceObject, SalesforceSource};
+use crate::models::{
+    ObjectDescribe, ObjectField, QueryResult, RecordUpdatePayload, SalesforceObject, SalesforceSource,
+};
 
 /// Salesforce API 客户端，负责所有外部 HTTP 通讯。
 #[derive(Clone)]
@@ -166,6 +168,98 @@ impl SalesforceClient {
         self.request_unit(source, Method::DELETE, &url, None).await
     }
 
+    pub async fn save_records(
+        &self,
+        source: &SalesforceSource,
+        object_name: &str,
+        creates: Vec<HashMap<String, Value>>,
+        updates: Vec<RecordUpdatePayload>,
+    ) -> Result<(), AppError> {
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct CompositeRequestItem {
+            method: String,
+            url: String,
+            reference_id: String,
+            body: Value,
+        }
+
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct CompositeRequestBody {
+            all_or_none: bool,
+            composite_request: Vec<CompositeRequestItem>,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct CompositeResponseItem {
+            http_status_code: u16,
+            reference_id: String,
+            body: Value,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct CompositeResponseBody {
+            composite_response: Vec<CompositeResponseItem>,
+        }
+
+        if creates.is_empty() && updates.is_empty() {
+            return Ok(());
+        }
+
+        let mut composite_request: Vec<CompositeRequestItem> =
+            Vec::with_capacity(creates.len() + updates.len());
+
+        for (index, values) in creates.into_iter().enumerate() {
+            composite_request.push(CompositeRequestItem {
+                method: "POST".to_string(),
+                url: format!("/services/data/{}/sobjects/{object_name}", source.api_version),
+                reference_id: format!("create_{index}"),
+                body: serde_json::to_value(values)?,
+            });
+        }
+
+        for (index, item) in updates.into_iter().enumerate() {
+            composite_request.push(CompositeRequestItem {
+                method: "PATCH".to_string(),
+                url: format!(
+                    "/services/data/{}/sobjects/{object_name}/{}",
+                    source.api_version, item.record_id
+                ),
+                reference_id: format!("update_{index}"),
+                body: serde_json::to_value(item.values)?,
+            });
+        }
+
+        if composite_request.len() > 25 {
+            return Err(AppError::Biz(
+                "批量提交失败：单次执行更新最多支持 25 条（新增+更新总和）。".to_string(),
+            ));
+        }
+
+        let payload = CompositeRequestBody {
+            all_or_none: true,
+            composite_request,
+        };
+        let url = build_url(source, "composite");
+        let response: CompositeResponseBody = self
+            .request_json(source, Method::POST, &url, Some(serde_json::to_value(payload)?))
+            .await?;
+
+        for item in response.composite_response {
+            if !(200..300).contains(&item.http_status_code) {
+                return Err(AppError::Biz(format!(
+                    "批量提交失败，步骤 {} 状态码 {}: {}",
+                    item.reference_id, item.http_status_code, item.body
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
     async fn request_json<T: for<'de> serde::Deserialize<'de>>(
         &self,
         source: &SalesforceSource,
@@ -229,4 +323,3 @@ fn build_url(source: &SalesforceSource, path: &str) -> String {
         path.trim_start_matches('/')
     )
 }
-

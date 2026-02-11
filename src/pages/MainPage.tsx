@@ -433,6 +433,8 @@ export function MainPage() {
 
     const editableFields = new Set(activeTab.describe.fields.map((field) => field.name));
     const dirtyCellSet = new Set(activeTab.dirtyCellKeys);
+    const creates: Record<string, unknown>[] = [];
+    const updates: { recordId: string; values: Record<string, unknown> }[] = [];
 
     patchTab(activeTab.objectName, (item) => ({ ...item, loading: true }));
     try {
@@ -448,11 +450,7 @@ export function MainPage() {
             if (raw === null || raw === undefined || String(raw).trim() === "") return;
             values[field] = raw;
           });
-          await api.createRecord({
-            sourceId: selectedSourceId,
-            objectName: activeTab.objectName,
-            values
-          });
+          creates.push(values);
           continue;
         }
 
@@ -470,9 +468,16 @@ export function MainPage() {
         });
 
         if (Object.keys(values).length > 0) {
-          await api.updateRecord(selectedSourceId, activeTab.objectName, recordId, values);
+          updates.push({ recordId, values });
         }
       }
+
+      await api.saveRecords({
+        sourceId: selectedSourceId,
+        objectName: activeTab.objectName,
+        creates,
+        updates
+      });
 
       await queryTabData(activeTab.objectName);
       patchTab(activeTab.objectName, (item) => ({

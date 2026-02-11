@@ -3,6 +3,7 @@ import {
   ObjectDescribe,
   QueryResult,
   RecordMutationPayload,
+  RecordSavePayload,
   SalesforceObject,
   SalesforceSource,
   SourceUpsertPayload
@@ -37,6 +38,7 @@ export const api = {
   queryRecords: (sourceId: string, soql: string) =>
     invokeApi<QueryResult>("query_records", { sourceId, soql }),
   createRecord: (payload: RecordMutationPayload) => invokeApi<string>("create_record", { payload }),
+  saveRecords: (payload: RecordSavePayload) => invokeApi<void>("save_records", { payload }),
   updateRecord: (sourceId: string, objectName: string, recordId: string, values: Record<string, unknown>) =>
     invokeApi<void>("update_record", { sourceId, objectName, recordId, values }),
   deleteRecord: (sourceId: string, objectName: string, recordId: string) =>

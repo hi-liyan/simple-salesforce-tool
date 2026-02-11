@@ -57,6 +57,20 @@ export type RecordMutationPayload = {
   values: Record<string, unknown>;
 };
 
+// 记录更新负载。
+export type RecordUpdatePayload = {
+  recordId: string;
+  values: Record<string, unknown>;
+};
+
+// 记录批量保存负载：同时包含新增与更新。
+export type RecordSavePayload = {
+  sourceId: string;
+  objectName: string;
+  creates: Record<string, unknown>[];
+  updates: RecordUpdatePayload[];
+};
+
 // 页面提示消息。
 export type Notice = {
   type: "error" | "success";

@@ -68,6 +68,22 @@ pub struct RecordMutationPayload {
     pub values: HashMap<String, Value>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordUpdatePayload {
+    pub record_id: String,
+    pub values: HashMap<String, Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordSavePayload {
+    pub source_id: String,
+    pub object_name: String,
+    pub creates: Vec<HashMap<String, Value>>,
+    pub updates: Vec<RecordUpdatePayload>,
+}
+
 #[derive(Debug)]
 pub struct CachedObjects {
     pub payload: String,

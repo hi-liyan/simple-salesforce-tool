@@ -6,8 +6,8 @@ use crate::app_state::AppState;
 use crate::db;
 use crate::error::AppError;
 use crate::models::{
-    ObjectDescribe, QueryResult, RecordMutationPayload, SalesforceObject, SalesforceSource,
-    SourceUpsertPayload,
+    ObjectDescribe, QueryResult, RecordMutationPayload, RecordSavePayload, SalesforceObject,
+    SalesforceSource, SourceUpsertPayload,
 };
 use crate::sf_cli;
 
@@ -246,6 +246,30 @@ pub async fn create_record(
     state
         .sf_client
         .create_record(&source, &payload.object_name, payload.values)
+        .await
+        .map_err(AppError::to_string_error)
+}
+
+#[tauri::command]
+pub async fn save_records(
+    state: State<'_, AppState>,
+    payload: RecordSavePayload,
+) -> Result<(), String> {
+    if payload.creates.is_empty() && payload.updates.is_empty() {
+        return Ok(());
+    }
+
+    let source = {
+        let connection = state
+            .db
+            .lock()
+            .map_err(|error| format!("Database lock failed: {error}"))?;
+        db::get_source(&connection, &payload.source_id).map_err(AppError::to_string_error)?
+    };
+
+    state
+        .sf_client
+        .save_records(&source, &payload.object_name, payload.creates, payload.updates)
         .await
         .map_err(AppError::to_string_error)
 }

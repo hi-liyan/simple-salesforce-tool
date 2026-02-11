@@ -1,5 +1,5 @@
 ﻿import { useMemo, useState } from "react";
-import { Box, Checkbox, Typography } from "@mui/material";
+import { Box, Typography } from "@mui/material";
 import {
   DataEditor,
   EditableGridCell,
@@ -51,6 +51,7 @@ export function DataGrid({
   );
 
   const allChecked = selectableIds.length > 0 && selectableIds.every((id) => selectedRecordIds.includes(id));
+  const hasAnyChecked = selectedRecordIds.some((id) => selectableIds.includes(id));
   const dirtyCellSet = useMemo(() => new Set(dirtyCellKeys), [dirtyCellKeys]);
 
   // 列宽状态：支持用户拖拽后即时更新列宽。
@@ -64,6 +65,7 @@ export function DataGrid({
     }));
 
     return [
+      // 第一列标题使用勾选符号，表示全选状态。
       { id: "__select", title: "", width: columnWidths.__select ?? 44 },
       { id: "__index", title: "#", width: columnWidths.__index ?? 56 },
       ...dataColumns
@@ -158,7 +160,7 @@ export function DataGrid({
   return (
     // 表格容器：顶部统计栏 + 数据表格。
     <Box sx={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
-      {/* 顶部工具栏：全选与统计。 */}
+      {/* 顶部工具栏：仅显示统计。 */}
       <Box
         sx={{
           px: 1.5,
@@ -170,8 +172,6 @@ export function DataGrid({
           gap: 1.2
         }}
       >
-        {/* 全选复选框。 */}
-        <Checkbox size="small" checked={allChecked} onChange={(event) => onToggleAll(event.target.checked, selectableIds)} />
         {/* 统计信息。 */}
         <Typography variant="caption" color="text.secondary">
           Rows: {result.totalSize}
@@ -187,6 +187,62 @@ export function DataGrid({
           getCellContent={getCellContent}
           onCellEdited={handleCellEdited}
           onCellsEdited={handleCellsEdited}
+          // 自定义首列表头复选框样式，使其与行内复选框视觉一致。
+          drawHeader={(args, drawContent) => {
+            drawContent();
+            if (String(args.column.id) !== "__select") return;
+
+            const { ctx, rect } = args;
+            const size = 14;
+            const x = rect.x + Math.floor((rect.width - size) / 2);
+            const y = rect.y + Math.floor((rect.height - size) / 2);
+            const radius = 2;
+
+            ctx.save();
+            ctx.beginPath();
+            ctx.moveTo(x + radius, y);
+            ctx.lineTo(x + size - radius, y);
+            ctx.quadraticCurveTo(x + size, y, x + size, y + radius);
+            ctx.lineTo(x + size, y + size - radius);
+            ctx.quadraticCurveTo(x + size, y + size, x + size - radius, y + size);
+            ctx.lineTo(x + radius, y + size);
+            ctx.quadraticCurveTo(x, y + size, x, y + size - radius);
+            ctx.lineTo(x, y + radius);
+            ctx.quadraticCurveTo(x, y, x + radius, y);
+            ctx.closePath();
+            ctx.fillStyle = allChecked || hasAnyChecked ? "#0176d3" : "#ffffff";
+            ctx.fill();
+            ctx.lineWidth = 1;
+            ctx.strokeStyle = allChecked || hasAnyChecked ? "#0176d3" : "#98a4b4";
+            ctx.stroke();
+
+            if (allChecked) {
+              ctx.beginPath();
+              ctx.moveTo(x + 3, y + 7);
+              ctx.lineTo(x + 6, y + 10);
+              ctx.lineTo(x + 11, y + 4);
+              ctx.lineWidth = 2;
+              ctx.strokeStyle = "#ffffff";
+              ctx.lineCap = "round";
+              ctx.lineJoin = "round";
+              ctx.stroke();
+            } else if (hasAnyChecked) {
+              ctx.beginPath();
+              ctx.moveTo(x + 3, y + 7);
+              ctx.lineTo(x + 11, y + 7);
+              ctx.lineWidth = 2;
+              ctx.strokeStyle = "#ffffff";
+              ctx.lineCap = "round";
+              ctx.stroke();
+            }
+
+            ctx.restore();
+          }}
+          // 点击首列表头可切换全选状态。
+          onHeaderClicked={(col) => {
+            if (col !== 0) return;
+            onToggleAll(!allChecked, selectableIds);
+          }}
           cellActivationBehavior="double-click"
           onColumnResize={(column, newSize) => {
             const id = String(column.id ?? "");
