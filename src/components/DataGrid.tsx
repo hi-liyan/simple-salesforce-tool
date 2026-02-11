@@ -1,13 +1,15 @@
 ﻿import { useMemo, useState } from "react";
-import { Box, Tooltip, Typography } from "@mui/material";
+import { Box, FormControl, Select, Tooltip, Typography } from "@mui/material";
 import {
+  CellClickedEventArgs,
   DataEditor,
   EditableGridCell,
   EditListItem,
   GridCell,
   GridCellKind,
   GridColumn,
-  Item
+  Item,
+  TextCell
 } from "@glideapps/glide-data-grid";
 import "@glideapps/glide-data-grid/dist/index.css";
 import { QueryResult } from "../types";
@@ -20,7 +22,8 @@ type Props = {
   selectedRecordIds: string[];
   onToggleRecord: (recordId: string, checked: boolean) => void;
   onToggleAll: (checked: boolean, recordIds: string[]) => void;
-  onEditCell: (rowIndex: number, columnName: string, value: string) => void;
+  onEditCell: (rowIndex: number, columnName: string, value: unknown) => void;
+  onShowMessage: (message: string) => void;
 };
 
 // 查询结果表：使用 Glide Data Grid 提供更接近数据库客户端的表格体验。
@@ -32,7 +35,8 @@ export function DataGrid({
   selectedRecordIds,
   onToggleRecord,
   onToggleAll,
-  onEditCell
+  onEditCell,
+  onShowMessage
 }: Props) {
   const records = result.records;
 
@@ -64,6 +68,8 @@ export function DataGrid({
     bounds: { x: number; y: number; width: number; height: number };
     metadata: Record<string, unknown>;
   } | null>(null);
+  // 当前激活单元格：用于 provideEditor 判断是否为 picklist 编辑。
+  const [activeEditorCell, setActiveEditorCell] = useState<Item | null>(null);
 
   const columns = useMemo<GridColumn[]>(() => {
     const dataColumns: GridColumn[] = displayColumns.map((column) => ({
@@ -102,6 +108,7 @@ export function DataGrid({
     const columnId = String(columns[col]?.id ?? "");
     const record = records[row] || {};
     const recordId = getRecordKey(row);
+    const isNewRow = Boolean(record.__isNew);
 
     if (columnId === "__select") {
       return {
@@ -123,24 +130,51 @@ export function DataGrid({
       };
     }
 
-    const text = stringifyCellValue(record[columnId]);
+    const metadata = fieldMetadataMap[columnId] || {};
+    const fieldType = getFieldType(metadata);
+    const editable = isCellEditableByMeta(metadata, isNewRow);
+    const requiredNewField = isRequiredOnCreate(metadata, isNewRow);
+    const raw = record[columnId];
     const isDirty = dirtyCellSet.has(`${recordId}:${columnId}`);
+    const isRequiredEmpty = requiredNewField && isEmptyValue(raw);
+
+    const commonTheme = buildCellThemeOverride(isDirty, isRequiredEmpty);
+
+    if (isBooleanType(fieldType)) {
+      const text = normalizeBooleanText(raw);
+      return {
+        kind: GridCellKind.Text,
+        data: text,
+        displayData: text,
+        allowOverlay: editable,
+        readonly: !editable,
+        themeOverride: commonTheme
+      };
+    }
+
+    if (isNumberType(fieldType)) {
+      const num = coerceNumber(raw);
+      return {
+        kind: GridCellKind.Number,
+        data: num,
+        displayData: raw === null || raw === undefined ? "" : String(raw),
+        allowOverlay: editable,
+        readonly: !editable,
+        themeOverride: commonTheme
+      };
+    }
+
+    const text = stringifyCellValue(raw);
     return {
       kind: GridCellKind.Text,
       data: text,
       displayData: text,
-      allowOverlay: true,
-      readonly: false,
-      themeOverride: isDirty
-        ? {
-            bgCell: "#fff6d9",
-            bgCellMedium: "#ffe9a8"
-          }
-        : undefined
+      allowOverlay: editable,
+      readonly: !editable,
+      themeOverride: commonTheme
     };
   };
 
-  // 双击单元格进入编辑，编辑结果会回写到当前 Tab 的表格数据状态。
   const handleCellEdited = ([col, row]: Item, newValue: EditableGridCell) => {
     const columnId = String(columns[col]?.id ?? "");
 
@@ -156,8 +190,74 @@ export function DataGrid({
       return;
     }
 
-    const nextValue = extractEditableValue(newValue);
-    onEditCell(row, columnId, nextValue);
+    const record = records[row] || {};
+    const isNewRow = Boolean(record.__isNew);
+    const metadata = fieldMetadataMap[columnId] || {};
+    const fieldType = getFieldType(metadata);
+
+    if (!isCellEditableByMeta(metadata, isNewRow)) {
+      const action = isNewRow ? "创建" : "更新";
+      onShowMessage(`${columnId} 字段不可${action}，无法编辑。`);
+      return;
+    }
+
+    if (isPicklistType(fieldType)) {
+      const options = getPicklistOptions(metadata);
+      const nextText = extractEditableString(newValue);
+      if (!options.some((item) => item.value === nextText)) {
+        onShowMessage(`${columnId} 字段只能选择预设选项。`);
+        return;
+      }
+      onEditCell(row, columnId, nextText);
+      return;
+    }
+
+    if (isBooleanType(fieldType)) {
+      const text = extractEditableString(newValue).trim().toLowerCase();
+      if (text !== "true" && text !== "false") {
+        onShowMessage(`${columnId} 字段仅支持 true/false。`);
+        return;
+      }
+      onEditCell(row, columnId, text === "true");
+      return;
+    }
+
+    if (isNumberType(fieldType)) {
+      const num = extractEditableNumber(newValue);
+      if (num === undefined && extractEditableString(newValue).trim() !== "") {
+        onShowMessage(`${columnId} 字段仅支持数字。`);
+        return;
+      }
+      onEditCell(row, columnId, num);
+      return;
+    }
+
+    onEditCell(row, columnId, extractEditableString(newValue));
+  };
+
+  const handleCellClicked = (cell: Item, event: CellClickedEventArgs) => {
+    const [col, row] = cell;
+    const columnId = String(columns[col]?.id ?? "");
+    if (!event.isDoubleClick) return;
+    if (!columnId || columnId.startsWith("__")) return;
+
+    const record = records[row] || {};
+    const isNewRow = Boolean(record.__isNew);
+    const metadata = fieldMetadataMap[columnId] || {};
+    const fieldType = getFieldType(metadata);
+
+    if (!isCellEditableByMeta(metadata, isNewRow)) {
+      const action = isNewRow ? "创建" : "更新";
+      onShowMessage(`${columnId} 字段不可${action}，无法编辑。`);
+      return;
+    }
+
+    if (isPicklistType(fieldType)) {
+      const options = getPicklistOptions(metadata);
+      if (options.length === 0) {
+        onShowMessage(`${columnId} 字段未配置可选值。`);
+      }
+    }
   };
 
   const handleCellsEdited = (newValues: readonly EditListItem[]) => {
@@ -201,8 +301,73 @@ export function DataGrid({
           columns={columns}
           rows={records.length}
           getCellContent={getCellContent}
+          onCellActivated={(cell) => setActiveEditorCell(cell)}
           onCellEdited={handleCellEdited}
+          onCellClicked={handleCellClicked}
           onCellsEdited={handleCellsEdited}
+          // 使用 Glide 内置 overlay 机制渲染 picklist 编辑器，避免手工定位。
+          provideEditor={(cell) => {
+            if (!activeEditorCell) return undefined;
+            if (cell.kind !== GridCellKind.Text) return undefined;
+
+            const [col] = activeEditorCell;
+            const columnId = String(columns[col]?.id ?? "");
+            if (!columnId || columnId.startsWith("__")) return undefined;
+
+            const metadata = fieldMetadataMap[columnId] || {};
+            const fieldType = getFieldType(metadata);
+            let options: { label: string; value: string }[] = [];
+            if (isPicklistType(fieldType)) {
+              options = getPicklistOptions(metadata);
+            } else if (isBooleanType(fieldType)) {
+              options = [
+                { label: "true", value: "true" },
+                { label: "false", value: "false" }
+              ];
+            } else {
+              return undefined;
+            }
+            if (options.length === 0) return undefined;
+
+            return (props) => {
+              const textValue = props.value as TextCell;
+              return (
+                <FormControl
+                  size="small"
+                  sx={{
+                    position: "absolute",
+                    left: props.target.x,
+                    top: props.target.y,
+                    width: Math.max(props.target.width, 180),
+                    bgcolor: "background.paper"
+                  }}
+                >
+                  <Select
+                    autoFocus
+                    native
+                    value={normalizeSelectValue(textValue.data, options)}
+                    onBlur={() => props.onFinishedEditing(undefined, [0, 0])}
+                    onChange={(event) => {
+                      const next = String(event.target.value);
+                      const nextCell: TextCell = {
+                        ...textValue,
+                        data: next,
+                        displayData: next
+                      };
+                      props.onChange(nextCell);
+                      props.onFinishedEditing(nextCell, [0, 0]);
+                    }}
+                  >
+                    {options.map((item) => (
+                      <option key={item.value} value={item.value}>
+                        {item.label}
+                      </option>
+                    ))}
+                  </Select>
+                </FormControl>
+              );
+            };
+          }}
           // 自定义首列表头复选框样式，使其与行内复选框视觉一致。
           drawHeader={(args, drawContent) => {
             drawContent();
@@ -370,6 +535,95 @@ export function DataGrid({
   );
 }
 
+// 根据元数据计算单元格样式（脏数据高亮 + 必填缺失红色提示）。
+function buildCellThemeOverride(isDirty: boolean, requiredMissing: boolean): GridCell["themeOverride"] | undefined {
+  if (requiredMissing) {
+    return {
+      bgCell: "#ffeaea",
+      bgCellMedium: "#ffd3d3"
+    };
+  }
+  if (isDirty) {
+    return {
+      bgCell: "#fff6d9",
+      bgCellMedium: "#ffe9a8"
+    };
+  }
+  return undefined;
+}
+
+// 元数据类型提取。
+function getFieldType(metadata: Record<string, unknown>): string {
+  const raw = metadata.type;
+  return typeof raw === "string" ? raw.toLowerCase() : "";
+}
+
+// 判断布尔字段类型。
+function isBooleanType(fieldType: string): boolean {
+  return fieldType === "boolean";
+}
+
+// 判断数字字段类型。
+function isNumberType(fieldType: string): boolean {
+  return ["int", "double", "currency", "percent", "long"].includes(fieldType);
+}
+
+// 判断 picklist 字段类型。
+function isPicklistType(fieldType: string): boolean {
+  return fieldType === "picklist";
+}
+
+// 判断字段是否可编辑。
+function isCellEditableByMeta(metadata: Record<string, unknown>, isNewRow: boolean): boolean {
+  const createable = metadata.createable;
+  const updateable = metadata.updateable;
+  if (isNewRow) {
+    return createable !== false;
+  }
+  return updateable !== false;
+}
+
+// 判断新建记录时是否必填。
+function isRequiredOnCreate(metadata: Record<string, unknown>, isNewRow: boolean): boolean {
+  if (!isNewRow) return false;
+  if (metadata.createable === false) return false;
+  return metadata.nillable === false;
+}
+
+// picklist 可选值提取。
+function getPicklistOptions(metadata: Record<string, unknown>): { label: string; value: string }[] {
+  const raw = metadata.picklistValues;
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((item) => item && typeof item === "object")
+    .map((item) => {
+      const obj = item as Record<string, unknown>;
+      const active = obj.active;
+      if (active === false) return null;
+      const value = String(obj.value ?? "");
+      const label = String(obj.label ?? value);
+      if (!value) return null;
+      return { label, value };
+    })
+    .filter((item): item is { label: string; value: string } => Boolean(item));
+}
+
+// 布尔值统一转换为编辑器可识别文本。
+function normalizeBooleanText(value: unknown): string {
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true" || normalized === "false") return normalized;
+  }
+  return "false";
+}
+
+// 归一化 Select 当前值，防止值不在选项里导致空白。
+function normalizeSelectValue(raw: string, options: { label: string; value: string }[]): string {
+  if (options.some((item) => item.value === raw)) return raw;
+  return options[0]?.value ?? "";
+}
+
 // 字段元数据键名中文映射。
 function translateFieldMetaKey(key: string): string {
   const map: Record<string, string> = {
@@ -418,6 +672,21 @@ function formatFieldMetaValue(value: unknown): string {
   return String(value);
 }
 
+// 将值转换为数字。
+function coerceNumber(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
+// 判断值是否为空。
+function isEmptyValue(value: unknown): boolean {
+  return value === null || value === undefined || (typeof value === "string" && value.trim() === "");
+}
+
 // 将单元格值转为显示字符串。
 function stringifyCellValue(value: unknown): string {
   if (value === null || value === undefined) return "";
@@ -433,10 +702,21 @@ function stringifyCellValue(value: unknown): string {
   return String(value);
 }
 
-// 抽取可编辑值。
-function extractEditableValue(value: EditableGridCell): string {
+// 抽取文本编辑值。
+function extractEditableString(value: EditableGridCell): string {
   if (value.kind === GridCellKind.Text) return String(value.data ?? "");
   if (value.kind === GridCellKind.Number) return String(value.data ?? "");
   if (value.kind === GridCellKind.Boolean) return String(value.data ?? "");
   return String(value.data ?? "");
+}
+
+// 抽取数字编辑值。
+function extractEditableNumber(value: EditableGridCell): number | undefined {
+  if (value.kind === GridCellKind.Number) {
+    return typeof value.data === "number" && Number.isFinite(value.data) ? value.data : undefined;
+  }
+  const text = extractEditableString(value).trim();
+  if (!text) return undefined;
+  const parsed = Number(text);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
