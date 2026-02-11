@@ -661,7 +661,8 @@ export default function App() {
                   <DataGrid
                     result={activeTab.result}
                     visibleColumns={getVisibleColumns(activeTab)}
-                    selectedRecordIds={activeTab.selectedRecordIds}                    onToggleRecord={(recordId, checked) => {
+                    selectedRecordIds={activeTab.selectedRecordIds}
+                    onToggleRecord={(recordId, checked) => {
                       patchTab(activeTab.objectName, (item) => ({
                         ...item,
                         selectedRecordIds: checked
@@ -671,6 +672,19 @@ export default function App() {
                     }}
                     onToggleAll={(checked, recordIds) => {
                       patchTab(activeTab.objectName, (item) => ({ ...item, selectedRecordIds: checked ? recordIds : [] }));
+                    }}
+                    onEditCell={(rowIndex, columnName, value) => {
+                      patchTab(activeTab.objectName, (item) => {
+                        const nextRecords = [...item.result.records];
+                        const target = nextRecords[rowIndex];
+                        if (!target) return item;
+
+                        nextRecords[rowIndex] = { ...target, [columnName]: value };
+                        return {
+                          ...item,
+                          result: { ...item.result, records: nextRecords }
+                        };
+                      });
                     }}
                   />
                 </Box>
