@@ -17,7 +17,7 @@ import {
   Typography,
   createTheme
 } from "@mui/material";
-import { PanelRightOpen, Play, RefreshCw, Search, Trash2, X } from "lucide-react";
+import { PanelRightOpen, Play, Plus, RefreshCw, Search, Trash2, X } from "lucide-react";
 import { api } from "./api";
 import { DataGrid } from "./components/DataGrid";
 import { ObjectList } from "./components/ObjectList";
@@ -364,6 +364,30 @@ export default function App() {
     }
   }
 
+  async function createRecordQuickly() {
+    if (!selectedSourceId || !activeTab) return;
+
+    patchTab(activeTab.objectName, (item) => ({ ...item, loading: true }));
+    try {
+      await api.createRecord({
+        sourceId: selectedSourceId,
+        objectName: activeTab.objectName,
+        values: {}
+      });
+      await queryTabData(activeTab.objectName);
+      patchTab(activeTab.objectName, (item) => ({
+        ...item,
+        notice: { type: "success", message: "新建记录成功。" }
+      }));
+    } catch (error) {
+      patchTab(activeTab.objectName, (item) => ({
+        ...item,
+        loading: false,
+        notice: { type: "error", message: `新建记录失败：${String(error)}` }
+      }));
+    }
+  }
+
   function closeTab(objectName: string) {
     if (noticeTimersRef.current[objectName]) {
       clearTimeout(noticeTimersRef.current[objectName]);
@@ -459,6 +483,49 @@ export default function App() {
           {activeTab && (
             <Box sx={{ position: "relative", display: "flex", minHeight: 0, flex: 1, overflow: "hidden" }}>
               <Box sx={{ minWidth: 0, flex: 1, display: "flex", flexDirection: "column" }}>
+                {/* 操作工具栏：新建、删除勾选、执行更新、字段与SOQL */}
+                <Box sx={{ px: 1.5, py: 0.75, borderBottom: "1px solid", borderColor: "divider" }}>
+                  <Stack direction="row" spacing={0.5} alignItems="center">
+                    <Button
+                      variant="outlined"
+                      startIcon={<Plus size={14} />}
+                      disabled={activeTab.loading}
+                      onClick={() => void createRecordQuickly()}
+                      sx={{ height: 40 }}
+                    >
+                      新建记录
+                    </Button>
+                    <Button
+                      color="error"
+                      variant="outlined"
+                      startIcon={<Trash2 size={14} />}
+                      disabled={activeTab.loading || activeTab.selectedRecordIds.length === 0}
+                      onClick={() => void deleteCheckedRecords()}
+                      sx={{ height: 40 }}
+                    >
+                      删除勾选({activeTab.selectedRecordIds.length})
+                    </Button>
+                    <Button
+                      variant="outlined"
+                      startIcon={<Play size={14} />}
+                      disabled={activeTab.loading}
+                      onClick={() => void executeCustomSoql()}
+                      sx={{ height: 40 }}
+                    >
+                      执行更新
+                    </Button>
+                    <Button
+                      variant="outlined"
+                      startIcon={<PanelRightOpen size={14} />}
+                      disabled={activeTab.loading}
+                      onClick={() => patchTab(activeTab.objectName, (item) => ({ ...item, showDrawer: !item.showDrawer }))}
+                      sx={{ height: 40 }}
+                    >
+                      字段与SOQL
+                    </Button>
+                  </Stack>
+                </Box>
+
                 <Box sx={{ px: 1.5, py: 1, borderBottom: "1px solid", borderColor: "divider" }}>
                   <Stack direction="row" spacing={1} alignItems="center" flexWrap="nowrap">
                     <TextField
@@ -522,6 +589,7 @@ export default function App() {
                     <Button
                       startIcon={<Search size={14} />}
                       disabled={activeTab.loading}
+                      sx={{ height: 35 }}
                       onClick={() =>
                         void queryTabData(
                           activeTab.objectName,
@@ -534,23 +602,6 @@ export default function App() {
                       }
                     >
                       查询
-                    </Button>
-                    <Button
-                      variant="outlined"
-                      startIcon={<PanelRightOpen size={14} />}
-                      disabled={activeTab.loading}
-                      onClick={() => patchTab(activeTab.objectName, (item) => ({ ...item, showDrawer: !item.showDrawer }))}
-                    >
-                      字段与 SOQL
-                    </Button>
-                    <Button
-                      color="error"
-                      variant="outlined"
-                      startIcon={<Trash2 size={14} />}
-                      disabled={activeTab.loading || activeTab.selectedRecordIds.length === 0}
-                      onClick={() => void deleteCheckedRecords()}
-                    >
-                      删除已勾选({activeTab.selectedRecordIds.length})
                     </Button>
                   </Stack>
                 </Box>
