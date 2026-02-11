@@ -530,6 +530,12 @@ export function MainPage() {
 
   const pageLoading = loading || sourcesFetching || objectsFetching;
   const visibleColumns = activeTab ? getVisibleColumns(activeTab) : [];
+  const fieldMetadataMap = activeTab
+    ? activeTab.describe?.fields.reduce(
+        (acc, field) => ({ ...acc, [field.name]: field.metadata || {} }),
+        {} as Record<string, Record<string, unknown>>
+      ) || {}
+    : {};
   const activeTabHasPendingChanges = activeTab ? hasPendingChanges(activeTab) : false;
 
   return (
@@ -553,6 +559,7 @@ export function MainPage() {
           activeTabObjectName={activeTabObjectName}
           activeTab={activeTab}
           visibleColumns={visibleColumns}
+          fieldMetadataMap={fieldMetadataMap}
           hasPendingChanges={activeTabHasPendingChanges}
           onActivateTab={setActiveTabObjectName}
           onCloseTab={closeTab}

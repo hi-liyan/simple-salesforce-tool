@@ -9,6 +9,7 @@ type RightWorkspaceProps = {
   activeTabObjectName: string;
   activeTab: TabState | null;
   visibleColumns: string[];
+  fieldMetadataMap: Record<string, Record<string, unknown>>;
   hasPendingChanges: boolean;
   onActivateTab: (objectName: string) => void;
   onCloseTab: (objectName: string) => void;
@@ -36,6 +37,7 @@ export function RightWorkspace({
   activeTabObjectName,
   activeTab,
   visibleColumns,
+  fieldMetadataMap,
   hasPendingChanges,
   onActivateTab,
   onCloseTab,
@@ -202,6 +204,7 @@ export function RightWorkspace({
               <DataGrid
                 result={activeTab.result}
                 visibleColumns={visibleColumns}
+                fieldMetadataMap={fieldMetadataMap}
                 dirtyCellKeys={activeTab.dirtyCellKeys}
                 selectedRecordIds={activeTab.selectedRecordIds}
                 onToggleRecord={onToggleRecord}

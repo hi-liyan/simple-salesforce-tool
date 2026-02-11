@@ -1,5 +1,5 @@
 ﻿import { useMemo, useState } from "react";
-import { Box, Typography } from "@mui/material";
+import { Box, Tooltip, Typography } from "@mui/material";
 import {
   DataEditor,
   EditableGridCell,
@@ -15,6 +15,7 @@ import { QueryResult } from "../types";
 type Props = {
   result: QueryResult;
   visibleColumns: string[];
+  fieldMetadataMap: Record<string, Record<string, unknown>>;
   dirtyCellKeys: string[];
   selectedRecordIds: string[];
   onToggleRecord: (recordId: string, checked: boolean) => void;
@@ -26,6 +27,7 @@ type Props = {
 export function DataGrid({
   result,
   visibleColumns,
+  fieldMetadataMap,
   dirtyCellKeys,
   selectedRecordIds,
   onToggleRecord,
@@ -56,6 +58,12 @@ export function DataGrid({
 
   // 列宽状态：支持用户拖拽后即时更新列宽。
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
+  // 表头悬浮信息：用于展示字段全部元数据。
+  const [hoveredHeaderMeta, setHoveredHeaderMeta] = useState<{
+    fieldName: string;
+    bounds: { x: number; y: number; width: number; height: number };
+    metadata: Record<string, unknown>;
+  } | null>(null);
 
   const columns = useMemo<GridColumn[]>(() => {
     const dataColumns: GridColumn[] = displayColumns.map((column) => ({
@@ -65,7 +73,6 @@ export function DataGrid({
     }));
 
     return [
-      // 第一列标题使用勾选符号，表示全选状态。
       { id: "__select", title: "", width: columnWidths.__select ?? 44 },
       { id: "__index", title: "#", width: columnWidths.__index ?? 56 },
       ...dataColumns
@@ -157,9 +164,18 @@ export function DataGrid({
     newValues.forEach((item) => handleCellEdited(item.location, item.value));
   };
 
+  const tooltipAnchorRect = hoveredHeaderMeta
+    ? new DOMRect(
+        hoveredHeaderMeta.bounds.x,
+        hoveredHeaderMeta.bounds.y + hoveredHeaderMeta.bounds.height,
+        hoveredHeaderMeta.bounds.width,
+        1
+      )
+    : new DOMRect(0, 0, 1, 1);
+
   return (
     // 表格容器：顶部统计栏 + 数据表格。
-    <Box sx={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
+    <Box sx={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0, position: "relative" }}>
       {/* 顶部工具栏：仅显示统计。 */}
       <Box
         sx={{
@@ -243,6 +259,40 @@ export function DataGrid({
             if (col !== 0) return;
             onToggleAll(!allChecked, selectableIds);
           }}
+          // 监听鼠标移动，鼠标位于字段表头时显示元数据提示。
+          onMouseMove={(args) => {
+            if (args.kind !== "header") {
+              if (hoveredHeaderMeta) setHoveredHeaderMeta(null);
+              return;
+            }
+
+            const columnId = String(columns[args.location[0]]?.id ?? "");
+            if (!columnId || columnId.startsWith("__")) {
+              if (hoveredHeaderMeta) setHoveredHeaderMeta(null);
+              return;
+            }
+
+            const metadata = fieldMetadataMap[columnId];
+            if (!metadata) {
+              if (hoveredHeaderMeta) setHoveredHeaderMeta(null);
+              return;
+            }
+
+            if (hoveredHeaderMeta && hoveredHeaderMeta.fieldName === columnId) {
+              return;
+            }
+
+            setHoveredHeaderMeta({
+              fieldName: columnId,
+              bounds: {
+                x: args.bounds.x,
+                y: args.bounds.y,
+                width: args.bounds.width,
+                height: args.bounds.height
+              },
+              metadata
+            });
+          }}
           cellActivationBehavior="double-click"
           onColumnResize={(column, newSize) => {
             const id = String(column.id ?? "");
@@ -260,8 +310,112 @@ export function DataGrid({
           getCellsForSelection
         />
       </Box>
+
+      {/* 表头字段元数据提示：使用 Tooltip 展示字段完整元数据（中文）。 */}
+      {hoveredHeaderMeta && (
+        <Tooltip
+          open
+          placement="bottom-start"
+          arrow
+          title={
+            <Box sx={{ maxWidth: 560, minWidth: 340 }}>
+              <Typography variant="caption" sx={{ display: "block", mb: 0.75, color: "inherit", fontWeight: 700 }}>
+                {hoveredHeaderMeta.fieldName} 字段元数据
+              </Typography>
+              <Box sx={{ maxHeight: 320, overflow: "auto", pr: 0.5 }}>
+                {Object.entries(hoveredHeaderMeta.metadata).map(([key, value]) => (
+                  <Typography
+                    key={key}
+                    variant="caption"
+                    sx={{
+                      display: "block",
+                      lineHeight: 1.5,
+                      fontFamily: "'Cascadia Mono', Consolas, 'Courier New', monospace"
+                    }}
+                  >
+                    {translateFieldMetaKey(key)}: {formatFieldMetaValue(value)}
+                  </Typography>
+                ))}
+              </Box>
+            </Box>
+          }
+          slotProps={{
+            tooltip: {
+              sx: {
+                bgcolor: "#223047",
+                border: "1px solid #3a557f",
+                maxWidth: "none"
+              }
+            },
+            popper: {
+              anchorEl: {
+                getBoundingClientRect: () => tooltipAnchorRect
+              }
+            }
+          }}
+        >
+          <Box
+            sx={{
+              position: "absolute",
+              left: hoveredHeaderMeta.bounds.x,
+              top: hoveredHeaderMeta.bounds.y + hoveredHeaderMeta.bounds.height,
+              width: 1,
+              height: 1,
+              pointerEvents: "none"
+            }}
+          />
+        </Tooltip>
+      )}
     </Box>
   );
+}
+
+// 字段元数据键名中文映射。
+function translateFieldMetaKey(key: string): string {
+  const map: Record<string, string> = {
+    name: "API 名称",
+    label: "标签",
+    type: "字段类型",
+    nillable: "可为空",
+    createable: "可创建",
+    updateable: "可更新",
+    defaultedOnCreate: "创建时默认值",
+    calculated: "是否公式字段",
+    calculatedFormula: "公式表达式",
+    length: "长度",
+    precision: "精度",
+    scale: "小数位",
+    unique: "是否唯一",
+    externalId: "外部 ID",
+    filterable: "可筛选",
+    sortable: "可排序",
+    groupable: "可分组",
+    referenceTo: "引用对象",
+    relationshipName: "关系名称",
+    byteLength: "字节长度",
+    inlineHelpText: "帮助文本",
+    defaultValue: "默认值",
+    defaultValueFormula: "默认值公式",
+    picklistValues: "选项列表"
+  };
+  return map[key] || key;
+}
+
+// 字段元数据值格式化。
+function formatFieldMetaValue(value: unknown): string {
+  if (typeof value === "boolean") {
+    return value ? "是" : "否";
+  }
+  if (Array.isArray(value)) {
+    return value.length === 0 ? "[]" : JSON.stringify(value);
+  }
+  if (value && typeof value === "object") {
+    return JSON.stringify(value);
+  }
+  if (value === null || value === undefined || value === "") {
+    return "-";
+  }
+  return String(value);
 }
 
 // 将单元格值转为显示字符串。

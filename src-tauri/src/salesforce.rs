@@ -65,18 +65,7 @@ impl SalesforceClient {
         struct DescribeResponse {
             name: String,
             label: String,
-            fields: Vec<DescribeField>,
-        }
-
-        #[derive(Deserialize)]
-        struct DescribeField {
-            name: String,
-            label: String,
-            #[serde(rename = "type")]
-            data_type: String,
-            nillable: bool,
-            updateable: bool,
-            createable: bool,
+            fields: Vec<Value>,
         }
 
         let url = build_url(source, &format!("sobjects/{object_name}/describe"));
@@ -88,15 +77,51 @@ impl SalesforceClient {
             fields: body
                 .fields
                 .into_iter()
-                .map(|field| ObjectField {
-                    name: field.name,
-                    label: field.label,
-                    data_type: field.data_type,
-                    nillable: field.nillable,
-                    updateable: field.updateable,
-                    createable: field.createable,
+                .map(|field| {
+                    let metadata = field
+                        .as_object()
+                        .ok_or_else(|| AppError::Biz("字段元数据格式无效。".to_string()))?
+                        .clone();
+
+                    let name = metadata
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| AppError::Biz("字段元数据缺少 name。".to_string()))?
+                        .to_string();
+                    let label = metadata
+                        .get("label")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string();
+                    let data_type = metadata
+                        .get("type")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string();
+                    let nillable = metadata
+                        .get("nillable")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    let updateable = metadata
+                        .get("updateable")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    let createable = metadata
+                        .get("createable")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+
+                    Ok(ObjectField {
+                        name,
+                        label,
+                        data_type,
+                        nillable,
+                        updateable,
+                        createable,
+                        metadata: metadata.into_iter().collect(),
+                    })
                 })
-                .collect(),
+                .collect::<Result<Vec<_>, AppError>>()?,
         })
     }
 

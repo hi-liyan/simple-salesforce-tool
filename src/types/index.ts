@@ -27,6 +27,7 @@ export type ObjectField = {
   nillable: boolean;
   updateable: boolean;
   createable: boolean;
+  metadata: Record<string, unknown>;
 };
 
 // 对象描述信息（字段列表等）。
