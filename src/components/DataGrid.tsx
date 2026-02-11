@@ -41,10 +41,12 @@ export function DataGrid({
   const records = result.records;
 
   const displayColumns = useMemo(
-    () =>
-      visibleColumns.includes("Id")
-        ? ["Id", ...visibleColumns.filter((column) => column !== "Id")]
-        : visibleColumns,
+    () => {
+      // 列顺序规范：始终将 Id、Name 提前展示，其余字段保持原有顺序。
+      const priority = ["Id", "Name"].filter((column) => visibleColumns.includes(column));
+      const rest = visibleColumns.filter((column) => column !== "Id" && column !== "Name");
+      return [...priority, ...rest];
+    },
     [visibleColumns]
   );
 
