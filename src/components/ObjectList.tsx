@@ -51,7 +51,12 @@ export function ObjectList({ objects, activeObjectName, onOpenObject }: Props) {
             <Tooltip
               arrow
               placement="bottom"
-              title={`名称: ${item.name}\n标签: ${item.label}\n可查询: ${item.queryable}\n可新增: ${item.createable}\n可更新: ${item.updateable}\n可删除: ${item.deletable}`}
+              title={
+                // 通过 pre-line 保留 \n 换行。
+                <Box sx={{ whiteSpace: "pre-line" }}>
+                  {`名称: ${item.name}\n标签: ${item.label}\n可查询: ${item.queryable}\n可新增: ${item.createable}\n可更新: ${item.updateable}\n可删除: ${item.deletable}`}
+                </Box>
+              }
             >
               {/* 点击项：选择对象并打开 Tab。 */}
               <ListItemButton
