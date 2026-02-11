@@ -15,6 +15,7 @@ import { QueryResult } from "../types";
 type Props = {
   result: QueryResult;
   visibleColumns: string[];
+  dirtyCellKeys: string[];
   selectedRecordIds: string[];
   onToggleRecord: (recordId: string, checked: boolean) => void;
   onToggleAll: (checked: boolean, recordIds: string[]) => void;
@@ -25,6 +26,7 @@ type Props = {
 export function DataGrid({
   result,
   visibleColumns,
+  dirtyCellKeys,
   selectedRecordIds,
   onToggleRecord,
   onToggleAll,
@@ -49,6 +51,7 @@ export function DataGrid({
   );
 
   const allChecked = selectableIds.length > 0 && selectableIds.every((id) => selectedRecordIds.includes(id));
+  const dirtyCellSet = useMemo(() => new Set(dirtyCellKeys), [dirtyCellKeys]);
 
   // 列宽状态：支持用户拖拽后即时更新列宽。
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
@@ -77,12 +80,17 @@ export function DataGrid({
     );
   }
 
-  const getRecordId = (rowIndex: number): string => String(records[rowIndex]?.Id || `row-${rowIndex}`);
+  const getRecordKey = (rowIndex: number): string => {
+    const record = records[rowIndex] || {};
+    if (record.__localId) return String(record.__localId);
+    if (record.Id) return String(record.Id);
+    return `row-${rowIndex}`;
+  };
 
   const getCellContent = ([col, row]: Item): GridCell => {
     const columnId = String(columns[col]?.id ?? "");
     const record = records[row] || {};
-    const recordId = getRecordId(row);
+    const recordId = getRecordKey(row);
 
     if (columnId === "__select") {
       return {
@@ -105,12 +113,19 @@ export function DataGrid({
     }
 
     const text = stringifyCellValue(record[columnId]);
+    const isDirty = dirtyCellSet.has(`${recordId}:${columnId}`);
     return {
       kind: GridCellKind.Text,
       data: text,
       displayData: text,
       allowOverlay: true,
-      readonly: false
+      readonly: false,
+      themeOverride: isDirty
+        ? {
+            bgCell: "#fff6d9",
+            bgCellMedium: "#ffe9a8"
+          }
+        : undefined
     };
   };
 
@@ -119,7 +134,7 @@ export function DataGrid({
     const columnId = String(columns[col]?.id ?? "");
 
     if (columnId === "__select" && newValue.kind === GridCellKind.Boolean) {
-      const recordId = getRecordId(row);
+      const recordId = getRecordKey(row);
       if (!recordId.startsWith("row-")) {
         onToggleRecord(recordId, Boolean(newValue.data));
       }
