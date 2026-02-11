@@ -219,6 +219,7 @@ export default function App() {
 
     try {
       const describe = await api.describeObject(selectedSourceId, objectItem.name);
+      const persistedVisibility = await loadColumnVisibilityFromDb(selectedSourceId, objectItem.name, describe);
       const defaultSortField = describe.fields.find((field) => field.name === "LastModifiedDate")
         ? "LastModifiedDate"
         : describe.fields.find((field) => field.name === "CreatedDate")
@@ -231,7 +232,7 @@ export default function App() {
         ...tab,
         describe,
         sortField: defaultSortField,
-        columnVisibility: loadColumnVisibility(selectedSourceId, objectItem.name, describe)
+        columnVisibility: persistedVisibility
       }));
 
       await queryTabData(objectItem.name, describe, "", defaultSortField, 200, "DESC");
@@ -354,7 +355,7 @@ export default function App() {
         whereClause: extractWhereClause(activeTab.soqlDraft, activeTab.objectName) ?? item.whereClause,
         notice: { type: "success", message: `${activeTab.objectName} 执行 SOQL 成功，共 ${result.totalSize} 条。` }
       }));
-      saveColumnVisibility(selectedSourceId, activeTab.objectName, nextVisibility);
+      await persistColumnVisibility(selectedSourceId, activeTab.objectName, nextVisibility);
     } catch (error) {
       patchTab(activeTab.objectName, (item) => ({
         ...item,
@@ -382,7 +383,7 @@ export default function App() {
     patchTab(activeTab.objectName, (item) => ({ ...item, showDrawer: true, loading: true }));
     try {
       const describe = await api.describeObject(selectedSourceId, activeTab.objectName);
-      const visibility = loadColumnVisibility(selectedSourceId, activeTab.objectName, describe);
+      const visibility = await loadColumnVisibilityFromDb(selectedSourceId, activeTab.objectName, describe);
       patchTab(activeTab.objectName, (item) => ({
         ...item,
         describe,
@@ -434,6 +435,33 @@ export default function App() {
       }
       return next;
     });
+  }
+
+  // 从后端 SQLite 读取字段勾选配置，并与当前对象字段做默认值合并。
+  async function loadColumnVisibilityFromDb(
+    sourceId: string,
+    objectName: string,
+    describe: ObjectDescribe
+  ): Promise<Record<string, boolean>> {
+    const defaults = buildDefaultVisibility(describe);
+    try {
+      const stored = await api.getColumnVisibility(sourceId, objectName);
+      return { ...defaults, ...stored };
+    } catch {
+      return defaults;
+    }
+  }
+
+  // 将字段勾选状态持久化到 SQLite，失败时给当前 Tab 提示，但不阻塞 UI 交互。
+  async function persistColumnVisibility(sourceId: string, objectName: string, visibility: Record<string, boolean>) {
+    try {
+      await api.saveColumnVisibility(sourceId, objectName, visibility);
+    } catch (error) {
+      patchTab(objectName, (item) => ({
+        ...item,
+        notice: { type: "error", message: `保存字段勾选配置失败：${String(error)}` }
+      }));
+    }
   }
 
   return (
@@ -542,7 +570,7 @@ export default function App() {
                     <Button
                       variant="outlined"
                       startIcon={<Play size={14} />}
-                      disabled={activeTab.loading}
+                      disabled={activeTab.loading || !activeTab.soqlDraft}
                       onClick={() => void executeCustomSoql()}
                       sx={{ height: 40 }}
                     >
@@ -568,18 +596,7 @@ export default function App() {
                       sx={{ width: 320 }}
                       onChange={(event) => {
                         const nextWhere = event.target.value;
-                        const selectedFields = (activeTab.describe?.fields || [])
-                          .map((field) => field.name)
-                          .filter((name) => (activeTab.columnVisibility[name] ?? true) === true);
-                        const nextSoql = buildQuerySoql(
-                          activeTab.objectName,
-                          selectedFields,
-                          nextWhere,
-                          activeTab.sortField,
-                          activeTab.sortDirection,
-                          activeTab.limit
-                        );
-                        patchTab(activeTab.objectName, (item) => ({ ...item, whereClause: nextWhere, soqlDraft: nextSoql }));
+                        patchTab(activeTab.objectName, (item) => ({ ...item, whereClause: nextWhere }));
                       }}
                     />
                     <TextField
@@ -681,18 +698,9 @@ export default function App() {
                           }, {} as Record<string, boolean>);
 
                           const selectedFields = nextChecked ? activeTab.describe!.fields.map((item) => item.name) : [];
-                          const nextSoql = buildQuerySoql(
-                            activeTab.objectName,
-                            selectedFields,
-                            activeTab.whereClause,
-                            activeTab.sortField,
-                            activeTab.sortDirection,
-                            activeTab.limit
-                          );
-
-                          patchTab(activeTab.objectName, (item) => ({ ...item, columnVisibility: nextVisibility, soqlDraft: nextSoql }));
+                          patchTab(activeTab.objectName, (item) => ({ ...item, columnVisibility: nextVisibility }));
                           if (selectedSourceId) {
-                            saveColumnVisibility(selectedSourceId, activeTab.objectName, nextVisibility);
+                            void persistColumnVisibility(selectedSourceId, activeTab.objectName, nextVisibility);
                           }
                         }}
                       >
@@ -732,22 +740,12 @@ export default function App() {
                                     const selectedFields = activeTab.describe!.fields
                                       .map((item) => item.name)
                                       .filter((name) => (nextVisibility[name] ?? true) === true);
-                                    const nextSoql = buildQuerySoql(
-                                      activeTab.objectName,
-                                      selectedFields,
-                                      activeTab.whereClause,
-                                      activeTab.sortField,
-                                      activeTab.sortDirection,
-                                      activeTab.limit
-                                    );
-
                                     patchTab(activeTab.objectName, (item) => ({
                                       ...item,
-                                      columnVisibility: nextVisibility,
-                                      soqlDraft: nextSoql
+                                      columnVisibility: nextVisibility
                                     }));
                                     if (selectedSourceId) {
-                                      saveColumnVisibility(selectedSourceId, activeTab.objectName, nextVisibility);
+                                      void persistColumnVisibility(selectedSourceId, activeTab.objectName, nextVisibility);
                                     }
                                   }}
                                 />
@@ -804,7 +802,12 @@ export default function App() {
                           }}
                         />
                       </Box>
-                      <Button startIcon={<Play size={14} />} sx={{ mt: 1, alignSelf: "flex-start" }} onClick={() => void executeCustomSoql()}>
+                      <Button
+                        startIcon={<Play size={14} />}
+                        sx={{ mt: 1, alignSelf: "flex-start" }}
+                        disabled={activeTab.loading || !activeTab.soqlDraft}
+                        onClick={() => void executeCustomSoql()}
+                      >
                         执行 SOQL
                       </Button>
                     </Box>
@@ -840,30 +843,8 @@ export default function App() {
   );
 }
 
-function getVisibilityStorageKey(sourceId: string, objectName: string): string {
-  return `column_visibility:${sourceId}:${objectName}`;
-}
-
-function loadColumnVisibility(sourceId: string, objectName: string, describe: ObjectDescribe): Record<string, boolean> {
-  const key = getVisibilityStorageKey(sourceId, objectName);
-  const defaults = describe.fields.reduce(
-    (acc, field) => ({ ...acc, [field.name]: true }),
-    {} as Record<string, boolean>
-  );
-
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return defaults;
-    const parsed = JSON.parse(raw) as Record<string, boolean>;
-    return { ...defaults, ...parsed };
-  } catch {
-    return defaults;
-  }
-}
-
-function saveColumnVisibility(sourceId: string, objectName: string, visibility: Record<string, boolean>) {
-  const key = getVisibilityStorageKey(sourceId, objectName);
-  localStorage.setItem(key, JSON.stringify(visibility));
+function buildDefaultVisibility(describe: ObjectDescribe): Record<string, boolean> {
+  return describe.fields.reduce((acc, field) => ({ ...acc, [field.name]: true }), {} as Record<string, boolean>);
 }
 
 function getVisibleColumns(tab: TabState): string[] {

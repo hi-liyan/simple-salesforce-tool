@@ -1,5 +1,6 @@
 ﻿use chrono::Utc;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
+use std::collections::HashMap;
 
 use crate::error::AppError;
 use crate::models::{CachedObjects, SalesforceObject, SalesforceSource, SourceUpsertPayload};
@@ -24,6 +25,15 @@ pub fn init_schema(connection: &Connection) -> Result<(), AppError> {
             source_id TEXT PRIMARY KEY,
             payload TEXT NOT NULL,
             updated_at INTEGER NOT NULL,
+            FOREIGN KEY(source_id) REFERENCES salesforce_sources(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS column_visibility_settings (
+            source_id TEXT NOT NULL,
+            object_name TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            updated_at INTEGER NOT NULL,
+            PRIMARY KEY(source_id, object_name),
             FOREIGN KEY(source_id) REFERENCES salesforce_sources(id) ON DELETE CASCADE
         );
         "#,
@@ -172,6 +182,7 @@ pub fn upsert_source_with_id(
 pub fn prune_cli_sources(connection: &Connection, keep_ids: &[String]) -> Result<(), AppError> {
     if keep_ids.is_empty() {
         connection.execute("DELETE FROM object_metadata_cache WHERE source_id LIKE 'cli-%'", [])?;
+        connection.execute("DELETE FROM column_visibility_settings WHERE source_id LIKE 'cli-%'", [])?;
         connection.execute("DELETE FROM salesforce_sources WHERE id LIKE 'cli-%'", [])?;
         return Ok(());
     }
@@ -187,6 +198,12 @@ pub fn prune_cli_sources(connection: &Connection, keep_ids: &[String]) -> Result
     );
     connection.execute(&cache_sql, params_from_iter(keep_ids.iter()))?;
 
+    let visibility_sql = format!(
+        "DELETE FROM column_visibility_settings WHERE source_id LIKE 'cli-%' AND source_id NOT IN ({})",
+        placeholders
+    );
+    connection.execute(&visibility_sql, params_from_iter(keep_ids.iter()))?;
+
     let source_sql = format!(
         "DELETE FROM salesforce_sources WHERE id LIKE 'cli-%' AND id NOT IN ({})",
         placeholders
@@ -199,6 +216,46 @@ pub fn prune_cli_sources(connection: &Connection, keep_ids: &[String]) -> Result
 pub fn delete_source(connection: &Connection, id: &str) -> Result<(), AppError> {
     connection.execute("DELETE FROM salesforce_sources WHERE id = ?1", [id])?;
     connection.execute("DELETE FROM object_metadata_cache WHERE source_id = ?1", [id])?;
+    connection.execute("DELETE FROM column_visibility_settings WHERE source_id = ?1", [id])?;
+    Ok(())
+}
+
+/// 读取某个数据源 + 对象的字段勾选配置。
+pub fn read_column_visibility(
+    connection: &Connection,
+    source_id: &str,
+    object_name: &str,
+) -> Result<Option<HashMap<String, bool>>, AppError> {
+    let payload: Option<String> = connection
+        .query_row(
+            "SELECT payload FROM column_visibility_settings WHERE source_id = ?1 AND object_name = ?2",
+            params![source_id, object_name],
+            |row| row.get(0),
+        )
+        .optional()?;
+
+    match payload {
+        Some(json) => Ok(Some(serde_json::from_str(&json)?)),
+        None => Ok(None),
+    }
+}
+
+/// 保存某个数据源 + 对象的字段勾选配置（UPSERT）。
+pub fn write_column_visibility(
+    connection: &Connection,
+    source_id: &str,
+    object_name: &str,
+    visibility: &HashMap<String, bool>,
+) -> Result<(), AppError> {
+    let payload = serde_json::to_string(visibility)?;
+    let now = Utc::now().timestamp();
+
+    connection.execute(
+        "INSERT INTO column_visibility_settings (source_id, object_name, payload, updated_at) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(source_id, object_name) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at",
+        params![source_id, object_name, payload, now],
+    )?;
+
     Ok(())
 }
 
