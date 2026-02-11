@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useRef, useState } from "react";
+﻿import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Box,
@@ -364,6 +364,40 @@ export default function App() {
     }
   }
 
+  async function toggleDrawerForActiveTab() {
+    if (!activeTab || !selectedSourceId) return;
+
+    const nextOpen = !activeTab.showDrawer;
+    if (!nextOpen) {
+      patchTab(activeTab.objectName, (item) => ({ ...item, showDrawer: false }));
+      return;
+    }
+
+    if (activeTab.describe) {
+      patchTab(activeTab.objectName, (item) => ({ ...item, showDrawer: true }));
+      return;
+    }
+
+    // 抽屉打开时兜底拉取字段元数据，避免出现空白面板。
+    patchTab(activeTab.objectName, (item) => ({ ...item, showDrawer: true, loading: true }));
+    try {
+      const describe = await api.describeObject(selectedSourceId, activeTab.objectName);
+      const visibility = loadColumnVisibility(selectedSourceId, activeTab.objectName, describe);
+      patchTab(activeTab.objectName, (item) => ({
+        ...item,
+        describe,
+        columnVisibility: visibility,
+        loading: false
+      }));
+    } catch (error) {
+      patchTab(activeTab.objectName, (item) => ({
+        ...item,
+        loading: false,
+        notice: { type: "error", message: `加载字段元数据失败：${String(error)}` }
+      }));
+    }
+  }
+
   async function createRecordQuickly() {
     if (!selectedSourceId || !activeTab) return;
 
@@ -518,7 +552,7 @@ export default function App() {
                       variant="outlined"
                       startIcon={<PanelRightOpen size={14} />}
                       disabled={activeTab.loading}
-                      onClick={() => patchTab(activeTab.objectName, (item) => ({ ...item, showDrawer: !item.showDrawer }))}
+                      onClick={() => void toggleDrawerForActiveTab()}
                       sx={{ height: 40 }}
                     >
                       字段与SOQL
@@ -625,109 +659,155 @@ export default function App() {
                 </Box>
               </Box>
 
-              {activeTab.showDrawer && activeTab.describe && (
-                <Box sx={{ width: 360, minWidth: 360, borderLeft: "1px solid", borderColor: "divider", display: "flex", flexDirection: "column" }}>
-                  <Box sx={{ px: 1.5, py: 1, borderBottom: "1px solid", borderColor: "divider", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <Typography variant="caption" sx={{ color: "text.secondary" }}>
-                      Field 元数据
-                    </Typography>
-                    <Button
-                      variant="text"
-                      size="small"
-                      disabled={activeTab.loading}
-                      onClick={() => {
-                        const allSelected = activeTab.describe!.fields.every(
-                          (field) => (activeTab.columnVisibility[field.name] ?? true) === true
-                        );
-                        const nextChecked = !allSelected;
-                        const nextVisibility = activeTab.describe!.fields.reduce((acc, field) => {
-                          acc[field.name] = nextChecked;
-                          return acc;
-                        }, {} as Record<string, boolean>);
+              {activeTab.showDrawer && (
+                <Box sx={{ width: 360, minWidth: 360, borderLeft: "1px solid", borderColor: "divider", display: "flex", flexDirection: "column", minHeight: 0 }}>
+                  <Box sx={{ flex: "1 1 50%", minHeight: 0, display: "flex", flexDirection: "column", borderBottom: "1px solid", borderColor: "divider" }}>
+                    <Box sx={{ px: 1.5, py: 1, borderBottom: "1px solid", borderColor: "divider", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <Typography variant="caption" sx={{ color: "text.secondary" }}>
+                        Field 元数据
+                      </Typography>
+                      <Button
+                        variant="text"
+                        size="small"
+                        disabled={activeTab.loading || !activeTab.describe}
+                        onClick={() => {
+                          const allSelected = activeTab.describe!.fields.every(
+                            (field) => (activeTab.columnVisibility[field.name] ?? true) === true
+                          );
+                          const nextChecked = !allSelected;
+                          const nextVisibility = activeTab.describe!.fields.reduce((acc, field) => {
+                            acc[field.name] = nextChecked;
+                            return acc;
+                          }, {} as Record<string, boolean>);
 
-                        const selectedFields = nextChecked ? activeTab.describe!.fields.map((item) => item.name) : [];
-                        const nextSoql = buildQuerySoql(
-                          activeTab.objectName,
-                          selectedFields,
-                          activeTab.whereClause,
-                          activeTab.sortField,
-                          activeTab.sortDirection,
-                          activeTab.limit
-                        );
+                          const selectedFields = nextChecked ? activeTab.describe!.fields.map((item) => item.name) : [];
+                          const nextSoql = buildQuerySoql(
+                            activeTab.objectName,
+                            selectedFields,
+                            activeTab.whereClause,
+                            activeTab.sortField,
+                            activeTab.sortDirection,
+                            activeTab.limit
+                          );
 
-                        patchTab(activeTab.objectName, (item) => ({ ...item, columnVisibility: nextVisibility, soqlDraft: nextSoql }));
-                        if (selectedSourceId) {
-                          saveColumnVisibility(selectedSourceId, activeTab.objectName, nextVisibility);
-                        }
-                      }}
-                    >
-                      {activeTab.describe!.fields.every((field) => (activeTab.columnVisibility[field.name] ?? true) === true)
-                        ? "取消全选"
-                        : "全选"}
-                    </Button>
-                  </Box>
+                          patchTab(activeTab.objectName, (item) => ({ ...item, columnVisibility: nextVisibility, soqlDraft: nextSoql }));
+                          if (selectedSourceId) {
+                            saveColumnVisibility(selectedSourceId, activeTab.objectName, nextVisibility);
+                          }
+                        }}
+                      >
+                        {activeTab.describe?.fields.every((field) => (activeTab.columnVisibility[field.name] ?? true) === true)
+                          ? "取消全选"
+                          : "全选"}
+                      </Button>
+                    </Box>
 
-                  <Box sx={{ flex: 1, minHeight: 0, overflow: "auto" }}>
-                    {activeTab.describe.fields.map((field) => {
-                      const checked = activeTab.columnVisibility[field.name] ?? true;
-                      return (
-                        <Box key={field.name} sx={{ px: 1.5, py: 0.8 }}>
-                          <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1}>
-                            <Stack direction="row" alignItems="center" spacing={1}>
-                              <input
-                                type="checkbox"
-                                checked={checked}
-                                disabled={activeTab.loading}
-                                onChange={(event) => {
-                                  const nextVisibility = { ...activeTab.columnVisibility, [field.name]: event.target.checked };
-                                  const selectedFields = activeTab.describe!.fields
-                                    .map((item) => item.name)
-                                    .filter((name) => (nextVisibility[name] ?? true) === true);
-                                  const nextSoql = buildQuerySoql(
-                                    activeTab.objectName,
-                                    selectedFields,
-                                    activeTab.whereClause,
-                                    activeTab.sortField,
-                                    activeTab.sortDirection,
-                                    activeTab.limit
-                                  );
-
-                                  patchTab(activeTab.objectName, (item) => ({
-                                    ...item,
-                                    columnVisibility: nextVisibility,
-                                    soqlDraft: nextSoql
-                                  }));
-                                  if (selectedSourceId) {
-                                    saveColumnVisibility(selectedSourceId, activeTab.objectName, nextVisibility);
-                                  }
-                                }}
-                              />
-                              <Typography variant="body2">{field.name}</Typography>
-                            </Stack>
-                            <Typography variant="caption" color="text.secondary" noWrap>
-                              {field.label} / {field.dataType}
-                            </Typography>
-                          </Stack>
-                          <Divider sx={{ mt: 0.8 }} />
+                    <Box sx={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+                      {!activeTab.describe && (
+                        <Box sx={{ px: 1.5, py: 1.2 }}>
+                          <Typography variant="caption" color="text.secondary">
+                            正在加载字段元数据...
+                          </Typography>
                         </Box>
-                      );
-                    })}
+                      )}
+                      {activeTab.describe && activeTab.describe.fields.length === 0 && (
+                        <Box sx={{ px: 1.5, py: 1.2 }}>
+                          <Typography variant="caption" color="text.secondary">
+                            未获取到字段元数据。
+                          </Typography>
+                        </Box>
+                      )}
+                      {activeTab.describe?.fields.map((field) => {
+                        const checked = activeTab.columnVisibility[field.name] ?? true;
+                        return (
+                          <Box key={field.name} sx={{ px: 1.5, py: 0.8 }}>
+                            <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1}>
+                              <Stack direction="row" alignItems="center" spacing={1}>
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  disabled={activeTab.loading}
+                                  onChange={(event) => {
+                                    const nextVisibility = { ...activeTab.columnVisibility, [field.name]: event.target.checked };
+                                    const selectedFields = activeTab.describe!.fields
+                                      .map((item) => item.name)
+                                      .filter((name) => (nextVisibility[name] ?? true) === true);
+                                    const nextSoql = buildQuerySoql(
+                                      activeTab.objectName,
+                                      selectedFields,
+                                      activeTab.whereClause,
+                                      activeTab.sortField,
+                                      activeTab.sortDirection,
+                                      activeTab.limit
+                                    );
+
+                                    patchTab(activeTab.objectName, (item) => ({
+                                      ...item,
+                                      columnVisibility: nextVisibility,
+                                      soqlDraft: nextSoql
+                                    }));
+                                    if (selectedSourceId) {
+                                      saveColumnVisibility(selectedSourceId, activeTab.objectName, nextVisibility);
+                                    }
+                                  }}
+                                />
+                                <Typography variant="body2">{field.name}</Typography>
+                              </Stack>
+                              <Typography variant="caption" color="text.secondary" noWrap>
+                                {field.label} / {field.dataType}
+                              </Typography>
+                            </Stack>
+                            <Divider sx={{ mt: 0.8 }} />
+                          </Box>
+                        );
+                      })}
+                    </Box>
                   </Box>
 
-                  <Box sx={{ borderTop: "1px solid", borderColor: "divider", p: 1.5, display: "flex", flexDirection: "column", minHeight: 220 }}>
-                    <Typography variant="caption" sx={{ color: "text.secondary", mb: 1 }}>
-                      SOQL 执行器
-                    </Typography>
-                    <TextField
-                      multiline
-                      minRows={6}
-                      value={activeTab.soqlDraft}
-                      onChange={(event) => patchTab(activeTab.objectName, (item) => ({ ...item, soqlDraft: event.target.value }))}
-                      sx={{ flex: 1 }}
-                    />
-                    <Button startIcon={<Play size={14} />} sx={{ mt: 1, alignSelf: "flex-start" }} onClick={() => void executeCustomSoql()}>
-                      执行 SOQL
-                    </Button>
+                  <Box sx={{ flex: "1 1 50%", minHeight: 0, display: "flex", flexDirection: "column" }}>
+                    <Box sx={{ px: 1.5, py: 1, borderBottom: "1px solid", borderColor: "divider" }}>
+                      <Typography variant="caption" sx={{ color: "text.secondary" }}>
+                        SOQL 执行器
+                      </Typography>
+                    </Box>
+                    <Box sx={{ flex: 1, minHeight: 0, p: 1.5, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+                      <Box
+                        sx={{
+                          flex: 1,
+                          minHeight: 0,
+                          border: "1px solid",
+                          borderColor: "divider",
+                          bgcolor: "background.paper",
+                          overflow: "hidden"
+                        }}
+                      >
+                        <Box
+                          component="textarea"
+                          value={activeTab.soqlDraft}
+                          onChange={(event: ChangeEvent<HTMLTextAreaElement>) =>
+                            patchTab(activeTab.objectName, (item) => ({ ...item, soqlDraft: event.target.value }))
+                          }
+                          sx={{
+                            width: "100%",
+                            height: "100%",
+                            border: "none",
+                            outline: "none",
+                            p: 1,
+                            resize: "none",
+                            overflow: "auto",
+                            fontFamily: "'Cascadia Mono', Consolas, 'Courier New', monospace",
+                            fontSize: 12,
+                            lineHeight: 1.5,
+                            boxSizing: "border-box",
+                            bgcolor: "background.paper",
+                            color: "text.primary"
+                          }}
+                        />
+                      </Box>
+                      <Button startIcon={<Play size={14} />} sx={{ mt: 1, alignSelf: "flex-start" }} onClick={() => void executeCustomSoql()}>
+                        执行 SOQL
+                      </Button>
+                    </Box>
                   </Box>
                 </Box>
               )}
@@ -853,7 +933,5 @@ function buildQuerySoql(
   const whereSegment = whereClause.trim() ? ` WHERE ${whereClause.trim()}` : "";
   return `SELECT ${fields.join(", ")} FROM ${objectName}${whereSegment} ORDER BY ${sortField} ${sortDirection} LIMIT ${limit}`;
 }
-
-
 
 
