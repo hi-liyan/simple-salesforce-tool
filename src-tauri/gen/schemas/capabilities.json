@@ -1,1 +1,1 @@
-{"main-window":{"identifier":"main-window","description":"Allow main and auth windows to emit/listen events.","local":true,"windows":["main","sf-auth"],"permissions":["core:default","core:event:default"]}}
+{"main-window":{"identifier":"main-window","description":"Allow main and auth windows to emit/listen events.","local":true,"windows":["main","sf-auth","sf-field-meta"],"permissions":["core:default","core:event:default"]}}
