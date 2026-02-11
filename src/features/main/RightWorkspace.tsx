@@ -16,6 +16,7 @@ type RightWorkspaceProps = {
   onCreateRecord: () => void;
   onDeleteCheckedRecords: () => void;
   onApplyPendingChanges: () => void;
+  onDiscardPendingChanges: () => void;
   onToggleDrawer: () => void;
   onWhereChange: (value: string) => void;
   onLimitChange: (value: number) => void;
@@ -24,7 +25,8 @@ type RightWorkspaceProps = {
   onQuery: () => void;
   onToggleRecord: (recordId: string, checked: boolean) => void;
   onToggleAllRecords: (checked: boolean, recordIds: string[]) => void;
-  onEditCell: (rowIndex: number, columnName: string, value: string) => void;
+  onEditCell: (rowIndex: number, columnName: string, value: unknown) => void;
+  onShowMessage: (message: string) => void;
   onToggleAllFields: () => void;
   onToggleFieldVisibility: (fieldName: string, checked: boolean) => void;
   onSoqlChange: (value: string) => void;
@@ -44,6 +46,7 @@ export function RightWorkspace({
   onCreateRecord,
   onDeleteCheckedRecords,
   onApplyPendingChanges,
+  onDiscardPendingChanges,
   onToggleDrawer,
   onWhereChange,
   onLimitChange,
@@ -53,6 +56,7 @@ export function RightWorkspace({
   onToggleRecord,
   onToggleAllRecords,
   onEditCell,
+  onShowMessage,
   onToggleAllFields,
   onToggleFieldVisibility,
   onSoqlChange,
@@ -97,16 +101,26 @@ export function RightWorkspace({
         })}
       </Box>
 
-      {/* 顶部通知条。 */}
-      {activeTab?.notice && (
-        <Alert severity={activeTab.notice.type === "error" ? "error" : "success"} sx={{ borderRadius: 0 }}>
-          {activeTab.notice.message}
-        </Alert>
-      )}
-
       {/* 右侧主体内容：表格 + 抽屉。 */}
       {activeTab && (
         <Box sx={{ position: "relative", display: "flex", minHeight: 0, flex: 1, overflow: "hidden" }}>
+          {/* 浮动通知：不占用标准数据流。 */}
+          {activeTab.notice && (
+            <Alert
+              severity={activeTab.notice.type === "error" ? "error" : "success"}
+              sx={{
+                position: "absolute",
+                top: 10,
+                right: 12,
+                zIndex: 40,
+                maxWidth: 560,
+                boxShadow: 3
+              }}
+            >
+              {activeTab.notice.message}
+            </Alert>
+          )}
+
           {/* 表格区域。 */}
           <Box sx={{ minWidth: 0, flex: 1, display: "flex", flexDirection: "column" }}>
             {/* 操作工具栏：新建、删除勾选、执行更新、字段与SOQL。 */}
@@ -139,6 +153,14 @@ export function RightWorkspace({
                   sx={{ height: 40 }}
                 >
                   执行更新
+                </Button>
+                <Button
+                  variant="outlined"
+                  disabled={activeTab.loading || !hasPendingChanges}
+                  onClick={onDiscardPendingChanges}
+                  sx={{ height: 40 }}
+                >
+                  撤回修改
                 </Button>
                 <Button
                   variant="outlined"
@@ -210,6 +232,7 @@ export function RightWorkspace({
                 onToggleRecord={onToggleRecord}
                 onToggleAll={onToggleAllRecords}
                 onEditCell={onEditCell}
+                onShowMessage={onShowMessage}
               />
             </Box>
           </Box>

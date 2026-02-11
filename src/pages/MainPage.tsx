@@ -493,6 +493,29 @@ export function MainPage() {
     }
   }
 
+  function discardPendingChanges() {
+    if (!activeTab) return;
+    if (!hasPendingChanges(activeTab)) return;
+
+    patchTab(activeTab.objectName, (item) => {
+      const revertedRecords = item.result.records
+        .filter((record) => !record.__isNew)
+        .map((record, index) => {
+          const key = getRecordKey(record, index);
+          const baseline = item.baselineRecords[key];
+          return baseline ? { ...baseline } : { ...record };
+        });
+
+      return {
+        ...item,
+        result: { ...item.result, records: revertedRecords },
+        dirtyCellKeys: [],
+        selectedRecordIds: [],
+        notice: { type: "success", message: "已撤回未提交修改。" }
+      };
+    });
+  }
+
   function closeTab(objectName: string) {
     if (noticeTimersRef.current[objectName]) {
       clearTimeout(noticeTimersRef.current[objectName]);
@@ -566,6 +589,7 @@ export function MainPage() {
           onCreateRecord={createRecordQuickly}
           onDeleteCheckedRecords={() => void deleteCheckedRecords()}
           onApplyPendingChanges={() => void applyPendingChanges()}
+          onDiscardPendingChanges={discardPendingChanges}
           onToggleDrawer={() => void toggleDrawerForActiveTab()}
           onWhereChange={(value) => {
             if (!activeTab) return;
@@ -638,6 +662,13 @@ export function MainPage() {
                 dirtyCellKeys: Array.from(dirtySet)
               };
             });
+          }}
+          onShowMessage={(message) => {
+            if (!activeTab) return;
+            patchTab(activeTab.objectName, (item) => ({
+              ...item,
+              notice: { type: "error", message }
+            }));
           }}
           onToggleAllFields={() => {
             if (!activeTab?.describe) return;
