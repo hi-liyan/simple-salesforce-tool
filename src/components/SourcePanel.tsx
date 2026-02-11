@@ -2,7 +2,7 @@
 import { api } from "../api";
 import { SalesforceSource } from "../types";
 
-// 数据源管理面板：负责数据源的创建、更新、删除与切换。
+// 数据源管理面板：使用紧凑风格支持数据源维护。
 type Props = {
   sources: SalesforceSource[];
   selectedSourceId: string;
@@ -53,10 +53,10 @@ export function SourcePanel({
     try {
       if (editingId) {
         await api.updateSource(editingId, form);
-        setMessage("数据源更新成功。");
+        setMessage("数据源更新成功");
       } else {
         await api.createSource(form);
-        setMessage("数据源创建成功。");
+        setMessage("数据源创建成功");
       }
       await onSourcesChanged();
       resetForm();
@@ -73,21 +73,20 @@ export function SourcePanel({
         onChangeSelectedSource("");
       }
       await onSourcesChanged();
-      setMessage("数据源删除成功。");
+      setMessage("数据源删除成功");
     } catch (error) {
       setMessage(`删除失败：${String(error)}`);
     }
   }
 
   return (
-    <div className="mt-4 space-y-3">
-      <label className="block text-sm font-medium text-slate-700">当前数据源</label>
+    <div className="space-y-2 text-xs">
       <select
-        className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-brand-500"
+        className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1.5 text-slate-100 outline-none focus:border-sky-500"
         value={selectedSourceId}
         onChange={(event) => onChangeSelectedSource(event.target.value)}
       >
-        <option value="">请选择</option>
+        <option value="">请选择数据源</option>
         {sources.map((source) => (
           <option key={source.id} value={source.id}>
             {source.name}
@@ -95,60 +94,53 @@ export function SourcePanel({
         ))}
       </select>
 
-      <div className="rounded-lg border border-slate-200 p-3">
-        <h3 className="text-sm font-semibold text-slate-700">新增/编辑数据源</h3>
-        <form className="mt-3 space-y-2" onSubmit={onSubmit}>
-          <input
-            className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-            placeholder="数据源名称"
-            value={form.name}
-            onChange={(event) => setForm((state) => ({ ...state, name: event.target.value }))}
-            required
-          />
-          <input
-            className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-            placeholder="Instance URL，如 https://xxx.my.salesforce.com"
-            value={form.instanceUrl}
-            onChange={(event) => setForm((state) => ({ ...state, instanceUrl: event.target.value }))}
-            required
-          />
-          <input
-            className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-            placeholder="Access Token"
-            value={form.accessToken}
-            onChange={(event) => setForm((state) => ({ ...state, accessToken: event.target.value }))}
-            required
-          />
-          <input
-            className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-            placeholder="API Version，如 v61.0"
-            value={form.apiVersion}
-            onChange={(event) => setForm((state) => ({ ...state, apiVersion: event.target.value }))}
-            required
-          />
-          <div className="flex gap-2">
-            <button className="rounded bg-brand-700 px-3 py-2 text-sm text-white hover:bg-brand-800" disabled={loading}>
-              {editingId ? "更新" : "保存"}
-            </button>
-            <button
-              type="button"
-              className="rounded border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
-              onClick={resetForm}
-            >
-              清空
-            </button>
-          </div>
-        </form>
-      </div>
+      <form className="space-y-1" onSubmit={onSubmit}>
+        <input
+          className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-100"
+          placeholder="名称"
+          value={form.name}
+          onChange={(event) => setForm((state) => ({ ...state, name: event.target.value }))}
+          required
+        />
+        <input
+          className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-100"
+          placeholder="Instance URL"
+          value={form.instanceUrl}
+          onChange={(event) => setForm((state) => ({ ...state, instanceUrl: event.target.value }))}
+          required
+        />
+        <input
+          className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-100"
+          placeholder="Access Token"
+          value={form.accessToken}
+          onChange={(event) => setForm((state) => ({ ...state, accessToken: event.target.value }))}
+          required
+        />
+        <input
+          className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-100"
+          placeholder="API Version"
+          value={form.apiVersion}
+          onChange={(event) => setForm((state) => ({ ...state, apiVersion: event.target.value }))}
+          required
+        />
+        <div className="flex gap-1">
+          <button className="rounded border border-sky-700 bg-sky-700 px-2 py-1 text-white" disabled={loading}>
+            {editingId ? "更新" : "保存"}
+          </button>
+          <button type="button" className="rounded border border-slate-600 px-2 py-1 text-slate-200" onClick={resetForm}>
+            清空
+          </button>
+        </div>
+      </form>
 
       {selectedSource && (
-        <div className="rounded-lg border border-slate-200 p-3 text-sm text-slate-700">
-          <div className="font-medium">已选：{selectedSource.name}</div>
-          <div className="mt-1 truncate">{selectedSource.instanceUrl}</div>
-          <div className="mt-2 flex gap-2">
+        <div className="rounded border border-slate-700 p-2 text-slate-300">
+          <div className="truncate">{selectedSource.name}</div>
+          <div className="mt-1 truncate text-[10px] text-slate-500">{selectedSource.instanceUrl}</div>
+          <div className="mt-1 flex gap-1">
             <button
               type="button"
-              className="rounded border border-slate-300 px-2 py-1 text-xs hover:bg-slate-50"
+              className="rounded border border-slate-600 px-2 py-0.5"
               onClick={() => {
                 setEditingId(selectedSource.id);
                 setForm({
@@ -163,7 +155,7 @@ export function SourcePanel({
             </button>
             <button
               type="button"
-              className="rounded border border-red-300 px-2 py-1 text-xs text-red-600 hover:bg-red-50"
+              className="rounded border border-red-700 px-2 py-0.5 text-red-300"
               onClick={() => void onDelete(selectedSource.id)}
             >
               删除
@@ -172,7 +164,7 @@ export function SourcePanel({
         </div>
       )}
 
-      {message && <p className="text-xs text-slate-600">{message}</p>}
+      {message && <p className="text-[10px] text-slate-400">{message}</p>}
     </div>
   );
 }

@@ -11,15 +11,17 @@ type Notice = {
   message: string;
 };
 
+// 主应用：采用 DataGrip 风格三段式工作区。
 export default function App() {
   const [sources, setSources] = useState<SalesforceSource[]>([]);
   const [selectedSourceId, setSelectedSourceId] = useState<string>("");
   const [objects, setObjects] = useState<SalesforceObject[]>([]);
   const [selectedObjectName, setSelectedObjectName] = useState<string>("");
   const [describe, setDescribe] = useState<ObjectDescribe | null>(null);
-  const [query, setQuery] = useState<string>("");
+  const [query, setQuery] = useState<string>("SELECT Id, Name FROM Account LIMIT 50");
   const [result, setResult] = useState<QueryResult>({ totalSize: 0, records: [] });
   const [selectedRecordId, setSelectedRecordId] = useState<string>("");
+  const [activeBottomTab, setActiveBottomTab] = useState<"result" | "editor">("result");
   const [loading, setLoading] = useState<boolean>(false);
   const [notice, setNotice] = useState<Notice | null>(null);
 
@@ -29,7 +31,7 @@ export default function App() {
   );
 
   useEffect(() => {
-    // 初次加载本地数据源配置。
+    // 启动时读取本地保存的数据源。
     void refreshSources();
   }, []);
 
@@ -39,7 +41,7 @@ export default function App() {
       return;
     }
 
-    // 数据源切换时刷新对象列表。
+    // 数据源切换后，刷新左侧对象树。
     void refreshObjects(selectedSourceId);
   }, [selectedSourceId]);
 
@@ -49,7 +51,7 @@ export default function App() {
       return;
     }
 
-    // 对象切换时拉取字段描述并生成默认查询。
+    // 当前对象变化时，刷新字段描述并设置默认查询。
     void loadDescribe(selectedSourceId, selectedObjectName);
     setQuery(`SELECT Id, Name FROM ${selectedObjectName} LIMIT 50`);
   }, [selectedSourceId, selectedObjectName]);
@@ -96,8 +98,8 @@ export default function App() {
     }
   }
 
-  async function onQuerySubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function executeQuery(event?: FormEvent<HTMLFormElement>) {
+    event?.preventDefault();
     if (!selectedSourceId) {
       setNotice({ type: "error", message: "请先选择数据源。" });
       return;
@@ -107,6 +109,7 @@ export default function App() {
     try {
       const payload = await api.queryRecords(selectedSourceId, query);
       setResult(payload);
+      setActiveBottomTab("result");
       setNotice({ type: "success", message: `查询成功，共 ${payload.totalSize} 条。` });
     } catch (error) {
       setNotice({ type: "error", message: `执行查询失败：${String(error)}` });
@@ -123,6 +126,7 @@ export default function App() {
       const recordId = await api.createRecord({ sourceId: selectedSourceId, objectName: selectedObjectName, values });
       setNotice({ type: "success", message: `创建成功，记录ID：${recordId}` });
       await onRefreshData();
+      setActiveBottomTab("result");
     } catch (error) {
       setNotice({ type: "error", message: `创建失败：${String(error)}` });
     } finally {
@@ -138,6 +142,7 @@ export default function App() {
       await api.updateRecord(selectedSourceId, selectedObjectName, selectedRecordId, values);
       setNotice({ type: "success", message: "更新成功。" });
       await onRefreshData();
+      setActiveBottomTab("result");
     } catch (error) {
       setNotice({ type: "error", message: `更新失败：${String(error)}` });
     } finally {
@@ -167,97 +172,166 @@ export default function App() {
     setResult(payload);
   }
 
-  return (
-    <main className="min-h-screen p-4 md:p-6">
-      <div className="mx-auto grid max-w-[1680px] grid-cols-1 gap-4 md:grid-cols-[280px_360px_1fr]">
-        <section className="rounded-2xl bg-white p-4 shadow-panel">
-          <h1 className="text-xl font-bold text-brand-800">Simple Salesforce Tool</h1>
-          <p className="mt-1 text-sm text-slate-600">多数据源 Salesforce 查询与 CRUD 工作台</p>
-          <SourcePanel
-            loading={loading}
-            selectedSourceId={selectedSourceId}
-            sources={sources}
-            onChangeSelectedSource={setSelectedSourceId}
-            onSourcesChanged={refreshSources}
-          />
-        </section>
+  async function onOpenObject(objectName: string) {
+    // 双击对象时模拟 DataGrip 的“直接打开数据”行为。
+    setSelectedObjectName(objectName);
+    const nextQuery = `SELECT Id, Name FROM ${objectName} LIMIT 200`;
+    setQuery(nextQuery);
 
-        <section className="rounded-2xl bg-white p-4 shadow-panel">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-brand-800">Objects</h2>
-            <button
-              type="button"
-              className="rounded-md bg-brand-700 px-3 py-1.5 text-sm text-white hover:bg-brand-800"
-              disabled={!selectedSourceId || loading}
-              onClick={() => void refreshObjects(selectedSourceId)}
-            >
-              刷新
+    if (!selectedSourceId) return;
+
+    setLoading(true);
+    try {
+      const payload = await api.queryRecords(selectedSourceId, nextQuery);
+      setResult(payload);
+      setActiveBottomTab("result");
+      setNotice({ type: "success", message: `已打开 ${objectName}，共 ${payload.totalSize} 条。` });
+    } catch (error) {
+      setNotice({ type: "error", message: `打开对象失败：${String(error)}` });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <main className="datagrip-shell min-h-screen">
+      <header className="border-b border-slate-700 bg-slate-900 px-4 py-2 text-xs text-slate-300">
+        Salesforce Workspace | 数据源：{selectedSource?.name || "未选择"} | 对象：{selectedObjectName || "未选择"}
+      </header>
+
+      <div className="grid min-h-[calc(100vh-34px)] grid-cols-[52px_320px_1fr]">
+        <aside className="border-r border-slate-700 bg-slate-900">
+          <div className="flex h-full flex-col items-center gap-2 pt-3">
+            <button type="button" className="tool-rail-btn tool-rail-btn--active" title="Database">
+              DB
+            </button>
+            <button type="button" className="tool-rail-btn" title="Query Console">
+              SQL
             </button>
           </div>
-          <ObjectList
-            objects={objects}
-            selectedObjectName={selectedObjectName}
-            onSelectObject={setSelectedObjectName}
-          />
-        </section>
+        </aside>
 
-        <section className="rounded-2xl bg-white p-4 shadow-panel">
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-brand-800">Query</h2>
-            <span className="text-sm text-slate-600">
-              数据源：{selectedSource?.name || "未选择"} / 对象：{selectedObjectName || "未选择"}
-            </span>
+        <aside className="border-r border-slate-700 bg-slate-800 p-3">
+          <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-300">Database Explorer</div>
+
+          <div className="rounded-md border border-slate-700 bg-slate-900 p-2">
+            <SourcePanel
+              loading={loading}
+              selectedSourceId={selectedSourceId}
+              sources={sources}
+              onChangeSelectedSource={setSelectedSourceId}
+              onSourcesChanged={refreshSources}
+            />
           </div>
 
-          <form onSubmit={onQuerySubmit} className="space-y-2">
-            <textarea
-              className="h-24 w-full rounded-md border border-slate-300 p-3 font-mono text-sm outline-none focus:border-brand-500"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="输入 SOQL，例如 SELECT Id, Name FROM Account LIMIT 50"
-            />
-            <div className="flex gap-2">
+          <div className="mt-3 rounded-md border border-slate-700 bg-slate-900 p-2">
+            <div className="mb-2 flex items-center justify-between text-xs text-slate-300">
+              <span>Objects</span>
               <button
-                className="rounded-md bg-brand-700 px-4 py-2 text-white hover:bg-brand-800"
+                type="button"
+                className="rounded border border-slate-600 px-2 py-0.5 hover:bg-slate-700"
+                disabled={!selectedSourceId || loading}
+                onClick={() => void refreshObjects(selectedSourceId)}
+              >
+                刷新
+              </button>
+            </div>
+            <ObjectList
+              objects={objects}
+              selectedObjectName={selectedObjectName}
+              onSelectObject={setSelectedObjectName}
+              onOpenObject={onOpenObject}
+            />
+          </div>
+        </aside>
+
+        <section className="flex min-w-0 flex-col bg-slate-950">
+          <div className="border-b border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200">Query Console 1</div>
+
+          <form onSubmit={executeQuery} className="border-b border-slate-700 bg-slate-950 p-3">
+            <div className="mb-2 flex items-center gap-2">
+              <button
+                className="rounded border border-emerald-600 bg-emerald-700 px-3 py-1 text-xs text-white hover:bg-emerald-600"
                 disabled={loading || !selectedSourceId}
                 type="submit"
               >
-                执行查询
+                执行(Ctrl+Enter)
               </button>
               <button
-                className="rounded-md border border-slate-300 px-4 py-2 text-slate-700 hover:bg-slate-50"
+                className="rounded border border-slate-600 px-3 py-1 text-xs text-slate-200 hover:bg-slate-800"
                 type="button"
                 disabled={loading || !selectedSourceId}
                 onClick={() => void onRefreshData()}
               >
-                刷新结果
+                重新运行
+              </button>
+              <button
+                className="rounded border border-slate-600 px-3 py-1 text-xs text-slate-200 hover:bg-slate-800"
+                type="button"
+                disabled={!selectedSourceId || loading}
+                onClick={() => setActiveBottomTab("editor")}
+              >
+                打开编辑器
               </button>
             </div>
+
+            <textarea
+              className="h-44 w-full rounded border border-slate-700 bg-slate-900 p-3 font-mono text-sm text-slate-100 outline-none focus:border-sky-500"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="输入 SOQL，例如 SELECT Id, Name FROM Account LIMIT 50"
+            />
           </form>
 
           {notice && (
             <div
-              className={`mt-3 rounded-md px-3 py-2 text-sm ${
-                notice.type === "error" ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-700"
+              className={`mx-3 mt-2 rounded px-3 py-2 text-xs ${
+                notice.type === "error" ? "bg-red-950 text-red-200" : "bg-emerald-950 text-emerald-200"
               }`}
             >
               {notice.message}
             </div>
           )}
 
-          <DataGrid
-            result={result}
-            selectedRecordId={selectedRecordId}
-            onSelectRecord={setSelectedRecordId}
-            onDelete={handleDelete}
-          />
+          <div className="mt-2 flex min-h-0 flex-1 flex-col px-3 pb-3">
+            <div className="flex border-b border-slate-700 text-xs text-slate-300">
+              <button
+                type="button"
+                className={`px-3 py-2 ${activeBottomTab === "result" ? "border-b-2 border-sky-500 text-white" : ""}`}
+                onClick={() => setActiveBottomTab("result")}
+              >
+                Result
+              </button>
+              <button
+                type="button"
+                className={`px-3 py-2 ${activeBottomTab === "editor" ? "border-b-2 border-sky-500 text-white" : ""}`}
+                onClick={() => setActiveBottomTab("editor")}
+              >
+                Data Editor
+              </button>
+            </div>
 
-          <RecordEditor
-            describe={describe}
-            selectedRecord={result.records.find((item) => String(item.Id || "") === selectedRecordId) || null}
-            onCreate={handleCreate}
-            onUpdate={handleUpdate}
-          />
+            <div className="min-h-0 flex-1 overflow-auto bg-slate-900">
+              {activeBottomTab === "result" ? (
+                <DataGrid
+                  result={result}
+                  selectedRecordId={selectedRecordId}
+                  onSelectRecord={(id) => {
+                    setSelectedRecordId(id);
+                    setActiveBottomTab("editor");
+                  }}
+                  onDelete={handleDelete}
+                />
+              ) : (
+                <RecordEditor
+                  describe={describe}
+                  selectedRecord={result.records.find((item) => String(item.Id || "") === selectedRecordId) || null}
+                  onCreate={handleCreate}
+                  onUpdate={handleUpdate}
+                />
+              )}
+            </div>
+          </div>
         </section>
       </div>
     </main>

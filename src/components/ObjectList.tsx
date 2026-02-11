@@ -5,12 +5,13 @@ type Props = {
   objects: SalesforceObject[];
   selectedObjectName: string;
   onSelectObject: (value: string) => void;
+  onOpenObject: (value: string) => Promise<void>;
 };
 
-export function ObjectList({ objects, selectedObjectName, onSelectObject }: Props) {
+// 对象树组件：单击选中对象，双击直接打开数据。
+export function ObjectList({ objects, selectedObjectName, onSelectObject, onOpenObject }: Props) {
   const [keyword, setKeyword] = useState("");
 
-  // 本地过滤提升可用性，避免每次输入都触发后端请求。
   const filtered = useMemo(() => {
     const trimmed = keyword.trim().toLowerCase();
     if (!trimmed) return objects;
@@ -20,25 +21,26 @@ export function ObjectList({ objects, selectedObjectName, onSelectObject }: Prop
   }, [keyword, objects]);
 
   return (
-    <div className="mt-3">
+    <div>
       <input
-        className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-brand-500"
+        className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-slate-100 outline-none focus:border-sky-500"
         value={keyword}
         onChange={(event) => setKeyword(event.target.value)}
-        placeholder="搜索 Object 名称"
+        placeholder="筛选 Object"
       />
-      <div className="mt-2 h-[72vh] overflow-auto rounded-md border border-slate-200">
+      <div className="mt-2 h-[40vh] overflow-auto rounded border border-slate-700 bg-slate-950">
         {filtered.map((item) => (
           <button
             key={item.name}
             type="button"
-            className={`flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-brand-50 ${
-              item.name === selectedObjectName ? "bg-brand-100" : "bg-white"
+            className={`flex w-full items-center justify-between border-b border-slate-800 px-2 py-1.5 text-left text-xs hover:bg-slate-800 ${
+              item.name === selectedObjectName ? "bg-slate-700 text-white" : "text-slate-300"
             }`}
             onClick={() => onSelectObject(item.name)}
+            onDoubleClick={() => void onOpenObject(item.name)}
           >
-            <span className="font-medium text-slate-700">{item.name}</span>
-            <span className="text-xs text-slate-500">{item.label}</span>
+            <span className="truncate font-medium">{item.name}</span>
+            <span className="ml-2 truncate text-[10px] text-slate-500">{item.label}</span>
           </button>
         ))}
       </div>
