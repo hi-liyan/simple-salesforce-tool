@@ -4,13 +4,17 @@
 
 :root {
   font-family: "JetBrains Mono", "Consolas", "Microsoft YaHei", monospace;
-  color: #e2e8f0;
-  background: #0b1220;
+  color: #16325c;
+  background: #eef4ff;
 }
 
-body {
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
   margin: 0;
-  min-height: 100vh;
+  overflow: hidden;
 }
 
 * {
@@ -18,27 +22,27 @@ body {
 }
 
 .datagrip-shell {
-  background: linear-gradient(180deg, #0b1220 0%, #0a0f1a 100%);
+  background: linear-gradient(180deg, #f4f8ff 0%, #e9f3ff 50%, #f8fbff 100%);
 }
 
 .tool-rail-btn {
   width: 34px;
   height: 34px;
-  border: 1px solid #334155;
+  border: 1px solid #9ec9ff;
   border-radius: 6px;
-  background: #1e293b;
-  color: #cbd5e1;
+  background: #ffffff;
+  color: #1b5297;
   font-size: 11px;
 }
 
 .tool-rail-btn:hover {
-  background: #334155;
+  background: #e9f3ff;
 }
 
 .tool-rail-btn--active {
-  border-color: #38bdf8;
-  color: #e2f4ff;
-  background: #0f172a;
+  border-color: #0176d3;
+  color: #0d2e57;
+  background: #d8ebff;
 }
 
 button:disabled {

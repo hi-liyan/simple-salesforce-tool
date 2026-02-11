@@ -1,16 +1,16 @@
 ﻿import { QueryResult } from "../types";
 
-// 查询结果表格组件：用于展示网格结果并支持行级删除。
 type Props = {
   result: QueryResult;
-  selectedRecordId: string;
-  onSelectRecord: (recordId: string) => void;
-  onDelete: (recordId: string) => Promise<void>;
+  selectedRecordIds: string[];
+  onToggleRecord: (recordId: string, checked: boolean) => void;
+  onToggleAll: (checked: boolean, recordIds: string[]) => void;
 };
 
-export function DataGrid({ result, selectedRecordId, onSelectRecord, onDelete }: Props) {
+// 查询结果表格：展示全字段列，支持勾选与全选。
+export function DataGrid({ result, selectedRecordIds, onToggleRecord, onToggleAll }: Props) {
   const records = result.records;
-  const columns = Array.from(
+  const rawColumns = Array.from(
     records.reduce((set, row) => {
       Object.keys(row).forEach((key) => {
         if (key !== "attributes") set.add(key);
@@ -18,56 +18,65 @@ export function DataGrid({ result, selectedRecordId, onSelectRecord, onDelete }:
       return set;
     }, new Set<string>())
   );
+  // 保证 Id 字段固定在第一列，其他列保持原有顺序。
+  const columns = rawColumns.includes("Id")
+    ? ["Id", ...rawColumns.filter((column) => column !== "Id")]
+    : rawColumns;
+
+  const selectableIds = records
+    .map((item, index) => String(item.Id || `row-${index}`))
+    .filter((id) => !id.startsWith("row-"));
+  const allChecked = selectableIds.length > 0 && selectableIds.every((id) => selectedRecordIds.includes(id));
 
   if (records.length === 0) {
-    return <div className="p-4 text-xs text-slate-400">暂无查询结果。</div>;
+    return <div className="p-4 text-xs text-sky-600">暂无查询结果。</div>;
   }
 
   return (
     <div className="h-full p-2">
-      <div className="mb-2 text-xs text-slate-400">Rows: {result.totalSize}</div>
-      <div className="max-h-[100%] overflow-auto border border-slate-700 bg-slate-950">
+      <div className="mb-2 text-xs text-sky-700">Rows: {result.totalSize}</div>
+
+      <div className="max-h-[100%] overflow-auto border border-sky-200 bg-white">
         <table className="min-w-full border-collapse text-xs">
-          <thead className="sticky top-0 bg-slate-900">
+          <thead className="sticky top-0 bg-sky-50">
             <tr>
-              <th className="border-b border-slate-700 px-2 py-1 text-left text-slate-300">#</th>
+              <th className="border-b border-sky-200 px-2 py-1 text-left text-sky-800">
+                <input
+                  type="checkbox"
+                  checked={allChecked}
+                  onChange={(event) => onToggleAll(event.target.checked, selectableIds)}
+                />
+              </th>
+              <th className="border-b border-sky-200 px-2 py-1 text-left text-sky-800">#</th>
               {columns.map((column) => (
-                <th key={column} className="border-b border-slate-700 px-2 py-1 text-left text-slate-300">
+                <th key={column} className="border-b border-sky-200 px-2 py-1 text-left text-sky-800">
                   {column}
                 </th>
               ))}
-              <th className="border-b border-slate-700 px-2 py-1 text-left text-slate-300">操作</th>
             </tr>
           </thead>
+
           <tbody>
             {records.map((record, index) => {
               const recordId = String(record.Id || `row-${index}`);
-              const selected = recordId === selectedRecordId;
+              const checked = selectedRecordIds.includes(recordId);
 
               return (
-                <tr
-                  key={recordId}
-                  className={selected ? "bg-slate-700" : "hover:bg-slate-800"}
-                  onClick={() => onSelectRecord(recordId)}
-                >
-                  <td className="border-b border-slate-800 px-2 py-1 text-slate-500">{index + 1}</td>
+                <tr key={recordId} className={checked ? "bg-sky-100" : "hover:bg-sky-50"}>
+                  <td className="border-b border-sky-100 px-2 py-1">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      disabled={recordId.startsWith("row-")}
+                      onChange={(event) => onToggleRecord(recordId, event.target.checked)}
+                    />
+                  </td>
+                  <td className="border-b border-sky-100 px-2 py-1 text-sky-500">{index + 1}</td>
                   {columns.map((column) => (
-                    <td key={`${recordId}-${column}`} className="border-b border-slate-800 px-2 py-1 text-slate-200">
+                    <td key={`${recordId}-${column}`} className="border-b border-sky-100 px-2 py-1 text-sky-900">
                       {String(record[column] ?? "")}
                     </td>
                   ))}
-                  <td className="border-b border-slate-800 px-2 py-1">
-                    <button
-                      type="button"
-                      className="rounded border border-red-700 px-1.5 py-0.5 text-[10px] text-red-300 hover:bg-red-950"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        void onDelete(recordId);
-                      }}
-                    >
-                      删除
-                    </button>
-                  </td>
                 </tr>
               );
             })}

@@ -3,13 +3,12 @@ import { SalesforceObject } from "../types";
 
 type Props = {
   objects: SalesforceObject[];
-  selectedObjectName: string;
-  onSelectObject: (value: string) => void;
-  onOpenObject: (value: string) => Promise<void>;
+  activeObjectName: string;
+  onOpenObject: (objectItem: SalesforceObject) => void;
 };
 
-// 对象树组件：单击选中对象，双击直接打开数据。
-export function ObjectList({ objects, selectedObjectName, onSelectObject, onOpenObject }: Props) {
+// 对象列表：鼠标悬停显示完整信息，点击打开对象标签页。
+export function ObjectList({ objects, activeObjectName, onOpenObject }: Props) {
   const [keyword, setKeyword] = useState("");
 
   const filtered = useMemo(() => {
@@ -21,26 +20,27 @@ export function ObjectList({ objects, selectedObjectName, onSelectObject, onOpen
   }, [keyword, objects]);
 
   return (
-    <div>
+    <div className="flex h-full min-h-0 flex-col">
       <input
-        className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-slate-100 outline-none focus:border-sky-500"
+        className="w-full rounded border border-sky-300 bg-white px-2 py-1.5 text-xs text-sky-900 outline-none focus:border-[#0176d3]"
         value={keyword}
         onChange={(event) => setKeyword(event.target.value)}
         placeholder="筛选 Object"
       />
-      <div className="mt-2 h-[40vh] overflow-auto rounded border border-slate-700 bg-slate-950">
+
+      <div className="mt-2 min-h-0 flex-1 overflow-auto rounded border border-sky-200 bg-white">
         {filtered.map((item) => (
           <button
             key={item.name}
             type="button"
-            className={`flex w-full items-center justify-between border-b border-slate-800 px-2 py-1.5 text-left text-xs hover:bg-slate-800 ${
-              item.name === selectedObjectName ? "bg-slate-700 text-white" : "text-slate-300"
+            className={`w-full border-b border-sky-100 px-2 py-1.5 text-left text-xs hover:bg-sky-50 ${
+              item.name === activeObjectName ? "bg-sky-100 text-[#0176d3]" : "text-sky-900"
             }`}
-            onClick={() => onSelectObject(item.name)}
-            onDoubleClick={() => void onOpenObject(item.name)}
+            onClick={() => onOpenObject(item)}
+            title={`名称: ${item.name}\n标签: ${item.label}\n可查询: ${item.queryable}\n可新增: ${item.createable}\n可更新: ${item.updateable}\n可删除: ${item.deletable}`}
           >
-            <span className="truncate font-medium">{item.name}</span>
-            <span className="ml-2 truncate text-[10px] text-slate-500">{item.label}</span>
+            <div className="truncate font-medium">{item.name}</div>
+            <div className="truncate text-[10px] text-sky-600">{item.label}</div>
           </button>
         ))}
       </div>
