@@ -18,6 +18,11 @@ type TabState = {
   sortField: string;
   sortDirection: "ASC" | "DESC";
   selectedRecordIds: string[];
+  currentSoql: string;
+  soqlDraft: string;
+  showSoqlExecutor: boolean;
+  showFieldMeta: boolean;
+  columnVisibility: Record<string, boolean>;
   loading: boolean;
 };
 
@@ -107,6 +112,11 @@ export default function App() {
       sortField: "Id",
       sortDirection: "DESC",
       selectedRecordIds: [],
+      currentSoql: "",
+      soqlDraft: "",
+      showSoqlExecutor: false,
+      showFieldMeta: false,
+      columnVisibility: {},
       loading: true
     };
 
@@ -126,7 +136,8 @@ export default function App() {
       patchTab(objectItem.name, (tab) => ({
         ...tab,
         describe,
-        sortField: defaultSortField
+        sortField: defaultSortField,
+        columnVisibility: loadColumnVisibility(selectedSourceId, objectItem.name, describe)
       }));
 
       await queryTabData(objectItem.name, describe, defaultSortField, 200, "DESC");
@@ -171,7 +182,9 @@ export default function App() {
         ...item,
         result,
         loading: false,
-        selectedRecordIds: []
+        selectedRecordIds: [],
+        currentSoql: soql,
+        soqlDraft: soql
       }));
 
       setNotice({ type: "success", message: `${objectName} 查询成功，共 ${result.totalSize} 条。` });
@@ -200,6 +213,37 @@ export default function App() {
     } catch (error) {
       patchTab(activeTab.objectName, (item) => ({ ...item, loading: false }));
       setNotice({ type: "error", message: `批量删除失败：${String(error)}` });
+    }
+  }
+
+  async function executeCustomSoql() {
+    if (!selectedSourceId || !activeTab) return;
+    if (!activeTab.soqlDraft.trim()) {
+      setNotice({ type: "error", message: "SOQL 不能为空。" });
+      return;
+    }
+
+    patchTab(activeTab.objectName, (item) => ({ ...item, loading: true }));
+    try {
+      const result = await api.queryRecords(selectedSourceId, activeTab.soqlDraft);
+      const nextVisibility = buildVisibilityFromSoql(
+        activeTab.soqlDraft,
+        activeTab.describe,
+        activeTab.columnVisibility
+      );
+      patchTab(activeTab.objectName, (item) => ({
+        ...item,
+        result,
+        loading: false,
+        selectedRecordIds: [],
+        currentSoql: activeTab.soqlDraft,
+        columnVisibility: nextVisibility
+      }));
+      saveColumnVisibility(selectedSourceId, activeTab.objectName, nextVisibility);
+      setNotice({ type: "success", message: `${activeTab.objectName} 执行 SOQL 成功，共 ${result.totalSize} 条。` });
+    } catch (error) {
+      patchTab(activeTab.objectName, (item) => ({ ...item, loading: false }));
+      setNotice({ type: "error", message: `执行 SOQL 失败：${String(error)}` });
     }
   }
 
@@ -354,6 +398,30 @@ export default function App() {
                     </button>
                     <button
                       type="button"
+                      className="rounded border border-sky-300 bg-white px-3 py-1 text-xs text-sky-800 hover:bg-sky-50"
+                      onClick={() =>
+                        patchTab(activeTab.objectName, (item) => ({
+                          ...item,
+                          showSoqlExecutor: !item.showSoqlExecutor
+                        }))
+                      }
+                    >
+                      SOQL 执行器
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded border border-sky-300 bg-white px-3 py-1 text-xs text-sky-800 hover:bg-sky-50"
+                      onClick={() =>
+                        patchTab(activeTab.objectName, (item) => ({
+                          ...item,
+                          showFieldMeta: !item.showFieldMeta
+                        }))
+                      }
+                    >
+                      Field 元数据
+                    </button>
+                    <button
+                      type="button"
                       className="rounded border border-red-300 bg-white px-3 py-1 text-xs text-red-700 hover:bg-red-50"
                       disabled={activeTab.loading || activeTab.selectedRecordIds.length === 0}
                       onClick={() => void deleteCheckedRecords()}
@@ -364,9 +432,78 @@ export default function App() {
                 </div>
               </div>
 
+              {activeTab.showSoqlExecutor && (
+                <div className="mb-2 rounded border border-sky-200 bg-white p-2">
+                  <div className="mb-1 text-xs font-semibold text-sky-800">SOQL 执行器</div>
+                  <textarea
+                    className="h-24 w-full rounded border border-sky-300 bg-[#f7fbff] p-2 font-mono text-xs text-sky-900 outline-none focus:border-[#0176d3]"
+                    value={activeTab.soqlDraft}
+                    onChange={(event) =>
+                      patchTab(activeTab.objectName, (item) => ({
+                        ...item,
+                        soqlDraft: event.target.value
+                      }))
+                    }
+                  />
+                  <div className="mt-2 flex items-center gap-2">
+                    <button
+                      type="button"
+                      className="rounded border border-[#0176d3] bg-[#0176d3] px-3 py-1 text-xs text-white hover:bg-[#025cb2]"
+                      disabled={activeTab.loading}
+                      onClick={() => void executeCustomSoql()}
+                    >
+                      执行 SOQL
+                    </button>
+                    <span className="text-[11px] text-sky-600">默认值为当前数据列表查询 SOQL</span>
+                  </div>
+                </div>
+              )}
+
+              {activeTab.showFieldMeta && activeTab.describe && (
+                <div className="mb-2 rounded border border-sky-200 bg-white p-2">
+                  <div className="mb-1 text-xs font-semibold text-sky-800">Field 元数据（勾选控制列表列显示）</div>
+                  <div className="max-h-40 overflow-auto rounded border border-sky-100 bg-[#f9fcff] p-1">
+                    {activeTab.describe.fields.map((field) => {
+                      const checked = activeTab.columnVisibility[field.name] ?? true;
+                      return (
+                        <label
+                          key={field.name}
+                          className="flex items-center justify-between gap-2 rounded px-2 py-1 text-xs text-sky-900 hover:bg-sky-50"
+                        >
+                          <span className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={(event) => {
+                                const nextVisibility = {
+                                  ...activeTab.columnVisibility,
+                                  [field.name]: event.target.checked
+                                };
+                                patchTab(activeTab.objectName, (item) => ({
+                                  ...item,
+                                  columnVisibility: nextVisibility
+                                }));
+                                if (selectedSourceId) {
+                                  saveColumnVisibility(selectedSourceId, activeTab.objectName, nextVisibility);
+                                }
+                              }}
+                            />
+                            <span>{field.name}</span>
+                          </span>
+                          <span className="text-[10px] text-sky-600">
+                            {field.label} / {field.dataType}
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               <div className="min-h-0 flex-1 overflow-hidden rounded border border-sky-200 bg-white">
                 <DataGrid
                   result={activeTab.result}
+                  visibleColumns={getVisibleColumns(activeTab)}
                   selectedRecordIds={activeTab.selectedRecordIds}
                   onToggleRecord={(recordId, checked) => {
                     patchTab(activeTab.objectName, (item) => ({
@@ -390,5 +527,76 @@ export default function App() {
       </div>
     </main>
   );
+}
+
+function getVisibilityStorageKey(sourceId: string, objectName: string): string {
+  return `column_visibility:${sourceId}:${objectName}`;
+}
+
+// 从本地存储读取字段可见性；默认所有字段可见。
+function loadColumnVisibility(sourceId: string, objectName: string, describe: ObjectDescribe): Record<string, boolean> {
+  const key = getVisibilityStorageKey(sourceId, objectName);
+  const defaults = describe.fields.reduce(
+    (acc, field) => ({ ...acc, [field.name]: true }),
+    {} as Record<string, boolean>
+  );
+
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return defaults;
+    const parsed = JSON.parse(raw) as Record<string, boolean>;
+    return { ...defaults, ...parsed };
+  } catch {
+    return defaults;
+  }
+}
+
+function saveColumnVisibility(sourceId: string, objectName: string, visibility: Record<string, boolean>) {
+  const key = getVisibilityStorageKey(sourceId, objectName);
+  localStorage.setItem(key, JSON.stringify(visibility));
+}
+
+function getVisibleColumns(tab: TabState): string[] {
+  if (!tab.describe) return [];
+  return tab.describe.fields
+    .map((field) => field.name)
+    .filter((name) => (tab.columnVisibility[name] ?? true) === true);
+}
+
+// 根据 SOQL 语句中的 SELECT 字段生成可见性映射，仅保留被查询字段。
+function buildVisibilityFromSoql(
+  soql: string,
+  describe: ObjectDescribe | null,
+  fallback: Record<string, boolean>
+): Record<string, boolean> {
+  if (!describe) return fallback;
+  const selected = extractSelectedFields(soql);
+  if (selected.length === 0) return fallback;
+
+  const selectedSet = new Set(selected.map((name) => name.toLowerCase()));
+  return describe.fields.reduce((acc, field) => {
+    acc[field.name] = selectedSet.has(field.name.toLowerCase());
+    return acc;
+  }, {} as Record<string, boolean>);
+}
+
+function extractSelectedFields(soql: string): string[] {
+  const normalized = soql.replace(/\s+/g, " ").trim();
+  const match = normalized.match(/^select\s+(.+?)\s+from\s+/i);
+  if (!match) return [];
+
+  const fieldSegment = match[1].trim();
+  if (!fieldSegment || fieldSegment === "*") return [];
+  if (/^count\(/i.test(fieldSegment)) return [];
+
+  return fieldSegment
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0)
+    .map((item) => {
+      const withoutAlias = item.split(/\s+/)[0];
+      const dotParts = withoutAlias.split(".");
+      return dotParts[dotParts.length - 1];
+    });
 }
 

@@ -2,13 +2,14 @@
 
 type Props = {
   result: QueryResult;
+  visibleColumns: string[];
   selectedRecordIds: string[];
   onToggleRecord: (recordId: string, checked: boolean) => void;
   onToggleAll: (checked: boolean, recordIds: string[]) => void;
 };
 
 // 查询结果表格：展示全字段列，支持勾选与全选。
-export function DataGrid({ result, selectedRecordIds, onToggleRecord, onToggleAll }: Props) {
+export function DataGrid({ result, visibleColumns, selectedRecordIds, onToggleRecord, onToggleAll }: Props) {
   const records = result.records;
   const rawColumns = Array.from(
     records.reduce((set, row) => {
@@ -22,6 +23,11 @@ export function DataGrid({ result, selectedRecordIds, onToggleRecord, onToggleAl
   const columns = rawColumns.includes("Id")
     ? ["Id", ...rawColumns.filter((column) => column !== "Id")]
     : rawColumns;
+  const displayColumns = visibleColumns.length > 0
+    ? (visibleColumns.includes("Id")
+      ? ["Id", ...visibleColumns.filter((column) => column !== "Id")]
+      : visibleColumns)
+    : columns;
 
   const selectableIds = records
     .map((item, index) => String(item.Id || `row-${index}`))
@@ -48,7 +54,7 @@ export function DataGrid({ result, selectedRecordIds, onToggleRecord, onToggleAl
                 />
               </th>
               <th className="border-b border-sky-200 px-2 py-1 text-left text-sky-800">#</th>
-              {columns.map((column) => (
+              {displayColumns.map((column) => (
                 <th key={column} className="border-b border-sky-200 px-2 py-1 text-left text-sky-800">
                   {column}
                 </th>
@@ -72,7 +78,7 @@ export function DataGrid({ result, selectedRecordIds, onToggleRecord, onToggleAl
                     />
                   </td>
                   <td className="border-b border-sky-100 px-2 py-1 text-sky-500">{index + 1}</td>
-                  {columns.map((column) => (
+                  {displayColumns.map((column) => (
                     <td key={`${recordId}-${column}`} className="border-b border-sky-100 px-2 py-1 text-sky-900">
                       {String(record[column] ?? "")}
                     </td>
