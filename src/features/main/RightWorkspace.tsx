@@ -1,13 +1,14 @@
 import { ChangeEvent } from "react";
 import { Alert, Box, Button, CircularProgress, Divider, FormControl, IconButton, MenuItem, Select, SelectChangeEvent, Stack, TextField, Typography } from "@mui/material";
-import { PanelRightOpen, Play, Plus, Search, Trash2, X } from "lucide-react";
+import { PanelRightOpen, Play, Plus, RotateCcw, Search, Trash2, X } from "lucide-react";
 import { DataGrid } from "../../components/DataGrid";
-import { TabState } from "../../types";
+import { Notice, TabState } from "../../types";
 
 type RightWorkspaceProps = {
   tabs: TabState[];
   activeTabObjectName: string;
   activeTab: TabState | null;
+  workspaceNotice: Notice | null;
   visibleColumns: string[];
   fieldMetadataMap: Record<string, Record<string, unknown>>;
   hasPendingChanges: boolean;
@@ -38,6 +39,7 @@ export function RightWorkspace({
   tabs,
   activeTabObjectName,
   activeTab,
+  workspaceNotice,
   visibleColumns,
   fieldMetadataMap,
   hasPendingChanges,
@@ -64,6 +66,23 @@ export function RightWorkspace({
 }: RightWorkspaceProps) {
   return (
     <>
+      {/* 工作区全局浮动提示：用于数据源切换等非 Tab 通知。 */}
+      {workspaceNotice && (
+        <Alert
+          severity={workspaceNotice.type === "error" ? "error" : "success"}
+          sx={{
+            position: "fixed",
+            top: 16,
+            right: 16,
+            zIndex: 60,
+            maxWidth: 560,
+            boxShadow: 4
+          }}
+        >
+          {workspaceNotice.message}
+        </Alert>
+      )}
+
       {/* Tab 标签栏。 */}
       <Box sx={{ display: "flex", overflowX: "auto", borderBottom: "1px solid", borderColor: "divider" }}>
         {tabs.length === 0 && (
@@ -156,6 +175,7 @@ export function RightWorkspace({
                 </Button>
                 <Button
                   variant="outlined"
+                  startIcon={<RotateCcw size={14} />}
                   disabled={activeTab.loading || !hasPendingChanges}
                   onClick={onDiscardPendingChanges}
                   sx={{ height: 40 }}
