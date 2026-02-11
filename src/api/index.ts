@@ -20,6 +20,9 @@ async function invokeApi<T>(command: string, payload?: Record<string, unknown>):
 export const api = {
   listSources: () => invokeApi<SalesforceSource[]>("list_sources"),
   syncCliSources: () => invokeApi<SalesforceSource[]>("sync_cli_sources"),
+  loginCliOrg: (instanceUrl: string) => invokeApi<string>("login_cli_org", { instanceUrl }),
+  openAuthWindow: () => invokeApi<void>("open_auth_window"),
+  closeAuthWindow: () => invokeApi<void>("close_auth_window"),
   createSource: (payload: SourceUpsertPayload) => invokeApi<SalesforceSource>("create_source", { payload }),
   updateSource: (id: string, payload: SourceUpsertPayload) =>
     invokeApi<SalesforceSource>("update_source", { id, payload }),

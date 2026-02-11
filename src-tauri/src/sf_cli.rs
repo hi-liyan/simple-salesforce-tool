@@ -1,4 +1,5 @@
 ﻿use serde::Deserialize;
+use serde_json::Value;
 use std::collections::HashSet;
 use std::env;
 use std::path::Path;
@@ -27,6 +28,11 @@ struct SfAuthOrg {
 pub struct CliSourceSeed {
     pub id: String,
     pub payload: SourceUpsertPayload,
+}
+
+#[derive(Debug)]
+pub struct CliLoginResult {
+    pub org_id: String,
 }
 
 /// 从 Salesforce CLI 读取所有已认证组织，并转换为应用数据源。
@@ -70,6 +76,30 @@ pub fn load_cli_sources() -> Result<Vec<CliSourceSeed>, AppError> {
     Ok(seeds)
 }
 
+/// 触发 Salesforce CLI OAuth 登录，并返回 org_id。
+pub fn login_web(instance_url: &str) -> Result<CliLoginResult, AppError> {
+    let stdout = run_sf_login_web_json(instance_url)?;
+    let text = String::from_utf8(stdout)
+        .map_err(|error| AppError::Serde(format!("解析 CLI 输出文本失败: {error}")))?;
+    let value: Value = serde_json::from_str(&text)?;
+
+    if let Some(status) = value.get("status").and_then(|item| item.as_i64()) {
+        if status != 0 {
+            let message = value
+                .get("message")
+                .and_then(|item| item.as_str())
+                .unwrap_or("Salesforce CLI 登录失败");
+            return Err(AppError::Biz(format!("{message} (status={status})")));
+        }
+    }
+
+    let org_id = extract_org_id(&value).ok_or_else(|| {
+        AppError::Biz("Salesforce CLI 登录成功，但未能解析 orgId。".to_string())
+    })?;
+
+    Ok(CliLoginResult { org_id })
+}
+
 /// 执行 `sf org list auth --json`：优先使用 SF_CLI_PATH，其次尝试多个可执行文件名称。
 fn run_sf_auth_list_json() -> Result<Vec<u8>, AppError> {
     let candidates = build_cli_candidates();
@@ -99,6 +129,77 @@ fn run_sf_auth_list_json() -> Result<Vec<u8>, AppError> {
         candidates.join(", "),
         errors.join(" | ")
     )))
+}
+
+/// 执行 `sf org login web --instance-url <url> --json` / `sfdx force:auth:web:login -r <url> --json`。
+fn run_sf_login_web_json(instance_url: &str) -> Result<Vec<u8>, AppError> {
+    let candidates = build_cli_candidates();
+    let mut errors = Vec::new();
+
+    for cli in &candidates {
+        let args = login_args_for(cli, instance_url);
+        match Command::new(cli).args(&args).output() {
+            Ok(output) if output.status.success() => return Ok(output.stdout),
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                let status = output
+                    .status
+                    .code()
+                    .map(|code| code.to_string())
+                    .unwrap_or_else(|| "unknown".to_string());
+                errors.push(format!("{cli}: exit={status}, stderr={stderr}"));
+            }
+            Err(error) => errors.push(format!("{cli}: {error}")),
+        }
+    }
+
+    Err(AppError::Biz(format!(
+        "调用 Salesforce CLI 登录失败。已尝试: {}。可设置环境变量 SF_CLI_PATH 指向 sf/sfdx 可执行文件。详情: {}",
+        candidates.join(", "),
+        errors.join(" | ")
+    )))
+}
+
+fn login_args_for(cli: &str, instance_url: &str) -> Vec<String> {
+    let filename = Path::new(cli)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(cli);
+    let is_sfdx = filename.eq_ignore_ascii_case("sfdx")
+        || filename.eq_ignore_ascii_case("sfdx.cmd")
+        || filename.eq_ignore_ascii_case("sfdx.exe");
+
+    if is_sfdx {
+        vec![
+            "force:auth:web:login".to_string(),
+            "-r".to_string(),
+            instance_url.to_string(),
+            "--json".to_string(),
+        ]
+    } else {
+        vec![
+            "org".to_string(),
+            "login".to_string(),
+            "web".to_string(),
+            "--instance-url".to_string(),
+            instance_url.to_string(),
+            "--json".to_string(),
+        ]
+    }
+}
+
+fn extract_org_id(value: &Value) -> Option<String> {
+    let result = value.get("result")?;
+    if let Some(org_id) = result.get("orgId").and_then(|item| item.as_str()) {
+        return Some(org_id.to_string());
+    }
+    if let Some(org_id) = result.get("org_id").and_then(|item| item.as_str()) {
+        return Some(org_id.to_string());
+    }
+    if let Some(org_id) = result.get("id").and_then(|item| item.as_str()) {
+        return Some(org_id.to_string());
+    }
+    None
 }
 
 /// 生成 CLI 候选路径：

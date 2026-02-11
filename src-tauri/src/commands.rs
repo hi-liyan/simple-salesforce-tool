@@ -1,5 +1,6 @@
 ﻿use std::collections::HashMap;
 use tauri::State;
+use tauri::Manager;
 
 use crate::app_state::AppState;
 use crate::db;
@@ -35,6 +36,48 @@ pub fn sync_cli_sources(state: State<'_, AppState>) -> Result<Vec<SalesforceSour
     }
     db::prune_cli_sources(&connection, &keep_ids).map_err(AppError::to_string_error)?;
     db::list_sources(&connection).map_err(AppError::to_string_error)
+}
+
+#[tauri::command]
+pub async fn login_cli_org(instance_url: String) -> Result<String, String> {
+    let trimmed = instance_url.trim().to_string();
+    if trimmed.is_empty() {
+        return Err("Instance URL cannot be empty".to_string());
+    }
+
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        sf_cli::login_web(trimmed.trim()).map_err(AppError::to_string_error)
+    })
+    .await
+    .map_err(|error| format!("登录线程失败: {error}"))??;
+
+    Ok(result.org_id)
+}
+
+#[tauri::command]
+pub fn open_auth_window(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("sf-auth") {
+        window.show().map_err(|error| error.to_string())?;
+        window.set_focus().map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+
+    tauri::WebviewWindowBuilder::new(&app, "sf-auth", tauri::WebviewUrl::App("/auth".into()))
+        .title("Salesforce 登录")
+        .inner_size(480.0, 360.0)
+        .resizable(false)
+        .center()
+        .build()
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn close_auth_window(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("sf-auth") {
+        window.close().map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 #[tauri::command]

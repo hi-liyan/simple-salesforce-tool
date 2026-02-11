@@ -17,6 +17,8 @@ import {
   Typography,
   createTheme
 } from "@mui/material";
+import { emit, listen } from "@tauri-apps/api/event";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { PanelRightOpen, Play, Plus, RefreshCw, Search, Trash2, X } from "lucide-react";
 import { api } from "./api";
 import { DataGrid } from "./components/DataGrid";
@@ -69,7 +71,7 @@ const theme = createTheme({
 });
 
 // 主应用：Material UI + 桌面分割线风格。
-export default function App() {
+function MainApp() {
   const [sources, setSources] = useState<SalesforceSource[]>([]);
   const [selectedSourceId, setSelectedSourceId] = useState<string>("");
   const [objects, setObjects] = useState<SalesforceObject[]>([]);
@@ -85,6 +87,43 @@ export default function App() {
 
   useEffect(() => {
     void refreshSources(true);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const setup = async () => {
+      const unlisten = await listen<{ orgId: string }>("sf:login-success", async (event) => {
+        if (!active) return;
+        setLoading(true);
+        try {
+          const list = await api.syncCliSources();
+          setSources(list);
+
+          const preferredId = event.payload?.orgId ? `cli-${event.payload.orgId}` : "";
+          if (preferredId && list.some((item) => item.id === preferredId)) {
+            setSelectedSourceId(preferredId);
+          } else if (list.length > 0) {
+            setSelectedSourceId(list[0].id);
+          } else {
+            setSelectedSourceId("");
+          }
+        } catch (error) {
+          patchActiveTabNotice({ type: "error", message: `同步数据源失败：${String(error)}` });
+        } finally {
+          setLoading(false);
+        }
+      });
+      return unlisten;
+    };
+
+    let cleanup: (() => void) | undefined;
+    setup().then((unlisten) => {
+      cleanup = unlisten;
+    });
+    return () => {
+      active = false;
+      cleanup?.();
+    };
   }, []);
 
   useEffect(() => {
@@ -124,6 +163,12 @@ export default function App() {
     } finally {
       setLoading(false);
     }
+  }
+
+  function openAuthWindow() {
+    api
+      .openAuthWindow()
+      .catch((error) => patchActiveTabNotice({ type: "error", message: `打开登录窗口失败：${String(error)}` }));
   }
 
   async function refreshObjects(sourceId: string) {
@@ -529,9 +574,14 @@ export default function App() {
       <Box sx={{ height: "100vh", width: "100vw", display: "grid", gridTemplateColumns: "320px 1fr", overflow: "hidden" }}>
         <Box sx={{ display: "flex", flexDirection: "column", minHeight: 0, borderRight: "1px solid", borderColor: "divider" }}>
           <Box sx={{ px: 1.5, py: 1, borderBottom: "1px solid", borderColor: "divider" }}>
-            <Typography variant="caption" sx={{ color: "text.secondary" }}>
-              DATA SOURCE
-            </Typography>
+            <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <Typography variant="caption" sx={{ color: "text.secondary" }}>
+                DATA SOURCE
+              </Typography>
+              <IconButton aria-label="新增 Salesforce 认证" onClick={openAuthWindow} disabled={loading}>
+                <Plus size={14} />
+              </IconButton>
+            </Box>
             <Stack direction="row" spacing={1} sx={{ mt: 0.8 }}>
               <FormControl fullWidth size="small">
                 <Select value={selectedSourceId} onChange={(event: SelectChangeEvent) => setSelectedSourceId(event.target.value)}>
@@ -931,8 +981,76 @@ export default function App() {
           )}
         </Box>
       </Box>
+
     </ThemeProvider>
   );
+}
+
+function AuthWindow() {
+  const [instanceUrl, setInstanceUrl] = useState<string>("https://login.salesforce.com");
+  const [error, setError] = useState<string>("");
+  const [busy, setBusy] = useState<boolean>(false);
+
+  async function loginWithCli() {
+    const normalized = normalizeInstanceUrl(instanceUrl);
+    if (!normalized) {
+      setError("请输入 Instance URL。");
+      return;
+    }
+
+    setBusy(true);
+    setError("");
+    try {
+      const orgId = await api.loginCliOrg(normalized);
+      await emit("sf:login-success", { orgId });
+      WebviewWindow.getCurrent().close();
+    } catch (loginError) {
+      setError(`登录失败：${String(loginError)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <ThemeProvider theme={theme}>
+      <CssBaseline />
+      <Box sx={{ minHeight: "100vh", bgcolor: "background.default", p: 3 }}>
+        <Stack spacing={2}>
+          <Typography variant="h6">连接 Salesforce</Typography>
+          <Typography variant="body2" color="text.secondary">
+            请输入 Instance URL，点击登录后将在浏览器完成 OAuth 授权。
+          </Typography>
+          <TextField
+            autoFocus
+            label="Instance URL"
+            value={instanceUrl}
+            onChange={(event) => setInstanceUrl(event.target.value)}
+            error={Boolean(error)}
+            helperText={error || "示例：https://login.salesforce.com 或 https://test.salesforce.com"}
+            fullWidth
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                void loginWithCli();
+              }
+            }}
+          />
+          <Stack direction="row" spacing={1} justifyContent="flex-end">
+            <Button variant="outlined" onClick={() => void api.closeAuthWindow()} disabled={busy}>
+              取消
+            </Button>
+            <Button onClick={() => void loginWithCli()} disabled={busy}>
+              {busy ? "登录中..." : "登录"}
+            </Button>
+          </Stack>
+        </Stack>
+      </Box>
+    </ThemeProvider>
+  );
+}
+
+export default function App() {
+  return window.location.pathname === "/auth" ? <AuthWindow /> : <MainApp />;
 }
 
 function buildDefaultVisibility(describe: ObjectDescribe): Record<string, boolean> {
@@ -1020,6 +1138,13 @@ function buildBaselineRecords(records: Record<string, unknown>[]): Record<string
   return baseline;
 }
 
+function normalizeInstanceUrl(raw: string) {
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return `https://${trimmed}`;
+}
+
 function getRecordKey(record: Record<string, unknown>, rowIndex: number): string {
   if (record.__localId) return String(record.__localId);
   if (record.Id) return String(record.Id);
@@ -1036,5 +1161,3 @@ function stringifyComparableValue(value: unknown): string {
     return String(value);
   }
 }
-
-
