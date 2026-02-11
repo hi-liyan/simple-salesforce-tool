@@ -1,0 +1,12 @@
+{
+  "identifier": "main-window",
+  "description": "Allow main and auth windows to emit/listen events.",
+  "windows": [
+    "main",
+    "sf-auth"
+  ],
+  "permissions": [
+    "core:default",
+    "core:event:default"
+  ]
+}

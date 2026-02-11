@@ -36,6 +36,9 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::list_sources,
             commands::sync_cli_sources,
+            commands::login_cli_org,
+            commands::open_auth_window,
+            commands::close_auth_window,
             commands::create_source,
             commands::update_source,
             commands::delete_source,
