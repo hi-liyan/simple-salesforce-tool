@@ -43,6 +43,7 @@ pub struct ObjectField {
     pub nillable: bool,
     pub updateable: bool,
     pub createable: bool,
+    pub metadata: HashMap<String, Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
