@@ -14,6 +14,7 @@ type TabState = {
   label: string;
   describe: ObjectDescribe | null;
   result: QueryResult;
+  whereClause: string;
   limit: number;
   sortField: string;
   sortDirection: "ASC" | "DESC";
@@ -22,6 +23,7 @@ type TabState = {
   soqlDraft: string;
   showDrawer: boolean;
   columnVisibility: Record<string, boolean>;
+  notice: Notice | null;
   loading: boolean;
 };
 
@@ -33,7 +35,6 @@ export default function App() {
   const [tabs, setTabs] = useState<TabState[]>([]);
   const [activeTabObjectName, setActiveTabObjectName] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(false);
-  const [notice, setNotice] = useState<Notice | null>(null);
 
   const activeTab = useMemo(
     () => tabs.find((item) => item.objectName === activeTabObjectName) || null,
@@ -71,7 +72,7 @@ export default function App() {
         setSelectedSourceId(list[0].id);
       }
     } catch (error) {
-      setNotice({ type: "error", message: `加载数据源失败：${String(error)}` });
+      patchActiveTabNotice({ type: "error", message: `加载数据源失败：${String(error)}` });
     } finally {
       setLoading(false);
     }
@@ -83,7 +84,7 @@ export default function App() {
       const list = await api.listObjects(sourceId);
       setObjects(list);
     } catch (error) {
-      setNotice({ type: "error", message: `拉取对象失败：${String(error)}` });
+      patchActiveTabNotice({ type: "error", message: `拉取对象失败：${String(error)}` });
     } finally {
       setLoading(false);
     }
@@ -91,6 +92,11 @@ export default function App() {
 
   function patchTab(objectName: string, updater: (tab: TabState) => TabState) {
     setTabs((current) => current.map((tab) => (tab.objectName === objectName ? updater(tab) : tab)));
+  }
+
+  function patchActiveTabNotice(nextNotice: Notice) {
+    if (!activeTabObjectName) return;
+    patchTab(activeTabObjectName, (item) => ({ ...item, notice: nextNotice }));
   }
 
   async function openObjectTab(objectItem: SalesforceObject) {
@@ -107,6 +113,7 @@ export default function App() {
       label: objectItem.label,
       describe: null,
       result: { totalSize: 0, records: [] },
+      whereClause: "",
       limit: 200,
       sortField: "Id",
       sortDirection: "DESC",
@@ -115,6 +122,7 @@ export default function App() {
       soqlDraft: "",
       showDrawer: false,
       columnVisibility: {},
+      notice: null,
       loading: true
     };
 
@@ -138,16 +146,20 @@ export default function App() {
         columnVisibility: loadColumnVisibility(selectedSourceId, objectItem.name, describe)
       }));
 
-      await queryTabData(objectItem.name, describe, defaultSortField, 200, "DESC");
+      await queryTabData(objectItem.name, describe, "", defaultSortField, 200, "DESC");
     } catch (error) {
       patchTab(objectItem.name, (tab) => ({ ...tab, loading: false }));
-      setNotice({ type: "error", message: `打开对象失败：${String(error)}` });
+      patchTab(objectItem.name, (item) => ({
+        ...item,
+        notice: { type: "error", message: `打开对象失败：${String(error)}` }
+      }));
     }
   }
 
   async function queryTabData(
     objectName: string,
     describeOverride?: ObjectDescribe,
+    whereOverride?: string,
     sortFieldOverride?: string,
     limitOverride?: number,
     directionOverride?: "ASC" | "DESC"
@@ -159,6 +171,7 @@ export default function App() {
     const describe = describeOverride ?? tab?.describe;
     if (!describe) return;
 
+    const whereClause = (whereOverride ?? tab?.whereClause ?? "").trim();
     const limit = Math.max(1, Math.min(2000, limitOverride ?? tab?.limit ?? 200));
     const sortField = sortFieldOverride ?? tab?.sortField ?? "Id";
     const sortDirection = directionOverride ?? tab?.sortDirection ?? "DESC";
@@ -168,7 +181,10 @@ export default function App() {
       .filter((name) => (visibility[name] ?? true) === true);
 
     if (selectedFields.length === 0) {
-      setNotice({ type: "error", message: `${objectName} 至少要勾选一个字段。` });
+      patchTab(objectName, (item) => ({
+        ...item,
+        notice: { type: "error", message: `${objectName} 至少要勾选一个字段。` }
+      }));
       patchTab(objectName, (item) => ({ ...item, loading: false }));
       return;
     }
@@ -176,13 +192,14 @@ export default function App() {
     patchTab(objectName, (item) => ({
       ...item,
       loading: true,
+      whereClause,
       limit,
       sortField,
       sortDirection
     }));
 
     try {
-      const soql = `SELECT ${selectedFields.join(", ")} FROM ${objectName} ORDER BY ${sortField} ${sortDirection} LIMIT ${limit}`;
+      const soql = buildQuerySoql(objectName, selectedFields, whereClause, sortField, sortDirection, limit);
       const result = await api.queryRecords(selectedSourceId, soql);
 
       patchTab(objectName, (item) => ({
@@ -191,20 +208,25 @@ export default function App() {
         loading: false,
         selectedRecordIds: [],
         currentSoql: soql,
-        soqlDraft: soql
+        soqlDraft: soql,
+        notice: { type: "success", message: `${objectName} 查询成功，共 ${result.totalSize} 条。` }
       }));
-
-      setNotice({ type: "success", message: `${objectName} 查询成功，共 ${result.totalSize} 条。` });
     } catch (error) {
-      patchTab(objectName, (item) => ({ ...item, loading: false }));
-      setNotice({ type: "error", message: `${objectName} 查询失败：${String(error)}` });
+      patchTab(objectName, (item) => ({
+        ...item,
+        loading: false,
+        notice: { type: "error", message: `${objectName} 查询失败：${String(error)}` }
+      }));
     }
   }
 
   async function deleteCheckedRecords() {
     if (!selectedSourceId || !activeTab) return;
     if (activeTab.selectedRecordIds.length === 0) {
-      setNotice({ type: "error", message: "请先勾选要删除的记录。" });
+      patchTab(activeTab.objectName, (item) => ({
+        ...item,
+        notice: { type: "error", message: "请先勾选要删除的记录。" }
+      }));
       return;
     }
 
@@ -215,18 +237,27 @@ export default function App() {
         activeTab.selectedRecordIds.map((recordId) => api.deleteRecord(selectedSourceId, activeTab.objectName, recordId))
       );
 
-      setNotice({ type: "success", message: `已删除 ${activeTab.selectedRecordIds.length} 条记录。` });
+      patchTab(activeTab.objectName, (item) => ({
+        ...item,
+        notice: { type: "success", message: `已删除 ${activeTab.selectedRecordIds.length} 条记录。` }
+      }));
       await queryTabData(activeTab.objectName);
     } catch (error) {
-      patchTab(activeTab.objectName, (item) => ({ ...item, loading: false }));
-      setNotice({ type: "error", message: `批量删除失败：${String(error)}` });
+      patchTab(activeTab.objectName, (item) => ({
+        ...item,
+        loading: false,
+        notice: { type: "error", message: `批量删除失败：${String(error)}` }
+      }));
     }
   }
 
   async function executeCustomSoql() {
     if (!selectedSourceId || !activeTab) return;
     if (!activeTab.soqlDraft.trim()) {
-      setNotice({ type: "error", message: "SOQL 不能为空。" });
+      patchTab(activeTab.objectName, (item) => ({
+        ...item,
+        notice: { type: "error", message: "SOQL 不能为空。" }
+      }));
       return;
     }
 
@@ -241,13 +272,17 @@ export default function App() {
         loading: false,
         selectedRecordIds: [],
         currentSoql: activeTab.soqlDraft,
-        columnVisibility: nextVisibility
+        columnVisibility: nextVisibility,
+        whereClause: extractWhereClause(activeTab.soqlDraft, activeTab.objectName) ?? item.whereClause,
+        notice: { type: "success", message: `${activeTab.objectName} 执行 SOQL 成功，共 ${result.totalSize} 条。` }
       }));
       saveColumnVisibility(selectedSourceId, activeTab.objectName, nextVisibility);
-      setNotice({ type: "success", message: `${activeTab.objectName} 执行 SOQL 成功，共 ${result.totalSize} 条。` });
     } catch (error) {
-      patchTab(activeTab.objectName, (item) => ({ ...item, loading: false }));
-      setNotice({ type: "error", message: `执行 SOQL 失败：${String(error)}` });
+      patchTab(activeTab.objectName, (item) => ({
+        ...item,
+        loading: false,
+        notice: { type: "error", message: `执行 SOQL 失败：${String(error)}` }
+      }));
     }
   }
 
@@ -329,14 +364,14 @@ export default function App() {
             ))}
           </div>
 
-          {/* 全局通知条：展示成功/错误信息 */}
-          {notice && (
+          {/* 当前 tab 通知条：展示成功/错误信息 */}
+          {activeTab?.notice && (
             <div
               className={`mx-3 mt-2 rounded px-3 py-2 text-xs ${
-                notice.type === "error" ? "bg-red-100 text-red-700" : "bg-emerald-100 text-emerald-700"
+                activeTab.notice.type === "error" ? "bg-red-100 text-red-700" : "bg-emerald-100 text-emerald-700"
               }`}
             >
-              {notice.message}
+              {activeTab.notice.message}
             </div>
           )}
 
@@ -347,7 +382,35 @@ export default function App() {
               <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                 {/* 查询筛选工具栏：LIMIT、排序、查询与动作按钮 */}
                 <div className="mb-2 rounded border border-sky-200 bg-[#edf5ff] p-2 text-xs text-sky-900">
-                  <div className="grid grid-cols-[130px_520px_auto] items-center gap-2">
+                  <div className="grid grid-cols-[minmax(320px,1fr)_130px_520px_auto] items-center gap-2">
+                    <label className="flex items-center gap-2">
+                      <span className="shrink-0 whitespace-nowrap text-sky-700">WHERE</span>
+                      <input
+                        className="w-full rounded border border-sky-300 bg-white px-2 py-1 text-xs"
+                        placeholder="例如 Name LIKE 'Acme%'"
+                        value={activeTab.whereClause}
+                        onChange={(event) => {
+                          const nextWhere = event.target.value;
+                          const selectedFields = (activeTab.describe?.fields || [])
+                            .map((field) => field.name)
+                            .filter((name) => (activeTab.columnVisibility[name] ?? true) === true);
+                          const nextSoql = buildQuerySoql(
+                            activeTab.objectName,
+                            selectedFields,
+                            nextWhere,
+                            activeTab.sortField,
+                            activeTab.sortDirection,
+                            activeTab.limit
+                          );
+                          patchTab(activeTab.objectName, (item) => ({
+                            ...item,
+                            whereClause: nextWhere,
+                            soqlDraft: nextSoql
+                          }));
+                        }}
+                      />
+                    </label>
+
                     <label className="flex items-center gap-2">
                       <span className="shrink-0 whitespace-nowrap text-sky-700">LIMIT</span>
                       <input
@@ -399,6 +462,7 @@ export default function App() {
                           void queryTabData(
                             activeTab.objectName,
                             activeTab.describe || undefined,
+                            activeTab.whereClause,
                             activeTab.sortField,
                             activeTab.limit,
                             activeTab.sortDirection
@@ -479,12 +543,11 @@ export default function App() {
                               return acc;
                             }, {} as Record<string, boolean>);
 
-                            const baseSoql = activeTab.soqlDraft || activeTab.currentSoql;
                             const selectedFields = nextChecked ? activeTab.describe!.fields.map((item) => item.name) : [];
-                            const nextSoql = rebuildSoqlWithSelectedFields(
-                              baseSoql,
-                              selectedFields,
+                            const nextSoql = buildQuerySoql(
                               activeTab.objectName,
+                              selectedFields,
+                              activeTab.whereClause,
                               activeTab.sortField,
                               activeTab.sortDirection,
                               activeTab.limit
@@ -526,14 +589,13 @@ export default function App() {
                                     [field.name]: event.target.checked
                                   };
 
-                                  const baseSoql = activeTab.soqlDraft || activeTab.currentSoql;
                                   const selectedFields = activeTab.describe!.fields
                                     .map((item) => item.name)
                                     .filter((name) => (nextVisibility[name] ?? true) === true);
-                                  const nextSoql = rebuildSoqlWithSelectedFields(
-                                    baseSoql,
-                                    selectedFields,
+                                  const nextSoql = buildQuerySoql(
                                     activeTab.objectName,
+                                    selectedFields,
+                                    activeTab.whereClause,
                                     activeTab.sortField,
                                     activeTab.sortDirection,
                                     activeTab.limit
@@ -663,24 +725,27 @@ function extractSelectedFields(soql: string): string[] {
     });
 }
 
-function rebuildSoqlWithSelectedFields(
-  soql: string,
-  selectedFields: string[],
+function extractWhereClause(soql: string, objectName: string): string | null {
+  const normalized = soql.replace(/\s+/g, " ").trim();
+  const objectEscaped = objectName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = normalized.match(new RegExp(`\\sfrom\\s+${objectEscaped}\\s*(.*)$`, "i"));
+  if (!match) return null;
+  const tail = match[1].trim();
+
+  const whereMatch = tail.match(/^where\s+(.+?)(\s+order\s+by\s+|\s+limit\s+|$)/i);
+  if (!whereMatch) return "";
+  return whereMatch[1].trim();
+}
+
+function buildQuerySoql(
   objectName: string,
+  selectedFields: string[],
+  whereClause: string,
   sortField: string,
   sortDirection: "ASC" | "DESC",
   limit: number
 ): string {
-  if (selectedFields.length === 0) {
-    return `SELECT Id FROM ${objectName} ORDER BY ${sortField} ${sortDirection} LIMIT ${limit}`;
-  }
-
-  const selectSegment = `SELECT ${selectedFields.join(", ")}`;
-  const normalized = soql.replace(/\s+/g, " ").trim();
-  const fromMatch = normalized.match(/\sfrom\s.+$/i);
-  if (!fromMatch) {
-    return `${selectSegment} FROM ${objectName} ORDER BY ${sortField} ${sortDirection} LIMIT ${limit}`;
-  }
-
-  return `${selectSegment}${fromMatch[0]}`;
+  const fields = selectedFields.length > 0 ? selectedFields : ["Id"];
+  const whereSegment = whereClause.trim() ? ` WHERE ${whereClause.trim()}` : "";
+  return `SELECT ${fields.join(", ")} FROM ${objectName}${whereSegment} ORDER BY ${sortField} ${sortDirection} LIMIT ${limit}`;
 }
