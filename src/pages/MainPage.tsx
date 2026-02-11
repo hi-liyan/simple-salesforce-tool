@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
@@ -38,6 +38,10 @@ export function MainPage() {
 
   // 通知自动关闭的计时器。
   const noticeTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  // 数据源切换提示计时器。
+  const sourceNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 工作区全局浮动提示（与 Tab 无关）。
+  const [workspaceNotice, setWorkspaceNotice] = useState<Notice | null>(null);
 
   // 初始化加载：进入页面时同步一次数据源列表。
   useEffect(() => {
@@ -81,6 +85,10 @@ export function MainPage() {
       Object.values(noticeTimersRef.current).forEach((timer) => clearTimeout(timer));
       // 重置引用，避免残留。
       noticeTimersRef.current = {};
+      if (sourceNoticeTimerRef.current) {
+        clearTimeout(sourceNoticeTimerRef.current);
+        sourceNoticeTimerRef.current = null;
+      }
     };
   }, []);
 
@@ -95,17 +103,7 @@ export function MainPage() {
     resetTabs();
   }, [selectedSourceId, resetTabs]);
 
-  // 初始化默认数据源：当未选中数据源且已有列表时自动选第一个。
-  useEffect(() => {
-    // 已有选中则不处理。
-    if (selectedSourceId) return;
-    // 有数据源时选第一个。
-    if (sources.length > 0) {
-      setSelectedSourceId(sources[0].id);
-    }
-  }, [sources, selectedSourceId, setSelectedSourceId]);
-
-  // 当当前数据源被删除或失效时，回退到第一个可用数据源。
+  // 当当前数据源被删除或失效时，清空当前选择。
   useEffect(() => {
     // 未选择数据源则不需要处理。
     if (!selectedSourceId) return;
@@ -114,9 +112,9 @@ export function MainPage() {
       setSelectedSourceId("");
       return;
     }
-    // 当前选中项不存在时回退到第一个。
+    // 当前选中项不存在时清空选择，不自动切到第一个。
     if (!sources.some((item) => item.id === selectedSourceId)) {
-      setSelectedSourceId(sources[0].id);
+      setSelectedSourceId("");
     }
   }, [sources, selectedSourceId, setSelectedSourceId]);
 
@@ -136,16 +134,40 @@ export function MainPage() {
       const preferredId = preferredOrgId ? `cli-${preferredOrgId}` : "";
       if (preferredId && list.some((item) => item.id === preferredId)) {
         setSelectedSourceId(preferredId);
-      } else if (list.length > 0) {
-        setSelectedSourceId(list[0].id);
-      } else {
+      } else if (!list.some((item) => item.id === selectedSourceId)) {
         setSelectedSourceId("");
+      } else {
+        setSelectedSourceId(selectedSourceId);
       }
     } catch (error) {
       patchActiveTabNotice({ type: "error", message: `加载数据源失败：${String(error)}` });
     } finally {
       setLoading(false);
     }
+  }
+
+  function handleSourceChange(sourceId: string) {
+    setSelectedSourceId(sourceId);
+
+    if (sourceNoticeTimerRef.current) {
+      clearTimeout(sourceNoticeTimerRef.current);
+    }
+
+    if (!sourceId) {
+      setWorkspaceNotice(null);
+      return;
+    }
+
+    const selectedSource = sources.find((item) => item.id === sourceId);
+    const sourceDisplayName = selectedSource?.name || sourceId;
+    setWorkspaceNotice({
+      type: "success",
+      message: `已切换到数据源：${sourceDisplayName}`
+    });
+    sourceNoticeTimerRef.current = setTimeout(() => {
+      setWorkspaceNotice(null);
+      sourceNoticeTimerRef.current = null;
+    }, 2600);
   }
 
   function openAuthWindow() {
@@ -569,7 +591,7 @@ export function MainPage() {
           selectedSourceId={selectedSourceId}
           pageLoading={pageLoading}
           onOpenAuthWindow={openAuthWindow}
-          onChangeSource={setSelectedSourceId}
+          onChangeSource={handleSourceChange}
           onRefreshSources={() => void refreshSources(true)}
           objects={objects}
           activeTabObjectName={activeTabObjectName}
@@ -581,6 +603,7 @@ export function MainPage() {
           tabs={tabs}
           activeTabObjectName={activeTabObjectName}
           activeTab={activeTab}
+          workspaceNotice={workspaceNotice}
           visibleColumns={visibleColumns}
           fieldMetadataMap={fieldMetadataMap}
           hasPendingChanges={activeTabHasPendingChanges}
