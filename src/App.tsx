@@ -20,8 +20,7 @@ type TabState = {
   selectedRecordIds: string[];
   currentSoql: string;
   soqlDraft: string;
-  showSoqlExecutor: boolean;
-  showFieldMeta: boolean;
+  showDrawer: boolean;
   columnVisibility: Record<string, boolean>;
   loading: boolean;
 };
@@ -114,8 +113,7 @@ export default function App() {
       selectedRecordIds: [],
       currentSoql: "",
       soqlDraft: "",
-      showSoqlExecutor: false,
-      showFieldMeta: false,
+      showDrawer: false,
       columnVisibility: {},
       loading: true
     };
@@ -164,6 +162,16 @@ export default function App() {
     const limit = Math.max(1, Math.min(2000, limitOverride ?? tab?.limit ?? 200));
     const sortField = sortFieldOverride ?? tab?.sortField ?? "Id";
     const sortDirection = directionOverride ?? tab?.sortDirection ?? "DESC";
+    const visibility = tab?.columnVisibility ?? {};
+    const selectedFields = describe.fields
+      .map((field) => field.name)
+      .filter((name) => (visibility[name] ?? true) === true);
+
+    if (selectedFields.length === 0) {
+      setNotice({ type: "error", message: `${objectName} 至少要勾选一个字段。` });
+      patchTab(objectName, (item) => ({ ...item, loading: false }));
+      return;
+    }
 
     patchTab(objectName, (item) => ({
       ...item,
@@ -174,8 +182,7 @@ export default function App() {
     }));
 
     try {
-      const fieldList = describe.fields.map((field) => field.name).join(", ");
-      const soql = `SELECT ${fieldList} FROM ${objectName} ORDER BY ${sortField} ${sortDirection} LIMIT ${limit}`;
+      const soql = `SELECT ${selectedFields.join(", ")} FROM ${objectName} ORDER BY ${sortField} ${sortDirection} LIMIT ${limit}`;
       const result = await api.queryRecords(selectedSourceId, soql);
 
       patchTab(objectName, (item) => ({
@@ -226,11 +233,8 @@ export default function App() {
     patchTab(activeTab.objectName, (item) => ({ ...item, loading: true }));
     try {
       const result = await api.queryRecords(selectedSourceId, activeTab.soqlDraft);
-      const nextVisibility = buildVisibilityFromSoql(
-        activeTab.soqlDraft,
-        activeTab.describe,
-        activeTab.columnVisibility
-      );
+      const nextVisibility = buildVisibilityFromSoql(activeTab.soqlDraft, activeTab.describe, activeTab.columnVisibility);
+
       patchTab(activeTab.objectName, (item) => ({
         ...item,
         result,
@@ -259,8 +263,11 @@ export default function App() {
 
   return (
     <main className="datagrip-shell h-screen overflow-hidden">
+      {/* 页面主布局：左侧对象区域 + 右侧内容区域 */}
       <div className="grid h-full grid-cols-[340px_1fr] overflow-hidden">
+        {/* 左侧 aside：数据源选择与 Object 列表 */}
         <aside className="flex min-h-0 flex-col overflow-hidden border-r border-sky-200 bg-[#f3f8ff] p-3">
+          {/* 数据源操作区域：下拉选择 + CLI 刷新 */}
           <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-sky-900">Data Source</div>
           <div className="flex gap-2">
             <select
@@ -285,6 +292,7 @@ export default function App() {
             </button>
           </div>
 
+          {/* Object 列表区域 */}
           <div className="mt-4 text-xs font-semibold uppercase tracking-wide text-sky-900">Objects</div>
           <div className="mt-2 min-h-0 flex-1">
             <ObjectList
@@ -295,7 +303,9 @@ export default function App() {
           </div>
         </aside>
 
+        {/* 右侧 section：标签页、筛选工具栏、数据列表与抽屉 */}
         <section className="flex min-h-0 min-w-0 flex-col overflow-hidden bg-[#f7fbff]">
+          {/* 顶部标签栏：每个打开的 Object 一个 tab */}
           <div className="flex shrink-0 overflow-x-auto border-b border-sky-200 bg-[#eaf3ff] text-xs text-sky-900">
             {tabs.length === 0 && <div className="px-3 py-2 text-sky-600">请选择左侧 Object 打开标签页</div>}
             {tabs.map((tab) => (
@@ -319,6 +329,7 @@ export default function App() {
             ))}
           </div>
 
+          {/* 全局通知条：展示成功/错误信息 */}
           {notice && (
             <div
               className={`mx-3 mt-2 rounded px-3 py-2 text-xs ${
@@ -330,197 +341,249 @@ export default function App() {
           )}
 
           {activeTab && (
-            <div className="flex min-h-0 flex-1 flex-col p-3">
-              <div className="mb-2 rounded border border-sky-200 bg-[#edf5ff] p-2 text-xs text-sky-900">
-                <div className="grid grid-cols-[120px_240px_140px_auto] items-center gap-2">
-                  <label className="flex items-center gap-2">
-                    <span className="text-sky-700">LIMIT</span>
-                    <input
-                      type="number"
-                      min={1}
-                      max={2000}
-                      className="w-20 rounded border border-sky-300 bg-white px-2 py-1 text-xs"
-                      value={activeTab.limit}
-                      onChange={(event) => {
-                        const nextLimit = Number(event.target.value || 200);
-                        patchTab(activeTab.objectName, (item) => ({ ...item, limit: nextLimit }));
-                      }}
-                    />
-                  </label>
+            /* 当前激活 tab 的主体内容区域 */
+            <div className="flex min-h-0 flex-1 gap-2 p-3">
+              {/* 主内容列：筛选工具栏 + 数据列表 */}
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                {/* 查询筛选工具栏：LIMIT、排序、查询与动作按钮 */}
+                <div className="mb-2 rounded border border-sky-200 bg-[#edf5ff] p-2 text-xs text-sky-900">
+                  <div className="grid grid-cols-[130px_520px_auto] items-center gap-2">
+                    <label className="flex items-center gap-2">
+                      <span className="shrink-0 whitespace-nowrap text-sky-700">LIMIT</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={2000}
+                        className="w-20 rounded border border-sky-300 bg-white px-2 py-1 text-xs"
+                        value={activeTab.limit}
+                        onChange={(event) => {
+                          const nextLimit = Number(event.target.value || 200);
+                          patchTab(activeTab.objectName, (item) => ({ ...item, limit: nextLimit }));
+                        }}
+                      />
+                    </label>
 
-                  <label className="flex items-center gap-2">
-                    <span className="text-sky-700">排序字段</span>
-                    <select
-                      className="w-full rounded border border-sky-300 bg-white px-2 py-1 text-xs"
-                      value={activeTab.sortField}
-                      onChange={(event) =>
-                        patchTab(activeTab.objectName, (item) => ({ ...item, sortField: event.target.value }))
-                      }
-                    >
-                      {(activeTab.describe?.fields || []).map((field) => (
-                        <option key={field.name} value={field.name}>
-                          {field.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                    <label className="flex items-center gap-2">
+                      <span className="shrink-0 whitespace-nowrap text-sky-700">排序字段</span>
+                      <select
+                        className="w-56 shrink-0 rounded border border-sky-300 bg-white px-2 py-1 text-xs"
+                        value={activeTab.sortField}
+                        onChange={(event) =>
+                          patchTab(activeTab.objectName, (item) => ({ ...item, sortField: event.target.value }))
+                        }
+                      >
+                        {(activeTab.describe?.fields || []).map((field) => (
+                          <option key={field.name} value={field.name}>
+                            {field.name}
+                          </option>
+                        ))}
+                      </select>
+                      <select
+                        className="w-24 shrink-0 rounded border border-sky-300 bg-white px-2 py-1 text-xs"
+                        value={activeTab.sortDirection}
+                        onChange={(event) =>
+                          patchTab(activeTab.objectName, (item) => ({
+                            ...item,
+                            sortDirection: event.target.value as "ASC" | "DESC"
+                          }))
+                        }
+                      >
+                        <option value="ASC">ASC</option>
+                        <option value="DESC">DESC</option>
+                      </select>
+                      <button
+                        type="button"
+                        className="whitespace-nowrap rounded border border-[#0176d3] bg-[#0176d3] px-3 py-1 text-xs text-white hover:bg-[#025cb2]"
+                        disabled={activeTab.loading}
+                        onClick={() =>
+                          void queryTabData(
+                            activeTab.objectName,
+                            activeTab.describe || undefined,
+                            activeTab.sortField,
+                            activeTab.limit,
+                            activeTab.sortDirection
+                          )
+                        }
+                      >
+                        查询
+                      </button>
+                    </label>
 
-                  <select
-                    className="rounded border border-sky-300 bg-white px-2 py-1 text-xs"
-                    value={activeTab.sortDirection}
-                    onChange={(event) =>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        className="whitespace-nowrap rounded border border-sky-300 bg-white px-3 py-1 text-xs text-sky-800 hover:bg-sky-50"
+                        onClick={() =>
+                          patchTab(activeTab.objectName, (item) => ({
+                            ...item,
+                            showDrawer: !item.showDrawer
+                          }))
+                        }
+                      >
+                        字段与 SOQL
+                      </button>
+                      <button
+                        type="button"
+                        className="whitespace-nowrap rounded border border-red-300 bg-white px-3 py-1 text-xs text-red-700 hover:bg-red-50"
+                        disabled={activeTab.loading || activeTab.selectedRecordIds.length === 0}
+                        onClick={() => void deleteCheckedRecords()}
+                      >
+                        删除已勾选({activeTab.selectedRecordIds.length})
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 数据列表容器 */}
+                <div className="min-h-0 flex-1 overflow-hidden rounded border border-sky-200 bg-white">
+                  <DataGrid
+                    result={activeTab.result}
+                    visibleColumns={getVisibleColumns(activeTab)}
+                    selectedRecordIds={activeTab.selectedRecordIds}
+                    onToggleRecord={(recordId, checked) => {
                       patchTab(activeTab.objectName, (item) => ({
                         ...item,
-                        sortDirection: event.target.value as "ASC" | "DESC"
-                      }))
-                    }
-                  >
-                    <option value="ASC">ASC</option>
-                    <option value="DESC">DESC</option>
-                  </select>
-
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      className="rounded border border-[#0176d3] bg-[#0176d3] px-3 py-1 text-xs text-white hover:bg-[#025cb2]"
-                      disabled={activeTab.loading}
-                      onClick={() =>
-                        void queryTabData(
-                          activeTab.objectName,
-                          activeTab.describe || undefined,
-                          activeTab.sortField,
-                          activeTab.limit,
-                          activeTab.sortDirection
-                        )
-                      }
-                    >
-                      查询
-                    </button>
-                    <button
-                      type="button"
-                      className="rounded border border-sky-300 bg-white px-3 py-1 text-xs text-sky-800 hover:bg-sky-50"
-                      onClick={() =>
-                        patchTab(activeTab.objectName, (item) => ({
-                          ...item,
-                          showSoqlExecutor: !item.showSoqlExecutor
-                        }))
-                      }
-                    >
-                      SOQL 执行器
-                    </button>
-                    <button
-                      type="button"
-                      className="rounded border border-sky-300 bg-white px-3 py-1 text-xs text-sky-800 hover:bg-sky-50"
-                      onClick={() =>
-                        patchTab(activeTab.objectName, (item) => ({
-                          ...item,
-                          showFieldMeta: !item.showFieldMeta
-                        }))
-                      }
-                    >
-                      Field 元数据
-                    </button>
-                    <button
-                      type="button"
-                      className="rounded border border-red-300 bg-white px-3 py-1 text-xs text-red-700 hover:bg-red-50"
-                      disabled={activeTab.loading || activeTab.selectedRecordIds.length === 0}
-                      onClick={() => void deleteCheckedRecords()}
-                    >
-                      删除已勾选({activeTab.selectedRecordIds.length})
-                    </button>
-                  </div>
+                        selectedRecordIds: checked
+                          ? Array.from(new Set([...item.selectedRecordIds, recordId]))
+                          : item.selectedRecordIds.filter((id) => id !== recordId)
+                      }));
+                    }}
+                    onToggleAll={(checked, recordIds) => {
+                      patchTab(activeTab.objectName, (item) => ({
+                        ...item,
+                        selectedRecordIds: checked ? recordIds : []
+                      }));
+                    }}
+                  />
                 </div>
               </div>
 
-              {activeTab.showSoqlExecutor && (
-                <div className="mb-2 rounded border border-sky-200 bg-white p-2">
-                  <div className="mb-1 text-xs font-semibold text-sky-800">SOQL 执行器</div>
-                  <textarea
-                    className="h-24 w-full rounded border border-sky-300 bg-[#f7fbff] p-2 font-mono text-xs text-sky-900 outline-none focus:border-[#0176d3]"
-                    value={activeTab.soqlDraft}
-                    onChange={(event) =>
-                      patchTab(activeTab.objectName, (item) => ({
-                        ...item,
-                        soqlDraft: event.target.value
-                      }))
-                    }
-                  />
-                  <div className="mt-2 flex items-center gap-2">
+              {activeTab.showDrawer && activeTab.describe && (
+                /* 右侧抽屉：上方字段元数据，下方 SOQL 执行器 */
+                <aside className="flex w-[380px] shrink-0 flex-col gap-2 overflow-hidden rounded border border-sky-200 bg-white p-2">
+                  {/* 抽屉上半区：Field 元数据与勾选控制 */}
+                  <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded border border-sky-100 bg-[#f9fcff] p-2">
+                    <div className="mb-1 flex items-center justify-between text-xs">
+                      <span className="font-semibold text-sky-800">Field 元数据（勾选控制 SELECT 与列表列）</span>
+                      <div className="flex gap-1">
+                        <button
+                          type="button"
+                          className="rounded border border-sky-300 bg-white px-2 py-0.5 text-[11px] text-sky-800 hover:bg-sky-50"
+                          onClick={() => {
+                            const allSelected = activeTab.describe!.fields.every(
+                              (field) => (activeTab.columnVisibility[field.name] ?? true) === true
+                            );
+                            const nextChecked = !allSelected;
+                            const nextVisibility = activeTab.describe!.fields.reduce((acc, field) => {
+                              acc[field.name] = nextChecked;
+                              return acc;
+                            }, {} as Record<string, boolean>);
+
+                            const baseSoql = activeTab.soqlDraft || activeTab.currentSoql;
+                            const selectedFields = nextChecked ? activeTab.describe!.fields.map((item) => item.name) : [];
+                            const nextSoql = rebuildSoqlWithSelectedFields(
+                              baseSoql,
+                              selectedFields,
+                              activeTab.objectName,
+                              activeTab.sortField,
+                              activeTab.sortDirection,
+                              activeTab.limit
+                            );
+
+                            patchTab(activeTab.objectName, (item) => ({
+                              ...item,
+                              columnVisibility: nextVisibility,
+                              soqlDraft: nextSoql
+                            }));
+                            if (selectedSourceId) {
+                              saveColumnVisibility(selectedSourceId, activeTab.objectName, nextVisibility);
+                            }
+                          }}
+                        >
+                          {activeTab.describe!.fields.every(
+                            (field) => (activeTab.columnVisibility[field.name] ?? true) === true
+                          )
+                            ? "取消全选"
+                            : "全选"}
+                        </button>
+                      </div>
+                    </div>
+                    <div className="min-h-0 flex-1 overflow-auto">
+                      {activeTab.describe.fields.map((field) => {
+                        const checked = activeTab.columnVisibility[field.name] ?? true;
+                        return (
+                          <label
+                            key={field.name}
+                            className="flex items-center justify-between gap-2 rounded px-2 py-1 text-xs text-sky-900 hover:bg-sky-50"
+                          >
+                            <span className="flex items-center gap-2">
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={(event) => {
+                                  const nextVisibility = {
+                                    ...activeTab.columnVisibility,
+                                    [field.name]: event.target.checked
+                                  };
+
+                                  const baseSoql = activeTab.soqlDraft || activeTab.currentSoql;
+                                  const selectedFields = activeTab.describe!.fields
+                                    .map((item) => item.name)
+                                    .filter((name) => (nextVisibility[name] ?? true) === true);
+                                  const nextSoql = rebuildSoqlWithSelectedFields(
+                                    baseSoql,
+                                    selectedFields,
+                                    activeTab.objectName,
+                                    activeTab.sortField,
+                                    activeTab.sortDirection,
+                                    activeTab.limit
+                                  );
+
+                                  patchTab(activeTab.objectName, (item) => ({
+                                    ...item,
+                                    columnVisibility: nextVisibility,
+                                    soqlDraft: nextSoql
+                                  }));
+                                  if (selectedSourceId) {
+                                    saveColumnVisibility(selectedSourceId, activeTab.objectName, nextVisibility);
+                                  }
+                                }}
+                              />
+                              <span>{field.name}</span>
+                            </span>
+                            <span className="text-[10px] text-sky-600">
+                              {field.label} / {field.dataType}
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* 抽屉下半区：SOQL 执行器 */}
+                  <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded border border-sky-100 bg-[#f9fcff] p-2">
+                    <div className="mb-1 text-xs font-semibold text-sky-800">SOQL 执行器</div>
+                    <textarea
+                      className="min-h-0 flex-1 rounded border border-sky-300 bg-white p-2 font-mono text-xs text-sky-900 outline-none focus:border-[#0176d3]"
+                      value={activeTab.soqlDraft}
+                      onChange={(event) =>
+                        patchTab(activeTab.objectName, (item) => ({
+                          ...item,
+                          soqlDraft: event.target.value
+                        }))
+                      }
+                    />
                     <button
                       type="button"
-                      className="rounded border border-[#0176d3] bg-[#0176d3] px-3 py-1 text-xs text-white hover:bg-[#025cb2]"
+                      className="mt-2 rounded border border-[#0176d3] bg-[#0176d3] px-3 py-1 text-xs text-white hover:bg-[#025cb2]"
                       disabled={activeTab.loading}
                       onClick={() => void executeCustomSoql()}
                     >
                       执行 SOQL
                     </button>
-                    <span className="text-[11px] text-sky-600">默认值为当前数据列表查询 SOQL</span>
                   </div>
-                </div>
+                </aside>
               )}
-
-              {activeTab.showFieldMeta && activeTab.describe && (
-                <div className="mb-2 rounded border border-sky-200 bg-white p-2">
-                  <div className="mb-1 text-xs font-semibold text-sky-800">Field 元数据（勾选控制列表列显示）</div>
-                  <div className="max-h-40 overflow-auto rounded border border-sky-100 bg-[#f9fcff] p-1">
-                    {activeTab.describe.fields.map((field) => {
-                      const checked = activeTab.columnVisibility[field.name] ?? true;
-                      return (
-                        <label
-                          key={field.name}
-                          className="flex items-center justify-between gap-2 rounded px-2 py-1 text-xs text-sky-900 hover:bg-sky-50"
-                        >
-                          <span className="flex items-center gap-2">
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              onChange={(event) => {
-                                const nextVisibility = {
-                                  ...activeTab.columnVisibility,
-                                  [field.name]: event.target.checked
-                                };
-                                patchTab(activeTab.objectName, (item) => ({
-                                  ...item,
-                                  columnVisibility: nextVisibility
-                                }));
-                                if (selectedSourceId) {
-                                  saveColumnVisibility(selectedSourceId, activeTab.objectName, nextVisibility);
-                                }
-                              }}
-                            />
-                            <span>{field.name}</span>
-                          </span>
-                          <span className="text-[10px] text-sky-600">
-                            {field.label} / {field.dataType}
-                          </span>
-                        </label>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
-              <div className="min-h-0 flex-1 overflow-hidden rounded border border-sky-200 bg-white">
-                <DataGrid
-                  result={activeTab.result}
-                  visibleColumns={getVisibleColumns(activeTab)}
-                  selectedRecordIds={activeTab.selectedRecordIds}
-                  onToggleRecord={(recordId, checked) => {
-                    patchTab(activeTab.objectName, (item) => ({
-                      ...item,
-                      selectedRecordIds: checked
-                        ? Array.from(new Set([...item.selectedRecordIds, recordId]))
-                        : item.selectedRecordIds.filter((id) => id !== recordId)
-                    }));
-                  }}
-                  onToggleAll={(checked, recordIds) => {
-                    patchTab(activeTab.objectName, (item) => ({
-                      ...item,
-                      selectedRecordIds: checked ? recordIds : []
-                    }));
-                  }}
-                />
-              </div>
             </div>
           )}
         </section>
@@ -600,3 +663,24 @@ function extractSelectedFields(soql: string): string[] {
     });
 }
 
+function rebuildSoqlWithSelectedFields(
+  soql: string,
+  selectedFields: string[],
+  objectName: string,
+  sortField: string,
+  sortDirection: "ASC" | "DESC",
+  limit: number
+): string {
+  if (selectedFields.length === 0) {
+    return `SELECT Id FROM ${objectName} ORDER BY ${sortField} ${sortDirection} LIMIT ${limit}`;
+  }
+
+  const selectSegment = `SELECT ${selectedFields.join(", ")}`;
+  const normalized = soql.replace(/\s+/g, " ").trim();
+  const fromMatch = normalized.match(/\sfrom\s.+$/i);
+  if (!fromMatch) {
+    return `${selectSegment} FROM ${objectName} ORDER BY ${sortField} ${sortDirection} LIMIT ${limit}`;
+  }
+
+  return `${selectSegment}${fromMatch[0]}`;
+}

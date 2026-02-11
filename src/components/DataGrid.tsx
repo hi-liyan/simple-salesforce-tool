@@ -23,11 +23,9 @@ export function DataGrid({ result, visibleColumns, selectedRecordIds, onToggleRe
   const columns = rawColumns.includes("Id")
     ? ["Id", ...rawColumns.filter((column) => column !== "Id")]
     : rawColumns;
-  const displayColumns = visibleColumns.length > 0
-    ? (visibleColumns.includes("Id")
-      ? ["Id", ...visibleColumns.filter((column) => column !== "Id")]
-      : visibleColumns)
-    : columns;
+  const displayColumns = visibleColumns.includes("Id")
+    ? ["Id", ...visibleColumns.filter((column) => column !== "Id")]
+    : visibleColumns;
 
   const selectableIds = records
     .map((item, index) => String(item.Id || `row-${index}`))
