@@ -55,3 +55,18 @@ npm run tauri build
 ## 安全说明
 
 当前版本将 `accessToken` 保存在本地 SQLite 中，适用于内网桌面工具场景。若需要更高安全等级，建议改为系统密钥链（Windows Credential Manager / macOS Keychain）并对数据库仅保留引用。
+
+## Salesforce CLI 说明
+
+应用默认通过 Salesforce CLI (`sf`) 同步认证信息。
+
+- 优先读取环境变量 `SF_CLI_PATH`（可配置为 `sf.cmd`/`sfdx.cmd` 绝对路径）
+- 若未配置，则按顺序尝试：`sf`、`sf.cmd`、`sfdx`、`sfdx.cmd`
+- Windows 下额外尝试：`%APPDATA%\\npm\\sf.cmd`、`%APPDATA%\\npm\\sfdx.cmd`
+
+示例（Windows PowerShell）：
+
+```powershell
+$env:SF_CLI_PATH = "C:\\Users\\<用户名>\\AppData\\Roaming\\npm\\sf.cmd"
+npm run tauri dev
+```

@@ -4,6 +4,7 @@ use crate::app_state::AppState;
 use crate::db;
 use crate::error::AppError;
 use crate::models::{ObjectDescribe, QueryResult, RecordMutationPayload, SalesforceObject, SalesforceSource, SourceUpsertPayload};
+use crate::sf_cli;
 
 #[tauri::command]
 pub fn list_sources(state: State<'_, AppState>) -> Result<Vec<SalesforceSource>, String> {
@@ -11,6 +12,24 @@ pub fn list_sources(state: State<'_, AppState>) -> Result<Vec<SalesforceSource>,
         .db
         .lock()
         .map_err(|error| format!("数据库锁失败: {error}"))?;
+    db::list_sources(&connection).map_err(AppError::to_string_error)
+}
+
+/// 从 Salesforce CLI 同步认证信息到本地数据源。
+#[tauri::command]
+pub fn sync_cli_sources(state: State<'_, AppState>) -> Result<Vec<SalesforceSource>, String> {
+    let seeds = sf_cli::load_cli_sources().map_err(AppError::to_string_error)?;
+
+    let keep_ids: Vec<String> = seeds.iter().map(|item| item.id.clone()).collect();
+    let connection = state
+        .db
+        .lock()
+        .map_err(|error| format!("数据库锁失败: {error}"))?;
+
+    for seed in seeds {
+        db::upsert_source_with_id(&connection, &seed.id, seed.payload).map_err(AppError::to_string_error)?;
+    }
+    db::prune_cli_sources(&connection, &keep_ids).map_err(AppError::to_string_error)?;
     db::list_sources(&connection).map_err(AppError::to_string_error)
 }
 

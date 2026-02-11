@@ -1,5 +1,5 @@
 ﻿use chrono::Utc;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 
 use crate::error::AppError;
 use crate::models::{CachedObjects, SalesforceObject, SalesforceSource, SourceUpsertPayload};
@@ -128,6 +128,72 @@ pub fn update_source(
     )?;
 
     get_source(connection, id)
+}
+
+/// 按固定 ID 进行写入，适用于 CLI 同步场景（重复同步只更新不新增）。
+pub fn upsert_source_with_id(
+    connection: &Connection,
+    id: &str,
+    payload: SourceUpsertPayload,
+) -> Result<SalesforceSource, AppError> {
+    let now = Utc::now().to_rfc3339();
+    let created_at: Option<String> = connection
+        .query_row(
+            "SELECT created_at FROM salesforce_sources WHERE id = ?1",
+            [id],
+            |row| row.get(0),
+        )
+        .optional()?;
+
+    connection.execute(
+        "INSERT INTO salesforce_sources (id, name, instance_url, access_token, api_version, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT(id) DO UPDATE SET
+           name = excluded.name,
+           instance_url = excluded.instance_url,
+           access_token = excluded.access_token,
+           api_version = excluded.api_version,
+           updated_at = excluded.updated_at",
+        params![
+            id,
+            payload.name,
+            payload.instance_url.trim_end_matches('/').to_string(),
+            payload.access_token,
+            payload.api_version,
+            created_at.unwrap_or_else(|| now.clone()),
+            now,
+        ],
+    )?;
+
+    get_source(connection, id)
+}
+
+/// 清理本次 CLI 同步中不存在的旧 CLI 数据源，避免脏数据堆积。
+pub fn prune_cli_sources(connection: &Connection, keep_ids: &[String]) -> Result<(), AppError> {
+    if keep_ids.is_empty() {
+        connection.execute("DELETE FROM object_metadata_cache WHERE source_id LIKE 'cli-%'", [])?;
+        connection.execute("DELETE FROM salesforce_sources WHERE id LIKE 'cli-%'", [])?;
+        return Ok(());
+    }
+
+    let placeholders = std::iter::repeat("?")
+        .take(keep_ids.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let cache_sql = format!(
+        "DELETE FROM object_metadata_cache WHERE source_id LIKE 'cli-%' AND source_id NOT IN ({})",
+        placeholders
+    );
+    connection.execute(&cache_sql, params_from_iter(keep_ids.iter()))?;
+
+    let source_sql = format!(
+        "DELETE FROM salesforce_sources WHERE id LIKE 'cli-%' AND id NOT IN ({})",
+        placeholders
+    );
+    connection.execute(&source_sql, params_from_iter(keep_ids.iter()))?;
+
+    Ok(())
 }
 
 pub fn delete_source(connection: &Connection, id: &str) -> Result<(), AppError> {

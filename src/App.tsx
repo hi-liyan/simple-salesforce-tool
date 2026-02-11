@@ -31,8 +31,8 @@ export default function App() {
   );
 
   useEffect(() => {
-    // 启动时读取本地保存的数据源。
-    void refreshSources();
+    // 启动时默认从 Salesforce CLI 同步认证信息。
+    void refreshSources(true);
   }, []);
 
   useEffect(() => {
@@ -56,10 +56,10 @@ export default function App() {
     setQuery(`SELECT Id, Name FROM ${selectedObjectName} LIMIT 50`);
   }, [selectedSourceId, selectedObjectName]);
 
-  async function refreshSources() {
+  async function refreshSources(syncCli = false) {
     setLoading(true);
     try {
-      const list = await api.listSources();
+      const list = syncCli ? await api.syncCliSources() : await api.listSources();
       setSources(list);
       if (list.length > 0 && !selectedSourceId) {
         setSelectedSourceId(list[0].id);
