@@ -8,7 +8,7 @@ type Props = {
   selectedSourceId: string;
   loading: boolean;
   onChangeSelectedSource: (sourceId: string) => void;
-  onSourcesChanged: () => Promise<void>;
+  onSourcesChanged: (syncCli?: boolean) => Promise<void>;
 };
 
 type FormState = {
@@ -58,7 +58,7 @@ export function SourcePanel({
         await api.createSource(form);
         setMessage("数据源创建成功");
       }
-      await onSourcesChanged();
+      await onSourcesChanged(false);
       resetForm();
     } catch (error) {
       setMessage(`提交失败：${String(error)}`);
@@ -72,15 +72,44 @@ export function SourcePanel({
       if (selectedSourceId === id) {
         onChangeSelectedSource("");
       }
-      await onSourcesChanged();
+      await onSourcesChanged(false);
       setMessage("数据源删除成功");
     } catch (error) {
       setMessage(`删除失败：${String(error)}`);
     }
   }
 
+  async function onSyncCli() {
+    setMessage("");
+    try {
+      await onSourcesChanged(true);
+      setMessage("已从 Salesforce CLI 同步认证数据源");
+    } catch (error) {
+      setMessage(`CLI 同步失败：${String(error)}`);
+    }
+  }
+
   return (
     <div className="space-y-2 text-xs">
+      <div className="flex gap-1">
+        <button
+          type="button"
+          className="rounded border border-emerald-700 bg-emerald-700 px-2 py-1 text-white"
+          onClick={() => void onSyncCli()}
+          disabled={loading}
+        >
+          从 CLI 同步
+        </button>
+        <button
+          type="button"
+          className="rounded border border-slate-600 px-2 py-1 text-slate-200"
+          onClick={() => void onSourcesChanged(false)}
+          disabled={loading}
+        >
+          刷新
+        </button>
+      </div>
+
       <select
         className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1.5 text-slate-100 outline-none focus:border-sky-500"
         value={selectedSourceId}

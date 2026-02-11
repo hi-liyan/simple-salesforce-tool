@@ -19,6 +19,7 @@ async function invokeApi<T>(command: string, payload?: Record<string, unknown>):
 
 export const api = {
   listSources: () => invokeApi<SalesforceSource[]>("list_sources"),
+  syncCliSources: () => invokeApi<SalesforceSource[]>("sync_cli_sources"),
   createSource: (payload: SourceUpsertPayload) => invokeApi<SalesforceSource>("create_source", { payload }),
   updateSource: (id: string, payload: SourceUpsertPayload) =>
     invokeApi<SalesforceSource>("update_source", { id, payload }),
