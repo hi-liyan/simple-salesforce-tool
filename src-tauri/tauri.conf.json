@@ -2,7 +2,7 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Simple Salesforce Tool",
   "version": "0.1.0",
-  "identifier": "com.example.simple-salesforce-tool",
+  "identifier": "com.iyucode.simple-salesforce-tool",
   "build": {
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build",

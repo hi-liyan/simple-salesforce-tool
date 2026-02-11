@@ -21,7 +21,9 @@ export function ObjectList({ objects, activeObjectName, onOpenObject }: Props) {
   }, [keyword, objects]);
 
   return (
+    // 外层容器：对象列表整体布局。
     <Box sx={{ height: "100%", minHeight: 0, display: "flex", flexDirection: "column" }}>
+      {/* 筛选输入框。 */}
       <TextField
         size="small"
         fullWidth
@@ -29,6 +31,7 @@ export function ObjectList({ objects, activeObjectName, onOpenObject }: Props) {
         value={keyword}
         onChange={(event) => setKeyword(event.target.value)}
       />
+      {/* 列表容器：可滚动区域。 */}
       <List
         dense
         disablePadding
@@ -42,17 +45,21 @@ export function ObjectList({ objects, activeObjectName, onOpenObject }: Props) {
         }}
       >
         {filtered.map((item) => (
+          // 单项容器：包裹 Tooltip 与分割线。
           <div key={item.name}>
+            {/* Tooltip：显示对象元数据。 */}
             <Tooltip
               arrow
-              placement="right"
+              placement="bottom"
               title={`名称: ${item.name}\n标签: ${item.label}\n可查询: ${item.queryable}\n可新增: ${item.createable}\n可更新: ${item.updateable}\n可删除: ${item.deletable}`}
             >
+              {/* 点击项：选择对象并打开 Tab。 */}
               <ListItemButton
                 selected={item.name === activeObjectName}
                 onClick={() => onOpenObject(item)}
                 sx={{ py: 0.75, px: 1.5 }}
               >
+                {/* 列表文字：对象名称与标签。 */}
                 <ListItemText
                   primary={item.name}
                   secondary={item.label}
@@ -61,6 +68,7 @@ export function ObjectList({ objects, activeObjectName, onOpenObject }: Props) {
                 />
               </ListItemButton>
             </Tooltip>
+            {/* 分割线。 */}
             <Divider />
           </div>
         ))}

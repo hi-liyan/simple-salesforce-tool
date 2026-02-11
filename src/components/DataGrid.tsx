@@ -72,7 +72,9 @@ export function DataGrid({
 
   if (records.length === 0) {
     return (
+      // 空状态容器。
       <Box sx={{ p: 2 }}>
+        {/* 空状态提示。 */}
         <Typography variant="caption" color="text.secondary">
           暂无查询结果。
         </Typography>
@@ -154,7 +156,9 @@ export function DataGrid({
   };
 
   return (
+    // 表格容器：顶部统计栏 + 数据表格。
     <Box sx={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
+      {/* 顶部工具栏：全选与统计。 */}
       <Box
         sx={{
           px: 1.5,
@@ -166,13 +170,17 @@ export function DataGrid({
           gap: 1.2
         }}
       >
+        {/* 全选复选框。 */}
         <Checkbox size="small" checked={allChecked} onChange={(event) => onToggleAll(event.target.checked, selectableIds)} />
+        {/* 统计信息。 */}
         <Typography variant="caption" color="text.secondary">
           Rows: {result.totalSize}
         </Typography>
       </Box>
 
+      {/* 数据表格主体。 */}
       <Box sx={{ flex: 1, minHeight: 0 }}>
+        {/* Glide Data Grid 组件。 */}
         <DataEditor
           columns={columns}
           rows={records.length}
@@ -200,29 +208,25 @@ export function DataGrid({
   );
 }
 
+// 将单元格值转为显示字符串。
 function stringifyCellValue(value: unknown): string {
   if (value === null || value === undefined) return "";
   if (typeof value === "string") return value;
   if (typeof value === "number" || typeof value === "boolean") return String(value);
-
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
+  if (typeof value === "object") {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return "[Object]";
+    }
   }
+  return String(value);
 }
 
+// 抽取可编辑值。
 function extractEditableValue(value: EditableGridCell): string {
-  switch (value.kind) {
-    case GridCellKind.Text:
-    case GridCellKind.Uri:
-    case GridCellKind.Markdown:
-      return String(value.data ?? "");
-    case GridCellKind.Number:
-      return value.data === undefined || value.data === null ? "" : String(value.data);
-    case GridCellKind.Boolean:
-      return String(Boolean(value.data));
-    default:
-      return "";
-  }
+  if (value.kind === GridCellKind.Text) return String(value.data ?? "");
+  if (value.kind === GridCellKind.Number) return String(value.data ?? "");
+  if (value.kind === GridCellKind.Boolean) return String(value.data ?? "");
+  return String(value.data ?? "");
 }

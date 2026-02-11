@@ -90,8 +90,11 @@ export function SourcePanel({
   }
 
   return (
+    // 面板容器：数据源管理整体布局。
     <div className="space-y-2 text-xs">
+      {/* 操作按钮行。 */}
       <div className="flex gap-1">
+        {/* CLI 同步按钮。 */}
         <button
           type="button"
           className="rounded border border-emerald-700 bg-emerald-700 px-2 py-1 text-white"
@@ -100,6 +103,7 @@ export function SourcePanel({
         >
           从 CLI 同步
         </button>
+        {/* 刷新按钮。 */}
         <button
           type="button"
           className="rounded border border-slate-600 px-2 py-1 text-slate-200"
@@ -110,6 +114,7 @@ export function SourcePanel({
         </button>
       </div>
 
+      {/* 数据源选择下拉。 */}
       <select
         className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1.5 text-slate-100 outline-none focus:border-sky-500"
         value={selectedSourceId}
@@ -123,7 +128,9 @@ export function SourcePanel({
         ))}
       </select>
 
+      {/* 数据源表单。 */}
       <form className="space-y-1" onSubmit={onSubmit}>
+        {/* 名称输入。 */}
         <input
           className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-100"
           placeholder="名称"
@@ -131,6 +138,7 @@ export function SourcePanel({
           onChange={(event) => setForm((state) => ({ ...state, name: event.target.value }))}
           required
         />
+        {/* Instance URL 输入。 */}
         <input
           className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-100"
           placeholder="Instance URL"
@@ -138,6 +146,7 @@ export function SourcePanel({
           onChange={(event) => setForm((state) => ({ ...state, instanceUrl: event.target.value }))}
           required
         />
+        {/* Access Token 输入。 */}
         <input
           className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-100"
           placeholder="Access Token"
@@ -145,6 +154,7 @@ export function SourcePanel({
           onChange={(event) => setForm((state) => ({ ...state, accessToken: event.target.value }))}
           required
         />
+        {/* API Version 输入。 */}
         <input
           className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-100"
           placeholder="API Version"
@@ -152,21 +162,29 @@ export function SourcePanel({
           onChange={(event) => setForm((state) => ({ ...state, apiVersion: event.target.value }))}
           required
         />
+        {/* 表单操作按钮行。 */}
         <div className="flex gap-1">
+          {/* 保存/更新按钮。 */}
           <button className="rounded border border-sky-700 bg-sky-700 px-2 py-1 text-white" disabled={loading}>
             {editingId ? "更新" : "保存"}
           </button>
+          {/* 清空按钮。 */}
           <button type="button" className="rounded border border-slate-600 px-2 py-1 text-slate-200" onClick={resetForm}>
             清空
           </button>
         </div>
       </form>
 
+      {/* 已选数据源信息卡片。 */}
       {selectedSource && (
         <div className="rounded border border-slate-700 p-2 text-slate-300">
+          {/* 数据源名称。 */}
           <div className="truncate">{selectedSource.name}</div>
+          {/* 数据源 URL。 */}
           <div className="mt-1 truncate text-[10px] text-slate-500">{selectedSource.instanceUrl}</div>
+          {/* 编辑/删除按钮行。 */}
           <div className="mt-1 flex gap-1">
+            {/* 编辑按钮。 */}
             <button
               type="button"
               className="rounded border border-slate-600 px-2 py-0.5"
@@ -182,6 +200,7 @@ export function SourcePanel({
             >
               编辑
             </button>
+            {/* 删除按钮。 */}
             <button
               type="button"
               className="rounded border border-red-700 px-2 py-0.5 text-red-300"
@@ -193,6 +212,7 @@ export function SourcePanel({
         </div>
       )}
 
+      {/* 结果提示信息。 */}
       {message && <p className="text-[10px] text-slate-400">{message}</p>}
     </div>
   );
