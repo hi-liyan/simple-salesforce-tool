@@ -1,9 +1,7 @@
-﻿import { FormEvent, useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import { api } from "./api";
 import { DataGrid } from "./components/DataGrid";
 import { ObjectList } from "./components/ObjectList";
-import { RecordEditor } from "./components/RecordEditor";
-import { SourcePanel } from "./components/SourcePanel";
 import { ObjectDescribe, QueryResult, SalesforceObject, SalesforceSource } from "./types";
 
 type Notice = {
@@ -11,57 +9,61 @@ type Notice = {
   message: string;
 };
 
-// 主应用：采用 DataGrip 风格三段式工作区。
+type TabState = {
+  objectName: string;
+  label: string;
+  describe: ObjectDescribe | null;
+  result: QueryResult;
+  limit: number;
+  sortField: string;
+  sortDirection: "ASC" | "DESC";
+  selectedRecordIds: string[];
+  loading: boolean;
+};
+
+// 主应用：左侧对象树 + 右侧多对象标签页。
 export default function App() {
   const [sources, setSources] = useState<SalesforceSource[]>([]);
   const [selectedSourceId, setSelectedSourceId] = useState<string>("");
   const [objects, setObjects] = useState<SalesforceObject[]>([]);
-  const [selectedObjectName, setSelectedObjectName] = useState<string>("");
-  const [describe, setDescribe] = useState<ObjectDescribe | null>(null);
-  const [query, setQuery] = useState<string>("SELECT Id, Name FROM Account LIMIT 50");
-  const [result, setResult] = useState<QueryResult>({ totalSize: 0, records: [] });
-  const [selectedRecordId, setSelectedRecordId] = useState<string>("");
-  const [activeBottomTab, setActiveBottomTab] = useState<"result" | "editor">("result");
+  const [tabs, setTabs] = useState<TabState[]>([]);
+  const [activeTabObjectName, setActiveTabObjectName] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(false);
   const [notice, setNotice] = useState<Notice | null>(null);
 
-  const selectedSource = useMemo(
-    () => sources.find((source) => source.id === selectedSourceId) || null,
-    [sources, selectedSourceId]
+  const activeTab = useMemo(
+    () => tabs.find((item) => item.objectName === activeTabObjectName) || null,
+    [tabs, activeTabObjectName]
   );
 
   useEffect(() => {
-    // 启动时默认从 Salesforce CLI 同步认证信息。
+    // 启动默认从 CLI 同步数据源。
     void refreshSources(true);
   }, []);
 
   useEffect(() => {
     if (!selectedSourceId) {
       setObjects([]);
+      setTabs([]);
+      setActiveTabObjectName("");
       return;
     }
 
-    // 数据源切换后，刷新左侧对象树。
+    // 切换数据源后刷新对象列表，并清空已打开标签页。
+    setTabs([]);
+    setActiveTabObjectName("");
     void refreshObjects(selectedSourceId);
   }, [selectedSourceId]);
 
-  useEffect(() => {
-    if (!selectedSourceId || !selectedObjectName) {
-      setDescribe(null);
-      return;
-    }
-
-    // 当前对象变化时，刷新字段描述并设置默认查询。
-    void loadDescribe(selectedSourceId, selectedObjectName);
-    setQuery(`SELECT Id, Name FROM ${selectedObjectName} LIMIT 50`);
-  }, [selectedSourceId, selectedObjectName]);
-
-  async function refreshSources(syncCli = false) {
+  async function refreshSources(syncCli: boolean) {
     setLoading(true);
     try {
       const list = syncCli ? await api.syncCliSources() : await api.listSources();
       setSources(list);
-      if (list.length > 0 && !selectedSourceId) {
+
+      if (list.length === 0) {
+        setSelectedSourceId("");
+      } else if (!list.some((item) => item.id === selectedSourceId)) {
         setSelectedSourceId(list[0].id);
       }
     } catch (error) {
@@ -73,14 +75,9 @@ export default function App() {
 
   async function refreshObjects(sourceId: string) {
     setLoading(true);
-    setSelectedObjectName("");
-    setResult({ totalSize: 0, records: [] });
     try {
       const list = await api.listObjects(sourceId);
       setObjects(list);
-      if (list.length > 0) {
-        setSelectedObjectName(list[0].name);
-      }
     } catch (error) {
       setNotice({ type: "error", message: `拉取对象失败：${String(error)}` });
     } finally {
@@ -88,252 +85,310 @@ export default function App() {
     }
   }
 
-  async function loadDescribe(sourceId: string, objectName: string) {
-    try {
-      const payload = await api.describeObject(sourceId, objectName);
-      setDescribe(payload);
-    } catch (error) {
-      setDescribe(null);
-      setNotice({ type: "error", message: `获取对象字段失败：${String(error)}` });
-    }
+  function patchTab(objectName: string, updater: (tab: TabState) => TabState) {
+    setTabs((current) => current.map((tab) => (tab.objectName === objectName ? updater(tab) : tab)));
   }
 
-  async function executeQuery(event?: FormEvent<HTMLFormElement>) {
-    event?.preventDefault();
-    if (!selectedSourceId) {
-      setNotice({ type: "error", message: "请先选择数据源。" });
+  async function openObjectTab(objectItem: SalesforceObject) {
+    if (!selectedSourceId) return;
+
+    const existed = tabs.find((tab) => tab.objectName === objectItem.name);
+    if (existed) {
+      setActiveTabObjectName(objectItem.name);
       return;
     }
 
-    setLoading(true);
+    const newTab: TabState = {
+      objectName: objectItem.name,
+      label: objectItem.label,
+      describe: null,
+      result: { totalSize: 0, records: [] },
+      limit: 200,
+      sortField: "Id",
+      sortDirection: "DESC",
+      selectedRecordIds: [],
+      loading: true
+    };
+
+    setTabs((current) => [...current, newTab]);
+    setActiveTabObjectName(objectItem.name);
+
     try {
-      const payload = await api.queryRecords(selectedSourceId, query);
-      setResult(payload);
-      setActiveBottomTab("result");
-      setNotice({ type: "success", message: `查询成功，共 ${payload.totalSize} 条。` });
+      const describe = await api.describeObject(selectedSourceId, objectItem.name);
+      const defaultSortField = describe.fields.find((field) => field.name === "LastModifiedDate")
+        ? "LastModifiedDate"
+        : describe.fields.find((field) => field.name === "CreatedDate")
+          ? "CreatedDate"
+          : describe.fields.find((field) => field.name === "Name")
+            ? "Name"
+            : "Id";
+
+      patchTab(objectItem.name, (tab) => ({
+        ...tab,
+        describe,
+        sortField: defaultSortField
+      }));
+
+      await queryTabData(objectItem.name, describe, defaultSortField, 200, "DESC");
     } catch (error) {
-      setNotice({ type: "error", message: `执行查询失败：${String(error)}` });
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function handleCreate(values: Record<string, unknown>) {
-    if (!selectedSourceId || !selectedObjectName) return;
-
-    setLoading(true);
-    try {
-      const recordId = await api.createRecord({ sourceId: selectedSourceId, objectName: selectedObjectName, values });
-      setNotice({ type: "success", message: `创建成功，记录ID：${recordId}` });
-      await onRefreshData();
-      setActiveBottomTab("result");
-    } catch (error) {
-      setNotice({ type: "error", message: `创建失败：${String(error)}` });
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function handleUpdate(values: Record<string, unknown>) {
-    if (!selectedSourceId || !selectedObjectName || !selectedRecordId) return;
-
-    setLoading(true);
-    try {
-      await api.updateRecord(selectedSourceId, selectedObjectName, selectedRecordId, values);
-      setNotice({ type: "success", message: "更新成功。" });
-      await onRefreshData();
-      setActiveBottomTab("result");
-    } catch (error) {
-      setNotice({ type: "error", message: `更新失败：${String(error)}` });
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function handleDelete(recordId: string) {
-    if (!selectedSourceId || !selectedObjectName) return;
-
-    setLoading(true);
-    try {
-      await api.deleteRecord(selectedSourceId, selectedObjectName, recordId);
-      setSelectedRecordId("");
-      setNotice({ type: "success", message: "删除成功。" });
-      await onRefreshData();
-    } catch (error) {
-      setNotice({ type: "error", message: `删除失败：${String(error)}` });
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function onRefreshData() {
-    if (!selectedSourceId || !query.trim()) return;
-    const payload = await api.queryRecords(selectedSourceId, query);
-    setResult(payload);
-  }
-
-  async function onOpenObject(objectName: string) {
-    // 双击对象时模拟 DataGrip 的“直接打开数据”行为。
-    setSelectedObjectName(objectName);
-    const nextQuery = `SELECT Id, Name FROM ${objectName} LIMIT 200`;
-    setQuery(nextQuery);
-
-    if (!selectedSourceId) return;
-
-    setLoading(true);
-    try {
-      const payload = await api.queryRecords(selectedSourceId, nextQuery);
-      setResult(payload);
-      setActiveBottomTab("result");
-      setNotice({ type: "success", message: `已打开 ${objectName}，共 ${payload.totalSize} 条。` });
-    } catch (error) {
+      patchTab(objectItem.name, (tab) => ({ ...tab, loading: false }));
       setNotice({ type: "error", message: `打开对象失败：${String(error)}` });
-    } finally {
-      setLoading(false);
     }
+  }
+
+  async function queryTabData(
+    objectName: string,
+    describeOverride?: ObjectDescribe,
+    sortFieldOverride?: string,
+    limitOverride?: number,
+    directionOverride?: "ASC" | "DESC"
+  ) {
+    if (!selectedSourceId) return;
+    const tab = tabs.find((item) => item.objectName === objectName);
+    if (!tab && !describeOverride) return;
+
+    const describe = describeOverride ?? tab?.describe;
+    if (!describe) return;
+
+    const limit = Math.max(1, Math.min(2000, limitOverride ?? tab?.limit ?? 200));
+    const sortField = sortFieldOverride ?? tab?.sortField ?? "Id";
+    const sortDirection = directionOverride ?? tab?.sortDirection ?? "DESC";
+
+    patchTab(objectName, (item) => ({
+      ...item,
+      loading: true,
+      limit,
+      sortField,
+      sortDirection
+    }));
+
+    try {
+      const fieldList = describe.fields.map((field) => field.name).join(", ");
+      const soql = `SELECT ${fieldList} FROM ${objectName} ORDER BY ${sortField} ${sortDirection} LIMIT ${limit}`;
+      const result = await api.queryRecords(selectedSourceId, soql);
+
+      patchTab(objectName, (item) => ({
+        ...item,
+        result,
+        loading: false,
+        selectedRecordIds: []
+      }));
+
+      setNotice({ type: "success", message: `${objectName} 查询成功，共 ${result.totalSize} 条。` });
+    } catch (error) {
+      patchTab(objectName, (item) => ({ ...item, loading: false }));
+      setNotice({ type: "error", message: `${objectName} 查询失败：${String(error)}` });
+    }
+  }
+
+  async function deleteCheckedRecords() {
+    if (!selectedSourceId || !activeTab) return;
+    if (activeTab.selectedRecordIds.length === 0) {
+      setNotice({ type: "error", message: "请先勾选要删除的记录。" });
+      return;
+    }
+
+    patchTab(activeTab.objectName, (item) => ({ ...item, loading: true }));
+
+    try {
+      await Promise.all(
+        activeTab.selectedRecordIds.map((recordId) => api.deleteRecord(selectedSourceId, activeTab.objectName, recordId))
+      );
+
+      setNotice({ type: "success", message: `已删除 ${activeTab.selectedRecordIds.length} 条记录。` });
+      await queryTabData(activeTab.objectName);
+    } catch (error) {
+      patchTab(activeTab.objectName, (item) => ({ ...item, loading: false }));
+      setNotice({ type: "error", message: `批量删除失败：${String(error)}` });
+    }
+  }
+
+  function closeTab(objectName: string) {
+    setTabs((current) => {
+      const next = current.filter((item) => item.objectName !== objectName);
+      if (activeTabObjectName === objectName) {
+        setActiveTabObjectName(next[0]?.objectName || "");
+      }
+      return next;
+    });
   }
 
   return (
-    <main className="datagrip-shell min-h-screen">
-      <header className="border-b border-slate-700 bg-slate-900 px-4 py-2 text-xs text-slate-300">
-        Salesforce Workspace | 数据源：{selectedSource?.name || "未选择"} | 对象：{selectedObjectName || "未选择"}
-      </header>
-
-      <div className="grid min-h-[calc(100vh-34px)] grid-cols-[52px_320px_1fr]">
-        <aside className="border-r border-slate-700 bg-slate-900">
-          <div className="flex h-full flex-col items-center gap-2 pt-3">
-            <button type="button" className="tool-rail-btn tool-rail-btn--active" title="Database">
-              DB
-            </button>
-            <button type="button" className="tool-rail-btn" title="Query Console">
-              SQL
+    <main className="datagrip-shell h-screen overflow-hidden">
+      <div className="grid h-full grid-cols-[340px_1fr] overflow-hidden">
+        <aside className="flex min-h-0 flex-col overflow-hidden border-r border-sky-200 bg-[#f3f8ff] p-3">
+          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-sky-900">Data Source</div>
+          <div className="flex gap-2">
+            <select
+              className="w-full rounded border border-sky-300 bg-white px-2 py-1.5 text-xs text-sky-900 outline-none focus:border-[#0176d3]"
+              value={selectedSourceId}
+              onChange={(event) => setSelectedSourceId(event.target.value)}
+            >
+              <option value="">请选择数据源</option>
+              {sources.map((source) => (
+                <option key={source.id} value={source.id}>
+                  {source.name}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="rounded border border-[#0176d3] bg-[#0176d3] px-3 py-1 text-xs text-white hover:bg-[#025cb2]"
+              disabled={loading}
+              onClick={() => void refreshSources(true)}
+            >
+              刷新
             </button>
           </div>
-        </aside>
 
-        <aside className="border-r border-slate-700 bg-slate-800 p-3">
-          <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-300">Database Explorer</div>
-
-          <div className="rounded-md border border-slate-700 bg-slate-900 p-2">
-            <SourcePanel
-              loading={loading}
-              selectedSourceId={selectedSourceId}
-              sources={sources}
-              onChangeSelectedSource={setSelectedSourceId}
-              onSourcesChanged={refreshSources}
-            />
-          </div>
-
-          <div className="mt-3 rounded-md border border-slate-700 bg-slate-900 p-2">
-            <div className="mb-2 flex items-center justify-between text-xs text-slate-300">
-              <span>Objects</span>
-              <button
-                type="button"
-                className="rounded border border-slate-600 px-2 py-0.5 hover:bg-slate-700"
-                disabled={!selectedSourceId || loading}
-                onClick={() => void refreshObjects(selectedSourceId)}
-              >
-                刷新
-              </button>
-            </div>
+          <div className="mt-4 text-xs font-semibold uppercase tracking-wide text-sky-900">Objects</div>
+          <div className="mt-2 min-h-0 flex-1">
             <ObjectList
               objects={objects}
-              selectedObjectName={selectedObjectName}
-              onSelectObject={setSelectedObjectName}
-              onOpenObject={onOpenObject}
+              activeObjectName={activeTabObjectName}
+              onOpenObject={(objectItem) => void openObjectTab(objectItem)}
             />
           </div>
         </aside>
 
-        <section className="flex min-w-0 flex-col bg-slate-950">
-          <div className="border-b border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200">Query Console 1</div>
-
-          <form onSubmit={executeQuery} className="border-b border-slate-700 bg-slate-950 p-3">
-            <div className="mb-2 flex items-center gap-2">
-              <button
-                className="rounded border border-emerald-600 bg-emerald-700 px-3 py-1 text-xs text-white hover:bg-emerald-600"
-                disabled={loading || !selectedSourceId}
-                type="submit"
+        <section className="flex min-h-0 min-w-0 flex-col overflow-hidden bg-[#f7fbff]">
+          <div className="flex shrink-0 overflow-x-auto border-b border-sky-200 bg-[#eaf3ff] text-xs text-sky-900">
+            {tabs.length === 0 && <div className="px-3 py-2 text-sky-600">请选择左侧 Object 打开标签页</div>}
+            {tabs.map((tab) => (
+              <div
+                key={tab.objectName}
+                className={`flex items-center gap-2 border-r border-sky-200 px-3 py-2 ${
+                  activeTabObjectName === tab.objectName ? "bg-white text-[#0176d3]" : "text-sky-700"
+                }`}
               >
-                执行(Ctrl+Enter)
-              </button>
-              <button
-                className="rounded border border-slate-600 px-3 py-1 text-xs text-slate-200 hover:bg-slate-800"
-                type="button"
-                disabled={loading || !selectedSourceId}
-                onClick={() => void onRefreshData()}
-              >
-                重新运行
-              </button>
-              <button
-                className="rounded border border-slate-600 px-3 py-1 text-xs text-slate-200 hover:bg-slate-800"
-                type="button"
-                disabled={!selectedSourceId || loading}
-                onClick={() => setActiveBottomTab("editor")}
-              >
-                打开编辑器
-              </button>
-            </div>
-
-            <textarea
-              className="h-44 w-full rounded border border-slate-700 bg-slate-900 p-3 font-mono text-sm text-slate-100 outline-none focus:border-sky-500"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="输入 SOQL，例如 SELECT Id, Name FROM Account LIMIT 50"
-            />
-          </form>
+                <button type="button" onClick={() => setActiveTabObjectName(tab.objectName)} title={tab.label}>
+                  {tab.objectName}
+                </button>
+                <button
+                  type="button"
+                  className="rounded px-1 text-sky-600 hover:bg-sky-100 hover:text-sky-900"
+                  onClick={() => closeTab(tab.objectName)}
+                >
+                  x
+                </button>
+              </div>
+            ))}
+          </div>
 
           {notice && (
             <div
               className={`mx-3 mt-2 rounded px-3 py-2 text-xs ${
-                notice.type === "error" ? "bg-red-950 text-red-200" : "bg-emerald-950 text-emerald-200"
+                notice.type === "error" ? "bg-red-100 text-red-700" : "bg-emerald-100 text-emerald-700"
               }`}
             >
               {notice.message}
             </div>
           )}
 
-          <div className="mt-2 flex min-h-0 flex-1 flex-col px-3 pb-3">
-            <div className="flex border-b border-slate-700 text-xs text-slate-300">
-              <button
-                type="button"
-                className={`px-3 py-2 ${activeBottomTab === "result" ? "border-b-2 border-sky-500 text-white" : ""}`}
-                onClick={() => setActiveBottomTab("result")}
-              >
-                Result
-              </button>
-              <button
-                type="button"
-                className={`px-3 py-2 ${activeBottomTab === "editor" ? "border-b-2 border-sky-500 text-white" : ""}`}
-                onClick={() => setActiveBottomTab("editor")}
-              >
-                Data Editor
-              </button>
-            </div>
+          {activeTab && (
+            <div className="flex min-h-0 flex-1 flex-col p-3">
+              <div className="mb-2 rounded border border-sky-200 bg-[#edf5ff] p-2 text-xs text-sky-900">
+                <div className="grid grid-cols-[120px_240px_140px_auto] items-center gap-2">
+                  <label className="flex items-center gap-2">
+                    <span className="text-sky-700">LIMIT</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={2000}
+                      className="w-20 rounded border border-sky-300 bg-white px-2 py-1 text-xs"
+                      value={activeTab.limit}
+                      onChange={(event) => {
+                        const nextLimit = Number(event.target.value || 200);
+                        patchTab(activeTab.objectName, (item) => ({ ...item, limit: nextLimit }));
+                      }}
+                    />
+                  </label>
 
-            <div className="min-h-0 flex-1 overflow-auto bg-slate-900">
-              {activeBottomTab === "result" ? (
+                  <label className="flex items-center gap-2">
+                    <span className="text-sky-700">排序字段</span>
+                    <select
+                      className="w-full rounded border border-sky-300 bg-white px-2 py-1 text-xs"
+                      value={activeTab.sortField}
+                      onChange={(event) =>
+                        patchTab(activeTab.objectName, (item) => ({ ...item, sortField: event.target.value }))
+                      }
+                    >
+                      {(activeTab.describe?.fields || []).map((field) => (
+                        <option key={field.name} value={field.name}>
+                          {field.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <select
+                    className="rounded border border-sky-300 bg-white px-2 py-1 text-xs"
+                    value={activeTab.sortDirection}
+                    onChange={(event) =>
+                      patchTab(activeTab.objectName, (item) => ({
+                        ...item,
+                        sortDirection: event.target.value as "ASC" | "DESC"
+                      }))
+                    }
+                  >
+                    <option value="ASC">ASC</option>
+                    <option value="DESC">DESC</option>
+                  </select>
+
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      className="rounded border border-[#0176d3] bg-[#0176d3] px-3 py-1 text-xs text-white hover:bg-[#025cb2]"
+                      disabled={activeTab.loading}
+                      onClick={() =>
+                        void queryTabData(
+                          activeTab.objectName,
+                          activeTab.describe || undefined,
+                          activeTab.sortField,
+                          activeTab.limit,
+                          activeTab.sortDirection
+                        )
+                      }
+                    >
+                      查询
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded border border-red-300 bg-white px-3 py-1 text-xs text-red-700 hover:bg-red-50"
+                      disabled={activeTab.loading || activeTab.selectedRecordIds.length === 0}
+                      onClick={() => void deleteCheckedRecords()}
+                    >
+                      删除已勾选({activeTab.selectedRecordIds.length})
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="min-h-0 flex-1 overflow-hidden rounded border border-sky-200 bg-white">
                 <DataGrid
-                  result={result}
-                  selectedRecordId={selectedRecordId}
-                  onSelectRecord={(id) => {
-                    setSelectedRecordId(id);
-                    setActiveBottomTab("editor");
+                  result={activeTab.result}
+                  selectedRecordIds={activeTab.selectedRecordIds}
+                  onToggleRecord={(recordId, checked) => {
+                    patchTab(activeTab.objectName, (item) => ({
+                      ...item,
+                      selectedRecordIds: checked
+                        ? Array.from(new Set([...item.selectedRecordIds, recordId]))
+                        : item.selectedRecordIds.filter((id) => id !== recordId)
+                    }));
                   }}
-                  onDelete={handleDelete}
+                  onToggleAll={(checked, recordIds) => {
+                    patchTab(activeTab.objectName, (item) => ({
+                      ...item,
+                      selectedRecordIds: checked ? recordIds : []
+                    }));
+                  }}
                 />
-              ) : (
-                <RecordEditor
-                  describe={describe}
-                  selectedRecord={result.records.find((item) => String(item.Id || "") === selectedRecordId) || null}
-                  onCreate={handleCreate}
-                  onUpdate={handleUpdate}
-                />
-              )}
+              </div>
             </div>
-          </div>
+          )}
         </section>
       </div>
     </main>
   );
 }
+
