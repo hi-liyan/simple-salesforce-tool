@@ -1,6 +1,6 @@
 ﻿import { QueryResult } from "../types";
 
-// 查询结果表格组件：负责记录展示、选中与删除触发。
+// 查询结果表格组件：用于展示网格结果并支持行级删除。
 type Props = {
   result: QueryResult;
   selectedRecordId: string;
@@ -20,22 +20,23 @@ export function DataGrid({ result, selectedRecordId, onSelectRecord, onDelete }:
   );
 
   if (records.length === 0) {
-    return <div className="mt-4 rounded-md bg-slate-50 p-4 text-sm text-slate-500">暂无查询结果。</div>;
+    return <div className="p-4 text-xs text-slate-400">暂无查询结果。</div>;
   }
 
   return (
-    <div className="mt-4">
-      <div className="mb-2 text-sm text-slate-600">总记录数：{result.totalSize}</div>
-      <div className="max-h-[38vh] overflow-auto rounded-md border border-slate-200">
-        <table className="min-w-full border-collapse text-sm">
-          <thead className="sticky top-0 bg-slate-100">
+    <div className="h-full p-2">
+      <div className="mb-2 text-xs text-slate-400">Rows: {result.totalSize}</div>
+      <div className="max-h-[100%] overflow-auto border border-slate-700 bg-slate-950">
+        <table className="min-w-full border-collapse text-xs">
+          <thead className="sticky top-0 bg-slate-900">
             <tr>
+              <th className="border-b border-slate-700 px-2 py-1 text-left text-slate-300">#</th>
               {columns.map((column) => (
-                <th key={column} className="border-b border-slate-200 px-3 py-2 text-left font-semibold text-slate-700">
+                <th key={column} className="border-b border-slate-700 px-2 py-1 text-left text-slate-300">
                   {column}
                 </th>
               ))}
-              <th className="border-b border-slate-200 px-3 py-2 text-left font-semibold text-slate-700">操作</th>
+              <th className="border-b border-slate-700 px-2 py-1 text-left text-slate-300">操作</th>
             </tr>
           </thead>
           <tbody>
@@ -46,18 +47,19 @@ export function DataGrid({ result, selectedRecordId, onSelectRecord, onDelete }:
               return (
                 <tr
                   key={recordId}
-                  className={selected ? "bg-brand-50" : "bg-white hover:bg-slate-50"}
+                  className={selected ? "bg-slate-700" : "hover:bg-slate-800"}
                   onClick={() => onSelectRecord(recordId)}
                 >
+                  <td className="border-b border-slate-800 px-2 py-1 text-slate-500">{index + 1}</td>
                   {columns.map((column) => (
-                    <td key={`${recordId}-${column}`} className="border-b border-slate-100 px-3 py-2 text-slate-700">
+                    <td key={`${recordId}-${column}`} className="border-b border-slate-800 px-2 py-1 text-slate-200">
                       {String(record[column] ?? "")}
                     </td>
                   ))}
-                  <td className="border-b border-slate-100 px-3 py-2">
+                  <td className="border-b border-slate-800 px-2 py-1">
                     <button
                       type="button"
-                      className="rounded border border-red-300 px-2 py-1 text-xs text-red-600 hover:bg-red-50"
+                      className="rounded border border-red-700 px-1.5 py-0.5 text-[10px] text-red-300 hover:bg-red-950"
                       onClick={(event) => {
                         event.stopPropagation();
                         void onDelete(recordId);

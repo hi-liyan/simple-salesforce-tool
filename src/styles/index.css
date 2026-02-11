@@ -3,9 +3,9 @@
 @tailwind utilities;
 
 :root {
-  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-  color: #10263a;
-  background: radial-gradient(circle at 10% 10%, #eff8ff 0%, #f9fcff 40%, #ffffff 100%);
+  font-family: "JetBrains Mono", "Consolas", "Microsoft YaHei", monospace;
+  color: #e2e8f0;
+  background: #0b1220;
 }
 
 body {
@@ -15,6 +15,30 @@ body {
 
 * {
   box-sizing: border-box;
+}
+
+.datagrip-shell {
+  background: linear-gradient(180deg, #0b1220 0%, #0a0f1a 100%);
+}
+
+.tool-rail-btn {
+  width: 34px;
+  height: 34px;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  background: #1e293b;
+  color: #cbd5e1;
+  font-size: 11px;
+}
+
+.tool-rail-btn:hover {
+  background: #334155;
+}
+
+.tool-rail-btn--active {
+  border-color: #38bdf8;
+  color: #e2f4ff;
+  background: #0f172a;
 }
 
 button:disabled {
