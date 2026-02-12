@@ -26,11 +26,14 @@ body,
 }
 
 .tool-rail-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 34px;
   height: 34px;
-  border: 1px solid #9ec9ff;
+  border: 1px solid transparent;
   border-radius: 6px;
-  background: #ffffff;
+  background: transparent;
   color: #1b5297;
   font-size: 11px;
 }
