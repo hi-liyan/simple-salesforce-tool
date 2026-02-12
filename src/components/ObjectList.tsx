@@ -291,6 +291,29 @@ export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, 
     }
   }
 
+  // 右键菜单动作：复制 Object API 名称到剪贴板。
+  async function copyObjectNameFromMenu() {
+    if (!objectContextMenu) return;
+    const objectName = objectContextMenu.objectItem.name;
+
+    try {
+      await navigator.clipboard.writeText(objectName); // 优先使用现代剪贴板 API。
+    } catch {
+      // 回退方案：兼容剪贴板权限受限场景。
+      const textarea = document.createElement("textarea");
+      textarea.value = objectName;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textarea);
+    } finally {
+      setObjectContextMenu(null); // 执行后关闭菜单。
+    }
+  }
+
   return (
     // 容器：输入框 + 可滚动树形列表。
     <div className="flex h-full min-h-0 flex-col">
@@ -467,12 +490,21 @@ export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, 
       {/* 对象右键菜单：提供“打开 Salesforce 列表页”操作。 */}
       {objectContextMenu && (
         <div
-          className="fixed z-[80] min-w-[144px] rounded border border-base-300 bg-base-100 p-1 shadow-xl"
+          className="fixed z-[80] flex min-w-max flex-col rounded border border-base-300 bg-base-100 p-1 shadow-xl"
           style={{ left: objectContextMenu.x, top: objectContextMenu.y }}
           onClick={(event) => event.stopPropagation()}
         >
           <button
-            className="btn btn-ghost btn-xs w-full justify-start"
+            className="btn btn-ghost btn-xs w-full justify-start whitespace-nowrap px-2"
+            onClick={() => {
+              void copyObjectNameFromMenu(); // 复制对象名称并关闭菜单。
+            }}
+          >
+            复制 Object 名称
+          </button>
+          <div className="my-1 border-t border-base-300" />
+          <button
+            className="btn btn-ghost btn-xs w-full justify-start whitespace-nowrap px-2"
             disabled={!sourceId || !objectContextMenu.objectItem.queryable}
             onClick={() => {
               void openSalesforceListPageFromMenu(); // 触发菜单动作并关闭菜单。
@@ -481,13 +513,13 @@ export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, 
             打开 Salesforce 列表页
           </button>
           <button
-            className="btn btn-ghost btn-xs w-full justify-start"
+            className="btn btn-ghost btn-xs w-full justify-start whitespace-nowrap px-2"
             disabled={!sourceId}
             onClick={() => {
               void openSalesforceObjectEditPageFromMenu(); // 触发菜单动作并关闭菜单。
             }}
           >
-            打开 Edit Object 页面
+            编辑 Object 页面
           </button>
         </div>
       )}

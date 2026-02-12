@@ -2,6 +2,7 @@
 import { Play, Plus, Table2, X } from "lucide-react";
 import { DataGrid } from "../../components/DataGrid";
 import { NoticeAlert } from "../../components/NoticeAlert";
+import { SoqlMonacoEditor } from "../../components/SoqlMonacoEditor";
 import { api } from "../../api";
 import { Notice, QueryResult, TabLog } from "../../types";
 
@@ -219,17 +220,15 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText }: SoqlExe
 
       {/* SOQL 编辑器区域。 */}
       <div className="border-b border-base-300 p-3">
-        <div className="border border-base-300 bg-base-100">
-          <textarea
-            value={activeTab.soqlDraft}
-            onChange={(event) => {
-              patchActiveTab((tab) => ({ ...tab, soqlDraft: event.target.value }));
-            }}
-            className="h-[220px] w-full resize-none overflow-auto border-none bg-base-100 p-2 text-[12px] outline-none"
-            style={{ fontFamily: "'Cascadia Mono', Consolas, 'Courier New', monospace", lineHeight: 1.5 }}
-            placeholder="请输入 SOQL，例如：SELECT Id, Name FROM Account LIMIT 20"
-          />
-        </div>
+        {/* SOQL 编辑器：统一复用 Monaco 组件，保持与主工作区一致的编辑体验。 */}
+        <SoqlMonacoEditor
+          value={activeTab.soqlDraft}
+          onChange={(value) => {
+            patchActiveTab((tab) => ({ ...tab, soqlDraft: value })); // 同步当前标签草稿。
+          }}
+          placeholder="请输入 SOQL，例如：SELECT Id, Name FROM Account LIMIT 20"
+          height="220px"
+        />
       </div>
 
       {/* 底部结果区头部：切换结果 / 日志。 */}
