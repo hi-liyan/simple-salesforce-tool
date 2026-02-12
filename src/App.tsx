@@ -1,20 +1,30 @@
+﻿import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { AuthPage } from "./pages/AuthPage";
 import { FieldMetaPage } from "./pages/FieldMetaPage";
 import { MainPage } from "./pages/MainPage";
 
-// 应用路由：根据路径渲染主页面或授权页面。
+type AppPage = "main" | "auth" | "field-meta";
+
+function resolvePageByWindowLabel(): AppPage {
+  try {
+    const label = getCurrentWebviewWindow().label;
+    if (label === "sf-auth") return "auth";
+    if (label === "sf-field-meta") return "field-meta";
+    return "main";
+  } catch {
+    // Fallback for non-Tauri environments.
+    if (window.location.pathname === "/auth") return "auth";
+    if (window.location.pathname === "/field-meta") return "field-meta";
+    return "main";
+  }
+}
+
 export default function App() {
+  const page = resolvePageByWindowLabel();
+
   return (
-    // 根节点：根据路径切换页面。
     <>
-      {/* 授权页面或主页面。 */}
-      {window.location.pathname === "/auth" ? (
-        <AuthPage />
-      ) : window.location.pathname === "/field-meta" ? (
-        <FieldMetaPage />
-      ) : (
-        <MainPage />
-      )}
+      {page === "auth" ? <AuthPage /> : page === "field-meta" ? <FieldMetaPage /> : <MainPage />}
     </>
   );
 }

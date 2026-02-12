@@ -41,6 +41,71 @@ fn write_system_log(
     }
 }
 
+fn set_main_window_enabled(app: &tauri::AppHandle, enabled: bool) {
+    if let Some(main_window) = app.get_webview_window("main") {
+        let _ = main_window.set_enabled(enabled);
+    }
+}
+
+fn is_unauthorized_error(error: &AppError) -> bool {
+    matches!(
+        error,
+        AppError::Http(message)
+            if message.contains("状态码 401")
+                || message.contains("status code 401")
+                || message.contains("401 Unauthorized")
+    )
+}
+
+/// 仅针对 CLI 数据源：发生 401 后通过 CLI 刷新 token，并回写本地数据源。
+async fn refresh_cli_source_token(
+    state: &State<'_, AppState>,
+    source_id: &str,
+    action: &str,
+    target: Option<&str>,
+) -> Result<SalesforceSource, AppError> {
+    write_system_log(
+        state,
+        "INFO",
+        "SALESFORCE_CLI",
+        action,
+        Some(source_id),
+        target,
+        true,
+        "检测到 401，开始通过 CLI 刷新 token。",
+        None,
+    );
+
+    let source_id_owned = source_id.to_string();
+    let refreshed_seed = tauri::async_runtime::spawn_blocking(move || {
+        sf_cli::load_cli_source_by_id(&source_id_owned)
+    })
+    .await
+    .map_err(|error| AppError::Biz(format!("CLI 刷新线程失败: {error}")))??;
+
+    let refreshed_source = {
+        let connection = state
+            .db
+            .lock()
+            .map_err(|error| AppError::Db(format!("Database lock failed: {error}")))?;
+        db::upsert_source_with_id(&connection, &refreshed_seed.id, refreshed_seed.payload)?
+    };
+
+    write_system_log(
+        state,
+        "INFO",
+        "SALESFORCE_CLI",
+        action,
+        Some(source_id),
+        target,
+        true,
+        "通过 CLI 刷新 token 成功，准备重试请求。",
+        None,
+    );
+
+    Ok(refreshed_source)
+}
+
 /// 查询全部数据源列表。
 #[tauri::command]
 pub fn list_sources(state: State<'_, AppState>) -> Result<Vec<SalesforceSource>, String> {
@@ -106,7 +171,11 @@ pub fn sync_cli_sources(state: State<'_, AppState>) -> Result<Vec<SalesforceSour
 
 /// 调用 CLI 打开网页登录流程，登录成功后返回 orgId。
 #[tauri::command]
-pub async fn login_cli_org(state: State<'_, AppState>, instance_url: String) -> Result<String, String> {
+pub async fn login_cli_org(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    instance_url: String,
+) -> Result<String, String> {
     let trimmed = instance_url.trim().to_string();
     if trimmed.is_empty() {
         return Err("Instance URL cannot be empty".to_string());
@@ -162,26 +231,73 @@ pub async fn login_cli_org(state: State<'_, AppState>, instance_url: String) -> 
         "Salesforce CLI 登录成功。",
         None,
     );
+
+    let _ = app.emit_to(
+        "main",
+        "sf:login-success",
+        serde_json::json!({ "orgId": org_id.clone() }),
+    );
+    if let Some(window) = app.get_webview_window("sf-auth") {
+        let _ = window.close();
+    }
+    set_main_window_enabled(&app, true);
+    if let Some(main_window) = app.get_webview_window("main") {
+        let _ = main_window.set_focus();
+    }
+
     Ok(org_id)
 }
 
 /// 打开认证子窗口（已存在时仅激活并聚焦）。
 #[tauri::command]
-pub fn open_auth_window(app: tauri::AppHandle) -> Result<(), String> {
+pub async fn open_auth_window(app: tauri::AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("sf-auth") {
+        set_main_window_enabled(&app, false);
+        let _ = window.set_always_on_top(true);
         window.show().map_err(|error| error.to_string())?;
         window.set_focus().map_err(|error| error.to_string())?;
         return Ok(());
     }
 
-    tauri::WebviewWindowBuilder::new(&app, "sf-auth", tauri::WebviewUrl::App("/auth".into()))
+    set_main_window_enabled(&app, false);
+
+    let mut builder = tauri::WebviewWindowBuilder::new(
+        &app,
+        "sf-auth",
+        tauri::WebviewUrl::App("index.html".into()),
+    )
         .title("Salesforce 登录")
         .inner_size(480.0, 360.0)
         .resizable(false)
+        .focused(true)
+        .always_on_top(true)
+        .skip_taskbar(false)
         .center()
-        .build()
-        .map(|_| ())
-        .map_err(|error| error.to_string())
+        .visible(true);
+
+    if let Some(main_window) = app.get_webview_window("main") {
+        builder = builder.parent(&main_window).map_err(|error| error.to_string())?;
+    }
+
+    let auth_window = match builder.build() {
+        Ok(window) => window,
+        Err(error) => {
+            set_main_window_enabled(&app, true);
+            return Err(error.to_string());
+        }
+    };
+
+    let app_handle = app.clone();
+    auth_window.on_window_event(move |event| {
+        if matches!(event, tauri::WindowEvent::Destroyed) {
+            set_main_window_enabled(&app_handle, true);
+            if let Some(main_window) = app_handle.get_webview_window("main") {
+                let _ = main_window.set_focus();
+            }
+        }
+    });
+
+    Ok(())
 }
 
 /// 关闭认证子窗口。
@@ -190,6 +306,7 @@ pub fn close_auth_window(app: tauri::AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("sf-auth") {
         window.close().map_err(|error| error.to_string())?;
     }
+    set_main_window_enabled(&app, true);
     Ok(())
 }
 
@@ -203,7 +320,7 @@ struct FieldMetaWindowPayload {
 
 /// 打开字段元数据窗口，并向目标窗口发送当前字段 payload。
 #[tauri::command]
-pub fn open_field_meta_window(
+pub async fn open_field_meta_window(
     app: tauri::AppHandle,
     field_name: String,
     metadata: HashMap<String, serde_json::Value>,
@@ -224,7 +341,7 @@ pub fn open_field_meta_window(
     tauri::WebviewWindowBuilder::new(
         &app,
         "sf-field-meta",
-        tauri::WebviewUrl::App("/field-meta".into()),
+        tauri::WebviewUrl::App("index.html".into()),
     )
     .title(format!("{field_name} 字段元数据"))
     .inner_size(860.0, 620.0)
@@ -368,7 +485,18 @@ pub async fn list_objects(
         db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
     };
 
-    let objects = match state.sf_client.list_objects(&source).await {
+    let objects_result = match state.sf_client.list_objects(&source).await {
+        Ok(items) => Ok(items),
+        Err(error) if is_unauthorized_error(&error) && source_id.starts_with("cli-") => {
+            let refreshed_source = refresh_cli_source_token(&state, &source_id, "list_objects", None)
+                .await
+                .map_err(AppError::to_string_error)?;
+            state.sf_client.list_objects(&refreshed_source).await
+        }
+        Err(error) => Err(error),
+    };
+
+    let objects = match objects_result {
         Ok(items) => items,
         Err(error) => {
             let message = AppError::to_string_error(error);
@@ -427,7 +555,23 @@ pub async fn describe_object(
         db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
     };
 
-    match state.sf_client.describe_object(&source, &object_name).await {
+    let describe_result = match state.sf_client.describe_object(&source, &object_name).await {
+        Ok(describe) => Ok(describe),
+        Err(error) if is_unauthorized_error(&error) && source_id.starts_with("cli-") => {
+            let refreshed_source = refresh_cli_source_token(
+                &state,
+                &source_id,
+                "describe_object",
+                Some(&object_name),
+            )
+            .await
+            .map_err(AppError::to_string_error)?;
+            state.sf_client.describe_object(&refreshed_source, &object_name).await
+        }
+        Err(error) => Err(error),
+    };
+
+    match describe_result {
         Ok(describe) => {
             write_system_log(
                 &state,
@@ -479,7 +623,18 @@ pub async fn query_records(
         db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
     };
 
-    match state.sf_client.query_records(&source, &soql).await {
+    let query_result = match state.sf_client.query_records(&source, &soql).await {
+        Ok(result) => Ok(result),
+        Err(error) if is_unauthorized_error(&error) && source_id.starts_with("cli-") => {
+            let refreshed_source = refresh_cli_source_token(&state, &source_id, "query_records", None)
+                .await
+                .map_err(AppError::to_string_error)?;
+            state.sf_client.query_records(&refreshed_source, &soql).await
+        }
+        Err(error) => Err(error),
+    };
+
+    match query_result {
         Ok(result) => {
             write_system_log(
                 &state,
@@ -526,11 +681,32 @@ pub async fn create_record(
         db::get_source(&connection, &payload.source_id).map_err(AppError::to_string_error)?
     };
 
-    match state
+    let object_name = payload.object_name.clone();
+    let values = payload.values.clone();
+    let create_result = match state
         .sf_client
-        .create_record(&source, &payload.object_name, payload.values)
+        .create_record(&source, &object_name, values.clone())
         .await
     {
+        Ok(record_id) => Ok(record_id),
+        Err(error) if is_unauthorized_error(&error) && payload.source_id.starts_with("cli-") => {
+            let refreshed_source = refresh_cli_source_token(
+                &state,
+                &payload.source_id,
+                "create_record",
+                Some(&payload.object_name),
+            )
+            .await
+            .map_err(AppError::to_string_error)?;
+            state
+                .sf_client
+                .create_record(&refreshed_source, &object_name, values.clone())
+                .await
+        }
+        Err(error) => Err(error),
+    };
+
+    match create_result {
         Ok(record_id) => {
             write_system_log(
                 &state,
@@ -583,11 +759,33 @@ pub async fn save_records(
 
     let create_count = payload.creates.len();
     let update_count = payload.updates.len();
-    match state
+    let object_name = payload.object_name.clone();
+    let creates = payload.creates.clone();
+    let updates = payload.updates.clone();
+    let save_result = match state
         .sf_client
-        .save_records(&source, &payload.object_name, payload.creates, payload.updates)
+        .save_records(&source, &object_name, creates.clone(), updates.clone())
         .await
     {
+        Ok(()) => Ok(()),
+        Err(error) if is_unauthorized_error(&error) && payload.source_id.starts_with("cli-") => {
+            let refreshed_source = refresh_cli_source_token(
+                &state,
+                &payload.source_id,
+                "save_records",
+                Some(&payload.object_name),
+            )
+            .await
+            .map_err(AppError::to_string_error)?;
+            state
+                .sf_client
+                .save_records(&refreshed_source, &object_name, creates.clone(), updates.clone())
+                .await
+        }
+        Err(error) => Err(error),
+    };
+
+    match save_result {
         Ok(()) => {
             write_system_log(
                 &state,
@@ -637,11 +835,30 @@ pub async fn update_record(
         db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
     };
 
-    match state
+    let update_result = match state
         .sf_client
-        .update_record(&source, &object_name, &record_id, values)
+        .update_record(&source, &object_name, &record_id, values.clone())
         .await
     {
+        Ok(()) => Ok(()),
+        Err(error) if is_unauthorized_error(&error) && source_id.starts_with("cli-") => {
+            let refreshed_source = refresh_cli_source_token(
+                &state,
+                &source_id,
+                "update_record",
+                Some(&object_name),
+            )
+            .await
+            .map_err(AppError::to_string_error)?;
+            state
+                .sf_client
+                .update_record(&refreshed_source, &object_name, &record_id, values.clone())
+                .await
+        }
+        Err(error) => Err(error),
+    };
+
+    match update_result {
         Ok(()) => {
             write_system_log(
                 &state,
@@ -690,11 +907,30 @@ pub async fn delete_record(
         db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
     };
 
-    match state
+    let delete_result = match state
         .sf_client
         .delete_record(&source, &object_name, &record_id)
         .await
     {
+        Ok(()) => Ok(()),
+        Err(error) if is_unauthorized_error(&error) && source_id.starts_with("cli-") => {
+            let refreshed_source = refresh_cli_source_token(
+                &state,
+                &source_id,
+                "delete_record",
+                Some(&object_name),
+            )
+            .await
+            .map_err(AppError::to_string_error)?;
+            state
+                .sf_client
+                .delete_record(&refreshed_source, &object_name, &record_id)
+                .await
+        }
+        Err(error) => Err(error),
+    };
+
+    match delete_result {
         Ok(()) => {
             write_system_log(
                 &state,
@@ -743,3 +979,5 @@ fn validate_payload(payload: &SourceUpsertPayload) -> Result<(), String> {
     }
     Ok(())
 }
+
+

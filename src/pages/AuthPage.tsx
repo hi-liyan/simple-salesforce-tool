@@ -1,15 +1,13 @@
-import { useState } from "react";
+﻿import { useState } from "react";
 import { Box, Button, CssBaseline, Stack, TextField, ThemeProvider, Typography } from "@mui/material";
-import { emit } from "@tauri-apps/api/event";
-import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { api } from "../api";
 import { theme } from "../theme";
 
-// 登录窗口页面：处理 CLI 授权登录。
+// 登录窗口页面：处理 Salesforce CLI 授权登录。
 export function AuthPage() {
   // Instance URL 输入值。
   const [instanceUrl, setInstanceUrl] = useState<string>("https://login.salesforce.com");
-  // 错误信息提示。
+  // 错误提示信息。
   const [error, setError] = useState<string>("");
   // 登录中状态。
   const [busy, setBusy] = useState<boolean>(false);
@@ -24,9 +22,7 @@ export function AuthPage() {
     setBusy(true);
     setError("");
     try {
-      const orgId = await api.loginCliOrg(normalized);
-      await emit("sf:login-success", { orgId });
-      WebviewWindow.getCurrent().close();
+      await api.loginCliOrg(normalized);
     } catch (loginError) {
       setError(`登录失败：${String(loginError)}`);
     } finally {
@@ -35,11 +31,11 @@ export function AuthPage() {
   }
 
   return (
-    // 主题提供器：复用桌面应用主题。
+    // 主题提供器：复用桌面应用主主题。
     <ThemeProvider theme={theme}>
       {/* CSS Reset：统一基础样式。 */}
       <CssBaseline />
-      {/* 页面容器：登录布局外框。 */}
+      {/* 页面容器：登录页布局外框。 */}
       <Box sx={{ minHeight: "100vh", bgcolor: "background.default", p: 3 }}>
         {/* 内容列：标题、说明、输入与按钮。 */}
         <Stack spacing={2}>
