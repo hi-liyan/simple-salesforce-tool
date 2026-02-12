@@ -34,6 +34,8 @@ type RightWorkspaceProps = {
   onToggleFieldVisibility: (fieldName: string, checked: boolean) => void;
   onSoqlChange: (value: string) => void;
   onExecuteCustomSoql: () => void;
+  onCloseWorkspaceNotice: () => void;
+  onCloseActiveTabNotice: () => void;
 };
 
 // 右侧工作区：标签页、数据表格、字段抽屉与 SOQL 面板。
@@ -66,7 +68,9 @@ export function RightWorkspace({
   onToggleAllFields,
   onToggleFieldVisibility,
   onSoqlChange,
-  onExecuteCustomSoql
+  onExecuteCustomSoql,
+  onCloseWorkspaceNotice,
+  onCloseActiveTabNotice
 }: RightWorkspaceProps) {
   // 日志面板高度（可拖拽调整）。
   const [logPanelHeight, setLogPanelHeight] = useState(220);
@@ -104,6 +108,7 @@ export function RightWorkspace({
       {workspaceNotice && (
         <Alert
           severity={workspaceNotice.type === "error" ? "error" : "success"}
+          onClose={onCloseWorkspaceNotice}
           sx={{
             position: "fixed",
             top: 16,
@@ -161,6 +166,7 @@ export function RightWorkspace({
           {activeTab.notice && (
             <Alert
               severity={activeTab.notice.type === "error" ? "error" : "success"}
+              onClose={onCloseActiveTabNotice}
               sx={{
                 position: "absolute",
                 top: 10,

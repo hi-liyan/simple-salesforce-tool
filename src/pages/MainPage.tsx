@@ -65,6 +65,10 @@ export function MainPage() {
         if (!active) return;
         // 刷新数据源，并优先选中本次登录的 org。
         await refreshSources(true, event.payload?.orgId);
+        showWorkspaceNotice({
+          type: "success",
+          message: "Salesforce 认证成功。"
+        });
       });
       return unlisten;
     };
@@ -111,10 +115,13 @@ export function MainPage() {
   // 对象列表加载失败时给出明确提示，避免出现“空白但无错误”。
   useEffect(() => {
     if (!objectsError) return;
-    setWorkspaceNotice({
+    showWorkspaceNotice(
+      {
       type: "error",
       message: `加载 Objects 列表失败：${String(objectsError)}`
-    });
+      },
+      5000
+    );
   }, [objectsError]);
   // 当当前数据源被删除或失效时，清空当前选择。
   useEffect(() => {
@@ -162,25 +169,39 @@ export function MainPage() {
   function handleSourceChange(sourceId: string) {
     setSelectedSourceId(sourceId);
 
-    if (sourceNoticeTimerRef.current) {
-      clearTimeout(sourceNoticeTimerRef.current);
-    }
-
     if (!sourceId) {
-      setWorkspaceNotice(null);
+      clearWorkspaceNotice();
       return;
     }
 
     const selectedSource = sources.find((item) => item.id === sourceId);
     const sourceDisplayName = selectedSource?.name || sourceId;
-    setWorkspaceNotice({
+    showWorkspaceNotice({
       type: "success",
       message: `已切换到数据源：${sourceDisplayName}`
     });
-    sourceNoticeTimerRef.current = setTimeout(() => {
-      setWorkspaceNotice(null);
+  }
+
+  function showWorkspaceNotice(notice: Notice, durationMs = 2600) {
+    setWorkspaceNotice(notice);
+    if (sourceNoticeTimerRef.current) {
+      clearTimeout(sourceNoticeTimerRef.current);
       sourceNoticeTimerRef.current = null;
-    }, 2600);
+    }
+    if (durationMs > 0) {
+      sourceNoticeTimerRef.current = setTimeout(() => {
+        setWorkspaceNotice(null);
+        sourceNoticeTimerRef.current = null;
+      }, durationMs);
+    }
+  }
+
+  function clearWorkspaceNotice() {
+    if (sourceNoticeTimerRef.current) {
+      clearTimeout(sourceNoticeTimerRef.current);
+      sourceNoticeTimerRef.current = null;
+    }
+    setWorkspaceNotice(null);
   }
 
   function openAuthWindow() {
@@ -194,13 +215,7 @@ export function MainPage() {
 
     patchTabInStore(objectName, (tab) => {
       const next = updater(tab);
-      const noticeChanged =
-        (tab.notice?.type ?? "") !== (next.notice?.type ?? "") ||
-        (tab.notice?.message ?? "") !== (next.notice?.message ?? "");
-
-      if (next.notice && noticeChanged) {
-        shouldAutoCloseNotice = true;
-      }
+      shouldAutoCloseNotice = Boolean(next.notice);
 
       if (!next.notice && noticeTimersRef.current[objectName]) {
         clearTimeout(noticeTimersRef.current[objectName]);
@@ -690,6 +705,7 @@ export function MainPage() {
                 sources={sources}
                 selectedSourceId={selectedSourceId}
                 pageLoading={pageLoading}
+                objectsLoading={Boolean(selectedSourceId) && objectsFetching}
                 onOpenAuthWindow={openAuthWindow}
                 onChangeSource={handleSourceChange}
                 onRefreshSources={() => void refreshSources(true)}
@@ -830,6 +846,11 @@ export function MainPage() {
                   patchTab(activeTab.objectName, (item) => ({ ...item, soqlDraft: value }));
                 }}
                 onExecuteCustomSoql={() => void executeCustomSoql()}
+                onCloseWorkspaceNotice={clearWorkspaceNotice}
+                onCloseActiveTabNotice={() => {
+                  if (!activeTab) return;
+                  patchTab(activeTab.objectName, (item) => ({ ...item, notice: null }));
+                }}
               />
             </Box>
           </Box>

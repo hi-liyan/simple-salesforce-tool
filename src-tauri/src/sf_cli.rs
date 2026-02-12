@@ -89,6 +89,14 @@ pub fn load_cli_sources() -> Result<Vec<CliSourceSeed>, AppError> {
     Ok(seeds)
 }
 
+/// 按 source_id（cli-<orgId>）读取最新 CLI 数据源信息。
+pub fn load_cli_source_by_id(source_id: &str) -> Result<CliSourceSeed, AppError> {
+    load_cli_sources()?
+        .into_iter()
+        .find(|item| item.id == source_id)
+        .ok_or_else(|| AppError::Biz(format!("CLI 中未找到数据源: {source_id}")))
+}
+
 /// 触发 Salesforce CLI OAuth 登录，并返回 org_id。
 pub fn login_web(instance_url: &str) -> Result<CliLoginResult, AppError> {
     let stdout = run_sf_login_web_json(instance_url)?;
