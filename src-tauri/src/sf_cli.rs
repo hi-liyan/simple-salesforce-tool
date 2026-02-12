@@ -1,5 +1,6 @@
 ﻿use serde::Deserialize;
 use serde_json::Value;
+use std::cmp::Ordering as CmpOrdering;
 use std::collections::HashSet;
 use std::env;
 use std::path::Path;
@@ -9,7 +10,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::error::AppError;
-use crate::models::{CliPathProbe, CliPathSettings, SourceUpsertPayload};
+use crate::models::{CliPathProbe, CliPathSettings, CliPathStatus, SourceUpsertPayload};
 
 #[derive(Debug, Deserialize)]
 struct SfAuthListResponse {
@@ -689,3 +690,136 @@ fn run_command_with_cancel_and_timeout(
         }
     }
 }
+
+/// 读取 CLI 路径设置（不做自动探测，仅返回当前配置与默认生效路径）。
+pub fn read_cli_path_settings(custom_cli_path: Option<String>) -> CliPathSettings {
+    let custom = custom_cli_path
+        .as_ref()
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty());
+    let resolved_cli_path = resolve_effective_cli_path(custom.clone());
+    CliPathSettings {
+        custom_cli_path: custom,
+        resolved_cli_path,
+        resolved_cli_version: None,
+        probes: Vec::new(),
+    }
+}
+
+/// 解析当前生效的 CLI 路径（不校验有效性）。
+pub fn resolve_effective_cli_path(custom_cli_path: Option<String>) -> Option<String> {
+    build_cli_candidates(custom_cli_path.as_deref()).into_iter().next()
+}
+
+/// 自动探测本地可用 CLI 路径：仅返回探测成功的候选项。
+pub fn detect_available_cli_paths(custom_cli_path: Option<String>) -> Vec<CliPathProbe> {
+    detect_cli_path_settings(custom_cli_path)
+        .probes
+        .into_iter()
+        .filter(|probe| probe.ok)
+        .collect()
+}
+
+/// 检测指定路径是否可用，并尝试判断是否存在可用更新。
+pub fn check_cli_path_status(input_cli_path: Option<String>) -> CliPathStatus {
+    let path = input_cli_path
+        .as_ref()
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty());
+    let Some(cli_path) = path else {
+        return CliPathStatus {
+            path: None,
+            ok: false,
+            version: None,
+            has_update: None,
+            latest_version: None,
+            detail: "未配置可用 CLI 路径。".to_string(),
+        };
+    };
+
+    match probe_cli_version(&cli_path) {
+        Ok(version_text) => {
+            let current_semver = extract_semver(&version_text);
+            let latest_version = fetch_latest_cli_version().ok();
+            let latest_semver = latest_version
+                .as_ref()
+                .and_then(|value| extract_semver(value));
+            let has_update = match (current_semver.as_deref(), latest_semver.as_deref()) {
+                (Some(current), Some(latest)) => Some(compare_semver(current, latest) == CmpOrdering::Less),
+                _ => None,
+            };
+            CliPathStatus {
+                path: Some(cli_path),
+                ok: true,
+                version: Some(version_text),
+                has_update,
+                latest_version,
+                detail: "可用".to_string(),
+            }
+        }
+        Err(detail) => CliPathStatus {
+            path: Some(cli_path),
+            ok: false,
+            version: None,
+            has_update: None,
+            latest_version: None,
+            detail,
+        },
+    }
+}
+
+/// 从 npm registry 拉取 Salesforce CLI 的最新版本号。
+fn fetch_latest_cli_version() -> Result<String, String> {
+    let response = reqwest::blocking::get("https://registry.npmjs.org/%40salesforce%2Fcli/latest")
+        .map_err(|error| format!("请求最新版本失败: {error}"))?;
+    if !response.status().is_success() {
+        return Err(format!("请求最新版本失败: status={}", response.status()));
+    }
+    let payload: Value = response
+        .json()
+        .map_err(|error| format!("解析最新版本响应失败: {error}"))?;
+    let version = payload
+        .get("version")
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if version.is_empty() {
+        return Err("最新版本响应缺少 version 字段。".to_string());
+    }
+    Ok(version)
+}
+
+/// 从任意版本文本中提取第一个 `x.y.z` 语义版本号。
+fn extract_semver(text: &str) -> Option<String> {
+    for token in text.split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '.' || ch == '-')) {
+        let normalized = token.trim().trim_start_matches('v');
+        if normalized.is_empty() {
+            continue;
+        }
+        let mut parts = normalized.split('.');
+        let major = parts.next().unwrap_or("");
+        let minor = parts.next().unwrap_or("");
+        let patch = parts.next().unwrap_or("");
+        if major.chars().all(|ch| ch.is_ascii_digit())
+            && minor.chars().all(|ch| ch.is_ascii_digit())
+            && patch.chars().all(|ch| ch.is_ascii_digit())
+        {
+            return Some(format!("{major}.{minor}.{patch}"));
+        }
+    }
+    None
+}
+
+/// 比较两个 `x.y.z` 版本号大小。
+fn compare_semver(left: &str, right: &str) -> CmpOrdering {
+    let parse_triplet = |value: &str| -> [u64; 3] {
+        let mut numbers = [0_u64, 0_u64, 0_u64];
+        for (index, part) in value.split('.').take(3).enumerate() {
+            numbers[index] = part.parse::<u64>().unwrap_or(0);
+        }
+        numbers
+    };
+    parse_triplet(left).cmp(&parse_triplet(right))
+}
+

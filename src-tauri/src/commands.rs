@@ -10,8 +10,8 @@ use crate::app_state::AppState;
 use crate::db;
 use crate::error::AppError;
 use crate::models::{
-    CliPathSettings, ObjectDescribe, QueryResult, RecordMutationPayload, RecordSavePayload,
-    SalesforceObject, SalesforceSource, SourceUpsertPayload, SystemLogPage,
+    CliPathProbe, CliPathSettings, CliPathStatus, ObjectDescribe, QueryResult, RecordMutationPayload,
+    RecordSavePayload, SalesforceObject, SalesforceSource, SourceUpsertPayload, SystemLogPage,
 };
 use crate::sf_cli;
 
@@ -645,7 +645,7 @@ pub async fn list_objects(
 #[tauri::command]
 pub fn get_cli_path_settings(state: State<'_, AppState>) -> Result<CliPathSettings, String> {
     let custom = read_configured_cli_path(&state);
-    Ok(sf_cli::detect_cli_path_settings(custom))
+    Ok(sf_cli::read_cli_path_settings(custom))
 }
 
 /// 保存 Salesforce CLI 自定义路径（传空会清除配置）。
@@ -672,7 +672,28 @@ pub fn save_cli_path_settings(
         }
     }
 
-    Ok(sf_cli::detect_cli_path_settings(normalized))
+    Ok(sf_cli::read_cli_path_settings(normalized))
+}
+
+/// 检测指定 Salesforce CLI 路径是否可用，并返回版本与更新状态。
+#[tauri::command]
+pub fn check_cli_path_status(
+    state: State<'_, AppState>,
+    cli_path: Option<String>,
+) -> Result<CliPathStatus, String> {
+    let input = cli_path
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
+        .or_else(|| read_configured_cli_path(&state))
+        .or_else(|| sf_cli::resolve_effective_cli_path(None));
+    Ok(sf_cli::check_cli_path_status(input))
+}
+
+/// 自动探测本地可用 CLI 路径，并返回可用于下拉选择的候选项。
+#[tauri::command]
+pub fn detect_local_cli_paths(state: State<'_, AppState>) -> Result<Vec<CliPathProbe>, String> {
+    let custom = read_configured_cli_path(&state);
+    Ok(sf_cli::detect_available_cli_paths(custom))
 }
 
 /// 强制刷新对象列表（跳过缓存，直接请求 Salesforce API 并回写缓存）。

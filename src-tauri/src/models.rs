@@ -195,3 +195,20 @@ pub struct CliPathSettings {
     /// 本次探测的候选详情。
     pub probes: Vec<CliPathProbe>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CliPathStatus {
+    /// 本次检测使用的 CLI 路径。
+    pub path: Option<String>,
+    /// 路径是否可用。
+    pub ok: bool,
+    /// 当前 CLI 版本文本。
+    pub version: Option<String>,
+    /// 是否存在可用更新（无法判断时为 None）。
+    pub has_update: Option<bool>,
+    /// 可用更新的最新版本号（无法获取时为 None）。
+    pub latest_version: Option<String>,
+    /// 诊断详情（错误或提示信息）。
+    pub detail: String,
+}

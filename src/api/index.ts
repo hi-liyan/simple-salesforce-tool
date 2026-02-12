@@ -1,6 +1,8 @@
 ﻿import { invoke } from "@tauri-apps/api/core";
 import {
+  CliPathProbe,
   CliPathSettings,
+  CliPathStatus,
   ObjectDescribe,
   QueryResult,
   RecordMutationPayload,
@@ -25,6 +27,8 @@ export const api = {
   getCliPathSettings: () => invokeApi<CliPathSettings>("get_cli_path_settings"),
   saveCliPathSettings: (customCliPath: string | null) =>
     invokeApi<CliPathSettings>("save_cli_path_settings", { customCliPath }),
+  checkCliPathStatus: (cliPath: string | null) => invokeApi<CliPathStatus>("check_cli_path_status", { cliPath }),
+  detectLocalCliPaths: () => invokeApi<CliPathProbe[]>("detect_local_cli_paths"),
   syncCliSources: () => invokeApi<SalesforceSource[]>("sync_cli_sources"),
   loginCliOrg: (instanceUrl: string) => invokeApi<string>("login_cli_org", { instanceUrl }),
   openAuthWindow: () => invokeApi<void>("open_auth_window"),

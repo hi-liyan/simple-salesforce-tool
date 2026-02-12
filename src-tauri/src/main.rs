@@ -38,6 +38,8 @@ fn main() {
             commands::list_sources,
             commands::get_cli_path_settings,
             commands::save_cli_path_settings,
+            commands::check_cli_path_status,
+            commands::detect_local_cli_paths,
             commands::sync_cli_sources,
             commands::login_cli_org,
             commands::open_auth_window,
