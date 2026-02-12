@@ -54,6 +54,7 @@ fn main() {
             commands::list_objects,
             commands::refresh_objects,
             commands::open_object_list_page,
+            commands::open_object_edit_page,
             commands::open_record_page,
             commands::describe_object,
             commands::query_records,

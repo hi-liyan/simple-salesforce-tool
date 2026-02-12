@@ -902,6 +902,142 @@ pub async fn open_object_list_page(
     Ok(Some(final_url))
 }
 
+/// 打开 Salesforce Object 管理页（混合方案：CLI 数据源优先走 CLI，非 CLI 走 frontdoor URL）。
+#[tauri::command]
+pub async fn open_object_edit_page(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    source_id: String,
+    object_name: String,
+) -> Result<Option<String>, String> {
+    let normalized_object_name = object_name.trim().to_string();
+    if normalized_object_name.is_empty() {
+        return Err("Object 名称不能为空".to_string());
+    }
+
+    let object_segment = urlencoding::encode(&normalized_object_name);
+    let edit_path = format!("/lightning/setup/ObjectManager/{object_segment}/Details/view");
+
+    let source = {
+        let connection = state
+            .db
+            .lock()
+            .map_err(|error| format!("Database lock failed: {error}"))?;
+        db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
+    };
+
+    // CLI 数据源：后端直接调用 CLI 打开系统浏览器。
+    if source_id.starts_with("cli-") {
+        let source_id_cloned = source_id.clone();
+        let edit_path_cloned = edit_path.clone();
+        let preferred_cli_path = read_configured_cli_path(&state);
+        let cli_open_result = tauri::async_runtime::spawn_blocking(move || {
+            sf_cli::open_org_path(
+                &source_id_cloned,
+                &edit_path_cloned,
+                preferred_cli_path.as_deref(),
+            )
+        })
+        .await
+        .map_err(|error| format!("打开 Salesforce 页面线程失败: {error}"));
+
+        match cli_open_result {
+            Ok(Ok(())) => {
+                write_system_log(
+                    &state,
+                    "INFO",
+                    "SALESFORCE_CLI",
+                    "open_object_edit_page",
+                    Some(&source_id),
+                    Some(&normalized_object_name),
+                    true,
+                    "已通过 Salesforce CLI 打开 Object 管理页。",
+                    None,
+                );
+                return Ok(None);
+            }
+            Ok(Err(error)) => {
+                let detail = error.to_string();
+                write_system_log(
+                    &state,
+                    "WARN",
+                    "SALESFORCE_CLI",
+                    "open_object_edit_page",
+                    Some(&source_id),
+                    Some(&normalized_object_name),
+                    false,
+                    "通过 Salesforce CLI 打开 Object 管理页失败，回退 frontdoor URL。",
+                    Some(&detail),
+                );
+            }
+            Err(error) => {
+                write_system_log(
+                    &state,
+                    "WARN",
+                    "SALESFORCE_CLI",
+                    "open_object_edit_page",
+                    Some(&source_id),
+                    Some(&normalized_object_name),
+                    false,
+                    "通过 Salesforce CLI 打开 Object 管理页线程失败，回退 frontdoor URL。",
+                    Some(&error),
+                );
+            }
+        }
+    }
+
+    // 回退策略：构建 frontdoor URL，交由前端打开（仍可自动带登录态）。
+    let effective_source = if source_id.starts_with("cli-") {
+        match refresh_cli_source_token(
+            &app,
+            &state,
+            &source_id,
+            "open_object_edit_page",
+            Some(&normalized_object_name),
+        )
+        .await
+        {
+            Ok(refreshed) => refreshed,
+            Err(error) => {
+                let detail = error.to_string();
+                write_system_log(
+                    &state,
+                    "WARN",
+                    "SALESFORCE_CLI",
+                    "open_object_edit_page",
+                    Some(&source_id),
+                    Some(&normalized_object_name),
+                    false,
+                    "刷新 token 失败，回退使用本地 token 构建 frontdoor 地址。",
+                    Some(&detail),
+                );
+                source.clone()
+            }
+        }
+    } else {
+        source.clone()
+    };
+
+    let instance = effective_source.instance_url.trim_end_matches('/');
+    let sid = urlencoding::encode(&effective_source.access_token);
+    let ret_url_encoded = urlencoding::encode(&edit_path);
+    let final_url = format!("{instance}/secur/frontdoor.jsp?sid={sid}&retURL={ret_url_encoded}");
+
+    write_system_log(
+        &state,
+        "INFO",
+        "SALESFORCE_API",
+        "open_object_edit_page",
+        Some(&source_id),
+        Some(&normalized_object_name),
+        true,
+        "已生成 frontdoor Object 管理页地址。",
+        None,
+    );
+
+    Ok(Some(final_url))
+}
+
 /// 打开 Salesforce 记录详情页（混合方案：CLI 数据源优先走 CLI，非 CLI 走 frontdoor URL）。
 #[tauri::command]
 pub async fn open_record_page(
@@ -1494,5 +1630,4 @@ fn validate_payload(payload: &SourceUpsertPayload) -> Result<(), String> {
     }
     Ok(())
 }
-
 

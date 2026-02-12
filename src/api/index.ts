@@ -49,6 +49,8 @@ export const api = {
   refreshObjects: (sourceId: string) => invokeApi<SalesforceObject[]>("refresh_objects", { sourceId }),
   openObjectListPage: (sourceId: string, objectName: string) =>
     invokeApi<string | null>("open_object_list_page", { sourceId, objectName }),
+  openObjectEditPage: (sourceId: string, objectName: string) =>
+    invokeApi<string | null>("open_object_edit_page", { sourceId, objectName }),
   openRecordPage: (sourceId: string, objectName: string, recordId: string) =>
     invokeApi<string | null>("open_record_page", { sourceId, objectName, recordId }),
   describeObject: (sourceId: string, objectName: string) =>
