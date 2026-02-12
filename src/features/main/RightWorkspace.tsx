@@ -6,6 +6,8 @@ import { SoqlMonacoEditor } from "../../components/SoqlMonacoEditor";
 import { Notice, TabState } from "../../types";
 
 type RightWorkspaceProps = {
+  // 当前选中的数据源 ID：用于打开外部 Salesforce 页面。
+  selectedSourceId: string;
   tabs: TabState[];
   activeTabObjectName: string;
   activeTab: TabState | null;
@@ -54,6 +56,7 @@ type RightWorkspaceProps = {
 
 // 右侧工作区：包含 Tab、查询工具栏、数据表格、日志面板和字段抽屉。
 export function RightWorkspace({
+  selectedSourceId,
   tabs,
   activeTabObjectName,
   activeTab,
@@ -387,6 +390,8 @@ export function RightWorkspace({
                 dirtyCellKeys={activeTab.dirtyCellKeys}
                 selectedRecordIds={activeTab.selectedRecordIds}
                 pendingDeleteRecordIds={pendingDeleteRecordIds}
+                sourceId={selectedSourceId}
+                objectName={activeTab.objectName}
                 onToggleRecord={onToggleRecord}
                 onToggleAll={onToggleAllRecords}
                 onEditCell={onEditCell}
@@ -533,4 +538,3 @@ function formatLogTime(timestamp: string): string {
   if (Number.isNaN(date.getTime())) return timestamp;
   return date.toLocaleString();
 }
-

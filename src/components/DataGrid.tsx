@@ -12,6 +12,7 @@ import {
   TextCell
 } from "@glideapps/glide-data-grid";
 import "@glideapps/glide-data-grid/dist/index.css";
+import { api } from "../api";
 import { QueryResult } from "../types";
 
 type Props = {
@@ -20,6 +21,10 @@ type Props = {
   fieldMetadataMap: Record<string, Record<string, unknown>>;
   dirtyCellKeys: string[];
   selectedRecordIds: string[];
+  // 当前选中的数据源 ID：用于打开 Salesforce 记录页（可选）。
+  sourceId?: string;
+  // 当前对象 API 名称：用于打开 Salesforce 记录页（可选）。
+  objectName?: string;
   // 待删除记录 Id 列表：用于将整行标记为灰色背景。
   pendingDeleteRecordIds: string[];
   onToggleRecord: (recordId: string, checked: boolean) => void;
@@ -35,6 +40,8 @@ export function DataGrid({
   fieldMetadataMap,
   dirtyCellKeys,
   selectedRecordIds,
+  sourceId,
+  objectName,
   pendingDeleteRecordIds,
   onToggleRecord,
   onToggleAll,
@@ -67,6 +74,8 @@ export function DataGrid({
   const pendingDeleteRecordSet = useMemo(() => new Set(pendingDeleteRecordIds), [pendingDeleteRecordIds]);
   const gridBodyRef = useRef<HTMLDivElement | null>(null);
   const closeMetaTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 行右键菜单状态：记录菜单坐标与目标记录 Id。
+  const [rowContextMenu, setRowContextMenu] = useState<{ x: number; y: number; recordId: string } | null>(null);
 
   useEffect(() => {
     return () => {
@@ -75,6 +84,29 @@ export function DataGrid({
       closeMetaTimerRef.current = null;
     };
   }, []);
+
+  // 全局关闭行右键菜单：点击空白、滚动、按下 ESC 时关闭。
+  useEffect(() => {
+    if (!rowContextMenu) return;
+
+    const closeMenu = () => {
+      setRowContextMenu(null); // 统一关闭菜单，避免浮层残留。
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      closeMenu(); // ESC 快捷关闭菜单。
+    };
+
+    window.addEventListener("click", closeMenu);
+    window.addEventListener("scroll", closeMenu, true);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("click", closeMenu);
+      window.removeEventListener("scroll", closeMenu, true);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [rowContextMenu]);
 
   // 列宽状态：支持用户拖拽后即时更新列宽。
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
@@ -306,6 +338,32 @@ export function DataGrid({
     }, 180);
   };
 
+  // 打开 Salesforce 记录页：调用后端混合模式（CLI 优先，失败回退 frontdoor）。
+  async function openRecordPageFromMenu() {
+    if (!rowContextMenu) return;
+    if (!sourceId || !objectName) {
+      onShowMessage("当前上下文缺少 sourceId/objectName，无法打开 Salesforce 记录页。");
+      setRowContextMenu(null);
+      return;
+    }
+    if (!rowContextMenu.recordId) {
+      onShowMessage("当前行没有可用的记录 Id。");
+      setRowContextMenu(null);
+      return;
+    }
+
+    try {
+      const openUrl = await api.openRecordPage(sourceId, objectName, rowContextMenu.recordId);
+      if (openUrl) {
+        window.open(openUrl, "_blank", "noopener,noreferrer"); // 非 CLI 回退场景：在浏览器打开 frontdoor URL。
+      }
+    } catch (error) {
+      onShowMessage(`打开 Salesforce 记录页失败：${String(error)}`);
+    } finally {
+      setRowContextMenu(null); // 执行后关闭菜单。
+    }
+  }
+
   return (
     // 表格容器：顶部统计栏 + 数据表格。
     <div className="relative flex h-full min-h-0 flex-col">
@@ -333,6 +391,29 @@ export function DataGrid({
           onCellEdited={handleCellEdited}
           // 单元格点击事件：用于双击编辑提示等交互。
           onCellClicked={handleCellClicked}
+          // 单元格右键事件：弹出记录级菜单。
+          onCellContextMenu={(cell, event) => {
+            if (!sourceId || !objectName) return; // 缺少对象上下文时不展示“打开记录页”菜单。
+            const [, row] = cell;
+            const record = records[row] || {};
+            const recordId = String(record.Id ?? "").trim();
+            if (!recordId) return; // 无真实记录 Id（如新建行）时不展示菜单。
+
+            const gridRect = gridBodyRef.current?.getBoundingClientRect();
+            if (!gridRect) return;
+
+            const localClickX = event.bounds.x + event.localEventX;
+            const localClickY = event.bounds.y + event.localEventY;
+            const anchorClientX = resolveViewportAxis(localClickX, gridRect.left, gridRect.right);
+            const anchorClientY = resolveViewportAxis(localClickY, gridRect.top, gridRect.bottom);
+
+            event.preventDefault(); // 阻止默认右键行为，交由自定义菜单处理。
+            setRowContextMenu({
+              x: anchorClientX,
+              y: anchorClientY,
+              recordId
+            });
+          }}
           // 粘贴/批量编辑时的批处理入口。
           onCellsEdited={handleCellsEdited}
           // 使用 Glide 内置 overlay 机制渲染 picklist 编辑器，避免手工定位。
@@ -587,6 +668,24 @@ export function DataGrid({
                 </p>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* 行右键菜单：提供“打开 Salesforce 记录页”操作。 */}
+        {rowContextMenu && (
+          <div
+            className="fixed z-[80] min-w-[164px] rounded border border-base-300 bg-base-100 p-1 shadow-xl"
+            style={{ left: rowContextMenu.x, top: rowContextMenu.y }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button
+              className="btn btn-ghost btn-xs w-full justify-start"
+              onClick={() => {
+                void openRecordPageFromMenu(); // 触发菜单动作并关闭菜单。
+              }}
+            >
+              打开 Salesforce 记录页
+            </button>
           </div>
         )}
       </div>

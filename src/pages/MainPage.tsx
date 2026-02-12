@@ -912,6 +912,7 @@ export function MainPage() {
                 </div>
                 <div className="flex min-h-0 min-w-0 flex-col overflow-hidden">
                   <RightWorkspace
+                    selectedSourceId={selectedSourceId}
                     tabs={tabs}
                     activeTabObjectName={activeTabObjectName}
                     activeTab={activeTab}
@@ -1258,4 +1259,3 @@ function normalizeQueryResult(input: QueryResult): QueryResult {
   const totalSize = typeof input?.totalSize === "number" ? input.totalSize : records.length;
   return { totalSize, records };
 }
-
