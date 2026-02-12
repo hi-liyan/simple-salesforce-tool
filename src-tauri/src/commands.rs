@@ -9,9 +9,11 @@ use tauri::Manager;
 use crate::app_state::AppState;
 use crate::db;
 use crate::error::AppError;
+use crate::llm::{openai_chat_json, openai_chat_json_stream, LlmChatMessage, LlmChatRole};
 use crate::models::{
-    CliPathProbe, CliPathSettings, CliPathStatus, ObjectDescribe, QueryResult, RecordMutationPayload,
-    RecordSavePayload, SalesforceObject, SalesforceSource, SourceUpsertPayload, SystemLogPage,
+    CliPathProbe, CliPathSettings, CliPathStatus, LlmSettings, LlmSettingsView, ObjectDescribe, QueryResult,
+    RecordMutationPayload, RecordSavePayload, SalesforceObject, SalesforceSource, SaveLlmSettingsPayload,
+    SoqlConversationRequest, SoqlConversationResponse, SourceUpsertPayload, SystemLogPage,
 };
 use crate::sf_cli;
 
@@ -44,6 +46,7 @@ fn write_system_log(
 }
 
 const SF_CLI_PATH_SETTING_KEY: &str = "sf_cli_path";
+const LLM_SETTINGS_KEY: &str = "llm.settings.openai";
 
 /// 读取已配置的自定义 Salesforce CLI 路径。
 fn read_configured_cli_path(state: &State<'_, AppState>) -> Option<String> {
@@ -85,6 +88,26 @@ fn cancel_cli_login_if_running(state: &State<'_, AppState>) {
 fn clear_cli_login_cancel_token(state: &State<'_, AppState>) {
     if let Ok(mut slot) = state.cli_login_cancel.lock() {
         *slot = None;
+    }
+}
+
+fn set_llm_stream_cancel_token(state: &State<'_, AppState>, request_id: &str, token: Arc<AtomicBool>) {
+    if let Ok(mut map) = state.llm_stream_cancels.lock() {
+        map.insert(request_id.to_string(), token);
+    }
+}
+
+fn cancel_llm_stream_by_request_id(state: &State<'_, AppState>, request_id: &str) {
+    if let Ok(map) = state.llm_stream_cancels.lock() {
+        if let Some(token) = map.get(request_id) {
+            token.store(true, Ordering::Relaxed);
+        }
+    }
+}
+
+fn clear_llm_stream_cancel_token(state: &State<'_, AppState>, request_id: &str) {
+    if let Ok(mut map) = state.llm_stream_cancels.lock() {
+        map.remove(request_id);
     }
 }
 fn is_unauthorized_error(error: &AppError) -> bool {
@@ -694,6 +717,309 @@ pub fn check_cli_path_status(
 pub fn detect_local_cli_paths(state: State<'_, AppState>) -> Result<Vec<CliPathProbe>, String> {
     let custom = read_configured_cli_path(&state);
     Ok(sf_cli::detect_available_cli_paths(custom))
+}
+
+/// 读取 LLM 设置（apiKey 仅返回掩码与是否已配置）。
+#[tauri::command]
+pub fn get_llm_settings(state: State<'_, AppState>) -> Result<LlmSettingsView, String> {
+    let settings = read_llm_settings(&state)?;
+    Ok(to_llm_settings_view(&settings))
+}
+
+/// 保存 LLM 设置（apiKey 采用覆盖保存策略）。
+#[tauri::command]
+pub fn save_llm_settings(
+    state: State<'_, AppState>,
+    payload: SaveLlmSettingsPayload,
+) -> Result<LlmSettingsView, String> {
+    let mut current = read_llm_settings(&state)?;
+    let base_url = payload.base_url.trim();
+    let model = payload.model.trim();
+    if base_url.is_empty() {
+        return Err("LLM baseUrl 不能为空".to_string());
+    }
+    if model.is_empty() {
+        return Err("LLM model 不能为空".to_string());
+    }
+
+    current.base_url = base_url.to_string();
+    current.model = model.to_string();
+    current.timeout_ms = payload.timeout_ms.unwrap_or(current.timeout_ms).max(1000);
+
+    // 仅当用户输入了新值时覆盖 apiKey，空字符串视为不覆盖。
+    if let Some(next_key) = payload.api_key {
+        let trimmed = next_key.trim();
+        if !trimmed.is_empty() {
+            current.api_key = trimmed.to_string();
+        }
+    }
+
+    {
+        let connection = state
+            .db
+            .lock()
+            .map_err(|error| format!("Database lock failed: {error}"))?;
+        let raw = serde_json::to_string(&current).map_err(|error| AppError::to_string_error(error.into()))?;
+        db::write_app_setting(&connection, LLM_SETTINGS_KEY, &raw).map_err(AppError::to_string_error)?;
+    }
+
+    Ok(to_llm_settings_view(&current))
+}
+
+/// 停止指定 requestId 的 LLM 流式生成。
+#[tauri::command]
+pub fn stop_llm_stream_generation(state: State<'_, AppState>, request_id: String) -> Result<(), String> {
+    let normalized = request_id.trim().to_string();
+    if normalized.is_empty() {
+        return Err("requestId 不能为空".to_string());
+    }
+    cancel_llm_stream_by_request_id(&state, &normalized);
+    Ok(())
+}
+
+/// 基于多轮对话生成 SOQL（仅允许读取 Salesforce 元数据，不允许触达数据接口）。
+#[tauri::command]
+pub async fn generate_soql_from_conversation(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    payload: SoqlConversationRequest,
+) -> Result<SoqlConversationResponse, String> {
+    let user_message = payload.user_message.trim().to_string();
+    if user_message.is_empty() {
+        return Err("用户输入不能为空".to_string());
+    }
+
+    let llm_settings = read_llm_settings(&state)?;
+    if llm_settings.api_key.trim().is_empty() {
+        return Err("LLM apiKey 未配置，请先到设置页保存。".to_string());
+    }
+
+    let source = {
+        let connection = state
+            .db
+            .lock()
+            .map_err(|error| format!("Database lock failed: {error}"))?;
+        db::get_source(&connection, &payload.source_id).map_err(AppError::to_string_error)?
+    };
+    // 对话模式与生成模式分流：只有命中“生成 SOQL”意图才走自动生成兜底。
+    let generate_mode = should_generate_soql(&user_message);
+
+    // 元数据阶段仅调用对象列表与字段 describe，严格禁止 query/data 写入接口。
+    let all_objects = match state.sf_client.list_objects(&source).await {
+        Ok(items) => items.into_iter().filter(|item| item.queryable).collect::<Vec<_>>(),
+        Err(error) if is_unauthorized_error(&error) && payload.source_id.starts_with("cli-") => {
+            let refreshed_source = refresh_cli_source_token(
+                &app,
+                &state,
+                &payload.source_id,
+                "generate_soql_from_conversation",
+                None,
+            )
+            .await
+            .map_err(AppError::to_string_error)?;
+            state
+                .sf_client
+                .list_objects(&refreshed_source)
+                .await
+                .map_err(AppError::to_string_error)?
+                .into_iter()
+                .filter(|item| item.queryable)
+                .collect::<Vec<_>>()
+        }
+        Err(error) => return Err(AppError::to_string_error(error)),
+    };
+
+    let candidate_objects = pick_candidate_objects(
+        &all_objects,
+        &user_message,
+        payload.context_object_hint.as_deref(),
+    );
+
+    let mut object_fields_map: HashMap<String, Vec<String>> = HashMap::new();
+    for object_name in candidate_objects.iter().take(6) {
+        let describe = match state.sf_client.describe_object(&source, object_name).await {
+            Ok(item) => item,
+            Err(error) if is_unauthorized_error(&error) && payload.source_id.starts_with("cli-") => {
+                let refreshed_source = refresh_cli_source_token(
+                    &app,
+                    &state,
+                    &payload.source_id,
+                    "generate_soql_from_conversation",
+                    Some(object_name),
+                )
+                .await
+                .map_err(AppError::to_string_error)?;
+                state
+                    .sf_client
+                    .describe_object(&refreshed_source, object_name)
+                    .await
+                    .map_err(AppError::to_string_error)?
+            }
+            Err(_) => continue, // 个别对象 describe 失败时忽略，不阻塞整体生成流程。
+        };
+
+        object_fields_map.insert(
+            object_name.clone(),
+            describe.fields.into_iter().map(|field| field.name).collect(),
+        );
+    }
+
+    let conversation_id = payload
+        .conversation_id
+        .filter(|item| !item.trim().is_empty())
+        .unwrap_or_else(|| format!("conv-{}", uuid::Uuid::new_v4()));
+
+    let mut history = {
+        let map = state
+            .llm_conversations
+            .lock()
+            .map_err(|error| format!("LLM 会话锁失败: {error}"))?;
+        map.get(&conversation_id).cloned().unwrap_or_default()
+    };
+    history.push(LlmChatMessage {
+        role: LlmChatRole::User,
+        content: user_message.clone(),
+    });
+
+    let prompt_messages = build_llm_messages(
+        &history,
+        &all_objects,
+        &object_fields_map,
+        payload.context_object_hint.as_deref(),
+        generate_mode,
+    );
+    let stream_request_id = payload
+        .stream_request_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|item| !item.is_empty());
+    let llm_raw = call_llm_with_optional_stream(
+        &app,
+        &state,
+        &llm_settings,
+        &prompt_messages,
+        stream_request_id,
+    )
+    .await?;
+    let mut parsed = parse_llm_soql_payload(&llm_raw);
+
+    // 生成模式下若首轮未产出 SOQL，则自动做一次修复重试（不走流式，避免重复事件）。
+    if generate_mode && parsed.soql.is_none() {
+        let mut repair_messages = prompt_messages.clone();
+        repair_messages.push(LlmChatMessage {
+            role: LlmChatRole::System,
+            content: "上一轮未产出可用 soql。请基于已有上下文修复，必须返回 mode=generate 且提供非空 soql；若确实无法生成则返回 mode=clarify 并给出最小问题列表。".to_string(),
+        });
+        if let Ok(retry_raw) = call_llm_with_optional_stream(
+            &app,
+            &state,
+            &llm_settings,
+            &repair_messages,
+            None,
+        )
+        .await
+        {
+            let retried = parse_llm_soql_payload(&retry_raw);
+            if retried.soql.is_some() || retried.mode == "clarify" {
+                parsed = retried;
+            }
+        }
+    }
+
+    let response = if generate_mode {
+        if let Some(soql) = parsed.soql.clone().filter(|item| !item.trim().is_empty()) {
+            SoqlConversationResponse {
+                conversation_id: conversation_id.clone(),
+                mode: "generate".to_string(),
+                status: "ready".to_string(),
+                questions: vec![],
+                soql: Some(soql),
+                object_name: parsed.object_name.clone(),
+                field_names: parsed.field_names.clone(),
+                reason: if parsed.reason.trim().is_empty() {
+                    "已按当前需求生成 SOQL。".to_string()
+                } else {
+                    parsed.reason.clone()
+                },
+                answer: parsed.answer.clone(),
+            }
+        } else {
+            SoqlConversationResponse {
+                conversation_id: conversation_id.clone(),
+                mode: "clarify".to_string(),
+                status: "clarify".to_string(),
+                questions: if parsed.questions.is_empty() {
+                    fallback_questions()
+                } else {
+                    parsed.questions.clone()
+                },
+                soql: None,
+                object_name: parsed.object_name.clone(),
+                field_names: parsed.field_names.clone(),
+                reason: if parsed.reason.trim().is_empty() {
+                    "当前信息仍不足以生成 SOQL，请按问题补充。".to_string()
+                } else {
+                    parsed.reason.clone()
+                },
+                answer: parsed.answer.clone(),
+            }
+        }
+    } else if parsed.mode == "clarify" && !parsed.questions.is_empty() {
+        SoqlConversationResponse {
+            conversation_id: conversation_id.clone(),
+            mode: "clarify".to_string(),
+            status: "clarify".to_string(),
+            questions: parsed.questions.clone(),
+            soql: None,
+            object_name: parsed.object_name.clone(),
+            field_names: parsed.field_names.clone(),
+            reason: parsed.reason.clone(),
+            answer: parsed.answer.clone(),
+        }
+    } else {
+        SoqlConversationResponse {
+            conversation_id: conversation_id.clone(),
+            mode: "answer".to_string(),
+            status: "clarify".to_string(),
+            questions: vec![],
+            soql: None,
+            object_name: parsed.object_name.clone(),
+            field_names: parsed.field_names.clone(),
+            reason: if parsed.reason.trim().is_empty() {
+                "已按对话模式回答。若需要，请继续明确“生成 SOQL”。".to_string()
+            } else {
+                parsed.reason.clone()
+            },
+            answer: parsed.answer.clone(),
+        }
+    };
+
+    history.push(LlmChatMessage {
+        role: LlmChatRole::Assistant,
+        content: serde_json::to_string(&response).unwrap_or_else(|_| "{}".to_string()),
+    });
+    compress_history_in_place(&mut history, 140_000); // 超上下文阈值时改为摘要压缩，而不是直接截断。
+    {
+        let mut map = state
+            .llm_conversations
+            .lock()
+            .map_err(|error| format!("LLM 会话锁失败: {error}"))?;
+        map.insert(conversation_id.clone(), history);
+    }
+
+    write_system_log(
+        &state,
+        "INFO",
+        "LLM_SOQL",
+        "generate_soql_from_conversation",
+        Some(&payload.source_id),
+        None,
+        true,
+        "SOQL 生成完成（仅元数据链路）。",
+        Some(&format!("conversationId={conversation_id}, status={}", response.status)),
+    );
+
+    Ok(response)
 }
 
 /// 强制刷新对象列表（跳过缓存，直接请求 Salesforce API 并回写缓存）。
@@ -1614,6 +1940,412 @@ pub async fn delete_record(
     }
 }
 
+#[derive(Debug, Clone)]
+struct ParsedSoqlPayload {
+    /// 响应模式：answer/generate/clarify。
+    mode: String,
+    /// 需要继续确认的问题列表。
+    questions: Vec<String>,
+    /// 生成出的 SOQL。
+    soql: Option<String>,
+    /// 识别到的主对象名。
+    object_name: Option<String>,
+    /// 识别到的字段列表。
+    field_names: Vec<String>,
+    /// 解释文本。
+    reason: String,
+    /// 对用户问题的直接回答。
+    answer: Option<String>,
+}
+
+/// 读取 LLM 设置，未配置时返回默认值。
+fn read_llm_settings(state: &State<'_, AppState>) -> Result<LlmSettings, String> {
+    let connection = state
+        .db
+        .lock()
+        .map_err(|error| format!("Database lock failed: {error}"))?;
+    let raw = db::read_app_setting(&connection, LLM_SETTINGS_KEY)
+        .map_err(AppError::to_string_error)?
+        .unwrap_or_default();
+    if raw.trim().is_empty() {
+        return Ok(LlmSettings {
+            provider: "openai".to_string(),
+            base_url: "https://api.openai.com/v1".to_string(),
+            model: "gpt-4.1-mini".to_string(),
+            api_key: "".to_string(),
+            timeout_ms: 30_000,
+        });
+    }
+
+    let mut parsed: LlmSettings =
+        serde_json::from_str(&raw).map_err(|error| AppError::to_string_error(error.into()))?;
+    if parsed.provider.trim().is_empty() {
+        parsed.provider = "openai".to_string();
+    }
+    if parsed.base_url.trim().is_empty() {
+        parsed.base_url = "https://api.openai.com/v1".to_string();
+    }
+    if parsed.model.trim().is_empty() {
+        parsed.model = "gpt-4.1-mini".to_string();
+    }
+    if parsed.timeout_ms == 0 {
+        parsed.timeout_ms = 30_000;
+    }
+    Ok(parsed)
+}
+
+/// 生成对前端安全的 LLM 设置视图（隐藏 apiKey 明文）。
+fn to_llm_settings_view(settings: &LlmSettings) -> LlmSettingsView {
+    let configured = !settings.api_key.trim().is_empty();
+    LlmSettingsView {
+        provider: settings.provider.clone(),
+        base_url: settings.base_url.clone(),
+        model: settings.model.clone(),
+        api_key_configured: configured,
+        api_key_masked: mask_api_key(&settings.api_key),
+        timeout_ms: settings.timeout_ms,
+    }
+}
+
+/// 对 apiKey 做掩码处理，避免前端拿到明文。
+fn mask_api_key(api_key: &str) -> String {
+    let trimmed = api_key.trim();
+    if trimmed.is_empty() {
+        return "".to_string();
+    }
+    if trimmed.len() <= 8 {
+        return "****".to_string();
+    }
+    let tail = &trimmed[trimmed.len() - 4..];
+    format!("{}****{}", &trimmed[0..3], tail)
+}
+
+/// 调用 LLM：可选开启流式事件推送。
+async fn call_llm_with_optional_stream(
+    app: &tauri::AppHandle,
+    state: &State<'_, AppState>,
+    llm_settings: &LlmSettings,
+    messages: &[LlmChatMessage],
+    stream_request_id: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    if let Some(request_id) = stream_request_id {
+        let cancel_token = Arc::new(AtomicBool::new(false));
+        set_llm_stream_cancel_token(state, request_id, cancel_token.clone());
+        let stream_result = openai_chat_json_stream(
+            &llm_settings.base_url,
+            &llm_settings.api_key,
+            &llm_settings.model,
+            messages,
+            llm_settings.timeout_ms,
+            |chunk| {
+                app.emit_to(
+                    "main",
+                    "llm:soql-stream-chunk",
+                    serde_json::json!({
+                        "requestId": request_id,
+                        "chunk": chunk
+                    }),
+                )
+                .map_err(|error| AppError::Biz(format!("推送流式事件失败: {error}")))?;
+                Ok(())
+            },
+            || cancel_token.load(Ordering::Relaxed),
+        )
+        .await;
+        clear_llm_stream_cancel_token(state, request_id);
+        stream_result.map_err(AppError::to_string_error)
+    } else {
+        openai_chat_json(
+            &llm_settings.base_url,
+            &llm_settings.api_key,
+            &llm_settings.model,
+            messages,
+            llm_settings.timeout_ms,
+        )
+        .await
+        .map_err(AppError::to_string_error)
+    }
+}
+
+/// 从模型原始 JSON 解析结构化载荷，解析失败时降级为 clarify。
+fn parse_llm_soql_payload(raw: &serde_json::Value) -> ParsedSoqlPayload {
+    let mode = raw
+        .get("mode")
+        .and_then(|item| item.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_lowercase();
+    let normalized_mode = match mode.as_str() {
+        "answer" | "generate" | "clarify" => mode,
+        _ => "".to_string(),
+    };
+    let questions = raw
+        .get("questions")
+        .and_then(|item| item.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str())
+                .map(|item| item.trim().to_string())
+                .filter(|item| !item.is_empty())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let soql = raw
+        .get("soql")
+        .and_then(|item| item.as_str())
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty());
+    let object_name = raw
+        .get("object")
+        .or_else(|| raw.get("objectName"))
+        .and_then(|item| item.as_str())
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty());
+    let field_names = raw
+        .get("fields")
+        .and_then(|item| item.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str())
+                .map(|item| item.trim().to_string())
+                .filter(|item| !item.is_empty())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let reason = raw
+        .get("reason")
+        .and_then(|item| item.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let answer = raw
+        .get("answer")
+        .and_then(|item| item.as_str())
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty());
+
+    ParsedSoqlPayload {
+        mode: if normalized_mode.is_empty() {
+            if soql.is_some() {
+                "generate".to_string()
+            } else if questions.is_empty() {
+                "answer".to_string()
+            } else {
+                "clarify".to_string()
+            }
+        } else {
+            normalized_mode
+        },
+        questions,
+        soql,
+        object_name,
+        field_names,
+        reason,
+        answer,
+    }
+}
+
+/// 构造模型输入消息：包含系统约束、元数据摘要和多轮历史。
+fn build_llm_messages(
+    history: &[LlmChatMessage],
+    all_objects: &[SalesforceObject],
+    object_fields_map: &HashMap<String, Vec<String>>,
+    context_object_hint: Option<&str>,
+    generate_mode: bool,
+) -> Vec<LlmChatMessage> {
+    let mode_prompt = if generate_mode {
+        "当前模式：生成模式。优先输出可执行 SOQL。"
+    } else {
+        "当前模式：对话模式。仅回答问题，不要输出 SOQL，除非用户明确要求“生成SOQL”。"
+    };
+    let system_prompt = format!(
+        "{}\n{}",
+        mode_prompt,
+        r#"
+你是 Salesforce SOQL 生成助手。
+必须遵守：
+1) 你是专业 Salesforce 工程师，先回答用户问题，再决定是否生成 SOQL。
+2) 必须输出 mode：
+   - answer: 只回答，不生成 SOQL
+   - generate: 回答 + 生成 SOQL
+   - clarify: 需求模糊，提出问题直到明确
+3) 若用户明确要求“生成SOQL”，优先返回 mode=generate 且给出 soql。
+4) 仅当“对象无法确定”或“业务冲突无法消解”时返回 mode=clarify。
+3) 若用户说“全部数据/全量数据”，按 SOQL 特性处理：使用对象全部可用字段（不允许 SELECT *），默认附加 LIMIT 200 与可读排序（如 CreatedDate DESC）。
+4) 除非用户明确要求，不要因为 IsDeleted/LIMIT/排序等默认边界反复追问；可在 reason 里说明默认假设。
+5) 仅允许输出 SELECT 语句，可包含子查询、聚合、分组、排序、函数。
+6) 禁止输出 INSERT/UPDATE/DELETE/UPSERT/MERGE。
+7) 只能使用给定元数据中的对象与字段，不能臆造。
+8) 仅输出 JSON 对象，不要输出额外文本。
+JSON 结构：
+{
+  \"mode\": \"answer|generate|clarify\",
+  \"status\": \"clarify|ready\",
+  \"questions\": [\"...\"],
+  \"answer\": \"...（对用户问题的专业回答）\",
+  \"soql\": \"...\",
+  \"object\": \"...\",
+  \"fields\": [\"...\"],
+  \"reason\": \"...\"
+}
+"#
+        .trim()
+    );
+
+    let metadata_snapshot = build_layered_metadata_snapshot(all_objects, object_fields_map, context_object_hint);
+
+    let mut messages = vec![LlmChatMessage {
+        role: LlmChatRole::System,
+        content: system_prompt,
+    }];
+    messages.push(LlmChatMessage {
+        role: LlmChatRole::System,
+        content: format!("元数据上下文：{}", metadata_snapshot),
+    });
+    messages.extend_from_slice(history);
+    messages
+}
+
+/// 构建分层元数据快照：对象摘要 + 重点对象字段 + 按需补充说明。
+fn build_layered_metadata_snapshot(
+    all_objects: &[SalesforceObject],
+    object_fields_map: &HashMap<String, Vec<String>>,
+    context_object_hint: Option<&str>,
+) -> serde_json::Value {
+    let object_summaries = all_objects
+        .iter()
+        .take(500)
+        .map(|item| {
+            serde_json::json!({
+                "name": item.name,
+                "label": item.label,
+                "queryable": item.queryable
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let focus_object_details = object_fields_map
+        .iter()
+        .map(|(object_name, fields)| {
+            let sample_fields = fields.iter().take(60).cloned().collect::<Vec<_>>();
+            serde_json::json!({
+                "object": object_name,
+                "fieldCount": fields.len(),
+                "sampleFields": sample_fields
+            })
+        })
+        .collect::<Vec<_>>();
+
+    serde_json::json!({
+        "layer1ObjectSummaries": object_summaries,
+        "layer2FocusObjectDetails": focus_object_details,
+        "layer3OnDemandPolicy": "若字段不足，可在对话中向用户确认后按需补充；优先使用已提供字段生成或回答。",
+        "contextObjectHint": context_object_hint.unwrap_or("")
+    })
+}
+
+/// 压缩上下文：超过阈值时，把旧消息汇总为摘要并保留最近消息。
+fn compress_history_in_place(history: &mut Vec<LlmChatMessage>, max_chars: usize) {
+    let total_chars = history.iter().map(|item| item.content.chars().count()).sum::<usize>();
+    if total_chars <= max_chars || history.len() <= 24 {
+        return;
+    }
+
+    let keep_recent = 18usize.min(history.len());
+    let split_index = history.len().saturating_sub(keep_recent);
+    let old_messages = history[..split_index].to_vec();
+    let recent_messages = history[split_index..].to_vec();
+
+    let mut summary_lines: Vec<String> = Vec::new();
+    for item in old_messages.iter().rev().take(80).rev() {
+        let role = match item.role {
+            LlmChatRole::System => "System",
+            LlmChatRole::User => "User",
+            LlmChatRole::Assistant => "Assistant",
+        };
+        let snippet = item.content.chars().take(220).collect::<String>();
+        summary_lines.push(format!("[{role}] {snippet}"));
+    }
+    let mut summary_text = format!(
+        "【历史对话摘要（自动压缩）】\n{}\n【摘要结束】",
+        summary_lines.join("\n")
+    );
+    if summary_text.chars().count() > 6000 {
+        summary_text = summary_text.chars().take(6000).collect();
+    }
+
+    let mut next_history = vec![LlmChatMessage {
+        role: LlmChatRole::System,
+        content: summary_text,
+    }];
+    next_history.extend(recent_messages);
+    *history = next_history;
+}
+
+/// 判断用户当前输入是否明确要求“生成/输出 SOQL”。
+fn should_generate_soql(user_message: &str) -> bool {
+    let lower = user_message.to_lowercase();
+    let hit_keywords = [
+        "生成soql",
+        "输出soql",
+        "写soql",
+        "给我soql",
+        "构造soql",
+        "generate soql",
+        "build soql",
+        "select ",
+        "查询",
+        "查一下",
+        "帮我查",
+    ];
+    hit_keywords.iter().any(|item| lower.contains(item))
+}
+
+/// 根据输入文本与上下文对象提示，筛选候选对象，避免 describe 全量对象导致性能开销过高。
+fn pick_candidate_objects(
+    objects: &[SalesforceObject],
+    user_message: &str,
+    context_object_hint: Option<&str>,
+) -> Vec<String> {
+    let mut picked: Vec<String> = Vec::new();
+    let lower_message = user_message.to_lowercase();
+
+    if let Some(hint) = context_object_hint.map(|item| item.trim()).filter(|item| !item.is_empty()) {
+        if let Some(found) = objects
+            .iter()
+            .find(|item| item.name.eq_ignore_ascii_case(hint) || item.label.eq_ignore_ascii_case(hint))
+        {
+            picked.push(found.name.clone());
+        }
+    }
+
+    for item in objects {
+        let name_hit = lower_message.contains(&item.name.to_lowercase());
+        let label_hit = lower_message.contains(&item.label.to_lowercase());
+        if name_hit || label_hit {
+            if !picked.iter().any(|name| name.eq_ignore_ascii_case(&item.name)) {
+                picked.push(item.name.clone());
+            }
+        }
+    }
+
+    if picked.is_empty() {
+        picked.extend(objects.iter().take(8).map(|item| item.name.clone()));
+    }
+    picked
+}
+
+/// 生成默认澄清问题，确保模糊场景下始终可继续对话。
+fn fallback_questions() -> Vec<String> {
+    vec![
+        "请先明确要查询的 Salesforce 对象（例如 Account、Contact）。".to_string(),
+        "如果对象已明确，我将按默认边界先生成可执行 SOQL（LIMIT 200、默认排序），你再按需调整。".to_string(),
+    ]
+}
+
+
 /// 校验数据源写入参数，避免保存明显非法值。
 fn validate_payload(payload: &SourceUpsertPayload) -> Result<(), String> {
     if payload.name.trim().is_empty() {
@@ -1630,4 +2362,3 @@ fn validate_payload(payload: &SourceUpsertPayload) -> Result<(), String> {
     }
     Ok(())
 }
-

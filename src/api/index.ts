@@ -3,12 +3,16 @@ import {
   CliPathProbe,
   CliPathSettings,
   CliPathStatus,
+  LlmSettings,
+  LlmSettingsSavePayload,
   ObjectDescribe,
   QueryResult,
   RecordMutationPayload,
   RecordSavePayload,
   SalesforceObject,
   SalesforceSource,
+  SoqlConversationRequest,
+  SoqlConversationResponse,
   SourceUpsertPayload,
   SystemLogPage
 } from "../types";
@@ -29,6 +33,11 @@ export const api = {
     invokeApi<CliPathSettings>("save_cli_path_settings", { customCliPath }),
   checkCliPathStatus: (cliPath: string | null) => invokeApi<CliPathStatus>("check_cli_path_status", { cliPath }),
   detectLocalCliPaths: () => invokeApi<CliPathProbe[]>("detect_local_cli_paths"),
+  getLlmSettings: () => invokeApi<LlmSettings>("get_llm_settings"),
+  saveLlmSettings: (payload: LlmSettingsSavePayload) => invokeApi<LlmSettings>("save_llm_settings", { payload }),
+  generateSoqlFromConversation: (payload: SoqlConversationRequest) =>
+    invokeApi<SoqlConversationResponse>("generate_soql_from_conversation", { payload }),
+  stopLlmStreamGeneration: (requestId: string) => invokeApi<void>("stop_llm_stream_generation", { requestId }),
   syncCliSources: () => invokeApi<SalesforceSource[]>("sync_cli_sources"),
   loginCliOrg: (instanceUrl: string) => invokeApi<string>("login_cli_org", { instanceUrl }),
   openAuthWindow: () => invokeApi<void>("open_auth_window"),
