@@ -53,6 +53,7 @@ fn main() {
             commands::save_column_visibility,
             commands::list_objects,
             commands::refresh_objects,
+            commands::open_object_list_page,
             commands::describe_object,
             commands::query_records,
             commands::create_record,

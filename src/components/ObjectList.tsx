@@ -1,5 +1,5 @@
 ﻿import { ChevronDown, ChevronRight } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { ObjectField, SalesforceObject } from "../types";
 
@@ -91,6 +91,31 @@ export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, 
   const [loadingByObjectName, setLoadingByObjectName] = useState<Record<string, boolean>>({});
   // 对象字段加载错误信息。
   const [errorByObjectName, setErrorByObjectName] = useState<Record<string, string>>({});
+  // 对象右键菜单状态：记录菜单位置与目标对象。
+  const [objectContextMenu, setObjectContextMenu] = useState<{ x: number; y: number; objectItem: SalesforceObject } | null>(null);
+
+  // 全局关闭对象右键菜单：点击空白、滚动、按下 ESC 时关闭。
+  useEffect(() => {
+    if (!objectContextMenu) return;
+
+    const closeMenu = () => {
+      setObjectContextMenu(null); // 统一关闭菜单，避免浮层残留。
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      closeMenu(); // ESC 快捷关闭菜单。
+    };
+
+    window.addEventListener("click", closeMenu);
+    window.addEventListener("scroll", closeMenu, true);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("click", closeMenu);
+      window.removeEventListener("scroll", closeMenu, true);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [objectContextMenu]);
 
   // 过滤结果：按对象名和标签模糊匹配。
   const filtered = useMemo(() => {
@@ -223,6 +248,30 @@ export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, 
     });
   }
 
+  // 右键菜单动作：打开当前组织的 Salesforce 对象列表页（自动登录）。
+  async function openSalesforceListPageFromMenu() {
+    if (!objectContextMenu) return;
+    const { objectItem } = objectContextMenu;
+    if (!sourceId) {
+      setObjectContextMenu(null);
+      return;
+    }
+    if (!objectItem.queryable) {
+      onNotQueryableClick?.(objectItem); // 不可查询对象保持原有提示行为。
+      setObjectContextMenu(null);
+      return;
+    }
+    try {
+      // 混合策略：CLI 数据源由后端直接打开；非 CLI 返回 frontdoor URL 由前端打开。
+      const openUrl = await api.openObjectListPage(sourceId, objectItem.name);
+      if (openUrl) {
+        window.open(openUrl, "_blank", "noopener,noreferrer"); // 在系统浏览器打开目标列表页。
+      }
+    } finally {
+      setObjectContextMenu(null); // 执行后关闭菜单。
+    }
+  }
+
   return (
     // 容器：输入框 + 可滚动树形列表。
     <div className="flex h-full min-h-0 flex-col">
@@ -251,6 +300,10 @@ export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, 
                     className="min-w-0 flex-1 text-left"
                     title={tooltip}
                     type="button"
+                    onContextMenu={(event) => {
+                      event.preventDefault(); // 阻止浏览器默认右键菜单。
+                      setObjectContextMenu({ x: event.clientX, y: event.clientY, objectItem: item }); // 打开对象右键菜单。
+                    }}
                     onClick={() => {
                       if (!item.queryable) {
                         onNotQueryableClick?.(item); // 不可查询对象：仅提示，不打开对象。
@@ -304,6 +357,10 @@ export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, 
                   className="min-w-0 flex-1 text-left"
                   title={tooltip}
                   type="button"
+                  onContextMenu={(event) => {
+                    event.preventDefault(); // 阻止浏览器默认右键菜单。
+                    setObjectContextMenu({ x: event.clientX, y: event.clientY, objectItem: item }); // 打开对象右键菜单。
+                  }}
                   onClick={() => {
                     void toggleObjectNode(item); // 点击对象名时展开/折叠字段。
                   }}
@@ -387,7 +444,25 @@ export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, 
           );
         })}
       </div>
+
+      {/* 对象右键菜单：提供“打开 Salesforce 列表页”操作。 */}
+      {objectContextMenu && (
+        <div
+          className="fixed z-[80] min-w-[144px] rounded border border-base-300 bg-base-100 p-1 shadow-xl"
+          style={{ left: objectContextMenu.x, top: objectContextMenu.y }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <button
+            className="btn btn-ghost btn-xs w-full justify-start"
+            disabled={!objectContextMenu.objectItem.queryable}
+            onClick={() => {
+              void openSalesforceListPageFromMenu(); // 触发菜单动作并关闭菜单。
+            }}
+          >
+            打开 Salesforce 列表页
+          </button>
+        </div>
+      )}
     </div>
   );
 }
-
