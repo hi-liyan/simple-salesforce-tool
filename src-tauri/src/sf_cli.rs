@@ -12,6 +12,19 @@ use std::time::{Duration, Instant};
 use crate::error::AppError;
 use crate::models::{CliPathProbe, CliPathSettings, CliPathStatus, SourceUpsertPayload};
 
+/// 创建子进程命令：Windows 下统一隐藏控制台窗口，避免安装版弹出终端。
+fn build_hidden_command(program: &str) -> Command {
+    let mut command = Command::new(program);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        // 强制子进程在无控制台窗口模式下运行。
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command
+}
+
 #[derive(Debug, Deserialize)]
 struct SfAuthListResponse {
     /// CLI 退出状态码，0 为成功。
@@ -224,7 +237,7 @@ fn run_sf_auth_list_json(preferred_cli_path: Option<&str>) -> Result<Vec<u8>, Ap
     let mut errors = Vec::new();
 
     for cli in &candidates {
-        match Command::new(cli)
+        match build_hidden_command(cli)
             .args(["org", "list", "auth", "--json"])
             .output()
         {
@@ -304,7 +317,7 @@ fn run_sf_org_display_json(
     for cli in &candidates {
         for target_org in target_org_candidates {
             let args = org_display_args_for(cli, target_org);
-            match Command::new(cli).args(&args).output() {
+            match build_hidden_command(cli).args(&args).output() {
                 Ok(output) if output.status.success() => return Ok(output.stdout),
                 Ok(output) => {
                     // 同时记录 stdout/stderr；sf 很多错误信息写在 stdout JSON 的 message 字段。
@@ -378,7 +391,7 @@ fn cleanup_stale_cli_processes() {
     }
 
     for image in ["sf.exe", "sfdx.exe"] {
-        let _ = Command::new("taskkill")
+        let _ = build_hidden_command("taskkill")
             .args(["/F", "/T", "/IM", image])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -551,7 +564,7 @@ pub fn detect_cli_path_settings(custom_cli_path: Option<String>) -> CliPathSetti
 
 /// 探测指定 CLI 的版本信息。
 fn probe_cli_version(cli: &str) -> Result<String, String> {
-    match Command::new(cli).arg("--version").output() {
+    match build_hidden_command(cli).arg("--version").output() {
         Ok(output) if output.status.success() => {
             let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -654,7 +667,7 @@ fn run_command_with_cancel_and_timeout(
     cancel_token: &Arc<AtomicBool>,
     timeout: Duration,
 ) -> Result<Output, AppError> {
-    let mut child = Command::new(cli)
+    let mut child = build_hidden_command(cli)
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
