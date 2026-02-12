@@ -31,6 +31,12 @@ type Props = {
   onToggleAll: (checked: boolean, recordIds: string[]) => void;
   onEditCell: (rowIndex: number, columnName: string, value: unknown) => void;
   onShowMessage: (message: string) => void;
+  // 是否展示表头 info icon 与字段元数据悬浮层。
+  showHeaderMetadata?: boolean;
+  // 是否启用双击只读单元格时的提示逻辑。
+  enableReadonlyCellHint?: boolean;
+  // 是否显示勾选列（首列 checkbox）。
+  showSelectionColumn?: boolean;
 };
 
 // 查询结果表：使用 Glide Data Grid 提供更接近数据库客户端的表格体验。
@@ -46,7 +52,10 @@ export function DataGrid({
   onToggleRecord,
   onToggleAll,
   onEditCell,
-  onShowMessage
+  onShowMessage,
+  showHeaderMetadata = true,
+  enableReadonlyCellHint = true,
+  showSelectionColumn = true
 }: Props) {
   const records = result.records;
 
@@ -130,11 +139,11 @@ export function DataGrid({
     }));
 
     return [
-      { id: "__select", title: "", width: columnWidths.__select ?? 44 },
+      ...(showSelectionColumn ? [{ id: "__select", title: "", width: columnWidths.__select ?? 44 }] : []),
       { id: "__index", title: "#", width: columnWidths.__index ?? 56 },
       ...dataColumns
     ];
-  }, [displayColumns, columnWidths]);
+  }, [displayColumns, columnWidths, showSelectionColumn]);
 
   if (records.length === 0) {
     return (
@@ -297,6 +306,7 @@ export function DataGrid({
   };
 
   const handleCellClicked = (cell: Item, event: CellClickedEventArgs) => {
+    if (!enableReadonlyCellHint) return;
     const [col, row] = cell;
     const columnId = String(columns[col]?.id ?? "");
     if (!event.isDoubleClick) return;
@@ -479,11 +489,13 @@ export function DataGrid({
           }}
           // 自定义首列表头复选框样式，使其与行内复选框视觉一致。
           drawHeader={(args, drawContent) => {
-            drawContent();
+          drawContent();
             const columnId = String(args.column.id ?? "");
             if (columnId !== "__select") {
               if (columnId.startsWith("__")) return;
-              drawHeaderInfoIcon(args.ctx, args.rect);
+              if (showHeaderMetadata) {
+                drawHeaderInfoIcon(args.ctx, args.rect);
+              }
               return;
             }
 
@@ -535,23 +547,29 @@ export function DataGrid({
           }}
           // 点击首列表头可切换全选状态。
           onHeaderClicked={(col, event) => {
-            if (col === 0) {
+            const columnId = String(columns[col]?.id ?? "");
+            if (columnId === "__select") {
               onToggleAll(!allChecked, selectableIds);
               return;
             }
 
-            const columnId = String(columns[col]?.id ?? "");
             if (!columnId || columnId.startsWith("__")) {
               return;
             }
 
             // 命中 info icon 时阻止默认行为，避免触发整列选中。
-            if (isHeaderInfoIconHit(event.localEventX, event.localEventY, event.bounds)) {
+            if (showHeaderMetadata && isHeaderInfoIconHit(event.localEventX, event.localEventY, event.bounds)) {
               event.preventDefault();
             }
           }}
           // 鼠标经过 info icon 时展示字段元数据，离开时隐藏。
           onMouseMove={(args) => {
+            if (!showHeaderMetadata) {
+              if (!metaPanelHovering) {
+                scheduleMetaClose();
+              }
+              return;
+            }
             if (args.kind !== "header") {
               if (!metaPanelHovering) {
                 scheduleMetaClose();
@@ -625,7 +643,7 @@ export function DataGrid({
           onPaste
         />
         {/* 表头字段元数据悬浮提示：仅在 hover 到 info icon 时显示。 */}
-        {hoveredHeaderMeta && (
+        {showHeaderMetadata && hoveredHeaderMeta && (
           <div
             className="fixed z-20 max-h-[320px] w-[420px] overflow-auto rounded border p-1.5"
             style={{
