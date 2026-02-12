@@ -110,7 +110,7 @@ export function RightWorkspace({
           tone={workspaceNotice.type === "error" ? "error" : "success"}
           message={workspaceNotice.message}
           onClose={onCloseWorkspaceNotice}
-          className="fixed right-4 top-4 z-[60] max-w-[560px] shadow-lg"
+          className="fixed right-4 top-4 z-[60] max-w-[380px] shadow-lg"
         />
       )}
 
@@ -144,7 +144,7 @@ export function RightWorkspace({
               tone={activeTab.notice.type === "error" ? "error" : "success"}
               message={activeTab.notice.message}
               onClose={onCloseActiveTabNotice}
-              className="absolute right-3 top-2.5 z-40 max-w-[560px] shadow"
+              className="absolute right-3 top-2.5 z-40 max-w-[380px] shadow"
             />
           )}
 
