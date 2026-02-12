@@ -36,6 +36,8 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::list_sources,
+            commands::get_cli_path_settings,
+            commands::save_cli_path_settings,
             commands::sync_cli_sources,
             commands::login_cli_org,
             commands::open_auth_window,
@@ -48,6 +50,7 @@ fn main() {
             commands::get_column_visibility,
             commands::save_column_visibility,
             commands::list_objects,
+            commands::refresh_objects,
             commands::describe_object,
             commands::query_records,
             commands::create_record,

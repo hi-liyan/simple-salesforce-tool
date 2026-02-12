@@ -54,9 +54,44 @@ pub fn init_schema(connection: &Connection) -> Result<(), AppError> {
         );
 
         CREATE INDEX IF NOT EXISTS idx_system_logs_created_at ON system_logs(created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS app_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
         "#,
     )?;
 
+    Ok(())
+}
+
+/// 读取应用配置项，不存在时返回 None。
+pub fn read_app_setting(connection: &Connection, key: &str) -> Result<Option<String>, AppError> {
+    let value: Option<String> = connection
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = ?1",
+            [key],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(value)
+}
+
+/// 写入应用配置项（UPSERT）。
+pub fn write_app_setting(connection: &Connection, key: &str, value: &str) -> Result<(), AppError> {
+    let now = Utc::now().to_rfc3339();
+    connection.execute(
+        "INSERT INTO app_settings (key, value, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+        params![key, value, now],
+    )?;
+    Ok(())
+}
+
+/// 删除应用配置项。
+pub fn delete_app_setting(connection: &Connection, key: &str) -> Result<(), AppError> {
+    connection.execute("DELETE FROM app_settings WHERE key = ?1", [key])?;
     Ok(())
 }
 

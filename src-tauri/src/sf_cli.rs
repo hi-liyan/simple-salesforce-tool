@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::error::AppError;
-use crate::models::SourceUpsertPayload;
+use crate::models::{CliPathProbe, CliPathSettings, SourceUpsertPayload};
 
 #[derive(Debug, Deserialize)]
 struct SfAuthListResponse {
@@ -51,8 +51,8 @@ pub struct CliLoginResult {
 }
 
 /// 从 Salesforce CLI 读取所有已认证组织，并转换为应用数据源。
-pub fn load_cli_sources() -> Result<Vec<CliSourceSeed>, AppError> {
-    let stdout = run_sf_auth_list_json()?;
+pub fn load_cli_sources(preferred_cli_path: Option<&str>) -> Result<Vec<CliSourceSeed>, AppError> {
+    let stdout = run_sf_auth_list_json(preferred_cli_path)?;
     let text = String::from_utf8(stdout)
         .map_err(|error| AppError::Serde(format!("解析 CLI 输出文本失败: {error}")))?;
     let parsed: SfAuthListResponse = serde_json::from_str(&text)?;
@@ -92,17 +92,108 @@ pub fn load_cli_sources() -> Result<Vec<CliSourceSeed>, AppError> {
     Ok(seeds)
 }
 
-/// 按 source_id（cli-<orgId>）读取最新 CLI 数据源信息。
-pub fn load_cli_source_by_id(source_id: &str) -> Result<CliSourceSeed, AppError> {
-    load_cli_sources()?
-        .into_iter()
-        .find(|item| item.id == source_id)
-        .ok_or_else(|| AppError::Biz(format!("CLI 中未找到数据源: {source_id}")))
+/// 通过 CLI 主动刷新指定 source_id（cli-<orgId>）对应组织的 accessToken。
+/// 说明：相比 `org list auth`，`org display --verbose` 更容易触发 token 刷新。
+pub fn refresh_cli_source_by_id(
+    source_id: &str,
+    preferred_cli_path: Option<&str>,
+) -> Result<CliSourceSeed, AppError> {
+    let org_id = source_id
+        .strip_prefix("cli-")
+        .ok_or_else(|| AppError::Biz(format!("仅支持 CLI 数据源刷新: {source_id}")))?;
+
+    let stdout = run_sf_org_display_json(org_id, preferred_cli_path)?;
+    let text = String::from_utf8(stdout)
+        .map_err(|error| AppError::Serde(format!("解析 CLI 输出文本失败: {error}")))?;
+    let value: Value = serde_json::from_str(&text)?;
+
+    let status = value.get("status").and_then(|item| item.as_i64()).unwrap_or(1);
+    if status != 0 {
+        let message = value
+            .get("message")
+            .and_then(|item| item.as_str())
+            .unwrap_or("Salesforce CLI 刷新 token 失败");
+        return Err(AppError::Biz(format!("{message} (status={status})")));
+    }
+
+    let result = value
+        .get("result")
+        .ok_or_else(|| AppError::Biz("CLI 刷新 token 返回缺少 result 字段。".to_string()))?;
+
+    let next_org_id = result
+        .get("orgId")
+        .and_then(|item| item.as_str())
+        .or_else(|| result.get("id").and_then(|item| item.as_str()))
+        .unwrap_or(org_id)
+        .to_string();
+
+    let username = result
+        .get("username")
+        .and_then(|item| item.as_str())
+        .unwrap_or("")
+        .to_string();
+    let alias = result
+        .get("alias")
+        .and_then(|item| item.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let instance_url = result
+        .get("instanceUrl")
+        .and_then(|item| item.as_str())
+        .or_else(|| result.get("instance_url").and_then(|item| item.as_str()))
+        .unwrap_or("")
+        .to_string();
+    let access_token = result
+        .get("accessToken")
+        .and_then(|item| item.as_str())
+        .or_else(|| result.get("access_token").and_then(|item| item.as_str()))
+        .unwrap_or("")
+        .to_string();
+    let api_version = result
+        .get("apiVersion")
+        .and_then(|item| item.as_str())
+        .map(|item| {
+            if item.starts_with('v') {
+                item.to_string()
+            } else {
+                format!("v{item}")
+            }
+        })
+        .unwrap_or_else(|| "v61.0".to_string());
+
+    if instance_url.trim().is_empty() || access_token.trim().is_empty() {
+        return Err(AppError::Biz(
+            "CLI 刷新 token 结果缺少 instanceUrl/accessToken。".to_string(),
+        ));
+    }
+
+    let display_name = if alias.is_empty() {
+        username.clone()
+    } else if username.is_empty() {
+        alias
+    } else {
+        format!("{alias} ({username})")
+    };
+
+    Ok(CliSourceSeed {
+        id: format!("cli-{next_org_id}"),
+        payload: SourceUpsertPayload {
+            name: display_name,
+            instance_url,
+            access_token,
+            api_version,
+        },
+    })
 }
 
 /// 触发 Salesforce CLI OAuth 登录，并返回 org_id。
-pub fn login_web(instance_url: &str, cancel_token: Arc<AtomicBool>) -> Result<CliLoginResult, AppError> {
-    let stdout = run_sf_login_web_json(instance_url, &cancel_token)?;
+pub fn login_web(
+    instance_url: &str,
+    cancel_token: Arc<AtomicBool>,
+    preferred_cli_path: Option<&str>,
+) -> Result<CliLoginResult, AppError> {
+    let stdout = run_sf_login_web_json(instance_url, &cancel_token, preferred_cli_path)?;
     let text = String::from_utf8(stdout)
         .map_err(|error| AppError::Serde(format!("解析 CLI 输出文本失败: {error}")))?;
     let value: Value = serde_json::from_str(&text)?;
@@ -125,8 +216,8 @@ pub fn login_web(instance_url: &str, cancel_token: Arc<AtomicBool>) -> Result<Cl
 }
 
 /// 执行 `sf org list auth --json`：优先使用 SF_CLI_PATH，其次尝试多个可执行文件名称。
-fn run_sf_auth_list_json() -> Result<Vec<u8>, AppError> {
-    let candidates = build_cli_candidates();
+fn run_sf_auth_list_json(preferred_cli_path: Option<&str>) -> Result<Vec<u8>, AppError> {
+    let candidates = build_cli_candidates(preferred_cli_path);
     let mut errors = Vec::new();
 
     for cli in &candidates {
@@ -156,8 +247,12 @@ fn run_sf_auth_list_json() -> Result<Vec<u8>, AppError> {
 }
 
 /// 执行 `sf org login web --instance-url <url> --json` / `sfdx force:auth:web:login -r <url> --json`。
-fn run_sf_login_web_json(instance_url: &str, cancel_token: &Arc<AtomicBool>) -> Result<Vec<u8>, AppError> {
-    let candidates = build_cli_candidates();
+fn run_sf_login_web_json(
+    instance_url: &str,
+    cancel_token: &Arc<AtomicBool>,
+    preferred_cli_path: Option<&str>,
+) -> Result<Vec<u8>, AppError> {
+    let candidates = build_cli_candidates(preferred_cli_path);
     let mut errors = Vec::new();
     let timeout = cli_login_timeout();
 
@@ -191,6 +286,58 @@ fn run_sf_login_web_json(instance_url: &str, cancel_token: &Arc<AtomicBool>) -> 
     )))
 }
 
+/// 执行 `sf org display --target-org <orgId> --verbose --json`
+/// 或 `sfdx force:org:display -u <orgId> --verbose --json`。
+fn run_sf_org_display_json(org_id: &str, preferred_cli_path: Option<&str>) -> Result<Vec<u8>, AppError> {
+    // Windows 下先尝试清理残留 CLI 进程，避免僵尸进程或句柄占用导致刷新失败。
+    cleanup_stale_cli_processes();
+
+    let candidates = build_cli_candidates(preferred_cli_path);
+    let mut errors = Vec::new();
+
+    for cli in &candidates {
+        let args = org_display_args_for(cli, org_id);
+        match Command::new(cli).args(&args).output() {
+            Ok(output) if output.status.success() => return Ok(output.stdout),
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                let status = output
+                    .status
+                    .code()
+                    .map(|code| code.to_string())
+                    .unwrap_or_else(|| "unknown".to_string());
+                errors.push(format!("{cli}: exit={status}, stderr={stderr}"));
+            }
+            Err(error) => errors.push(format!("{cli}: {error}")),
+        }
+    }
+
+    Err(AppError::Biz(format!(
+        "调用 Salesforce CLI 刷新 token 失败。已尝试: {}。详情: {}",
+        candidates.join(", "),
+        errors.join(" | ")
+    )))
+}
+
+/// 清理可能残留的 Salesforce CLI 进程。
+/// 说明：
+/// 1) 仅在 Windows 执行；
+/// 2) 失败不影响主流程（best-effort）；
+/// 3) 仅针对 sf/sfdx 可执行文件，避免误伤其它进程。
+fn cleanup_stale_cli_processes() {
+    if !cfg!(target_os = "windows") {
+        return;
+    }
+
+    for image in ["sf.exe", "sfdx.exe"] {
+        let _ = Command::new("taskkill")
+            .args(["/F", "/T", "/IM", image])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+}
+
 fn login_args_for(cli: &str, instance_url: &str) -> Vec<String> {
     let filename = Path::new(cli)
         .file_name()
@@ -221,6 +368,35 @@ fn login_args_for(cli: &str, instance_url: &str) -> Vec<String> {
     }
 }
 
+fn org_display_args_for(cli: &str, org_id: &str) -> Vec<String> {
+    let filename = Path::new(cli)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(cli);
+    let is_sfdx = filename.eq_ignore_ascii_case("sfdx")
+        || filename.eq_ignore_ascii_case("sfdx.cmd")
+        || filename.eq_ignore_ascii_case("sfdx.exe");
+
+    if is_sfdx {
+        vec![
+            "force:org:display".to_string(),
+            "-u".to_string(),
+            org_id.to_string(),
+            "--verbose".to_string(),
+            "--json".to_string(),
+        ]
+    } else {
+        vec![
+            "org".to_string(),
+            "display".to_string(),
+            "--target-org".to_string(),
+            org_id.to_string(),
+            "--verbose".to_string(),
+            "--json".to_string(),
+        ]
+    }
+}
+
 /// 从 CLI 登录响应里提取 orgId，兼容不同字段命名。
 fn extract_org_id(value: &Value) -> Option<String> {
     let result = value.get("result")?;
@@ -236,12 +412,91 @@ fn extract_org_id(value: &Value) -> Option<String> {
     None
 }
 
+/// 探测 CLI 路径与版本，返回最终可用路径和候选详情。
+pub fn detect_cli_path_settings(custom_cli_path: Option<String>) -> CliPathSettings {
+    let custom = custom_cli_path
+        .as_ref()
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty());
+    let candidates = build_cli_candidates(custom.as_deref());
+
+    let mut probes = Vec::new();
+    let mut resolved_cli_path: Option<String> = None;
+    let mut resolved_cli_version: Option<String> = None;
+
+    for cli in candidates {
+        match probe_cli_version(&cli) {
+            Ok(version) => {
+                probes.push(CliPathProbe {
+                    path: cli.clone(),
+                    ok: true,
+                    version: Some(version.clone()),
+                    detail: "可用".to_string(),
+                });
+                if resolved_cli_path.is_none() {
+                    resolved_cli_path = Some(cli);
+                    resolved_cli_version = Some(version);
+                }
+            }
+            Err(detail) => {
+                probes.push(CliPathProbe {
+                    path: cli,
+                    ok: false,
+                    version: None,
+                    detail,
+                });
+            }
+        }
+    }
+
+    CliPathSettings {
+        custom_cli_path: custom,
+        resolved_cli_path,
+        resolved_cli_version,
+        probes,
+    }
+}
+
+/// 探测指定 CLI 的版本信息。
+fn probe_cli_version(cli: &str) -> Result<String, String> {
+    match Command::new(cli).arg("--version").output() {
+        Ok(output) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            let text = if !stdout.is_empty() { stdout } else { stderr };
+            if text.is_empty() {
+                Ok("unknown".to_string())
+            } else {
+                Ok(text.lines().next().unwrap_or("unknown").to_string())
+            }
+        }
+        Ok(output) => {
+            let code = output
+                .status
+                .code()
+                .map(|item| item.to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            Err(format!("exit={code}, stderr={stderr}, stdout={stdout}"))
+        }
+        Err(error) => Err(format!("program not found: {error}")),
+    }
+}
+
 /// 生成 CLI 候选路径：
 /// 1) SF_CLI_PATH（绝对路径）
 /// 2) 命令名回退 sf/sf.cmd/sfdx/sfdx.cmd
 /// 3) Windows 常见 npm 全局目录与安装目录回退
-fn build_cli_candidates() -> Vec<String> {
+fn build_cli_candidates(preferred_cli_path: Option<&str>) -> Vec<String> {
     let mut raw = Vec::new();
+
+    if let Some(path) = preferred_cli_path {
+        let trimmed = path.trim();
+        if !trimmed.is_empty() {
+            raw.push(trimmed.to_string());
+        }
+    }
 
     if let Ok(path) = env::var("SF_CLI_PATH") {
         let trimmed = path.trim();

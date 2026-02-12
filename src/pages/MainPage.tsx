@@ -1,10 +1,11 @@
 ﻿import { useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useQueryClient } from "@tanstack/react-query";
-import { Database, Table2 } from "lucide-react";
+import { Database, Settings, Table2 } from "lucide-react";
 import { api } from "../api";
 import { LeftSidebar } from "../features/main/LeftSidebar";
 import { RightWorkspace } from "../features/main/RightWorkspace";
+import { SettingsPanel } from "../features/main/SettingsPanel";
 import { SystemLogsPanel } from "../features/main/SystemLogsPanel";
 import { MainLayout } from "../layouts/MainLayout";
 import { useObjectsQuery, useSourcesQuery, useSyncSourcesMutation } from "../queries/salesforce";
@@ -13,7 +14,7 @@ import { Notice, ObjectDescribe, QueryResult, SalesforceObject, TabLog, TabState
 
 // 主页面：对象列表 + 结果面板 + SOQL 抽屉。
 export function MainPage() {
-  const [viewMode, setViewMode] = useState<"query" | "systemLogs">("query");
+  const [viewMode, setViewMode] = useState<"query" | "systemLogs" | "settings">("query");
   // Store：读取全局状态。
   const selectedSourceId = useAppStore((state) => state.selectedSourceId);
   const tabs = useAppStore((state) => state.tabs);
@@ -45,11 +46,45 @@ export function MainPage() {
   const sourceNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 工作区全局浮动提示（与 Tab 无关）。
   const [workspaceNotice, setWorkspaceNotice] = useState<Notice | null>(null);
+  // 认证凭证刷新计数器：用于处理并发 API 请求下的开始/结束配对。
+  const tokenRefreshingCountRef = useRef(0);
+  // 是否正在通过 CLI 重新获取 accessToken。
+  const [tokenRefreshing, setTokenRefreshing] = useState(false);
 
   // 初始化加载：进入页面时同步一次数据源列表。
   useEffect(() => {
     // 触发 CLI 同步刷新数据源。
     void refreshSources(true);
+  }, []);
+
+  // 监听 token 刷新事件：用于在 loading 遮罩中显示更明确文案。
+  useEffect(() => {
+    // 标记组件生命周期，避免卸载后 setState。
+    let active = true;
+    let unlistenStart: (() => void) | undefined;
+    let unlistenEnd: (() => void) | undefined;
+
+    const setup = async () => {
+      unlistenStart = await listen("sf:token-refresh-start", () => {
+        if (!active) return;
+        tokenRefreshingCountRef.current += 1;
+        setTokenRefreshing(true);
+      });
+
+      unlistenEnd = await listen("sf:token-refresh-end", () => {
+        if (!active) return;
+        tokenRefreshingCountRef.current = Math.max(0, tokenRefreshingCountRef.current - 1);
+        setTokenRefreshing(tokenRefreshingCountRef.current > 0);
+      });
+    };
+
+    void setup();
+    return () => {
+      active = false;
+      unlistenStart?.();
+      unlistenEnd?.();
+      tokenRefreshingCountRef.current = 0;
+    };
   }, []);
 
   // 监听登录成功事件：自动刷新数据源并切换到新登录的 org。
@@ -151,12 +186,23 @@ export function MainPage() {
       }
 
       const preferredId = preferredOrgId ? `cli-${preferredOrgId}` : "";
+      // 计算刷新后的最终选中数据源，用于决定是否要同步刷新 Objects。
+      let nextSelectedSourceId = "";
       if (preferredId && list.some((item) => item.id === preferredId)) {
-        setSelectedSourceId(preferredId);
+        nextSelectedSourceId = preferredId;
       } else if (!list.some((item) => item.id === selectedSourceId)) {
-        setSelectedSourceId("");
+        nextSelectedSourceId = "";
       } else {
-        setSelectedSourceId(selectedSourceId);
+        nextSelectedSourceId = selectedSourceId;
+      }
+      setSelectedSourceId(nextSelectedSourceId);
+
+      // 刷新按钮行为增强：若当前仍有选中数据源，则立即重新拉取 Objects 列表。
+      if (nextSelectedSourceId) {
+        await queryClient.fetchQuery({
+          queryKey: ["objects", nextSelectedSourceId],
+          queryFn: () => api.refreshObjects(nextSelectedSourceId)
+        });
       }
     } catch (error) {
       patchActiveTabNotice({ type: "error", message: `加载数据源失败：${String(error)}` });
@@ -697,6 +743,7 @@ export function MainPage() {
 
   const pageLoading = loading || sourcesFetching || objectsFetching;
   const visibleColumns = activeTab ? getVisibleColumns(activeTab) : [];
+  const loadingText = tokenRefreshing ? "重新获取认证凭证中..." : "Loading...";
   const fieldMetadataMap = activeTab
     ? activeTab.describe?.fields.reduce(
         (acc, field) => ({ ...acc, [field.name]: field.metadata || {} }),
@@ -722,6 +769,13 @@ export function MainPage() {
             onClick={() => setViewMode("systemLogs")}
           >
               <Database size={16} />
+          </button>
+          <button
+            className={`tool-rail-btn ${viewMode === "settings" ? "tool-rail-btn--active" : ""}`}
+            title="设置"
+            onClick={() => setViewMode("settings")}
+          >
+              <Settings size={16} />
           </button>
         </div>
       }
@@ -880,11 +934,14 @@ export function MainPage() {
                   if (!activeTab) return;
                   patchTab(activeTab.objectName, (item) => ({ ...item, notice: null }));
                 }}
+                loadingText={loadingText}
               />
             </div>
           </div>
-        ) : (
+        ) : viewMode === "systemLogs" ? (
           <SystemLogsPanel />
+        ) : (
+          <SettingsPanel />
         )
       }
     />
@@ -1008,3 +1065,4 @@ function normalizeQueryResult(input: QueryResult): QueryResult {
   const totalSize = typeof input?.totalSize === "number" ? input.totalSize : records.length;
   return { totalSize, records };
 }
+
