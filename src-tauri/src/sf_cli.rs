@@ -3,7 +3,10 @@ use serde_json::Value;
 use std::collections::HashSet;
 use std::env;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Output, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use crate::error::AppError;
 use crate::models::SourceUpsertPayload;
@@ -98,8 +101,8 @@ pub fn load_cli_source_by_id(source_id: &str) -> Result<CliSourceSeed, AppError>
 }
 
 /// 触发 Salesforce CLI OAuth 登录，并返回 org_id。
-pub fn login_web(instance_url: &str) -> Result<CliLoginResult, AppError> {
-    let stdout = run_sf_login_web_json(instance_url)?;
+pub fn login_web(instance_url: &str, cancel_token: Arc<AtomicBool>) -> Result<CliLoginResult, AppError> {
+    let stdout = run_sf_login_web_json(instance_url, &cancel_token)?;
     let text = String::from_utf8(stdout)
         .map_err(|error| AppError::Serde(format!("解析 CLI 输出文本失败: {error}")))?;
     let value: Value = serde_json::from_str(&text)?;
@@ -153,13 +156,14 @@ fn run_sf_auth_list_json() -> Result<Vec<u8>, AppError> {
 }
 
 /// 执行 `sf org login web --instance-url <url> --json` / `sfdx force:auth:web:login -r <url> --json`。
-fn run_sf_login_web_json(instance_url: &str) -> Result<Vec<u8>, AppError> {
+fn run_sf_login_web_json(instance_url: &str, cancel_token: &Arc<AtomicBool>) -> Result<Vec<u8>, AppError> {
     let candidates = build_cli_candidates();
     let mut errors = Vec::new();
+    let timeout = cli_login_timeout();
 
     for cli in &candidates {
         let args = login_args_for(cli, instance_url);
-        match Command::new(cli).args(&args).output() {
+        match run_command_with_cancel_and_timeout(cli, &args, cancel_token, timeout) {
             Ok(output) if output.status.success() => return Ok(output.stdout),
             Ok(output) => {
                 let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -170,7 +174,13 @@ fn run_sf_login_web_json(instance_url: &str) -> Result<Vec<u8>, AppError> {
                     .unwrap_or_else(|| "unknown".to_string());
                 errors.push(format!("{cli}: exit={status}, stderr={stderr}"));
             }
-            Err(error) => errors.push(format!("{cli}: {error}")),
+            Err(error) => {
+                let message = error.to_string();
+                if message.contains("登录已取消") || message.contains("登录超时") {
+                    return Err(error);
+                }
+                errors.push(format!("{cli}: {message}"));
+            }
         }
     }
 
@@ -229,7 +239,7 @@ fn extract_org_id(value: &Value) -> Option<String> {
 /// 生成 CLI 候选路径：
 /// 1) SF_CLI_PATH（绝对路径）
 /// 2) 命令名回退 sf/sf.cmd/sfdx/sfdx.cmd
-/// 3) Windows 常见 npm 全局目录回退
+/// 3) Windows 常见 npm 全局目录与安装目录回退
 fn build_cli_candidates() -> Vec<String> {
     let mut raw = Vec::new();
 
@@ -251,6 +261,12 @@ fn build_cli_candidates() -> Vec<String> {
         if let Ok(appdata) = env::var("APPDATA") {
             raw.push(format!(r"{appdata}\npm\sf.cmd"));
             raw.push(format!(r"{appdata}\npm\sfdx.cmd"));
+        }
+        if let Ok(program_files) = env::var("ProgramFiles") {
+            raw.push(format!(r"{program_files}\sf\bin\sf.cmd"));
+        }
+        if let Ok(program_files_x86) = env::var("ProgramFiles(x86)") {
+            raw.push(format!(r"{program_files_x86}\sf\bin\sf.cmd"));
         }
     }
 
@@ -274,4 +290,56 @@ fn build_cli_candidates() -> Vec<String> {
     }
 
     result
+}
+
+fn cli_login_timeout() -> Duration {
+    let seconds = env::var("SF_CLI_LOGIN_TIMEOUT_SECONDS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(300);
+    Duration::from_secs(seconds)
+}
+
+fn run_command_with_cancel_and_timeout(
+    cli: &str,
+    args: &[String],
+    cancel_token: &Arc<AtomicBool>,
+    timeout: Duration,
+) -> Result<Output, AppError> {
+    let mut child = Command::new(cli)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| AppError::Biz(error.to_string()))?;
+
+    let started_at = Instant::now();
+    loop {
+        if cancel_token.load(Ordering::Relaxed) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(AppError::Biz("登录已取消。".to_string()));
+        }
+
+        if started_at.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(AppError::Biz(format!("登录超时（{} 秒）。", timeout.as_secs())));
+        }
+
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                return child
+                    .wait_with_output()
+                    .map_err(|error| AppError::Biz(format!("读取 CLI 输出失败: {error}")));
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(180)),
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(AppError::Biz(format!("等待 CLI 进程失败: {error}")));
+            }
+        }
+    }
 }

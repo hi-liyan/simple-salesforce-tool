@@ -1,4 +1,6 @@
 ﻿use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use serde::Serialize;
 use tauri::Emitter;
 use tauri::State;
@@ -47,6 +49,27 @@ fn set_main_window_enabled(app: &tauri::AppHandle, enabled: bool) {
     }
 }
 
+fn create_cli_login_cancel_token(state: &State<'_, AppState>) -> Arc<AtomicBool> {
+    let token = Arc::new(AtomicBool::new(false));
+    if let Ok(mut slot) = state.cli_login_cancel.lock() {
+        *slot = Some(token.clone());
+    }
+    token
+}
+
+fn cancel_cli_login_if_running(state: &State<'_, AppState>) {
+    if let Ok(slot) = state.cli_login_cancel.lock() {
+        if let Some(token) = slot.as_ref() {
+            token.store(true, Ordering::Relaxed);
+        }
+    }
+}
+
+fn clear_cli_login_cancel_token(state: &State<'_, AppState>) {
+    if let Ok(mut slot) = state.cli_login_cancel.lock() {
+        *slot = None;
+    }
+}
 fn is_unauthorized_error(error: &AppError) -> bool {
     matches!(
         error,
@@ -181,12 +204,16 @@ pub async fn login_cli_org(
         return Err("Instance URL cannot be empty".to_string());
     }
 
+    cancel_cli_login_if_running(&state);
+    let cancel_token = create_cli_login_cancel_token(&state);
+
     // CLI 命令会阻塞，放入 blocking 线程池避免卡住 async runtime。
     let result = tauri::async_runtime::spawn_blocking(move || {
-        sf_cli::login_web(trimmed.trim()).map_err(AppError::to_string_error)
+        sf_cli::login_web(trimmed.trim(), cancel_token).map_err(AppError::to_string_error)
     })
     .await
     .map_err(|error| format!("登录线程失败: {error}"));
+    clear_cli_login_cancel_token(&state);
 
     let org_id = match result {
         Ok(Ok(item)) => item.org_id,
@@ -253,7 +280,6 @@ pub async fn login_cli_org(
 pub async fn open_auth_window(app: tauri::AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("sf-auth") {
         set_main_window_enabled(&app, false);
-        let _ = window.set_always_on_top(true);
         window.show().map_err(|error| error.to_string())?;
         window.set_focus().map_err(|error| error.to_string())?;
         return Ok(());
@@ -270,7 +296,6 @@ pub async fn open_auth_window(app: tauri::AppHandle) -> Result<(), String> {
         .inner_size(480.0, 360.0)
         .resizable(false)
         .focused(true)
-        .always_on_top(true)
         .skip_taskbar(false)
         .center()
         .visible(true);
@@ -287,9 +312,26 @@ pub async fn open_auth_window(app: tauri::AppHandle) -> Result<(), String> {
         }
     };
 
+    if let Some(main_window) = app.get_webview_window("main") {
+        let app_handle = app.clone();
+        main_window.on_window_event(move |event| {
+            if let tauri::WindowEvent::Focused(true) = event {
+                if let Some(auth) = app_handle.get_webview_window("sf-auth") {
+                    let _ = auth.show();
+                    let _ = auth.set_focus();
+                }
+            }
+        });
+    }
+
     let app_handle = app.clone();
     auth_window.on_window_event(move |event| {
         if matches!(event, tauri::WindowEvent::Destroyed) {
+            {
+                let state = app_handle.state::<AppState>();
+                cancel_cli_login_if_running(&state);
+                clear_cli_login_cancel_token(&state);
+            }
             set_main_window_enabled(&app_handle, true);
             if let Some(main_window) = app_handle.get_webview_window("main") {
                 let _ = main_window.set_focus();
@@ -303,6 +345,11 @@ pub async fn open_auth_window(app: tauri::AppHandle) -> Result<(), String> {
 /// 关闭认证子窗口。
 #[tauri::command]
 pub fn close_auth_window(app: tauri::AppHandle) -> Result<(), String> {
+    {
+        let state = app.state::<AppState>();
+        cancel_cli_login_if_running(&state);
+        clear_cli_login_cancel_token(&state);
+    }
     if let Some(window) = app.get_webview_window("sf-auth") {
         window.close().map_err(|error| error.to_string())?;
     }
@@ -979,5 +1026,9 @@ fn validate_payload(payload: &SourceUpsertPayload) -> Result<(), String> {
     }
     Ok(())
 }
+
+
+
+
 
 

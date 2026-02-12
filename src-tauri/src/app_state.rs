@@ -1,4 +1,6 @@
 ﻿use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use std::sync::Mutex;
 
 use rusqlite::Connection;
@@ -12,6 +14,8 @@ pub struct AppState {
     pub db: Mutex<Connection>,
     /// Salesforce HTTP 客户端（可复用连接池）。
     pub sf_client: SalesforceClient,
+    /// 当前进行中的 CLI 登录取消令牌（关闭登录窗时置为 true）。
+    pub cli_login_cancel: Mutex<Option<Arc<AtomicBool>>>,
 }
 
 /// 解析并创建应用数据目录，确保数据库可持久化。
