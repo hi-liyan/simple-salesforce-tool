@@ -29,6 +29,7 @@ fn main() {
             app.manage(AppState {
                 db: Mutex::new(connection),
                 sf_client: SalesforceClient::new(),
+                cli_login_cancel: Mutex::new(None),
             });
 
             Ok(())
