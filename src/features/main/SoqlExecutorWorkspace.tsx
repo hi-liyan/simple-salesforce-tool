@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useRef, useState } from "react";
 import { Play, Plus, Table2, X } from "lucide-react";
 import { DataGrid } from "../../components/DataGrid";
 import { NoticeAlert } from "../../components/NoticeAlert";
@@ -15,6 +15,8 @@ type SoqlExecutorTab = {
   notice: Notice | null;
   logs: TabLog[];
   selectedRecordIds: string[];
+  // 是否显示底部结果/日志区域：默认新建 Tab 隐藏，查询成功后展示。
+  showBottomPanel: boolean;
 };
 
 type SoqlExecutorWorkspaceProps = {
@@ -36,6 +38,14 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText, objects }
   const [activeTabId, setActiveTabId] = useState<string>(tabs[0].id);
   // 底部展示模式：结果 / 日志。
   const [bottomView, setBottomView] = useState<BottomView>("result");
+  // 底部结果日志区高度：支持鼠标拖拽调整。
+  const [bottomPanelHeight, setBottomPanelHeight] = useState(260);
+  // 是否正在拖拽底部区域高度。
+  const [draggingBottomResize, setDraggingBottomResize] = useState(false);
+  const dragStartYRef = useRef(0);
+  const dragStartHeightRef = useRef(260);
+  // 编辑器与底部面板的分栏容器：用于按容器高度约束拖拽范围。
+  const splitContainerRef = useRef<HTMLDivElement | null>(null);
   // 对象字段缓存：按需 describe 后用于上下文补全，避免重复请求。
   const [objectFieldsMap, setObjectFieldsMap] = useState<Record<string, string[]>>({});
   // 当前数据源可查询对象名集合：用于 FROM 子句对象补全。
@@ -55,6 +65,28 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText, objects }
   useEffect(() => {
     setObjectFieldsMap({}); // 切换数据源后清空旧缓存，避免跨源字段污染。
   }, [selectedSourceId]);
+
+  useEffect(() => {
+    if (!draggingBottomResize) return;
+    const onMouseMove = (event: MouseEvent) => {
+      const delta = dragStartYRef.current - event.clientY;
+      const next = dragStartHeightRef.current + delta;
+      const containerHeight = splitContainerRef.current?.clientHeight || 0;
+      const minTopHeight = 180; // 顶部编辑器最小高度，避免拖拽后无法编辑。
+      const minBottomHeight = 160; // 底部面板最小高度，保证结果/日志可读。
+      const maxBottomHeight = Math.max(minBottomHeight, containerHeight - minTopHeight);
+      setBottomPanelHeight(Math.max(minBottomHeight, Math.min(maxBottomHeight, next))); // 约束在分栏容器内，仅移动顶部边界。
+    };
+    const onMouseUp = () => {
+      setDraggingBottomResize(false);
+    };
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+    };
+  }, [draggingBottomResize]);
 
   useEffect(() => {
     if (!selectedSourceId || !activeTab) return;
@@ -190,6 +222,7 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText, objects }
         result: normalizedResult,
         loading: false,
         selectedRecordIds: [],
+        showBottomPanel: true,
         notice: { type: "success", message: `执行成功，返回 ${normalizedResult.totalSize} 条。` },
         logs: [
           buildSoqlLog(true, trimmedSoql, `执行成功，返回 ${normalizedResult.totalSize} 条。`),
@@ -276,88 +309,107 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText, objects }
         </div>
       </div>
 
-      {/* SOQL 编辑器区域。 */}
-      <div className="border-b border-base-300 p-3">
-        {/* SOQL 编辑器：统一复用 Monaco 组件，保持与主工作区一致的编辑体验。 */}
-        <SoqlMonacoEditor
-          value={activeTab.soqlDraft}
-          onChange={(value) => {
-            patchActiveTab((tab) => ({ ...tab, soqlDraft: value })); // 同步当前标签草稿。
-          }}
-          fieldNames={fallbackFieldNames}
-          objectNames={objectNames}
-          objectFieldsMap={objectFieldsMap}
-          height="220px"
-        />
-      </div>
+      {/* 编辑器与底部结果区分栏容器：底部显示时由拖拽改变分栏高度。 */}
+      <div ref={splitContainerRef} className="min-h-0 flex flex-1 flex-col overflow-hidden">
+        {/* SOQL 编辑器区域：始终占剩余空间，底部面板显示时会随拖拽动态伸缩。 */}
+        <div className={activeTab.showBottomPanel ? "min-h-0 flex-1 border-b border-base-300 p-3" : "min-h-0 flex-1 p-3"}>
+          {/* SOQL 编辑器：统一复用 Monaco 组件，保持与主工作区一致的编辑体验。 */}
+          <SoqlMonacoEditor
+            value={activeTab.soqlDraft}
+            onChange={(value) => {
+              patchActiveTab((tab) => ({ ...tab, soqlDraft: value })); // 同步当前标签草稿。
+            }}
+            fieldNames={fallbackFieldNames}
+            objectNames={objectNames}
+            objectFieldsMap={objectFieldsMap}
+            height="100%"
+            className="h-full"
+          />
+        </div>
 
-      {/* 底部结果区头部：切换结果 / 日志。 */}
-      <div className="flex items-center gap-1 border-b border-base-300 px-3 py-1.5">
-        <button
-          className={`btn btn-xs ${bottomView === "result" ? "btn-primary" : "btn-ghost"}`}
-          onClick={() => setBottomView("result")}
-        >
-          <Table2 size={12} />
-          结果
-        </button>
-        <button
-          className={`btn btn-xs ${bottomView === "logs" ? "btn-primary" : "btn-ghost"}`}
-          onClick={() => setBottomView("logs")}
-        >
-          日志
-        </button>
-      </div>
-
-      {/* 底部结果内容区。 */}
-      <div className="min-h-0 flex-1">
-        {bottomView === "result" ? (
-          <DataGrid
-            result={gridResult}
-            visibleColumns={visibleColumns}
-            fieldMetadataMap={fieldMetadataMap}
-            dirtyCellKeys={[]}
-            selectedRecordIds={activeTab.selectedRecordIds}
-            pendingDeleteRecordIds={[]}
-            onToggleRecord={(recordId, checked) => {
-              patchActiveTab((tab) => ({
-                ...tab,
-                selectedRecordIds: checked
-                  ? Array.from(new Set([...tab.selectedRecordIds, recordId]))
-                  : tab.selectedRecordIds.filter((id) => id !== recordId)
-              }));
-            }}
-            onToggleAll={(checked, recordIds) => {
-              patchActiveTab((tab) => ({
-                ...tab,
-                selectedRecordIds: checked ? recordIds : []
-              }));
-            }}
-            onEditCell={() => {
-              // 执行器结果表为只读，保持空实现。
-            }}
-            onShowMessage={(message) => {
-              patchActiveTab((tab) => ({
-                ...tab,
-                notice: { type: "error", message }
-              }));
+        {/* 底部结果日志区：默认新建 Tab 不显示，查询成功后显示并支持拖拽高度。 */}
+        {activeTab.showBottomPanel && (
+          <div className="relative mb-3 flex min-h-0 shrink-0 flex-col border-t border-base-300" style={{ height: bottomPanelHeight }}>
+          <div
+            className="absolute left-0 right-0 top-0 z-[1] h-[6px] cursor-row-resize"
+            onMouseDown={(event) => {
+              event.preventDefault(); // 阻止拖拽起点触发文本选中。
+              dragStartYRef.current = event.clientY; // 记录本次拖拽起点 Y。
+              dragStartHeightRef.current = bottomPanelHeight; // 记录本次拖拽起始高度。
+              setDraggingBottomResize(true); // 进入拖拽状态。
             }}
           />
-        ) : (
-          <div className="h-full overflow-auto p-3">
-            {activeTab.logs.length === 0 ? (
-              <span className="text-[12px] text-neutral/70">暂无日志。</span>
+
+          {/* 底部结果区头部：切换结果 / 日志。 */}
+          <div className="flex items-center gap-1 border-b border-base-300 px-3 py-1.5">
+            <button
+              className={`btn btn-xs ${bottomView === "result" ? "btn-primary" : "btn-ghost"}`}
+              onClick={() => setBottomView("result")}
+            >
+              <Table2 size={12} />
+              结果
+            </button>
+            <button
+              className={`btn btn-xs ${bottomView === "logs" ? "btn-primary" : "btn-ghost"}`}
+              onClick={() => setBottomView("logs")}
+            >
+              日志
+            </button>
+          </div>
+
+          {/* 底部结果内容区。 */}
+          <div className="min-h-0 flex-1">
+            {bottomView === "result" ? (
+              <DataGrid
+                result={gridResult}
+                visibleColumns={visibleColumns}
+                fieldMetadataMap={fieldMetadataMap}
+                dirtyCellKeys={[]}
+                selectedRecordIds={activeTab.selectedRecordIds}
+                pendingDeleteRecordIds={[]}
+                onToggleRecord={(recordId, checked) => {
+                  patchActiveTab((tab) => ({
+                    ...tab,
+                    selectedRecordIds: checked
+                      ? Array.from(new Set([...tab.selectedRecordIds, recordId]))
+                      : tab.selectedRecordIds.filter((id) => id !== recordId)
+                  }));
+                }}
+                onToggleAll={(checked, recordIds) => {
+                  patchActiveTab((tab) => ({
+                    ...tab,
+                    selectedRecordIds: checked ? recordIds : []
+                  }));
+                }}
+                onEditCell={() => {
+                  // 执行器结果表为只读，保持空实现。
+                }}
+                onShowMessage={(message) => {
+                  patchActiveTab((tab) => ({
+                    ...tab,
+                    notice: { type: "error", message }
+                  }));
+                }}
+              />
             ) : (
-              activeTab.logs.map((log) => (
-                <div key={log.id} className="mb-2 border border-base-300 bg-base-100 p-2">
-                  <p className={`mb-1 block text-[12px] ${log.success ? "text-success" : "text-error"}`}>
-                    {formatLogTime(log.timestamp)} [{log.action}] {log.success ? "成功" : "失败"}
-                  </p>
-                  <p className="block text-[12px]">请求: {log.request}</p>
-                  <p className="block text-[12px]">响应: {log.summary}</p>
-                  {log.errorMessage && <p className="block text-[12px] text-error">错误: {log.errorMessage}</p>}
-                </div>
-              ))
+              <div className="h-full overflow-auto p-3">
+                {activeTab.logs.length === 0 ? (
+                  <span className="text-[12px] text-neutral/70">暂无日志。</span>
+                ) : (
+                  activeTab.logs.map((log) => (
+                    <div key={log.id} className="mb-2 border border-base-300 bg-base-100 p-2">
+                      <p className={`mb-1 block text-[12px] ${log.success ? "text-success" : "text-error"}`}>
+                        {formatLogTime(log.timestamp)} [{log.action}] {log.success ? "成功" : "失败"}
+                      </p>
+                      <p className="block text-[12px]">请求: {log.request}</p>
+                      <p className="block text-[12px]">响应: {log.summary}</p>
+                      {log.errorMessage && <p className="block text-[12px] text-error">错误: {log.errorMessage}</p>}
+                    </div>
+                  ))
+                )}
+              </div>
             )}
+          </div>
           </div>
         )}
       </div>
@@ -383,7 +435,8 @@ function createSoqlExecutorTab(index: number): SoqlExecutorTab {
     loading: false,
     notice: null,
     logs: [],
-    selectedRecordIds: []
+    selectedRecordIds: [],
+    showBottomPanel: false
   };
 }
 
