@@ -1,4 +1,4 @@
-﻿import { X } from "lucide-react";
+﻿import { AlertTriangle, CheckCircle2, Info, X, XCircle } from "lucide-react";
 import { useMemo } from "react";
 
 // 通知级别：对齐 daisyUI 的 alert 语义类型。
@@ -15,45 +15,44 @@ type NoticeAlertProps = {
   className?: string;
 };
 
-// 通知样式 Hook：统一维护 tone 到 class 的映射。
-export function useNoticeToneClass(tone: NoticeTone): string {
+// 通知配色 Hook：按当前软件蓝系主题统一通知颜色。
+export function useNoticePaletteClass(tone: NoticeTone): string {
   return useMemo(() => {
     const map: Record<NoticeTone, string> = {
-      info: "alert-info",
-      success: "alert-success",
-      warning: "alert-warning",
-      error: "alert-error"
+      info: "border border-brand-300 bg-brand-50 text-brand-800",
+      success: "border border-[#b8e3c8] bg-[#edf9f2] text-[#1f6b3b]",
+      warning: "border border-[#f2d9a6] bg-[#fff8ea] text-[#8a5a00]",
+      error: "border border-[#f3c2c2] bg-[#fff1f1] text-[#8b2a2a]"
     };
     return map[tone];
   }, [tone]);
 }
 
-// 通知浅色样式 Hook：统一覆盖为更接近官网的浅色视觉。
-export function useNoticeSoftClass(tone: NoticeTone): string {
+// 通知图标 Hook：按通知级别映射对应语义图标。
+export function useNoticeIcon(tone: NoticeTone) {
   return useMemo(() => {
-    const map: Record<NoticeTone, string> = {
-      info: "border-info/30 bg-info/10 text-info",
-      success: "border-success/30 bg-success/10 text-success",
-      warning: "border-warning/30 bg-warning/12 text-warning",
-      error: "border-error/30 bg-error/10 text-error"
+    const map: Record<NoticeTone, typeof Info> = {
+      info: Info,
+      success: CheckCircle2,
+      warning: AlertTriangle,
+      error: XCircle
     };
     return map[tone];
   }, [tone]);
 }
 
-// 统一通知组件：使用 daisyUI `alert alert-soft` 风格并内置圆角 icon 关闭按钮。
+// 统一通知组件：使用 daisyUI `alert alert-{tone}` 风格并内置圆角 icon 关闭按钮。
 export function NoticeAlert({ tone, message, onClose, className = "" }: NoticeAlertProps) {
-  // 颜色类：根据通知级别动态选择。
-  const toneClass = useNoticeToneClass(tone);
-  // 浅色覆盖类：确保通知呈现更轻量的浅色背景。
-  const softClass = useNoticeSoftClass(tone);
+  // 配色类：根据通知级别动态选择当前主题下的浅色样式。
+  const paletteClass = useNoticePaletteClass(tone);
+  // 图标组件：根据通知级别选择图标。
+  const ToneIcon = useNoticeIcon(tone);
 
   return (
-    // Alert 容器：使用软风格通知样式。
-    <div
-      role="alert"
-      className={`alert alert-soft inline-flex w-fit max-w-[420px] items-start gap-2 border ${toneClass} ${softClass} ${className}`}
-    >
+    // Alert 容器：标准 daisyUI 通知样式。
+    <div role="alert" className={`alert inline-flex w-fit max-w-[420px] items-start gap-2 shadow-sm ${paletteClass} ${className}`}>
+      {/* 通知类型图标。 */}
+      <ToneIcon className="h-6 w-6 shrink-0 stroke-current" />
       {/* 通知文案。 */}
       <span className="min-w-0 flex-1 whitespace-normal break-words text-[12px] leading-5 text-current">{message}</span>
       {onClose ? (
