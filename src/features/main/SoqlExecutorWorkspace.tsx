@@ -843,7 +843,24 @@ function extractVisibleColumns(records: Record<string, unknown>[]): string[] {
       columnSet.add(key);
     });
   });
-  return Array.from(columnSet);
+  const allColumns = Array.from(columnSet);
+  // 关系字段前缀集合：例如 `Contact.Id` 会生成前缀 `Contact`。
+  const relationPrefixSet = new Set(
+    allColumns
+      .filter((key) => key.includes("."))
+      .map((key) => key.split(".")[0])
+  );
+  return allColumns.filter((key) => {
+    // 过滤子查询/关系展开过程中的中间列，避免污染表头。
+    if (key.endsWith(".records") || key.endsWith(".totalSize") || key.endsWith(".done")) {
+      return false;
+    }
+    // 若已存在 `Contact.Id` 这类列，则隐藏同名前缀占位列 `Contact`。
+    if (!key.includes(".") && relationPrefixSet.has(key)) {
+      return false;
+    }
+    return true;
+  });
 }
 
 // 主记录展开：主记录 1 行 + 每条子查询记录 1 行。
