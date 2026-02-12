@@ -10,6 +10,8 @@ type SoqlExecutorTab = {
   id: string;
   name: string;
   soqlDraft: string;
+  // 当前编辑器选中文本：用于“仅执行选中内容”。
+  selectedSoqlText: string;
   result: QueryResult;
   loading: boolean;
   notice: Notice | null;
@@ -46,6 +48,8 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText, objects }
   const dragStartHeightRef = useRef(260);
   // 编辑器与底部面板的分栏容器：用于按容器高度约束拖拽范围。
   const splitContainerRef = useRef<HTMLDivElement | null>(null);
+  // 当前激活编辑器的最新选中文本（同步引用）：避免点击执行时读取到异步状态旧值。
+  const selectedSoqlTextRef = useRef("");
   // 对象字段缓存：按需 describe 后用于上下文补全，避免重复请求。
   const [objectFieldsMap, setObjectFieldsMap] = useState<Record<string, string[]>>({});
   // 当前数据源可查询对象名集合：用于 FROM 子句对象补全。
@@ -73,6 +77,11 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText, objects }
       window.clearTimeout(timer); // 切换 Tab 或 notice 变化时清理旧定时器。
     };
   }, [activeTab?.id, activeTab?.notice]);
+
+  useEffect(() => {
+    // 切换 Tab 或状态更新时同步 ref，保证执行入口读取到当前激活 Tab 的选区文本。
+    selectedSoqlTextRef.current = activeTab?.selectedSoqlText || "";
+  }, [activeTab?.id, activeTab?.selectedSoqlText]);
 
   useEffect(() => {
     setObjectFieldsMap({}); // 切换数据源后清空旧缓存，避免跨源字段污染。
@@ -213,8 +222,10 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText, objects }
       return;
     }
 
-    const trimmedSoql = activeTab.soqlDraft.trim();
-    if (!trimmedSoql) {
+    // 有选区时仅执行选中内容；无选区时回退执行全文。
+    const latestSelectedSoqlText = selectedSoqlTextRef.current.trim();
+    const executeSoql = latestSelectedSoqlText || activeTab.selectedSoqlText.trim() || activeTab.soqlDraft.trim();
+    if (!executeSoql) {
       patchActiveTab((tab) => ({
         ...tab,
         notice: { type: "error", message: "SOQL 不能为空。" }
@@ -226,7 +237,7 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText, objects }
 
     try {
       // 调用后端统一查询命令，支持常规查询与复杂子查询。
-      const result = await api.queryRecords(selectedSourceId, trimmedSoql);
+      const result = await api.queryRecords(selectedSourceId, executeSoql);
       const normalizedResult = normalizeQueryResult(result);
 
       patchActiveTab((tab) => ({
@@ -237,7 +248,7 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText, objects }
         showBottomPanel: true,
         notice: { type: "success", message: `执行成功，返回 ${normalizedResult.totalSize} 条。` },
         logs: [
-          buildSoqlLog(true, trimmedSoql, `执行成功，返回 ${normalizedResult.totalSize} 条。`),
+          buildSoqlLog(true, executeSoql, `执行成功，返回 ${normalizedResult.totalSize} 条。`),
           ...tab.logs
         ].slice(0, 200)
       }));
@@ -249,7 +260,7 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText, objects }
         loading: false,
         notice: { type: "error", message: `执行失败：${String(error)}` },
         logs: [
-          buildSoqlLog(false, trimmedSoql, "执行 SOQL 失败。", String(error)),
+          buildSoqlLog(false, executeSoql, "执行 SOQL 失败。", String(error)),
           ...tab.logs
         ].slice(0, 200)
       }));
@@ -313,7 +324,14 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText, objects }
       {/* 顶部工具栏：包含执行按钮。 */}
       <div className="border-b border-base-300 px-3 py-2">
         <div className="flex items-center gap-2">
-          <button className="btn btn-primary btn-sm" disabled={activeTab.loading} onClick={() => void executeActiveTabSoql()}>
+          <button
+            className="btn btn-primary btn-sm"
+            disabled={activeTab.loading}
+            onMouseDown={(event) => {
+              event.preventDefault(); // 阻止按钮按下时抢占焦点，避免 Monaco 选区在点击瞬间丢失。
+            }}
+            onClick={() => void executeActiveTabSoql()}
+          >
             <Play size={14} />
             执行
           </button>
@@ -330,6 +348,10 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText, objects }
             value={activeTab.soqlDraft}
             onChange={(value) => {
               patchActiveTab((tab) => ({ ...tab, soqlDraft: value })); // 同步当前标签草稿。
+            }}
+            onSelectionTextChange={(selectionText) => {
+              selectedSoqlTextRef.current = selectionText; // 同步更新 ref，确保“点执行”的同一时刻可读取到最新选区。
+              patchActiveTab((tab) => ({ ...tab, selectedSoqlText: selectionText })); // 同步当前标签选区文本。
             }}
             fieldNames={fallbackFieldNames}
             objectNames={objectNames}
@@ -456,6 +478,7 @@ function createSoqlExecutorTab(index: number): SoqlExecutorTab {
     id: `soql-tab-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     name: `SOQL ${index}`,
     soqlDraft: "",
+    selectedSoqlText: "",
     result: { totalSize: 0, records: [] },
     loading: false,
     notice: null,
