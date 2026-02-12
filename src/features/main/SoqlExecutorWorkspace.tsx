@@ -63,6 +63,18 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText, objects }
   );
 
   useEffect(() => {
+    if (!activeTab?.notice) return;
+    const timer = window.setTimeout(() => {
+      setTabs((current) =>
+        current.map((tab) => (tab.id === activeTab.id ? { ...tab, notice: null } : tab))
+      );
+    }, 3200);
+    return () => {
+      window.clearTimeout(timer); // 切换 Tab 或 notice 变化时清理旧定时器。
+    };
+  }, [activeTab?.id, activeTab?.notice]);
+
+  useEffect(() => {
     setObjectFieldsMap({}); // 切换数据源后清空旧缓存，避免跨源字段污染。
   }, [selectedSourceId]);
 
@@ -355,6 +367,16 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText, objects }
             >
               日志
             </button>
+            <div className="flex-1" />
+            <button
+              className="btn btn-circle btn-ghost btn-xs"
+              aria-label="关闭结果日志区域"
+              onClick={() => {
+                patchActiveTab((tab) => ({ ...tab, showBottomPanel: false })); // 关闭当前 Tab 底部结果日志区域。
+              }}
+            >
+              <X size={12} />
+            </button>
           </div>
 
           {/* 底部结果内容区。 */}
@@ -367,6 +389,9 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText, objects }
                 dirtyCellKeys={[]}
                 selectedRecordIds={activeTab.selectedRecordIds}
                 pendingDeleteRecordIds={[]}
+                showHeaderMetadata={false}
+                enableReadonlyCellHint={false}
+                showSelectionColumn={false}
                 onToggleRecord={(recordId, checked) => {
                   patchActiveTab((tab) => ({
                     ...tab,
