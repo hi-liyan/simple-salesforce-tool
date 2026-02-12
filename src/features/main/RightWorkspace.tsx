@@ -1,7 +1,8 @@
-﻿import { ChangeEvent, useEffect, useRef, useState } from "react";
+﻿import { useEffect, useRef, useState } from "react";
 import { PanelRightOpen, Play, Plus, RotateCcw, ScrollText, Search, Trash2, X } from "lucide-react";
 import { DataGrid } from "../../components/DataGrid";
 import { NoticeAlert } from "../../components/NoticeAlert";
+import { SoqlMonacoEditor } from "../../components/SoqlMonacoEditor";
 import { Notice, TabState } from "../../types";
 
 type RightWorkspaceProps = {
@@ -490,12 +491,18 @@ export function RightWorkspace({
                   </button>
                 </div>
                 <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-3">
-                  <div className="flex min-h-0 flex-1 overflow-hidden border border-base-300 bg-base-100">
-                    <textarea
+                  {/* 编辑器容器：占满剩余空间，避免挤压底部执行按钮。 */}
+                  <div className="min-h-0 flex-1">
+                    {/* SOQL 编辑器：使用 Monaco 提供语法高亮与自动补全。 */}
+                    <SoqlMonacoEditor
                       value={activeTab.soqlDraft}
-                      onChange={(event: ChangeEvent<HTMLTextAreaElement>) => onSoqlChange(event.target.value)}
-                      className="h-full w-full resize-none overflow-auto border-none bg-base-100 p-2 text-[12px] outline-none"
-                      style={{ fontFamily: "'Cascadia Mono', Consolas, 'Courier New', monospace", lineHeight: 1.5 }}
+                      onChange={(value) => onSoqlChange(value)}
+                      height="100%"
+                      className="h-full"
+                      // 当前对象字段名补全。
+                      fieldNames={activeTab.describe?.fields.map((field) => field.name) || []}
+                      // 当前对象名补全，便于 FROM 子句输入。
+                      objectNames={[activeTab.objectName]}
                     />
                   </div>
                   <button className="btn btn-primary btn-sm mt-2 self-start" disabled={activeTab.loading || !activeTab.soqlDraft} onClick={onExecuteCustomSoql}>
@@ -526,6 +533,4 @@ function formatLogTime(timestamp: string): string {
   if (Number.isNaN(date.getTime())) return timestamp;
   return date.toLocaleString();
 }
-
-
 
