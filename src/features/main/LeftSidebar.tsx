@@ -3,16 +3,28 @@ import { ObjectList } from "../../components/ObjectList";
 import { SalesforceObject, SalesforceSource } from "../../types";
 
 type LeftSidebarProps = {
+  // 数据源列表。
   sources: SalesforceSource[];
+  // 当前选中的数据源 ID。
   selectedSourceId: string;
+  // 页面级加载状态。
   pageLoading: boolean;
+  // 对象列表加载状态。
   objectsLoading: boolean;
+  // 打开认证窗口回调。
   onOpenAuthWindow: () => void;
+  // 切换数据源回调。
   onChangeSource: (sourceId: string) => void;
+  // 刷新数据源回调。
   onRefreshSources: () => void;
+  // 当前对象列表。
   objects: SalesforceObject[];
+  // 当前激活对象名。
   activeTabObjectName: string;
+  // 打开对象回调。
   onOpenObject: (item: SalesforceObject) => void;
+  // 点击不可查询徽标回调。
+  onNotQueryableObjectClick?: (item: SalesforceObject) => void;
 };
 
 // 左侧栏：数据源选择与对象列表。
@@ -26,7 +38,8 @@ export function LeftSidebar({
   onRefreshSources,
   objects,
   activeTabObjectName,
-  onOpenObject
+  onOpenObject,
+  onNotQueryableObjectClick
 }: LeftSidebarProps) {
   return (
     <>
@@ -73,7 +86,12 @@ export function LeftSidebar({
             <span className="text-[12px]">拉取 Object 列表中...</span>
           </div>
         ) : (
-          <ObjectList objects={objects} activeObjectName={activeTabObjectName} onOpenObject={onOpenObject} />
+          <ObjectList
+            objects={objects}
+            activeObjectName={activeTabObjectName}
+            onOpenObject={onOpenObject}
+            onNotQueryableClick={onNotQueryableObjectClick}
+          />
         )}
       </div>
     </>

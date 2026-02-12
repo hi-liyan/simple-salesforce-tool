@@ -2,13 +2,18 @@
 import { SalesforceObject } from "../types";
 
 type Props = {
+  // 对象数据列表。
   objects: SalesforceObject[];
+  // 当前激活对象名称。
   activeObjectName: string;
+  // 打开对象回调。
   onOpenObject: (objectItem: SalesforceObject) => void;
+  // 不可查询徽标点击回调：用于提示当前对象不可查询。
+  onNotQueryableClick?: (objectItem: SalesforceObject) => void;
 };
 
 // 对象列表：紧凑模式对象树。
-export function ObjectList({ objects, activeObjectName, onOpenObject }: Props) {
+export function ObjectList({ objects, activeObjectName, onOpenObject, onNotQueryableClick }: Props) {
   // 关键字：用于对象过滤。
   const [keyword, setKeyword] = useState("");
 
@@ -37,15 +42,33 @@ export function ObjectList({ objects, activeObjectName, onOpenObject }: Props) {
           const selected = item.name === activeObjectName;
           return (
             <div key={item.name}>
-              {/* 列表项：点击后打开对象 Tab。 */}
-              <button
-                className={`w-full px-3 py-1.5 text-left ${selected ? "bg-primary/10 text-primary" : "hover:bg-base-100"}`}
-                title={tooltip}
-                onClick={() => onOpenObject(item)}
-              >
-                <div className="truncate text-[12px]">{item.name}</div>
-                <div className="truncate text-[11px] text-neutral/70">{item.label}</div>
-              </button>
+              {/* 列表项容器：左侧主按钮打开对象，右侧可选“不可查询”徽标。 */}
+              <div className={`flex items-start gap-2 px-3 py-1.5 ${selected ? "bg-primary/10 text-primary" : "hover:bg-base-100"}`}>
+                {/* 主按钮：点击后打开对象 Tab。 */}
+                <button
+                  className="min-w-0 flex-1 text-left"
+                  title={tooltip}
+                  type="button"
+                  onClick={() => {
+                    if (!item.queryable) {
+                      onNotQueryableClick?.(item); // 不可查询对象：仅提示，不打开对象。
+                      return;
+                    }
+                    onOpenObject(item); // 可查询对象：正常打开对象 Tab。
+                  }}
+                >
+                  <div className="truncate text-[12px]">{item.name}</div>
+                  <div className="truncate text-[11px] text-neutral/70">{item.label}</div>
+                </button>
+                {!item.queryable && (
+                  <span
+                    className="badge badge-sm mt-[1px] shrink-0 select-none border-0 bg-base-300 text-[10px] text-base-content"
+                    title={`${item.name} 不可查询`}
+                  >
+                    不可查询
+                  </span>
+                )}
+              </div>
               {/* 分割线。 */}
               <div className="border-b border-base-300" />
             </div>

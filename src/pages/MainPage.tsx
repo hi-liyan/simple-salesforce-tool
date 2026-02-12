@@ -10,7 +10,7 @@ import { SystemLogsPanel } from "../features/main/SystemLogsPanel";
 import { MainLayout } from "../layouts/MainLayout";
 import { useObjectsQuery, useSourcesQuery, useSyncSourcesMutation } from "../queries/salesforce";
 import { useAppStore } from "../store/useAppStore";
-import { Notice, ObjectDescribe, QueryResult, SalesforceObject, TabLog, TabState } from "../types";
+import { Notice, ObjectDescribe, ObjectField, QueryResult, SalesforceObject, TabLog, TabState } from "../types";
 
 // 主页面：对象列表 + 结果面板 + SOQL 抽屉。
 export function MainPage() {
@@ -227,6 +227,14 @@ export function MainPage() {
     });
   }
 
+  // 点击 Object“不可查询”徽标时，在工作区顶部显示提示。
+  function handleNotQueryableObjectClick(objectItem: SalesforceObject) {
+    showWorkspaceNotice({
+      type: "error",
+      message: `${objectItem.name} 不可查询`
+    });
+  }
+
   function showWorkspaceNotice(notice: Notice, durationMs = 2600) {
     setWorkspaceNotice(notice);
     if (sourceNoticeTimerRef.current) {
@@ -321,7 +329,7 @@ export function MainPage() {
       result: { totalSize: 0, records: [] },
       whereClause: "",
       limit: 200,
-      sortField: "Id",
+      sortField: "",
       sortDirection: "DESC",
       selectedRecordIds: [],
       // 待删除记录：仅做前端标记，执行更新时统一提交。
@@ -345,13 +353,8 @@ export function MainPage() {
     try {
       const describe = await api.describeObject(selectedSourceId, objectItem.name);
       const persistedVisibility = await loadColumnVisibilityFromDb(selectedSourceId, objectItem.name, describe);
-      const defaultSortField = describe.fields.find((field) => field.name === "LastModifiedDate")
-        ? "LastModifiedDate"
-        : describe.fields.find((field) => field.name === "CreatedDate")
-          ? "CreatedDate"
-          : describe.fields.find((field) => field.name === "Name")
-            ? "Name"
-            : "Id";
+      // 默认排序字段：仅从“可排序字段”中选择优先级最高的一项。
+      const defaultSortField = pickDefaultSortField(getSortableFieldNames(describe));
 
       patchTab(objectItem.name, (tab) => ({
         ...tab,
@@ -387,7 +390,10 @@ export function MainPage() {
 
     const whereClause = (whereOverride ?? tab?.whereClause ?? "").trim();
     const limit = Math.max(1, Math.min(2000, limitOverride ?? tab?.limit ?? 200));
-    const sortField = sortFieldOverride ?? tab?.sortField ?? "Id";
+    const sortableFieldSet = new Set(getSortableFieldNames(describe));
+    const rawSortField = (sortFieldOverride ?? tab?.sortField ?? "").trim();
+    // 排序字段兜底：仅允许使用字段元数据中 sortable=true 的字段，否则视为“不排序”。
+    const sortField = sortableFieldSet.has(rawSortField) ? rawSortField : "";
     const sortDirection = directionOverride ?? tab?.sortDirection ?? "DESC";
     const visibility = tab?.columnVisibility ?? {};
     const selectedFields = describe.fields
@@ -437,7 +443,7 @@ export function MainPage() {
       appendTabLog(objectName, {
         action: "QUERY",
         success: false,
-        request: `object=${objectName}, where=${whereClause}, sort=${sortField} ${sortDirection}, limit=${limit}`,
+        request: `object=${objectName}, where=${whereClause}, sort=${sortField ? `${sortField} ${sortDirection}` : "无排序"}, limit=${limit}`,
         summary: "查询失败。",
         errorMessage: String(error)
       });
@@ -794,6 +800,7 @@ export function MainPage() {
                 objects={objects}
                 activeTabObjectName={activeTabObjectName}
                 onOpenObject={(item) => void openObjectTab(item)}
+                onNotQueryableObjectClick={handleNotQueryableObjectClick}
               />
             </div>
             <div className="flex min-h-0 min-w-0 flex-col overflow-hidden">
@@ -1023,7 +1030,27 @@ function buildQuerySoql(
 ): string {
   const fields = selectedFields.length > 0 ? selectedFields : ["Id"];
   const whereSegment = whereClause.trim() ? ` WHERE ${whereClause.trim()}` : "";
-  return `SELECT ${fields.join(", ")} FROM ${objectName}${whereSegment} ORDER BY ${sortField} ${sortDirection} LIMIT ${limit}`;
+  // 当排序字段为空时，明确不拼接 ORDER BY，避免生成无效 SOQL。
+  const orderBySegment = sortField.trim() ? ` ORDER BY ${sortField} ${sortDirection}` : "";
+  return `SELECT ${fields.join(", ")} FROM ${objectName}${whereSegment}${orderBySegment} LIMIT ${limit}`;
+}
+
+// 判断字段是否可排序：依据后端返回的字段元数据 `sortable`。
+function isFieldSortable(field: ObjectField): boolean {
+  return field.metadata?.sortable === true;
+}
+
+// 提取对象的可排序字段列表。
+function getSortableFieldNames(describe: ObjectDescribe): string[] {
+  return describe.fields.filter((field) => isFieldSortable(field)).map((field) => field.name);
+}
+
+// 按优先级挑选默认排序字段；若无可排序字段则返回空字符串（不排序）。
+function pickDefaultSortField(sortableFieldNames: string[]): string {
+  const priority = ["LastModifiedDate", "CreatedDate", "Name", "Id"];
+  const preferred = priority.find((fieldName) => sortableFieldNames.includes(fieldName));
+  if (preferred) return preferred;
+  return sortableFieldNames[0] || "";
 }
 
 // 判断 Tab 是否存在未提交的变更。
