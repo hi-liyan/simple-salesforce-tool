@@ -1,4 +1,6 @@
-﻿/** @type {import('tailwindcss').Config} */
+﻿import daisyui from "daisyui";
+
+/** @type {import('tailwindcss').Config} */
 export default {
   content: ["./index.html", "./src/**/*.{ts,tsx}"],
   theme: {
@@ -22,5 +24,24 @@ export default {
       }
     }
   },
-  plugins: []
+  plugins: [daisyui],
+  daisyui: {
+    themes: [
+      {
+        salesforce: {
+          primary: "#0176d3",
+          secondary: "#0b64a0",
+          accent: "#129ef2",
+          neutral: "#16325c",
+          "base-100": "#ffffff",
+          "base-200": "#f6f9fe",
+          "base-300": "#d8e5f5",
+          info: "#129ef2",
+          success: "#16a34a",
+          warning: "#f59e0b",
+          error: "#dc2626"
+        }
+      }
+    ]
+  }
 };

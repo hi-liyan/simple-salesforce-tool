@@ -1,6 +1,5 @@
 ﻿import { useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { Box, IconButton, Tooltip } from "@mui/material";
 import { useQueryClient } from "@tanstack/react-query";
 import { Database, Table2 } from "lucide-react";
 import { api } from "../api";
@@ -686,23 +685,27 @@ export function MainPage() {
   return (
     <MainLayout
       navRail={
-        <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", py: 1, gap: 0.5 }}>
-          <Tooltip title="Query 布局" placement="right">
-            <IconButton color={viewMode === "query" ? "primary" : "default"} onClick={() => setViewMode("query")}>
+        <div className="flex flex-col items-center gap-1 py-2">
+          <button
+            className={`tool-rail-btn ${viewMode === "query" ? "tool-rail-btn--active" : ""}`}
+            title="Query 布局"
+            onClick={() => setViewMode("query")}
+          >
               <Table2 size={16} />
-            </IconButton>
-          </Tooltip>
-          <Tooltip title="系统日志" placement="right">
-            <IconButton color={viewMode === "systemLogs" ? "primary" : "default"} onClick={() => setViewMode("systemLogs")}>
+          </button>
+          <button
+            className={`tool-rail-btn ${viewMode === "systemLogs" ? "tool-rail-btn--active" : ""}`}
+            title="系统日志"
+            onClick={() => setViewMode("systemLogs")}
+          >
               <Database size={16} />
-            </IconButton>
-          </Tooltip>
-        </Box>
+          </button>
+        </div>
       }
       content={
         viewMode === "query" ? (
-          <Box sx={{ height: "100%", width: "100%", display: "grid", gridTemplateColumns: "320px 1fr", overflow: "hidden" }}>
-            <Box sx={{ display: "flex", flexDirection: "column", minHeight: 0, borderRight: "1px solid", borderColor: "divider" }}>
+          <div className="grid h-full w-full grid-cols-[320px_1fr] overflow-hidden">
+            <div className="flex min-h-0 flex-col border-r border-base-300">
               <LeftSidebar
                 sources={sources}
                 selectedSourceId={selectedSourceId}
@@ -715,8 +718,8 @@ export function MainPage() {
                 activeTabObjectName={activeTabObjectName}
                 onOpenObject={(item) => void openObjectTab(item)}
               />
-            </Box>
-            <Box sx={{ minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+            </div>
+            <div className="flex min-h-0 min-w-0 flex-col overflow-hidden">
               <RightWorkspace
                 tabs={tabs}
                 activeTabObjectName={activeTabObjectName}
@@ -854,8 +857,8 @@ export function MainPage() {
                   patchTab(activeTab.objectName, (item) => ({ ...item, notice: null }));
                 }}
               />
-            </Box>
-          </Box>
+            </div>
+          </div>
         ) : (
           <SystemLogsPanel />
         )
