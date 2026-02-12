@@ -544,9 +544,6 @@ export function RightWorkspace({
               <div className="flex min-h-0 flex-[1_1_50%] flex-col">
                 <div className="flex items-center justify-between border-b border-base-300 px-3 py-2">
                   <span className="text-[12px] text-neutral/70">SOQL 执行器</span>
-                  <button className="btn btn-circle btn-ghost btn-xs" onClick={onToggleDrawer} aria-label="关闭字段与SOQL">
-                    <X size={14} />
-                  </button>
                 </div>
                 <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-3">
                   {/* 编辑器容器：占满剩余空间，避免挤压底部执行按钮。 */}
