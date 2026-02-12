@@ -1,10 +1,10 @@
-﻿import { useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import { Play, Plus, Table2, X } from "lucide-react";
 import { DataGrid } from "../../components/DataGrid";
 import { NoticeAlert } from "../../components/NoticeAlert";
 import { SoqlMonacoEditor } from "../../components/SoqlMonacoEditor";
 import { api } from "../../api";
-import { Notice, QueryResult, TabLog } from "../../types";
+import { Notice, QueryResult, SalesforceObject, TabLog } from "../../types";
 
 type SoqlExecutorTab = {
   id: string;
@@ -22,24 +22,82 @@ type SoqlExecutorWorkspaceProps = {
   selectedSourceId: string;
   // 加载遮罩文案。
   loadingText: string;
+  // 当前数据源对象列表：用于对象名补全。
+  objects: SalesforceObject[];
 };
 
 type BottomView = "result" | "logs";
 
 // SOQL 执行器工作区：支持多 Tab、执行、结果展示与查询日志。
-export function SoqlExecutorWorkspace({ selectedSourceId, loadingText }: SoqlExecutorWorkspaceProps) {
+export function SoqlExecutorWorkspace({ selectedSourceId, loadingText, objects }: SoqlExecutorWorkspaceProps) {
   // SOQL 执行器的多标签状态。
   const [tabs, setTabs] = useState<SoqlExecutorTab[]>(() => [createSoqlExecutorTab(1)]);
   // 当前激活标签 ID。
   const [activeTabId, setActiveTabId] = useState<string>(tabs[0].id);
   // 底部展示模式：结果 / 日志。
   const [bottomView, setBottomView] = useState<BottomView>("result");
+  // 对象字段缓存：按需 describe 后用于上下文补全，避免重复请求。
+  const [objectFieldsMap, setObjectFieldsMap] = useState<Record<string, string[]>>({});
+  // 当前数据源可查询对象名集合：用于 FROM 子句对象补全。
+  const objectNames = useMemo(() => objects.filter((item) => item.queryable).map((item) => item.name), [objects]);
+  // 缓存中的字段总集合：作为 FROM 未确定时的回退补全候选。
+  const fallbackFieldNames = useMemo(
+    () => Array.from(new Set(Object.values(objectFieldsMap).flatMap((fields) => fields))),
+    [objectFieldsMap]
+  );
 
   // 当前激活标签数据。
   const activeTab = useMemo(
     () => tabs.find((item) => item.id === activeTabId) || null,
     [tabs, activeTabId]
   );
+
+  useEffect(() => {
+    setObjectFieldsMap({}); // 切换数据源后清空旧缓存，避免跨源字段污染。
+  }, [selectedSourceId]);
+
+  useEffect(() => {
+    if (!selectedSourceId || !activeTab) return;
+    const fromObjectNames = extractFromObjectNames(activeTab.soqlDraft);
+    if (fromObjectNames.length === 0) return;
+    const queryableObjectNameSet = new Set(objectNames.map((name) => name.toLowerCase()));
+    const loadedObjectNameSet = new Set(Object.keys(objectFieldsMap).map((name) => name.toLowerCase()));
+    const unloadedObjectNames = fromObjectNames.filter((objectName) => {
+      if (!queryableObjectNameSet.has(objectName.toLowerCase())) return false; // 仅加载当前数据源可查询对象。
+      return !loadedObjectNameSet.has(objectName.toLowerCase());
+    });
+    if (unloadedObjectNames.length === 0) return;
+
+    let cancelled = false;
+    void Promise.all(
+      unloadedObjectNames.map(async (objectName) => {
+        try {
+          const describe = await api.describeObject(selectedSourceId, objectName);
+          return {
+            objectName,
+            fields: describe.fields.map((field) => field.name)
+          };
+        } catch {
+          return null; // describe 失败时忽略，不阻塞其它对象字段加载。
+        }
+      })
+    ).then((describes) => {
+      if (cancelled) return;
+      const loadedEntries = describes.filter((item): item is { objectName: string; fields: string[] } => Boolean(item));
+      if (loadedEntries.length === 0) return;
+      setObjectFieldsMap((current) => {
+        const next = { ...current };
+        loadedEntries.forEach((item) => {
+          next[item.objectName] = item.fields; // 写入缓存，供编辑器上下文补全读取。
+        });
+        return next;
+      });
+    });
+
+    return () => {
+      cancelled = true; // 避免异步返回后写入已失效状态。
+    };
+  }, [selectedSourceId, activeTab, objectNames, objectFieldsMap]);
 
   // 结果表专用数据：关系字段扁平化 + 子查询展开为多行。
   const gridResult = useMemo<QueryResult>(() => {
@@ -226,6 +284,9 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText }: SoqlExe
           onChange={(value) => {
             patchActiveTab((tab) => ({ ...tab, soqlDraft: value })); // 同步当前标签草稿。
           }}
+          fieldNames={fallbackFieldNames}
+          objectNames={objectNames}
+          objectFieldsMap={objectFieldsMap}
           height="220px"
         />
       </div>
@@ -337,6 +398,17 @@ function buildSoqlLog(success: boolean, request: string, summary: string, errorM
     summary,
     errorMessage
   };
+}
+
+// 从 SOQL 中提取所有 FROM 后对象名（包含子查询），用于按需加载字段元数据。
+function extractFromObjectNames(soql: string): string[] {
+  const objectNames: string[] = [];
+  const regex = /\bfrom\s+([A-Za-z_][\w]*)/gi;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(soql)) !== null) {
+    objectNames.push(match[1]); // 逐个记录 FROM 目标对象，供后续去重。
+  }
+  return Array.from(new Set(objectNames));
 }
 
 // 抽取可见列：合并所有记录的顶层键，并过滤 Salesforce attributes。

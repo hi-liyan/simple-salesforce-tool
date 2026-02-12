@@ -3,6 +3,7 @@ import { PanelRightOpen, Play, Plus, RotateCcw, ScrollText, Search, Trash2, X } 
 import { DataGrid } from "../../components/DataGrid";
 import { NoticeAlert } from "../../components/NoticeAlert";
 import { SoqlMonacoEditor } from "../../components/SoqlMonacoEditor";
+import { api } from "../../api";
 import { Notice, TabState } from "../../types";
 
 type RightWorkspaceProps = {
@@ -52,6 +53,8 @@ type RightWorkspaceProps = {
   onCloseWorkspaceNotice: () => void;
   onCloseActiveTabNotice: () => void;
   loadingText: string;
+  // 可补全的对象名集合：来自当前数据源 Objects 列表。
+  objectNames: string[];
 };
 
 // 右侧工作区：包含 Tab、查询工具栏、数据表格、日志面板和字段抽屉。
@@ -94,7 +97,8 @@ export function RightWorkspace({
   onExecuteCustomSoql,
   onCloseWorkspaceNotice,
   onCloseActiveTabNotice,
-  loadingText
+  loadingText,
+  objectNames
 }: RightWorkspaceProps) {
   // 日志面板高度状态。
   const [logPanelHeight, setLogPanelHeight] = useState(220);
@@ -104,6 +108,8 @@ export function RightWorkspace({
   const dragStartHeightRef = useRef(220);
   // Tab 右键菜单状态：记录显示位置和目标 Tab。
   const [tabContextMenu, setTabContextMenu] = useState<{ x: number; y: number; objectName: string } | null>(null);
+  // 编辑器对象字段缓存：支持 FROM 任意对象后做字段补全。
+  const [soqlObjectFieldsMap, setSoqlObjectFieldsMap] = useState<Record<string, string[]>>({});
 
   // 日志面板拖拽调整高度。
   useEffect(() => {
@@ -153,6 +159,53 @@ export function RightWorkspace({
 
   // 当前对象可排序字段：仅展示字段元数据中 sortable=true 的字段。
   const sortableFields = (activeTab?.describe?.fields || []).filter((field) => field.metadata?.sortable === true);
+
+  useEffect(() => {
+    setSoqlObjectFieldsMap({}); // 切换数据源后清空缓存，避免跨源字段污染。
+  }, [selectedSourceId]);
+
+  useEffect(() => {
+    if (!selectedSourceId || !activeTab) return;
+    const fromObjectNames = extractFromObjectNames(activeTab.soqlDraft);
+    if (fromObjectNames.length === 0) return;
+    const queryableObjectNameSet = new Set(objectNames.map((name) => name.toLowerCase()));
+    const loadedObjectNameSet = new Set(Object.keys(soqlObjectFieldsMap).map((name) => name.toLowerCase()));
+    const unloadedObjectNames = fromObjectNames.filter((objectName) => {
+      if (!queryableObjectNameSet.has(objectName.toLowerCase())) return false; // 仅加载当前数据源可查询对象。
+      return !loadedObjectNameSet.has(objectName.toLowerCase());
+    });
+    if (unloadedObjectNames.length === 0) return;
+
+    let cancelled = false;
+    void Promise.all(
+      unloadedObjectNames.map(async (objectName) => {
+        try {
+          const describe = await api.describeObject(selectedSourceId, objectName);
+          return {
+            objectName,
+            fields: describe.fields.map((field) => field.name)
+          };
+        } catch {
+          return null; // describe 失败时忽略，不阻塞其它对象字段加载。
+        }
+      })
+    ).then((describes) => {
+      if (cancelled) return;
+      const loadedEntries = describes.filter((item): item is { objectName: string; fields: string[] } => Boolean(item));
+      if (loadedEntries.length === 0) return;
+      setSoqlObjectFieldsMap((current) => {
+        const next = { ...current };
+        loadedEntries.forEach((item) => {
+          next[item.objectName] = item.fields; // 写入缓存，供编辑器上下文补全读取。
+        });
+        return next;
+      });
+    });
+
+    return () => {
+      cancelled = true; // 避免异步返回后写入已失效状态。
+    };
+  }, [selectedSourceId, activeTab, objectNames, soqlObjectFieldsMap]);
 
   return (
     <>
@@ -504,10 +557,17 @@ export function RightWorkspace({
                       onChange={(value) => onSoqlChange(value)}
                       height="100%"
                       className="h-full"
-                      // 当前对象字段名补全。
+                      // 当前对象字段名补全（作为回退候选）。
                       fieldNames={activeTab.describe?.fields.map((field) => field.name) || []}
-                      // 当前对象名补全，便于 FROM 子句输入。
-                      objectNames={[activeTab.objectName]}
+                      // 当前数据源对象名补全，便于 FROM 子句输入。
+                      objectNames={objectNames}
+                      // 传入对象字段映射，使 FROM <对象> 后可按对象上下文补全字段。
+                      objectFieldsMap={{
+                        ...soqlObjectFieldsMap,
+                        ...(activeTab.describe
+                          ? { [activeTab.objectName]: activeTab.describe.fields.map((field) => field.name) }
+                          : {})
+                      }}
                     />
                   </div>
                   <button className="btn btn-primary btn-sm mt-2 self-start" disabled={activeTab.loading || !activeTab.soqlDraft} onClick={onExecuteCustomSoql}>
@@ -537,4 +597,15 @@ function formatLogTime(timestamp: string): string {
   const date = new Date(timestamp);
   if (Number.isNaN(date.getTime())) return timestamp;
   return date.toLocaleString();
+}
+
+// 从 SOQL 中提取所有 FROM 后对象名（包含子查询），用于按需加载字段元数据。
+function extractFromObjectNames(soql: string): string[] {
+  const fromObjectNames: string[] = [];
+  const regex = /\bfrom\s+([A-Za-z_][\w]*)/gi;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(soql)) !== null) {
+    fromObjectNames.push(match[1]); // 逐个记录 FROM 对象，供后续去重与懒加载。
+  }
+  return Array.from(new Set(fromObjectNames));
 }

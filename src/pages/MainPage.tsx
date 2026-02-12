@@ -1055,6 +1055,7 @@ export function MainPage() {
                       patchTab(activeTab.objectName, (item) => ({ ...item, notice: null }));
                     }}
                     loadingText={loadingText}
+                    objectNames={objects.filter((item) => item.queryable).map((item) => item.name)}
                   />
                 </div>
               </div>
@@ -1094,7 +1095,7 @@ export function MainPage() {
               </div>
               {/* 右侧 SOQL 执行器：多 Tab、执行、结果/层级/日志。 */}
               <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-                <SoqlExecutorWorkspace selectedSourceId={selectedSourceId} loadingText={loadingText} />
+                <SoqlExecutorWorkspace selectedSourceId={selectedSourceId} loadingText={loadingText} objects={objects} />
               </div>
             </div>
 
