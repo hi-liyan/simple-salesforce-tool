@@ -203,6 +203,54 @@ pub fn refresh_cli_source_by_id(
     })
 }
 
+/// 通过 Salesforce CLI 直接打开指定组织的页面路径（系统默认浏览器）。
+/// 说明：仅支持 `cli-<orgId>` 数据源。
+pub fn open_org_path(
+    source_id: &str,
+    path: &str,
+    preferred_cli_path: Option<&str>,
+) -> Result<(), AppError> {
+    let org_id = source_id
+        .strip_prefix("cli-")
+        .ok_or_else(|| AppError::Biz(format!("仅支持 CLI 数据源打开页面: {source_id}")))?;
+    let normalized_path = if path.trim().is_empty() {
+        "/".to_string()
+    } else if path.starts_with('/') {
+        path.to_string()
+    } else {
+        format!("/{path}")
+    };
+
+    // Windows 下先尝试清理残留 CLI 进程，避免偶发命令卡死。
+    cleanup_stale_cli_processes();
+
+    let target_org_candidates = resolve_org_display_targets(org_id, preferred_cli_path);
+    let candidates = build_cli_candidates(preferred_cli_path);
+    let mut errors = Vec::new();
+
+    for cli in &candidates {
+        for target_org in &target_org_candidates {
+            let args = org_open_args_for(cli, target_org, &normalized_path);
+            match build_hidden_command(cli).args(&args).output() {
+                Ok(output) if output.status.success() => return Ok(()),
+                Ok(output) => {
+                    errors.push(format!(
+                        "{cli} (target={target_org}): {}",
+                        format_cli_failure(&output)
+                    ));
+                }
+                Err(error) => errors.push(format!("{cli} (target={target_org}): {error}")),
+            }
+        }
+    }
+
+    Err(AppError::Biz(format!(
+        "调用 Salesforce CLI 打开页面失败。已尝试: {}。详情: {}",
+        candidates.join(", "),
+        errors.join(" | ")
+    )))
+}
+
 /// 触发 Salesforce CLI OAuth 登录，并返回 org_id。
 pub fn login_web(
     instance_url: &str,
@@ -454,6 +502,35 @@ fn org_display_args_for(cli: &str, org_identifier: &str) -> Vec<String> {
             org_identifier.to_string(),
             "--verbose".to_string(),
             "--json".to_string(),
+        ]
+    }
+}
+
+fn org_open_args_for(cli: &str, org_identifier: &str, path: &str) -> Vec<String> {
+    let filename = Path::new(cli)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(cli);
+    let is_sfdx = filename.eq_ignore_ascii_case("sfdx")
+        || filename.eq_ignore_ascii_case("sfdx.cmd")
+        || filename.eq_ignore_ascii_case("sfdx.exe");
+
+    if is_sfdx {
+        vec![
+            "force:org:open".to_string(),
+            "-u".to_string(),
+            org_identifier.to_string(),
+            "-p".to_string(),
+            path.to_string(),
+        ]
+    } else {
+        vec![
+            "org".to_string(),
+            "open".to_string(),
+            "--target-org".to_string(),
+            org_identifier.to_string(),
+            "--path".to_string(),
+            path.to_string(),
         ]
     }
 }
@@ -835,4 +912,3 @@ fn compare_semver(left: &str, right: &str) -> CmpOrdering {
     };
     parse_triplet(left).cmp(&parse_triplet(right))
 }
-

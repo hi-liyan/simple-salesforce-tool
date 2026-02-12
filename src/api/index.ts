@@ -47,6 +47,8 @@ export const api = {
     invokeApi<void>("save_column_visibility", { sourceId, objectName, visibility }),
   listObjects: (sourceId: string) => invokeApi<SalesforceObject[]>("list_objects", { sourceId }),
   refreshObjects: (sourceId: string) => invokeApi<SalesforceObject[]>("refresh_objects", { sourceId }),
+  openObjectListPage: (sourceId: string, objectName: string) =>
+    invokeApi<string | null>("open_object_list_page", { sourceId, objectName }),
   describeObject: (sourceId: string, objectName: string) =>
     invokeApi<ObjectDescribe>("describe_object", { sourceId, objectName }),
   queryRecords: (sourceId: string, soql: string) =>
