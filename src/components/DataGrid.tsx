@@ -20,6 +20,8 @@ type Props = {
   fieldMetadataMap: Record<string, Record<string, unknown>>;
   dirtyCellKeys: string[];
   selectedRecordIds: string[];
+  // 待删除记录 Id 列表：用于将整行标记为灰色背景。
+  pendingDeleteRecordIds: string[];
   onToggleRecord: (recordId: string, checked: boolean) => void;
   onToggleAll: (checked: boolean, recordIds: string[]) => void;
   onEditCell: (rowIndex: number, columnName: string, value: unknown) => void;
@@ -33,6 +35,7 @@ export function DataGrid({
   fieldMetadataMap,
   dirtyCellKeys,
   selectedRecordIds,
+  pendingDeleteRecordIds,
   onToggleRecord,
   onToggleAll,
   onEditCell,
@@ -61,6 +64,7 @@ export function DataGrid({
   const allChecked = selectableIds.length > 0 && selectableIds.every((id) => selectedRecordIds.includes(id));
   const hasAnyChecked = selectedRecordIds.some((id) => selectableIds.includes(id));
   const dirtyCellSet = useMemo(() => new Set(dirtyCellKeys), [dirtyCellKeys]);
+  const pendingDeleteRecordSet = useMemo(() => new Set(pendingDeleteRecordIds), [pendingDeleteRecordIds]);
   const gridBodyRef = useRef<HTMLDivElement | null>(null);
   const closeMetaTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -124,13 +128,21 @@ export function DataGrid({
     const record = records[row] || {};
     const recordId = getRecordKey(row);
     const isNewRow = Boolean(record.__isNew);
+    // 待删除行统一灰色高亮，便于用户识别“尚未提交删除”的记录。
+    const isPendingDeleteRow = pendingDeleteRecordSet.has(recordId);
+    // 新建行统一浅绿色高亮，便于用户识别“待提交新增”的记录。
+    const isNewRowHighlight = isNewRow;
+    // 行级样式：用于选择列/序号列等非业务字段单元格。
+    const rowThemeOverride = buildRowThemeOverride(isPendingDeleteRow, isNewRowHighlight);
 
     if (columnId === "__select") {
       return {
         kind: GridCellKind.Boolean,
         data: selectedRecordIds.includes(recordId),
         allowOverlay: false,
-        readonly: recordId.startsWith("row-")
+        readonly: recordId.startsWith("row-"),
+        // 行级高亮：确保选择列与数据列颜色一致。
+        themeOverride: rowThemeOverride
       };
     }
 
@@ -141,7 +153,9 @@ export function DataGrid({
         data: text,
         displayData: text,
         allowOverlay: false,
-        readonly: true
+        readonly: true,
+        // 行级高亮：确保序号列与数据列颜色一致。
+        themeOverride: rowThemeOverride
       };
     }
 
@@ -153,7 +167,7 @@ export function DataGrid({
     const isDirty = dirtyCellSet.has(`${recordId}:${columnId}`);
     const isRequiredEmpty = requiredNewField && isEmptyValue(raw);
 
-    const commonTheme = buildCellThemeOverride(isDirty, isRequiredEmpty);
+    const commonTheme = buildCellThemeOverride(isDirty, isRequiredEmpty, isPendingDeleteRow, isNewRowHighlight);
 
     if (isBooleanType(fieldType)) {
       const text = normalizeBooleanText(raw);
@@ -627,17 +641,54 @@ function resolveViewportAxis(value: number, containerStart: number, containerEnd
 }
 
 // 根据元数据计算单元格样式（脏数据高亮 + 必填缺失红色提示）。
-function buildCellThemeOverride(isDirty: boolean, requiredMissing: boolean): GridCell["themeOverride"] | undefined {
+function buildCellThemeOverride(
+  isDirty: boolean,
+  requiredMissing: boolean,
+  pendingDelete: boolean,
+  isNewRow: boolean
+): GridCell["themeOverride"] | undefined {
+  if (pendingDelete) {
+    return {
+      bgCell: "#eceff3",
+      bgCellMedium: "#dfe4ea"
+    };
+  }
   if (requiredMissing) {
     return {
       bgCell: "#ffeaea",
       bgCellMedium: "#ffd3d3"
     };
   }
+  if (isNewRow) {
+    return {
+      bgCell: "#ebfaef",
+      bgCellMedium: "#d5f3dc"
+    };
+  }
   if (isDirty) {
     return {
       bgCell: "#fff6d9",
       bgCellMedium: "#ffe9a8"
+    };
+  }
+  return undefined;
+}
+
+// 行级样式：用于选择列与序号列的统一高亮。
+function buildRowThemeOverride(
+  pendingDelete: boolean,
+  isNewRow: boolean
+): GridCell["themeOverride"] | undefined {
+  if (pendingDelete) {
+    return {
+      bgCell: "#eceff3",
+      bgCellMedium: "#dfe4ea"
+    };
+  }
+  if (isNewRow) {
+    return {
+      bgCell: "#ebfaef",
+      bgCellMedium: "#d5f3dc"
     };
   }
   return undefined;
@@ -678,6 +729,8 @@ function isCellEditableByMeta(metadata: Record<string, unknown>, isNewRow: boole
 function isRequiredOnCreate(metadata: Record<string, unknown>, isNewRow: boolean): boolean {
   if (!isNewRow) return false;
   if (metadata.createable === false) return false;
+  // 创建时后端会自动填默认值的字段，不应再按“必填缺失”标红。
+  if (metadata.defaultedOnCreate === true) return false;
   return metadata.nillable === false;
 }
 
@@ -811,4 +864,3 @@ function extractEditableNumber(value: EditableGridCell): number | undefined {
   const parsed = Number(text);
   return Number.isFinite(parsed) ? parsed : undefined;
 }
-

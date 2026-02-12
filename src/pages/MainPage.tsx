@@ -278,6 +278,8 @@ export function MainPage() {
       sortField: "Id",
       sortDirection: "DESC",
       selectedRecordIds: [],
+      // 待删除记录：仅做前端标记，执行更新时统一提交。
+      pendingDeleteRecordIds: [],
       currentSoql: "",
       soqlDraft: "",
       showQueryBar: true,
@@ -367,6 +369,7 @@ export function MainPage() {
         result,
         loading: false,
         selectedRecordIds: [],
+        pendingDeleteRecordIds: [],
         currentSoql: soql,
         soqlDraft: soql,
         dirtyCellKeys: [],
@@ -405,35 +408,30 @@ export function MainPage() {
       return;
     }
 
-    patchTab(activeTab.objectName, (item) => ({ ...item, loading: true }));
-
+    // 删除按钮仅标记待删除，真正删除由“执行更新”统一提交。
     try {
-      await Promise.all(
-        activeTab.selectedRecordIds.map((recordId) => api.deleteRecord(selectedSourceId, activeTab.objectName, recordId))
-      );
-
       patchTab(activeTab.objectName, (item) => ({
         ...item,
-        notice: { type: "success", message: `已删除 ${activeTab.selectedRecordIds.length} 条记录。` }
+        pendingDeleteRecordIds: Array.from(new Set([...item.pendingDeleteRecordIds, ...item.selectedRecordIds])),
+        selectedRecordIds: [],
+        notice: { type: "success", message: `已标记 ${activeTab.selectedRecordIds.length} 条记录，执行更新时删除。` }
       }));
       appendTabLog(activeTab.objectName, {
         action: "DELETE",
         success: true,
         request: `recordIds=${activeTab.selectedRecordIds.join(",")}`,
-        summary: `删除成功，影响 ${activeTab.selectedRecordIds.length} 条。`
+        summary: `已标记删除 ${activeTab.selectedRecordIds.length} 条，待执行更新提交。`
       });
-      await queryTabData(activeTab.objectName);
     } catch (error) {
       patchTab(activeTab.objectName, (item) => ({
         ...item,
-        loading: false,
-        notice: { type: "error", message: `批量删除失败：${String(error)}` }
+        notice: { type: "error", message: `标记删除失败：${String(error)}` }
       }));
       appendTabLog(activeTab.objectName, {
         action: "DELETE",
         success: false,
         request: `recordIds=${activeTab.selectedRecordIds.join(",")}`,
-        summary: "批量删除失败。",
+        summary: "标记删除失败。",
         errorMessage: String(error)
       });
     }
@@ -457,6 +455,7 @@ export function MainPage() {
         result,
         loading: false,
         selectedRecordIds: [],
+        pendingDeleteRecordIds: [],
         currentSoql: activeTab.soqlDraft,
         columnVisibility: nextVisibility,
         dirtyCellKeys: [],
@@ -541,8 +540,10 @@ export function MainPage() {
 
     const editableFields = new Set(activeTab.describe.fields.map((field) => field.name));
     const dirtyCellSet = new Set(activeTab.dirtyCellKeys);
+    const pendingDeleteSet = new Set(activeTab.pendingDeleteRecordIds);
     const creates: Record<string, unknown>[] = [];
     const updates: { recordId: string; values: Record<string, unknown> }[] = [];
+    const deletes: string[] = [];
 
     patchTab(activeTab.objectName, (item) => ({ ...item, loading: true }));
     try {
@@ -564,6 +565,11 @@ export function MainPage() {
 
         const recordId = String(record.Id ?? "");
         if (!recordId) continue;
+        if (pendingDeleteSet.has(recordId)) {
+          // 已标记待删除的记录不再参与更新，只在删除阶段提交。
+          deletes.push(recordId);
+          continue;
+        }
 
         const values: Record<string, unknown> = {};
         dirtyCellSet.forEach((cellKey) => {
@@ -580,17 +586,24 @@ export function MainPage() {
         }
       }
 
-      await api.saveRecords({
-        sourceId: selectedSourceId,
-        objectName: activeTab.objectName,
-        creates,
-        updates
-      });
+      if (creates.length > 0 || updates.length > 0) {
+        await api.saveRecords({
+          sourceId: selectedSourceId,
+          objectName: activeTab.objectName,
+          creates,
+          updates
+        });
+      }
+      if (deletes.length > 0) {
+        await Promise.all(
+          deletes.map((recordId) => api.deleteRecord(selectedSourceId, activeTab.objectName, recordId))
+        );
+      }
       appendTabLog(activeTab.objectName, {
         action: "UPSERT",
         success: true,
-        request: `creates=${creates.length}, updates=${updates.length}`,
-        summary: `执行更新成功，新增 ${creates.length} 条，更新 ${updates.length} 条。`
+        request: `creates=${creates.length}, updates=${updates.length}, deletes=${deletes.length}`,
+        summary: `执行更新成功，新增 ${creates.length} 条，更新 ${updates.length} 条，删除 ${deletes.length} 条。`
       });
 
       await queryTabData(activeTab.objectName);
@@ -607,7 +620,7 @@ export function MainPage() {
       appendTabLog(activeTab.objectName, {
         action: "UPSERT",
         success: false,
-        request: `creates=${creates.length}, updates=${updates.length}`,
+        request: `creates=${creates.length}, updates=${updates.length}, deletes=${deletes.length}`,
         summary: "执行更新失败。",
         errorMessage: String(error)
       });
@@ -617,6 +630,9 @@ export function MainPage() {
   function discardPendingChanges() {
     if (!activeTab) return;
     if (!hasPendingChanges(activeTab)) return;
+    const revertedNewCount = activeTab.result.records.filter((record) => Boolean(record.__isNew)).length;
+    const revertedDirtyCount = activeTab.dirtyCellKeys.length;
+    const revertedDeleteCount = activeTab.pendingDeleteRecordIds.length;
 
     patchTab(activeTab.objectName, (item) => {
       const revertedRecords = item.result.records
@@ -631,9 +647,16 @@ export function MainPage() {
         ...item,
         result: { ...item.result, records: revertedRecords },
         dirtyCellKeys: [],
+        pendingDeleteRecordIds: [],
         selectedRecordIds: [],
         notice: { type: "success", message: "已撤回未提交修改。" }
       };
+    });
+    appendTabLog(activeTab.objectName, {
+      action: "DISCARD",
+      success: true,
+      request: `newRows=${revertedNewCount}, dirtyCells=${revertedDirtyCount}, pendingDeletes=${revertedDeleteCount}`,
+      summary: `撤回成功，已撤销新增 ${revertedNewCount} 条、编辑 ${revertedDirtyCount} 个单元格、待删除 ${revertedDeleteCount} 条。`
     });
   }
 
@@ -728,6 +751,7 @@ export function MainPage() {
                 visibleColumns={visibleColumns}
                 fieldMetadataMap={fieldMetadataMap}
                 hasPendingChanges={activeTabHasPendingChanges}
+                pendingDeleteRecordIds={activeTab?.pendingDeleteRecordIds ?? []}
                 onActivateTab={setActiveTabObjectName}
                 onCloseTab={closeTab}
                 onCreateRecord={createRecordQuickly}
@@ -948,7 +972,7 @@ function buildQuerySoql(
 // 判断 Tab 是否存在未提交的变更。
 function hasPendingChanges(tab: TabState): boolean {
   const hasNewRows = tab.result.records.some((record) => Boolean(record.__isNew));
-  return hasNewRows || tab.dirtyCellKeys.length > 0;
+  return hasNewRows || tab.dirtyCellKeys.length > 0 || tab.pendingDeleteRecordIds.length > 0;
 }
 
 // 基线记录：用于比较单元格是否发生变化。
