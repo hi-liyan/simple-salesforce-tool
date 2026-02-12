@@ -1,10 +1,11 @@
 ﻿import { useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useQueryClient } from "@tanstack/react-query";
-import { ScrollText, Settings, Table2 } from "lucide-react";
+import { Braces, ScrollText, Settings, Table2 } from "lucide-react";
 import { api } from "../api";
 import { LeftSidebar } from "../features/main/LeftSidebar";
 import { RightWorkspace } from "../features/main/RightWorkspace";
+import { SoqlExecutorWorkspace } from "../features/main/SoqlExecutorWorkspace";
 import { SettingsPanel } from "../features/main/SettingsPanel";
 import { SystemLogsPanel } from "../features/main/SystemLogsPanel";
 import { MainLayout } from "../layouts/MainLayout";
@@ -14,7 +15,7 @@ import { Notice, ObjectDescribe, ObjectField, QueryResult, SalesforceObject, Tab
 
 // 主页面：对象列表 + 结果面板 + SOQL 抽屉。
 export function MainPage() {
-  const [viewMode, setViewMode] = useState<"query" | "systemLogs" | "settings">("query");
+  const [viewMode, setViewMode] = useState<"query" | "soqlExecutor" | "systemLogs" | "settings">("query");
   // 启动画面状态：首次初始化完成前显示全屏遮罩，避免用户误以为卡死。
   const [startupLoading, setStartupLoading] = useState(true);
   // Store：读取全局状态。
@@ -821,6 +822,13 @@ export function MainPage() {
                 <Table2 size={16} />
             </button>
             <button
+              className={`tool-rail-btn ${viewMode === "soqlExecutor" ? "tool-rail-btn--active" : ""}`}
+              title="SOQL 执行器"
+              onClick={() => setViewMode("soqlExecutor")}
+            >
+                <Braces size={16} />
+            </button>
+            <button
               className={`tool-rail-btn ${viewMode === "systemLogs" ? "tool-rail-btn--active" : ""}`}
               title="系统日志"
               onClick={() => setViewMode("systemLogs")}
@@ -999,6 +1007,29 @@ export function MainPage() {
                   }}
                   loadingText={loadingText}
                 />
+              </div>
+            </div>
+          ) : viewMode === "soqlExecutor" ? (
+            <div className="grid h-full w-full grid-cols-[320px_1fr] overflow-hidden">
+              {/* 左侧沿用数据源/对象面板：便于在编写 SOQL 时参考对象信息。 */}
+              <div className="flex min-h-0 flex-col border-r border-base-300">
+                <LeftSidebar
+                  sources={sources}
+                  selectedSourceId={selectedSourceId}
+                  pageLoading={pageLoading}
+                  objectsLoading={Boolean(selectedSourceId) && objectsFetching}
+                  onOpenAuthWindow={openAuthWindow}
+                  onChangeSource={handleSourceChange}
+                  onRefreshSources={() => void refreshSources(true)}
+                  objects={objects}
+                  activeTabObjectName={activeTabObjectName}
+                  onOpenObject={(item) => void openObjectTab(item)}
+                  onNotQueryableObjectClick={handleNotQueryableObjectClick}
+                />
+              </div>
+              {/* 右侧 SOQL 执行器：多 Tab、执行、结果/层级/日志。 */}
+              <div className="flex min-h-0 min-w-0 flex-col overflow-hidden">
+                <SoqlExecutorWorkspace selectedSourceId={selectedSourceId} loadingText={loadingText} />
               </div>
             </div>
           ) : viewMode === "systemLogs" ? (
