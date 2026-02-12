@@ -1,9 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+﻿import { useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { Box, IconButton, Tooltip } from "@mui/material";
 import { useQueryClient } from "@tanstack/react-query";
+import { Database, Table2 } from "lucide-react";
 import { api } from "../api";
 import { LeftSidebar } from "../features/main/LeftSidebar";
 import { RightWorkspace } from "../features/main/RightWorkspace";
+import { SystemLogsPanel } from "../features/main/SystemLogsPanel";
 import { MainLayout } from "../layouts/MainLayout";
 import { useObjectsQuery, useSourcesQuery, useSyncSourcesMutation } from "../queries/salesforce";
 import { useAppStore } from "../store/useAppStore";
@@ -11,6 +14,7 @@ import { Notice, ObjectDescribe, QueryResult, SalesforceObject, TabLog, TabState
 
 // 主页面：对象列表 + 结果面板 + SOQL 抽屉。
 export function MainPage() {
+  const [viewMode, setViewMode] = useState<"query" | "systemLogs">("query");
   // Store：读取全局状态。
   const selectedSourceId = useAppStore((state) => state.selectedSourceId);
   const tabs = useAppStore((state) => state.tabs);
@@ -27,7 +31,7 @@ export function MainPage() {
   // React Query：数据源与对象列表。
   const queryClient = useQueryClient();
   const { data: sources = [], isFetching: sourcesFetching } = useSourcesQuery();
-  const { data: objects = [], isFetching: objectsFetching } = useObjectsQuery(selectedSourceId);
+  const { data: objects = [], isFetching: objectsFetching, error: objectsError } = useObjectsQuery(selectedSourceId);
   const syncSourcesMutation = useSyncSourcesMutation();
 
   // 当前激活的 Tab。
@@ -103,6 +107,15 @@ export function MainPage() {
     resetTabs();
   }, [selectedSourceId, resetTabs]);
 
+
+  // 对象列表加载失败时给出明确提示，避免出现“空白但无错误”。
+  useEffect(() => {
+    if (!objectsError) return;
+    setWorkspaceNotice({
+      type: "error",
+      message: `加载 Objects 列表失败：${String(objectsError)}`
+    });
+  }, [objectsError]);
   // 当当前数据源被删除或失效时，清空当前选择。
   useEffect(() => {
     // 未选择数据源则不需要处理。
@@ -253,6 +266,7 @@ export function MainPage() {
       selectedRecordIds: [],
       currentSoql: "",
       soqlDraft: "",
+      showQueryBar: true,
       showDrawer: false,
       showLogs: false,
       logs: [],
@@ -654,148 +668,174 @@ export function MainPage() {
 
   return (
     <MainLayout
-      leftSidebar={
-        <LeftSidebar
-          sources={sources}
-          selectedSourceId={selectedSourceId}
-          pageLoading={pageLoading}
-          onOpenAuthWindow={openAuthWindow}
-          onChangeSource={handleSourceChange}
-          onRefreshSources={() => void refreshSources(true)}
-          objects={objects}
-          activeTabObjectName={activeTabObjectName}
-          onOpenObject={(item) => void openObjectTab(item)}
-        />
+      navRail={
+        <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", py: 1, gap: 0.5 }}>
+          <Tooltip title="Query 布局" placement="right">
+            <IconButton color={viewMode === "query" ? "primary" : "default"} onClick={() => setViewMode("query")}>
+              <Table2 size={16} />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="系统日志" placement="right">
+            <IconButton color={viewMode === "systemLogs" ? "primary" : "default"} onClick={() => setViewMode("systemLogs")}>
+              <Database size={16} />
+            </IconButton>
+          </Tooltip>
+        </Box>
       }
-      rightWorkspace={
-        <RightWorkspace
-          tabs={tabs}
-          activeTabObjectName={activeTabObjectName}
-          activeTab={activeTab}
-          workspaceNotice={workspaceNotice}
-          visibleColumns={visibleColumns}
-          fieldMetadataMap={fieldMetadataMap}
-          hasPendingChanges={activeTabHasPendingChanges}
-          onActivateTab={setActiveTabObjectName}
-          onCloseTab={closeTab}
-          onCreateRecord={createRecordQuickly}
-          onDeleteCheckedRecords={() => void deleteCheckedRecords()}
-          onApplyPendingChanges={() => void applyPendingChanges()}
-          onDiscardPendingChanges={discardPendingChanges}
-          onToggleDrawer={() => void toggleDrawerForActiveTab()}
-          onToggleLogs={() => {
-            if (!activeTab) return;
-            patchTab(activeTab.objectName, (item) => ({ ...item, showLogs: !item.showLogs }));
-          }}
-          onWhereChange={(value) => {
-            if (!activeTab) return;
-            patchTab(activeTab.objectName, (item) => ({ ...item, whereClause: value }));
-          }}
-          onLimitChange={(value) => {
-            if (!activeTab) return;
-            patchTab(activeTab.objectName, (item) => ({ ...item, limit: value }));
-          }}
-          onSortFieldChange={(value) => {
-            if (!activeTab) return;
-            patchTab(activeTab.objectName, (item) => ({ ...item, sortField: value }));
-          }}
-          onSortDirectionChange={(value) => {
-            if (!activeTab) return;
-            patchTab(activeTab.objectName, (item) => ({ ...item, sortDirection: value }));
-          }}
-          onQuery={() => {
-            if (!activeTab) return;
-            void queryTabData(
-              activeTab.objectName,
-              activeTab.describe || undefined,
-              activeTab.whereClause,
-              activeTab.sortField,
-              activeTab.limit,
-              activeTab.sortDirection
-            );
-          }}
-          onToggleRecord={(recordId, checked) => {
-            if (!activeTab) return;
-            patchTab(activeTab.objectName, (item) => ({
-              ...item,
-              selectedRecordIds: checked
-                ? Array.from(new Set([...item.selectedRecordIds, recordId]))
-                : item.selectedRecordIds.filter((id) => id !== recordId)
-            }));
-          }}
-          onToggleAllRecords={(checked, recordIds) => {
-            if (!activeTab) return;
-            patchTab(activeTab.objectName, (item) => ({ ...item, selectedRecordIds: checked ? recordIds : [] }));
-          }}
-          onEditCell={(rowIndex, columnName, value) => {
-            if (!activeTab) return;
-            patchTab(activeTab.objectName, (item) => {
-              const nextRecords = [...item.result.records];
-              const target = nextRecords[rowIndex];
-              if (!target) return item;
+      content={
+        viewMode === "query" ? (
+          <Box sx={{ height: "100%", width: "100%", display: "grid", gridTemplateColumns: "320px 1fr", overflow: "hidden" }}>
+            <Box sx={{ display: "flex", flexDirection: "column", minHeight: 0, borderRight: "1px solid", borderColor: "divider" }}>
+              <LeftSidebar
+                sources={sources}
+                selectedSourceId={selectedSourceId}
+                pageLoading={pageLoading}
+                onOpenAuthWindow={openAuthWindow}
+                onChangeSource={handleSourceChange}
+                onRefreshSources={() => void refreshSources(true)}
+                objects={objects}
+                activeTabObjectName={activeTabObjectName}
+                onOpenObject={(item) => void openObjectTab(item)}
+              />
+            </Box>
+            <Box sx={{ minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+              <RightWorkspace
+                tabs={tabs}
+                activeTabObjectName={activeTabObjectName}
+                activeTab={activeTab}
+                workspaceNotice={workspaceNotice}
+                visibleColumns={visibleColumns}
+                fieldMetadataMap={fieldMetadataMap}
+                hasPendingChanges={activeTabHasPendingChanges}
+                onActivateTab={setActiveTabObjectName}
+                onCloseTab={closeTab}
+                onCreateRecord={createRecordQuickly}
+                onDeleteCheckedRecords={() => void deleteCheckedRecords()}
+                onApplyPendingChanges={() => void applyPendingChanges()}
+                onDiscardPendingChanges={discardPendingChanges}
+                onToggleDrawer={() => void toggleDrawerForActiveTab()}
+                onToggleQueryBar={() => {
+                  if (!activeTab) return;
+                  patchTab(activeTab.objectName, (item) => ({ ...item, showQueryBar: !item.showQueryBar }));
+                }}
+                onToggleLogs={() => {
+                  if (!activeTab) return;
+                  patchTab(activeTab.objectName, (item) => ({ ...item, showLogs: !item.showLogs }));
+                }}
+                onWhereChange={(value) => {
+                  if (!activeTab) return;
+                  patchTab(activeTab.objectName, (item) => ({ ...item, whereClause: value }));
+                }}
+                onLimitChange={(value) => {
+                  if (!activeTab) return;
+                  patchTab(activeTab.objectName, (item) => ({ ...item, limit: value }));
+                }}
+                onSortFieldChange={(value) => {
+                  if (!activeTab) return;
+                  patchTab(activeTab.objectName, (item) => ({ ...item, sortField: value }));
+                }}
+                onSortDirectionChange={(value) => {
+                  if (!activeTab) return;
+                  patchTab(activeTab.objectName, (item) => ({ ...item, sortDirection: value }));
+                }}
+                onQuery={() => {
+                  if (!activeTab) return;
+                  void queryTabData(
+                    activeTab.objectName,
+                    activeTab.describe || undefined,
+                    activeTab.whereClause,
+                    activeTab.sortField,
+                    activeTab.limit,
+                    activeTab.sortDirection
+                  );
+                }}
+                onToggleRecord={(recordId, checked) => {
+                  if (!activeTab) return;
+                  patchTab(activeTab.objectName, (item) => ({
+                    ...item,
+                    selectedRecordIds: checked
+                      ? Array.from(new Set([...item.selectedRecordIds, recordId]))
+                      : item.selectedRecordIds.filter((id) => id !== recordId)
+                  }));
+                }}
+                onToggleAllRecords={(checked, recordIds) => {
+                  if (!activeTab) return;
+                  patchTab(activeTab.objectName, (item) => ({ ...item, selectedRecordIds: checked ? recordIds : [] }));
+                }}
+                onEditCell={(rowIndex, columnName, value) => {
+                  if (!activeTab) return;
+                  patchTab(activeTab.objectName, (item) => {
+                    const nextRecords = [...item.result.records];
+                    const target = nextRecords[rowIndex];
+                    if (!target) return item;
 
-              const nextRecord = { ...target, [columnName]: value };
-              const recordKey = getRecordKey(nextRecord, rowIndex);
-              const cellKey = `${recordKey}:${columnName}`;
-              const dirtySet = new Set(item.dirtyCellKeys);
-              const isNewRow = Boolean(nextRecord.__isNew);
-              if (isNewRow) {
-                dirtySet.add(cellKey);
-              } else {
-                const baselineValue = stringifyComparableValue(item.baselineRecords[recordKey]?.[columnName]);
-                const nextValue = stringifyComparableValue(value);
-                if (baselineValue === nextValue) {
-                  dirtySet.delete(cellKey);
-                } else {
-                  dirtySet.add(cellKey);
-                }
-              }
+                    const nextRecord = { ...target, [columnName]: value };
+                    const recordKey = getRecordKey(nextRecord, rowIndex);
+                    const cellKey = `${recordKey}:${columnName}`;
+                    const dirtySet = new Set(item.dirtyCellKeys);
+                    const isNewRow = Boolean(nextRecord.__isNew);
+                    if (isNewRow) {
+                      dirtySet.add(cellKey);
+                    } else {
+                      const baselineValue = stringifyComparableValue(item.baselineRecords[recordKey]?.[columnName]);
+                      const nextValue = stringifyComparableValue(value);
+                      if (baselineValue === nextValue) {
+                        dirtySet.delete(cellKey);
+                      } else {
+                        dirtySet.add(cellKey);
+                      }
+                    }
 
-              nextRecords[rowIndex] = nextRecord;
-              return {
-                ...item,
-                result: { ...item.result, records: nextRecords },
-                dirtyCellKeys: Array.from(dirtySet)
-              };
-            });
-          }}
-          onShowMessage={(message) => {
-            if (!activeTab) return;
-            patchTab(activeTab.objectName, (item) => ({
-              ...item,
-              notice: { type: "error", message }
-            }));
-          }}
-          onToggleAllFields={() => {
-            if (!activeTab?.describe) return;
-            const allSelected = activeTab.describe.fields.every((field) => (activeTab.columnVisibility[field.name] ?? true) === true);
-            const nextChecked = !allSelected;
-            const nextVisibility = activeTab.describe.fields.reduce((acc, field) => {
-              acc[field.name] = nextChecked;
-              return acc;
-            }, {} as Record<string, boolean>);
-            patchTab(activeTab.objectName, (item) => ({ ...item, columnVisibility: nextVisibility }));
-            if (selectedSourceId) {
-              void persistColumnVisibility(selectedSourceId, activeTab.objectName, nextVisibility);
-            }
-          }}
-          onToggleFieldVisibility={(fieldName, checked) => {
-            if (!activeTab) return;
-            const nextVisibility = { ...activeTab.columnVisibility, [fieldName]: checked };
-            patchTab(activeTab.objectName, (item) => ({
-              ...item,
-              columnVisibility: nextVisibility
-            }));
-            if (selectedSourceId) {
-              void persistColumnVisibility(selectedSourceId, activeTab.objectName, nextVisibility);
-            }
-          }}
-          onSoqlChange={(value) => {
-            if (!activeTab) return;
-            patchTab(activeTab.objectName, (item) => ({ ...item, soqlDraft: value }));
-          }}
-          onExecuteCustomSoql={() => void executeCustomSoql()}
-        />
+                    nextRecords[rowIndex] = nextRecord;
+                    return {
+                      ...item,
+                      result: { ...item.result, records: nextRecords },
+                      dirtyCellKeys: Array.from(dirtySet)
+                    };
+                  });
+                }}
+                onShowMessage={(message) => {
+                  if (!activeTab) return;
+                  patchTab(activeTab.objectName, (item) => ({
+                    ...item,
+                    notice: { type: "error", message }
+                  }));
+                }}
+                onToggleAllFields={() => {
+                  if (!activeTab?.describe) return;
+                  const allSelected = activeTab.describe.fields.every((field) => (activeTab.columnVisibility[field.name] ?? true) === true);
+                  const nextChecked = !allSelected;
+                  const nextVisibility = activeTab.describe.fields.reduce((acc, field) => {
+                    acc[field.name] = nextChecked;
+                    return acc;
+                  }, {} as Record<string, boolean>);
+                  patchTab(activeTab.objectName, (item) => ({ ...item, columnVisibility: nextVisibility }));
+                  if (selectedSourceId) {
+                    void persistColumnVisibility(selectedSourceId, activeTab.objectName, nextVisibility);
+                  }
+                }}
+                onToggleFieldVisibility={(fieldName, checked) => {
+                  if (!activeTab) return;
+                  const nextVisibility = { ...activeTab.columnVisibility, [fieldName]: checked };
+                  patchTab(activeTab.objectName, (item) => ({
+                    ...item,
+                    columnVisibility: nextVisibility
+                  }));
+                  if (selectedSourceId) {
+                    void persistColumnVisibility(selectedSourceId, activeTab.objectName, nextVisibility);
+                  }
+                }}
+                onSoqlChange={(value) => {
+                  if (!activeTab) return;
+                  patchTab(activeTab.objectName, (item) => ({ ...item, soqlDraft: value }));
+                }}
+                onExecuteCustomSoql={() => void executeCustomSoql()}
+              />
+            </Box>
+          </Box>
+        ) : (
+          <SystemLogsPanel />
+        )
       }
     />
   );

@@ -15,6 +15,7 @@ pub struct SalesforceClient {
 }
 
 impl SalesforceClient {
+    /// 创建 Salesforce HTTP 客户端。
     pub fn new() -> Self {
         let http = Client::builder()
             .user_agent("simple-salesforce-tool/0.1.0")
@@ -23,6 +24,7 @@ impl SalesforceClient {
         Self { http }
     }
 
+    /// 拉取当前实例下可见对象列表。
     pub async fn list_objects(&self, source: &SalesforceSource) -> Result<Vec<SalesforceObject>, AppError> {
         #[derive(Deserialize)]
         struct ObjectsResponse {
@@ -56,6 +58,7 @@ impl SalesforceClient {
             .collect())
     }
 
+    /// 拉取对象 describe 信息，并保留字段完整元数据。
     pub async fn describe_object(
         &self,
         source: &SalesforceSource,
@@ -78,6 +81,7 @@ impl SalesforceClient {
                 .fields
                 .into_iter()
                 .map(|field| {
+                    // Salesforce 字段结构较复杂，先转为对象后再提取常用字段。
                     let metadata = field
                         .as_object()
                         .ok_or_else(|| AppError::Biz("字段元数据格式无效。".to_string()))?
@@ -125,6 +129,7 @@ impl SalesforceClient {
         })
     }
 
+    /// 执行 SOQL 并返回记录集。
     pub async fn query_records(
         &self,
         source: &SalesforceSource,
@@ -147,6 +152,7 @@ impl SalesforceClient {
         })
     }
 
+    /// 新增单条记录，返回新记录 Id。
     pub async fn create_record(
         &self,
         source: &SalesforceSource,
@@ -171,6 +177,7 @@ impl SalesforceClient {
         }
     }
 
+    /// 更新单条记录（PATCH）。
     pub async fn update_record(
         &self,
         source: &SalesforceSource,
@@ -183,6 +190,7 @@ impl SalesforceClient {
             .await
     }
 
+    /// 删除单条记录（DELETE）。
     pub async fn delete_record(
         &self,
         source: &SalesforceSource,
@@ -193,6 +201,7 @@ impl SalesforceClient {
         self.request_unit(source, Method::DELETE, &url, None).await
     }
 
+    /// 批量提交新增+更新，使用 Composite API 并开启 all_or_none。
     pub async fn save_records(
         &self,
         source: &SalesforceSource,
@@ -237,6 +246,7 @@ impl SalesforceClient {
         let mut composite_request: Vec<CompositeRequestItem> =
             Vec::with_capacity(creates.len() + updates.len());
 
+        // 先拼装新增请求。
         for (index, values) in creates.into_iter().enumerate() {
             composite_request.push(CompositeRequestItem {
                 method: "POST".to_string(),
@@ -246,6 +256,7 @@ impl SalesforceClient {
             });
         }
 
+        // 再拼装更新请求。
         for (index, item) in updates.into_iter().enumerate() {
             composite_request.push(CompositeRequestItem {
                 method: "PATCH".to_string(),
@@ -273,6 +284,7 @@ impl SalesforceClient {
             .request_json(source, Method::POST, &url, Some(serde_json::to_value(payload)?))
             .await?;
 
+        // 任一子请求失败都视为整体失败（与 all_or_none 语义保持一致）。
         for item in response.composite_response {
             if !(200..300).contains(&item.http_status_code) {
                 return Err(AppError::Biz(format!(
@@ -285,6 +297,7 @@ impl SalesforceClient {
         Ok(())
     }
 
+    /// 发起并解析 JSON 请求（用于有返回体的接口）。
     async fn request_json<T: for<'de> serde::Deserialize<'de>>(
         &self,
         source: &SalesforceSource,
@@ -312,6 +325,7 @@ impl SalesforceClient {
         Ok(response.json::<T>().await?)
     }
 
+    /// 发起无返回体请求（成功状态含 204）。
     async fn request_unit(
         &self,
         source: &SalesforceSource,
@@ -340,6 +354,7 @@ impl SalesforceClient {
     }
 }
 
+/// 构造 Salesforce REST API 绝对路径。
 fn build_url(source: &SalesforceSource, path: &str) -> String {
     format!(
         "{}/services/data/{}/{}",

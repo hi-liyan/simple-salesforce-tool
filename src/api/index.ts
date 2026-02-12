@@ -6,7 +6,8 @@ import {
   RecordSavePayload,
   SalesforceObject,
   SalesforceSource,
-  SourceUpsertPayload
+  SourceUpsertPayload,
+  SystemLogPage
 } from "../types";
 
 // 统一调用封装，确保前后端错误在 UI 层可直接展示。
@@ -26,6 +27,8 @@ export const api = {
   closeAuthWindow: () => invokeApi<void>("close_auth_window"),
   openFieldMetaWindow: (fieldName: string, metadata: Record<string, unknown>) =>
     invokeApi<void>("open_field_meta_window", { fieldName, metadata }),
+  listSystemLogs: (page: number, pageSize: number) =>
+    invokeApi<SystemLogPage>("list_system_logs", { page, pageSize }),
   createSource: (payload: SourceUpsertPayload) => invokeApi<SalesforceSource>("create_source", { payload }),
   updateSource: (id: string, payload: SourceUpsertPayload) =>
     invokeApi<SalesforceSource>("update_source", { id, payload }),

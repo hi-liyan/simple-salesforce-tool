@@ -3,7 +3,10 @@ use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 use std::collections::HashMap;
 
 use crate::error::AppError;
-use crate::models::{CachedObjects, SalesforceObject, SalesforceSource, SourceUpsertPayload};
+use crate::models::{
+    CachedObjects, SalesforceObject, SalesforceSource, SourceUpsertPayload, SystemLogEntry,
+    SystemLogPage,
+};
 
 const OBJECT_CACHE_TTL_SECONDS: i64 = 3600;
 
@@ -36,12 +39,28 @@ pub fn init_schema(connection: &Connection) -> Result<(), AppError> {
             PRIMARY KEY(source_id, object_name),
             FOREIGN KEY(source_id) REFERENCES salesforce_sources(id) ON DELETE CASCADE
         );
+
+        CREATE TABLE IF NOT EXISTS system_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL,
+            level TEXT NOT NULL,
+            category TEXT NOT NULL,
+            action TEXT NOT NULL,
+            source_id TEXT NULL,
+            target TEXT NULL,
+            success INTEGER NOT NULL,
+            message TEXT NOT NULL,
+            detail TEXT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_system_logs_created_at ON system_logs(created_at DESC);
         "#,
     )?;
 
     Ok(())
 }
 
+/// 查询所有数据源，按更新时间倒序返回。
 pub fn list_sources(connection: &Connection) -> Result<Vec<SalesforceSource>, AppError> {
     let mut statement = connection.prepare(
         "SELECT id, name, instance_url, access_token, api_version, created_at, updated_at FROM salesforce_sources ORDER BY updated_at DESC",
@@ -66,6 +85,7 @@ pub fn list_sources(connection: &Connection) -> Result<Vec<SalesforceSource>, Ap
     Ok(items)
 }
 
+/// 按 ID 查询单个数据源，不存在时返回业务错误。
 pub fn get_source(connection: &Connection, id: &str) -> Result<SalesforceSource, AppError> {
     let mut statement = connection.prepare(
         "SELECT id, name, instance_url, access_token, api_version, created_at, updated_at FROM salesforce_sources WHERE id = ?1",
@@ -88,6 +108,7 @@ pub fn get_source(connection: &Connection, id: &str) -> Result<SalesforceSource,
     item.ok_or_else(|| AppError::Biz(format!("数据源不存在: {id}")))
 }
 
+/// 新增数据源（ID 由后端生成 UUID）。
 pub fn create_source(
     connection: &Connection,
     payload: SourceUpsertPayload,
@@ -119,6 +140,7 @@ pub fn create_source(
     Ok(item)
 }
 
+/// 更新现有数据源并返回最新记录。
 pub fn update_source(
     connection: &Connection,
     id: &str,
@@ -181,12 +203,14 @@ pub fn upsert_source_with_id(
 /// 清理本次 CLI 同步中不存在的旧 CLI 数据源，避免脏数据堆积。
 pub fn prune_cli_sources(connection: &Connection, keep_ids: &[String]) -> Result<(), AppError> {
     if keep_ids.is_empty() {
+        // 当 CLI 无任何可用账号时，直接清空全部 cli-* 来源及关联缓存。
         connection.execute("DELETE FROM object_metadata_cache WHERE source_id LIKE 'cli-%'", [])?;
         connection.execute("DELETE FROM column_visibility_settings WHERE source_id LIKE 'cli-%'", [])?;
         connection.execute("DELETE FROM salesforce_sources WHERE id LIKE 'cli-%'", [])?;
         return Ok(());
     }
 
+    // 构造动态占位符，确保 SQL 仍走参数绑定，避免字符串拼接注入风险。
     let placeholders = std::iter::repeat("?")
         .take(keep_ids.len())
         .collect::<Vec<_>>()
@@ -213,6 +237,7 @@ pub fn prune_cli_sources(connection: &Connection, keep_ids: &[String]) -> Result
     Ok(())
 }
 
+/// 删除数据源及其对象缓存、字段可见性配置。
 pub fn delete_source(connection: &Connection, id: &str) -> Result<(), AppError> {
     connection.execute("DELETE FROM salesforce_sources WHERE id = ?1", [id])?;
     connection.execute("DELETE FROM object_metadata_cache WHERE source_id = ?1", [id])?;
@@ -259,6 +284,7 @@ pub fn write_column_visibility(
     Ok(())
 }
 
+/// 读取对象列表缓存（命中且未过期时返回 Some）。
 pub fn read_object_cache(
     connection: &Connection,
     source_id: &str,
@@ -278,6 +304,7 @@ pub fn read_object_cache(
 
     if let Some(item) = cache {
         let now = Utc::now().timestamp();
+        // 仅在 TTL 内返回缓存，超时后强制走远端刷新。
         if now - item.updated_at < OBJECT_CACHE_TTL_SECONDS {
             let parsed: Vec<SalesforceObject> = serde_json::from_str(&item.payload)?;
             return Ok(Some(parsed));
@@ -287,6 +314,7 @@ pub fn read_object_cache(
     Ok(None)
 }
 
+/// 写入对象列表缓存（按 source_id 覆盖）。
 pub fn write_object_cache(
     connection: &Connection,
     source_id: &str,
@@ -302,4 +330,83 @@ pub fn write_object_cache(
     )?;
 
     Ok(())
+}
+
+/// 写入系统日志（用于 Salesforce API / CLI 调用链路追踪）。
+pub fn insert_system_log(
+    connection: &Connection,
+    level: &str,
+    category: &str,
+    action: &str,
+    source_id: Option<&str>,
+    target: Option<&str>,
+    success: bool,
+    message: &str,
+    detail: Option<&str>,
+) -> Result<(), AppError> {
+    let now = Utc::now().to_rfc3339();
+    connection.execute(
+        "INSERT INTO system_logs (created_at, level, category, action, source_id, target, success, message, detail)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![
+            now,
+            level,
+            category,
+            action,
+            source_id,
+            target,
+            if success { 1 } else { 0 },
+            message,
+            detail
+        ],
+    )?;
+    Ok(())
+}
+
+/// 分页读取系统日志，按时间倒序返回。
+pub fn list_system_logs(
+    connection: &Connection,
+    page: i64,
+    page_size: i64,
+) -> Result<SystemLogPage, AppError> {
+    // 对页码和页大小做后端兜底，防止前端传入无效参数。
+    let safe_page = page.max(1);
+    let safe_size = page_size.clamp(10, 200);
+    let offset = (safe_page - 1) * safe_size;
+
+    let total: i64 = connection.query_row("SELECT COUNT(1) FROM system_logs", [], |row| row.get(0))?;
+
+    let mut statement = connection.prepare(
+        "SELECT id, created_at, level, category, action, source_id, target, success, message, detail
+         FROM system_logs
+         ORDER BY id DESC
+         LIMIT ?1 OFFSET ?2",
+    )?;
+
+    let rows = statement.query_map(params![safe_size, offset], |row| {
+        Ok(SystemLogEntry {
+            id: row.get(0)?,
+            created_at: row.get(1)?,
+            level: row.get(2)?,
+            category: row.get(3)?,
+            action: row.get(4)?,
+            source_id: row.get(5)?,
+            target: row.get(6)?,
+            success: row.get::<_, i64>(7)? == 1,
+            message: row.get(8)?,
+            detail: row.get(9)?,
+        })
+    })?;
+
+    let mut items = Vec::new();
+    for row in rows {
+        items.push(row?);
+    }
+
+    Ok(SystemLogPage {
+        items,
+        page: safe_page,
+        page_size: safe_size,
+        total,
+    })
 }

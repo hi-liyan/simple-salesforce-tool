@@ -19,6 +19,7 @@ type RightWorkspaceProps = {
   onApplyPendingChanges: () => void;
   onDiscardPendingChanges: () => void;
   onToggleDrawer: () => void;
+  onToggleQueryBar: () => void;
   onToggleLogs: () => void;
   onWhereChange: (value: string) => void;
   onLimitChange: (value: number) => void;
@@ -51,6 +52,7 @@ export function RightWorkspace({
   onApplyPendingChanges,
   onDiscardPendingChanges,
   onToggleDrawer,
+  onToggleQueryBar,
   onToggleLogs,
   onWhereChange,
   onLimitChange,
@@ -216,6 +218,15 @@ export function RightWorkspace({
                 </Button>
                 <Button
                   variant="outlined"
+                  startIcon={<Search size={14} />}
+                  disabled={activeTab.loading}
+                  onClick={onToggleQueryBar}
+                  sx={{ height: 40 }}
+                >
+                  {activeTab.showQueryBar ? "隐藏查询栏" : "显示查询栏"}
+                </Button>
+                <Button
+                  variant="outlined"
                   startIcon={<PanelRightOpen size={14} />}
                   disabled={activeTab.loading}
                   onClick={onToggleDrawer}
@@ -236,8 +247,13 @@ export function RightWorkspace({
             </Box>
 
             {/* 查询条件栏。 */}
-            <Box sx={{ px: 1.5, py: 1, borderBottom: "1px solid", borderColor: "divider" }}>
-              <Stack direction="row" spacing={1} alignItems="center" flexWrap="nowrap">
+            {activeTab.showQueryBar && (
+              <Box sx={{ px: 1.5, py: 1, borderBottom: "1px solid", borderColor: "divider" }}>
+                <Stack direction="row" spacing={1} alignItems="center" flexWrap="nowrap">
+                  {/* 查询条件栏关闭按钮。 */}
+                  <IconButton size="small" onClick={onToggleQueryBar}>
+                    <X size={14} />
+                  </IconButton>
                 {/* WHERE 条件输入。 */}
                 <TextField
                   label="WHERE"
@@ -298,8 +314,9 @@ export function RightWorkspace({
                 <Button startIcon={<Search size={14} />} disabled={activeTab.loading} sx={{ height: 35 }} onClick={onQuery}>
                   查询
                 </Button>
-              </Stack>
-            </Box>
+                </Stack>
+              </Box>
+            )}
 
             {/* 数据表格区域。 */}
             <Box sx={{ minHeight: 0, flex: 1 }}>

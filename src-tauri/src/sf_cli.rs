@@ -10,28 +10,40 @@ use crate::models::SourceUpsertPayload;
 
 #[derive(Debug, Deserialize)]
 struct SfAuthListResponse {
+    /// CLI 退出状态码，0 为成功。
     status: i32,
+    /// 已认证组织列表。
     result: Vec<SfAuthOrg>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SfAuthOrg {
+    /// 组织 Id（18 位）。
     org_id: String,
+    /// 用户名。
     username: String,
+    /// 实例地址。
     instance_url: String,
+    /// 访问令牌。
     access_token: String,
+    /// 组织别名（可为空）。
     alias: Option<String>,
 }
 
+/// CLI 同步时用于写库的种子数据。
 #[derive(Debug, Clone)]
 pub struct CliSourceSeed {
+    /// 本地数据源 ID（约定为 cli-<orgId>）。
     pub id: String,
+    /// 入库 payload。
     pub payload: SourceUpsertPayload,
 }
 
+/// CLI 登录返回结果。
 #[derive(Debug)]
 pub struct CliLoginResult {
+    /// 登录组织 orgId。
     pub org_id: String,
 }
 
@@ -48,6 +60,7 @@ pub fn load_cli_sources() -> Result<Vec<CliSourceSeed>, AppError> {
 
     let mut seeds = Vec::new();
     for org in parsed.result {
+        // 缺失关键鉴权信息的组织直接跳过，避免写入不可用数据源。
         if org.access_token.trim().is_empty() || org.instance_url.trim().is_empty() {
             continue;
         }
@@ -170,6 +183,7 @@ fn login_args_for(cli: &str, instance_url: &str) -> Vec<String> {
         || filename.eq_ignore_ascii_case("sfdx.exe");
 
     if is_sfdx {
+        // sfdx 旧命令格式。
         vec![
             "force:auth:web:login".to_string(),
             "-r".to_string(),
@@ -177,6 +191,7 @@ fn login_args_for(cli: &str, instance_url: &str) -> Vec<String> {
             "--json".to_string(),
         ]
     } else {
+        // sf 新命令格式。
         vec![
             "org".to_string(),
             "login".to_string(),
@@ -188,6 +203,7 @@ fn login_args_for(cli: &str, instance_url: &str) -> Vec<String> {
     }
 }
 
+/// 从 CLI 登录响应里提取 orgId，兼容不同字段命名。
 fn extract_org_id(value: &Value) -> Option<String> {
     let result = value.get("result")?;
     if let Some(org_id) = result.get("orgId").and_then(|item| item.as_str()) {
