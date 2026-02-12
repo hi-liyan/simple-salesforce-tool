@@ -1,6 +1,6 @@
 import { Box, Button, CircularProgress, Divider, Stack, Typography } from "@mui/material";
 import { RefreshCw } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useSystemLogsQuery } from "../../queries/salesforce";
 
 // 系统日志面板：展示后端持久化日志，支持倒序分页浏览。
@@ -13,6 +13,20 @@ export function SystemLogsPanel() {
 
   const total = data?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+  useEffect(() => {
+    // 进入系统日志视图时先立即刷新一次，避免看到旧缓存。
+    void refetch();
+
+    // 仅在系统日志页面挂载期间轮询；离开页面会自动清理。
+    const timer = window.setInterval(() => {
+      void refetch();
+    }, 5000);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [refetch]);
 
   return (
     <Box sx={{ minHeight: 0, flex: 1, display: "flex", flexDirection: "column" }}>
