@@ -10,8 +10,8 @@ use crate::app_state::AppState;
 use crate::db;
 use crate::error::AppError;
 use crate::models::{
-    ObjectDescribe, QueryResult, RecordMutationPayload, RecordSavePayload, SalesforceObject,
-    SalesforceSource, SourceUpsertPayload, SystemLogPage,
+    CliPathSettings, ObjectDescribe, QueryResult, RecordMutationPayload, RecordSavePayload,
+    SalesforceObject, SalesforceSource, SourceUpsertPayload, SystemLogPage,
 };
 use crate::sf_cli;
 
@@ -41,6 +41,18 @@ fn write_system_log(
             detail,
         );
     }
+}
+
+const SF_CLI_PATH_SETTING_KEY: &str = "sf_cli_path";
+
+/// 读取已配置的自定义 Salesforce CLI 路径。
+fn read_configured_cli_path(state: &State<'_, AppState>) -> Option<String> {
+    let connection = state.db.lock().ok()?;
+    db::read_app_setting(&connection, SF_CLI_PATH_SETTING_KEY)
+        .ok()
+        .flatten()
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
 }
 
 fn set_main_window_enabled(app: &tauri::AppHandle, enabled: bool) {
@@ -87,11 +99,17 @@ fn is_unauthorized_error(error: &AppError) -> bool {
 
 /// 仅针对 CLI 数据源：发生 401 后通过 CLI 刷新 token，并回写本地数据源。
 async fn refresh_cli_source_token(
+    app: &tauri::AppHandle,
     state: &State<'_, AppState>,
     source_id: &str,
     action: &str,
     target: Option<&str>,
 ) -> Result<SalesforceSource, AppError> {
+    let _ = app.emit_to(
+        "main",
+        "sf:token-refresh-start",
+        serde_json::json!({ "sourceId": source_id, "action": action }),
+    );
     write_system_log(
         state,
         "INFO",
@@ -104,34 +122,61 @@ async fn refresh_cli_source_token(
         None,
     );
 
-    let source_id_owned = source_id.to_string();
-    let refreshed_seed = tauri::async_runtime::spawn_blocking(move || {
-        sf_cli::load_cli_source_by_id(&source_id_owned)
-    })
-    .await
-    .map_err(|error| AppError::Biz(format!("CLI 刷新线程失败: {error}")))??;
+    let result = async {
+        let source_id_owned = source_id.to_string();
+        let preferred_cli_path = read_configured_cli_path(state);
+        let refreshed_seed = tauri::async_runtime::spawn_blocking(move || {
+            sf_cli::refresh_cli_source_by_id(&source_id_owned, preferred_cli_path.as_deref())
+        })
+        .await
+        .map_err(|error| AppError::Biz(format!("CLI 刷新线程失败: {error}")))??;
 
-    let refreshed_source = {
-        let connection = state
-            .db
-            .lock()
-            .map_err(|error| AppError::Db(format!("Database lock failed: {error}")))?;
-        db::upsert_source_with_id(&connection, &refreshed_seed.id, refreshed_seed.payload)?
-    };
+        let refreshed_source = {
+            let connection = state
+                .db
+                .lock()
+                .map_err(|error| AppError::Db(format!("Database lock failed: {error}")))?;
+            db::upsert_source_with_id(&connection, &refreshed_seed.id, refreshed_seed.payload)?
+        };
 
-    write_system_log(
-        state,
-        "INFO",
-        "SALESFORCE_CLI",
-        action,
-        Some(source_id),
-        target,
-        true,
-        "通过 CLI 刷新 token 成功，准备重试请求。",
-        None,
+        write_system_log(
+            state,
+            "INFO",
+            "SALESFORCE_CLI",
+            action,
+            Some(source_id),
+            target,
+            true,
+            "通过 CLI 刷新 token 成功，准备重试请求。",
+            None,
+        );
+
+        Ok::<SalesforceSource, AppError>(refreshed_source)
+    }
+    .await;
+
+    if let Err(error) = &result {
+        let detail = error.to_string();
+        write_system_log(
+            state,
+            "ERROR",
+            "SALESFORCE_CLI",
+            action,
+            Some(source_id),
+            target,
+            false,
+            "通过 CLI 刷新 token 失败。",
+            Some(&detail),
+        );
+    }
+
+    let _ = app.emit_to(
+        "main",
+        "sf:token-refresh-end",
+        serde_json::json!({ "sourceId": source_id, "action": action, "success": result.is_ok() }),
     );
 
-    Ok(refreshed_source)
+    result
 }
 
 /// 查询全部数据源列表。
@@ -147,7 +192,8 @@ pub fn list_sources(state: State<'_, AppState>) -> Result<Vec<SalesforceSource>,
 /// 从 Salesforce CLI 同步认证账号到本地 SQLite。
 #[tauri::command]
 pub fn sync_cli_sources(state: State<'_, AppState>) -> Result<Vec<SalesforceSource>, String> {
-    let seeds = match sf_cli::load_cli_sources() {
+    let preferred_cli_path = read_configured_cli_path(&state);
+    let seeds = match sf_cli::load_cli_sources(preferred_cli_path.as_deref()) {
         Ok(items) => items,
         Err(error) => {
             let message = AppError::to_string_error(error);
@@ -211,10 +257,12 @@ pub async fn login_cli_org(
 
     cancel_cli_login_if_running(&state);
     let cancel_token = create_cli_login_cancel_token(&state);
+    let preferred_cli_path = read_configured_cli_path(&state);
 
     // CLI 命令会阻塞，放入 blocking 线程池避免卡住 async runtime。
     let result = tauri::async_runtime::spawn_blocking(move || {
-        sf_cli::login_web(trimmed.trim(), cancel_token).map_err(AppError::to_string_error)
+        sf_cli::login_web(trimmed.trim(), cancel_token, preferred_cli_path.as_deref())
+            .map_err(AppError::to_string_error)
     })
     .await
     .map_err(|error| format!("登录线程失败: {error}"));
@@ -503,6 +551,7 @@ pub fn save_column_visibility(
 /// 读取对象列表（优先走缓存，缓存失效后再请求 Salesforce）。
 #[tauri::command]
 pub async fn list_objects(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     source_id: String,
 ) -> Result<Vec<SalesforceObject>, String> {
@@ -540,7 +589,7 @@ pub async fn list_objects(
     let objects_result = match state.sf_client.list_objects(&source).await {
         Ok(items) => Ok(items),
         Err(error) if is_unauthorized_error(&error) && source_id.starts_with("cli-") => {
-            let refreshed_source = refresh_cli_source_token(&state, &source_id, "list_objects", None)
+            let refreshed_source = refresh_cli_source_token(&app, &state, &source_id, "list_objects", None)
                 .await
                 .map_err(AppError::to_string_error)?;
             state.sf_client.list_objects(&refreshed_source).await
@@ -592,9 +641,114 @@ pub async fn list_objects(
     Ok(objects)
 }
 
+/// 获取 Salesforce CLI 路径配置与自动探测结果。
+#[tauri::command]
+pub fn get_cli_path_settings(state: State<'_, AppState>) -> Result<CliPathSettings, String> {
+    let custom = read_configured_cli_path(&state);
+    Ok(sf_cli::detect_cli_path_settings(custom))
+}
+
+/// 保存 Salesforce CLI 自定义路径（传空会清除配置）。
+#[tauri::command]
+pub fn save_cli_path_settings(
+    state: State<'_, AppState>,
+    custom_cli_path: Option<String>,
+) -> Result<CliPathSettings, String> {
+    let normalized = custom_cli_path
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty());
+
+    {
+        let connection = state
+            .db
+            .lock()
+            .map_err(|error| format!("Database lock failed: {error}"))?;
+        if let Some(path) = normalized.as_ref() {
+            db::write_app_setting(&connection, SF_CLI_PATH_SETTING_KEY, path)
+                .map_err(AppError::to_string_error)?;
+        } else {
+            db::delete_app_setting(&connection, SF_CLI_PATH_SETTING_KEY)
+                .map_err(AppError::to_string_error)?;
+        }
+    }
+
+    Ok(sf_cli::detect_cli_path_settings(normalized))
+}
+
+/// 强制刷新对象列表（跳过缓存，直接请求 Salesforce API 并回写缓存）。
+#[tauri::command]
+pub async fn refresh_objects(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    source_id: String,
+) -> Result<Vec<SalesforceObject>, String> {
+    let source = {
+        let connection = state
+            .db
+            .lock()
+            .map_err(|error| format!("Database lock failed: {error}"))?;
+        db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
+    };
+
+    let objects_result = match state.sf_client.list_objects(&source).await {
+        Ok(items) => Ok(items),
+        Err(error) if is_unauthorized_error(&error) && source_id.starts_with("cli-") => {
+            let refreshed_source = refresh_cli_source_token(&app, &state, &source_id, "refresh_objects", None)
+                .await
+                .map_err(AppError::to_string_error)?;
+            state.sf_client.list_objects(&refreshed_source).await
+        }
+        Err(error) => Err(error),
+    };
+
+    let objects = match objects_result {
+        Ok(items) => items,
+        Err(error) => {
+            let message = AppError::to_string_error(error);
+            write_system_log(
+                &state,
+                "ERROR",
+                "SALESFORCE_API",
+                "refresh_objects",
+                Some(&source_id),
+                None,
+                false,
+                "强制刷新对象列表失败。",
+                Some(&message),
+            );
+            return Err(message);
+        }
+    };
+
+    {
+        let connection = state
+            .db
+            .lock()
+            .map_err(|error| format!("Database lock failed: {error}"))?;
+        // 强制刷新成功后覆盖缓存，保证后续列表读取为最新远端快照。
+        db::write_object_cache(&connection, &source_id, &objects)
+            .map_err(AppError::to_string_error)?;
+    }
+
+    write_system_log(
+        &state,
+        "INFO",
+        "SALESFORCE_API",
+        "refresh_objects",
+        Some(&source_id),
+        None,
+        true,
+        &format!("强制刷新对象列表成功，共 {} 个。", objects.len()),
+        None,
+    );
+
+    Ok(objects)
+}
+
 /// 读取对象字段元数据（Describe）。
 #[tauri::command]
 pub async fn describe_object(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     source_id: String,
     object_name: String,
@@ -611,6 +765,7 @@ pub async fn describe_object(
         Ok(describe) => Ok(describe),
         Err(error) if is_unauthorized_error(&error) && source_id.starts_with("cli-") => {
             let refreshed_source = refresh_cli_source_token(
+                &app,
                 &state,
                 &source_id,
                 "describe_object",
@@ -659,6 +814,7 @@ pub async fn describe_object(
 /// 执行 SOQL 查询并返回记录集。
 #[tauri::command]
 pub async fn query_records(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     source_id: String,
     soql: String,
@@ -678,7 +834,7 @@ pub async fn query_records(
     let query_result = match state.sf_client.query_records(&source, &soql).await {
         Ok(result) => Ok(result),
         Err(error) if is_unauthorized_error(&error) && source_id.starts_with("cli-") => {
-            let refreshed_source = refresh_cli_source_token(&state, &source_id, "query_records", None)
+            let refreshed_source = refresh_cli_source_token(&app, &state, &source_id, "query_records", None)
                 .await
                 .map_err(AppError::to_string_error)?;
             state.sf_client.query_records(&refreshed_source, &soql).await
@@ -722,6 +878,7 @@ pub async fn query_records(
 /// 新增单条记录。
 #[tauri::command]
 pub async fn create_record(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     payload: RecordMutationPayload,
 ) -> Result<String, String> {
@@ -743,6 +900,7 @@ pub async fn create_record(
         Ok(record_id) => Ok(record_id),
         Err(error) if is_unauthorized_error(&error) && payload.source_id.starts_with("cli-") => {
             let refreshed_source = refresh_cli_source_token(
+                &app,
                 &state,
                 &payload.source_id,
                 "create_record",
@@ -794,6 +952,7 @@ pub async fn create_record(
 /// 批量保存记录（同时支持新增与更新）。
 #[tauri::command]
 pub async fn save_records(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     payload: RecordSavePayload,
 ) -> Result<(), String> {
@@ -822,6 +981,7 @@ pub async fn save_records(
         Ok(()) => Ok(()),
         Err(error) if is_unauthorized_error(&error) && payload.source_id.starts_with("cli-") => {
             let refreshed_source = refresh_cli_source_token(
+                &app,
                 &state,
                 &payload.source_id,
                 "save_records",
@@ -873,6 +1033,7 @@ pub async fn save_records(
 /// 更新单条记录。
 #[tauri::command]
 pub async fn update_record(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     source_id: String,
     object_name: String,
@@ -895,6 +1056,7 @@ pub async fn update_record(
         Ok(()) => Ok(()),
         Err(error) if is_unauthorized_error(&error) && source_id.starts_with("cli-") => {
             let refreshed_source = refresh_cli_source_token(
+                &app,
                 &state,
                 &source_id,
                 "update_record",
@@ -946,6 +1108,7 @@ pub async fn update_record(
 /// 删除单条记录。
 #[tauri::command]
 pub async fn delete_record(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     source_id: String,
     object_name: String,
@@ -967,6 +1130,7 @@ pub async fn delete_record(
         Ok(()) => Ok(()),
         Err(error) if is_unauthorized_error(&error) && source_id.starts_with("cli-") => {
             let refreshed_source = refresh_cli_source_token(
+                &app,
                 &state,
                 &source_id,
                 "delete_record",

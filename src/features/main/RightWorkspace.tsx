@@ -38,6 +38,7 @@ type RightWorkspaceProps = {
   onExecuteCustomSoql: () => void;
   onCloseWorkspaceNotice: () => void;
   onCloseActiveTabNotice: () => void;
+  loadingText: string;
 };
 
 // 右侧工作区：包含 Tab、查询工具栏、数据表格、日志面板和字段抽屉。
@@ -73,7 +74,8 @@ export function RightWorkspace({
   onSoqlChange,
   onExecuteCustomSoql,
   onCloseWorkspaceNotice,
-  onCloseActiveTabNotice
+  onCloseActiveTabNotice,
+  loadingText
 }: RightWorkspaceProps) {
   // 日志面板高度状态。
   const [logPanelHeight, setLogPanelHeight] = useState(220);
@@ -389,7 +391,7 @@ export function RightWorkspace({
           {activeTab.loading && (
             <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-white/70">
               <span className="loading loading-spinner" style={{ width: 42, height: 42 }} />
-              <span className="text-[12px] text-neutral/70">Loading...</span>
+              <span className="text-[12px] text-neutral/70">{loadingText}</span>
             </div>
           )}
         </div>

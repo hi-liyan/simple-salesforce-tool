@@ -169,3 +169,29 @@ pub struct SystemLogPage {
     /// 总记录数。
     pub total: i64,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CliPathProbe {
+    /// 候选 CLI 路径。
+    pub path: String,
+    /// 探测是否成功。
+    pub ok: bool,
+    /// 版本文本（成功时可能包含）。
+    pub version: Option<String>,
+    /// 探测详情（错误信息或 stdout 片段）。
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CliPathSettings {
+    /// 自定义 CLI 路径（未设置时为 None）。
+    pub custom_cli_path: Option<String>,
+    /// 当前最终生效的 CLI 路径（自动探测结果）。
+    pub resolved_cli_path: Option<String>,
+    /// 当前最终生效的 CLI 版本。
+    pub resolved_cli_version: Option<String>,
+    /// 本次探测的候选详情。
+    pub probes: Vec<CliPathProbe>,
+}

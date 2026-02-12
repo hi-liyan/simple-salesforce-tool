@@ -136,3 +136,19 @@ export type SystemLogPage = {
   pageSize: number;
   total: number;
 };
+
+// CLI 路径候选探测结果。
+export type CliPathProbe = {
+  path: string;
+  ok: boolean;
+  version: string | null;
+  detail: string;
+};
+
+// CLI 路径设置与自动探测信息。
+export type CliPathSettings = {
+  customCliPath: string | null;
+  resolvedCliPath: string | null;
+  resolvedCliVersion: string | null;
+  probes: CliPathProbe[];
+};
