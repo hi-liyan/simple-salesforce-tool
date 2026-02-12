@@ -16,6 +16,16 @@ type RightWorkspaceProps = {
   pendingDeleteRecordIds: string[];
   onActivateTab: (objectName: string) => void;
   onCloseTab: (objectName: string) => void;
+  // 关闭当前（右键菜单：关闭当前）。
+  onCloseCurrentTab: (objectName: string) => void;
+  // 关闭左侧（右键菜单：关闭左侧）。
+  onCloseLeftTabs: (objectName: string) => void;
+  // 关闭右侧（右键菜单：关闭右侧）。
+  onCloseRightTabs: (objectName: string) => void;
+  // 关闭其他（右键菜单：关闭其他）。
+  onCloseOtherTabs: (objectName: string) => void;
+  // 全部关闭（右键菜单：全部关闭）。
+  onCloseAllTabs: () => void;
   onCreateRecord: () => void;
   onDeleteCheckedRecords: () => void;
   onApplyPendingChanges: () => void;
@@ -53,6 +63,11 @@ export function RightWorkspace({
   pendingDeleteRecordIds,
   onActivateTab,
   onCloseTab,
+  onCloseCurrentTab,
+  onCloseLeftTabs,
+  onCloseRightTabs,
+  onCloseOtherTabs,
+  onCloseAllTabs,
   onCreateRecord,
   onDeleteCheckedRecords,
   onApplyPendingChanges,
@@ -83,6 +98,8 @@ export function RightWorkspace({
   const [draggingLogResize, setDraggingLogResize] = useState(false);
   const dragStartYRef = useRef(0);
   const dragStartHeightRef = useRef(220);
+  // Tab 右键菜单状态：记录显示位置和目标 Tab。
+  const [tabContextMenu, setTabContextMenu] = useState<{ x: number; y: number; objectName: string } | null>(null);
 
   // 日志面板拖拽调整高度。
   useEffect(() => {
@@ -107,6 +124,29 @@ export function RightWorkspace({
     };
   }, [draggingLogResize]);
 
+  // 全局关闭右键菜单：点击空白、滚动、按下 ESC 时关闭菜单。
+  useEffect(() => {
+    if (!tabContextMenu) return;
+
+    const closeMenu = () => {
+      setTabContextMenu(null); // 关闭菜单，避免残留浮层。
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      closeMenu(); // ESC 快捷关闭菜单。
+    };
+
+    window.addEventListener("click", closeMenu);
+    window.addEventListener("scroll", closeMenu, true);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("click", closeMenu);
+      window.removeEventListener("scroll", closeMenu, true);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [tabContextMenu]);
+
   // 当前对象可排序字段：仅展示字段元数据中 sortable=true 的字段。
   const sortableFields = (activeTab?.describe?.fields || []).filter((field) => field.metadata?.sortable === true);
 
@@ -127,8 +167,20 @@ export function RightWorkspace({
         {tabs.length === 0 && <span className="px-2 py-1.5 text-[12px] text-neutral/70">请选择左侧 Object 打开标签页</span>}
         {tabs.map((tab) => {
           const active = tab.objectName === activeTabObjectName;
+          const tabIndex = tabs.findIndex((item) => item.objectName === tab.objectName);
+          const hasLeftTabs = tabIndex > 0;
+          const hasRightTabs = tabIndex >= 0 && tabIndex < tabs.length - 1;
+          const hasOtherTabs = tabs.length > 1;
           return (
-            <div key={tab.objectName} className={`flex items-center border-r border-base-300 ${active ? "bg-base-100" : ""}`}>
+            <div
+              key={tab.objectName}
+              className={`flex items-center border-r border-base-300 ${active ? "bg-base-100" : ""}`}
+              onContextMenu={(event) => {
+                event.preventDefault(); // 阻止浏览器默认右键菜单。
+                onActivateTab(tab.objectName); // 右键时先切换到目标 Tab，避免操作目标不一致。
+                setTabContextMenu({ x: event.clientX, y: event.clientY, objectName: tab.objectName }); // 打开自定义菜单。
+              }}
+            >
               <button
                 className={`min-w-0 px-3 py-2 text-[12px] ${active ? "text-primary" : "text-neutral/70"}`}
                 onClick={() => onActivateTab(tab.objectName)}
@@ -138,6 +190,64 @@ export function RightWorkspace({
               <button className="btn btn-circle btn-ghost btn-xs mr-1" onClick={() => onCloseTab(tab.objectName)}>
                 <X size={13} />
               </button>
+              {/* Tab 右键菜单：提供常见批量关闭操作。 */}
+              {tabContextMenu?.objectName === tab.objectName && (
+                <div
+                  className="fixed z-[80] min-w-[132px] rounded border border-base-300 bg-base-100 p-1 shadow-xl"
+                  style={{ left: tabContextMenu.x, top: tabContextMenu.y }}
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <button
+                    className="btn btn-ghost btn-xs w-full justify-start"
+                    onClick={() => {
+                      onCloseCurrentTab(tab.objectName); // 关闭当前 Tab。
+                      setTabContextMenu(null); // 执行后关闭菜单。
+                    }}
+                  >
+                    关闭当前
+                  </button>
+                  <button
+                    className="btn btn-ghost btn-xs w-full justify-start"
+                    disabled={!hasLeftTabs}
+                    onClick={() => {
+                      onCloseLeftTabs(tab.objectName); // 关闭目标 Tab 左侧所有 Tab。
+                      setTabContextMenu(null); // 执行后关闭菜单。
+                    }}
+                  >
+                    关闭左侧
+                  </button>
+                  <button
+                    className="btn btn-ghost btn-xs w-full justify-start"
+                    disabled={!hasRightTabs}
+                    onClick={() => {
+                      onCloseRightTabs(tab.objectName); // 关闭目标 Tab 右侧所有 Tab。
+                      setTabContextMenu(null); // 执行后关闭菜单。
+                    }}
+                  >
+                    关闭右侧
+                  </button>
+                  <button
+                    className="btn btn-ghost btn-xs w-full justify-start"
+                    disabled={!hasOtherTabs}
+                    onClick={() => {
+                      onCloseOtherTabs(tab.objectName); // 仅保留目标 Tab，关闭其它 Tab。
+                      setTabContextMenu(null); // 执行后关闭菜单。
+                    }}
+                  >
+                    关闭其他
+                  </button>
+                  <button
+                    className="btn btn-ghost btn-xs w-full justify-start"
+                    disabled={tabs.length === 0}
+                    onClick={() => {
+                      onCloseAllTabs(); // 关闭全部 Tab。
+                      setTabContextMenu(null); // 执行后关闭菜单。
+                    }}
+                  >
+                    全部关闭
+                  </button>
+                </div>
+              )}
             </div>
           );
         })}

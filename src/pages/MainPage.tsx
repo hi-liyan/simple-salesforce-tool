@@ -25,7 +25,6 @@ export function MainPage() {
   const setTabs = useAppStore((state) => state.setTabs);
   const setLoading = useAppStore((state) => state.setLoading);
   const patchTabInStore = useAppStore((state) => state.patchTab);
-  const closeTabInStore = useAppStore((state) => state.closeTab);
   const resetTabs = useAppStore((state) => state.resetTabs);
 
   // React Query：数据源与对象列表。
@@ -713,11 +712,48 @@ export function MainPage() {
   }
 
   function closeTab(objectName: string) {
-    if (noticeTimersRef.current[objectName]) {
-      clearTimeout(noticeTimersRef.current[objectName]);
+    closeTabsByObjectNames([objectName]); // 单个关闭复用批量关闭逻辑，保持行为一致。
+  }
+
+  // 批量关闭 Tab：统一处理通知计时器、Tab 列表和激活项收敛。
+  function closeTabsByObjectNames(objectNames: string[]) {
+    if (objectNames.length === 0) return;
+
+    const closeSet = new Set(objectNames);
+    Object.keys(noticeTimersRef.current).forEach((objectName) => {
+      if (!closeSet.has(objectName)) return;
+      clearTimeout(noticeTimersRef.current[objectName]); // 关闭前清理通知计时器，避免悬空回调。
       delete noticeTimersRef.current[objectName];
-    }
-    closeTabInStore(objectName);
+    });
+
+    const nextTabs = tabs.filter((tab) => !closeSet.has(tab.objectName));
+    const nextActive = closeSet.has(activeTabObjectName) ? nextTabs[0]?.objectName || "" : activeTabObjectName;
+    setTabs(nextTabs); // 批量写回剩余 Tab。
+    setActiveTabObjectName(nextActive); // 若当前激活 Tab 被关闭，则切到第一个剩余 Tab。
+  }
+
+  // 右键动作：关闭目标 Tab 左侧全部。
+  function closeLeftTabs(objectName: string) {
+    const index = tabs.findIndex((tab) => tab.objectName === objectName);
+    if (index <= 0) return;
+    closeTabsByObjectNames(tabs.slice(0, index).map((tab) => tab.objectName));
+  }
+
+  // 右键动作：关闭目标 Tab 右侧全部。
+  function closeRightTabs(objectName: string) {
+    const index = tabs.findIndex((tab) => tab.objectName === objectName);
+    if (index < 0 || index >= tabs.length - 1) return;
+    closeTabsByObjectNames(tabs.slice(index + 1).map((tab) => tab.objectName));
+  }
+
+  // 右键动作：关闭除目标 Tab 外的其它 Tab。
+  function closeOtherTabs(objectName: string) {
+    closeTabsByObjectNames(tabs.filter((tab) => tab.objectName !== objectName).map((tab) => tab.objectName));
+  }
+
+  // 右键动作：关闭全部 Tab。
+  function closeAllTabs() {
+    closeTabsByObjectNames(tabs.map((tab) => tab.objectName));
   }
 
   // 从后端 SQLite 读取字段勾选配置，并与当前对象字段做默认值合并。
@@ -815,6 +851,11 @@ export function MainPage() {
                 pendingDeleteRecordIds={activeTab?.pendingDeleteRecordIds ?? []}
                 onActivateTab={setActiveTabObjectName}
                 onCloseTab={closeTab}
+                onCloseCurrentTab={closeTab}
+                onCloseLeftTabs={closeLeftTabs}
+                onCloseRightTabs={closeRightTabs}
+                onCloseOtherTabs={closeOtherTabs}
+                onCloseAllTabs={closeAllTabs}
                 onCreateRecord={createRecordQuickly}
                 onDeleteCheckedRecords={() => void deleteCheckedRecords()}
                 onApplyPendingChanges={() => void applyPendingChanges()}
