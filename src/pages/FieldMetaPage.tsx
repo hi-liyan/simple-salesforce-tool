@@ -1,21 +1,19 @@
-import { useEffect, useState } from "react";
+﻿import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { Box, CssBaseline, ThemeProvider, Typography } from "@mui/material";
-import { theme } from "../theme";
 
 type FieldMetaPayload = {
   field_name: string;
   metadata: Record<string, unknown>;
 };
 
-// 字段元数据窗口：独立 Tauri 窗口展示当前选中字段的完整元数据。
+// 字段元数据窗口：独立窗口展示当前字段详情。
 export function FieldMetaPage() {
-  // 当前字段名称。
+  // 当前字段名。
   const [fieldName, setFieldName] = useState<string>("");
-  // 当前字段元数据内容。
+  // 当前字段元数据对象。
   const [metadata, setMetadata] = useState<Record<string, unknown>>({});
 
-  // 监听主窗口发来的字段元数据事件。
+  // 监听主窗口事件：接收待展示的字段信息。
   useEffect(() => {
     let active = true;
     let cleanup: (() => void) | undefined;
@@ -37,42 +35,29 @@ export function FieldMetaPage() {
   }, []);
 
   return (
-    // 主题提供器：保持与主窗口一致的视觉风格。
-    <ThemeProvider theme={theme}>
-      {/* CSS Reset：统一基础样式。 */}
-      <CssBaseline />
-      {/* 页面容器：承载标题和元数据列表。 */}
-      <Box sx={{ minHeight: "100vh", bgcolor: "background.default", p: 2 }}>
-        {/* 标题区：显示当前字段名。 */}
-        <Typography variant="h6" sx={{ mb: 1.5 }}>
-          {fieldName ? `${fieldName} 字段元数据` : "字段元数据"}
-        </Typography>
-        {/* 元数据列表容器：支持滚动查看全部键值。 */}
-        <Box sx={{ maxHeight: "calc(100vh - 110px)", overflow: "auto", pr: 0.5 }}>
-          {Object.keys(metadata).length === 0 ? (
-            // 空状态：尚未收到字段元数据事件。
-            <Typography variant="body2" color="text.secondary">
-              暂无字段元数据。
-            </Typography>
-          ) : (
-            // 元数据条目：逐项展示键和值。
-            Object.entries(metadata).map(([key, value]) => (
-              <Typography
-                key={key}
-                variant="caption"
-                sx={{
-                  display: "block",
-                  lineHeight: 1.6,
-                  fontFamily: "'Cascadia Mono', Consolas, 'Courier New', monospace"
-                }}
-              >
-                {translateFieldMetaKey(key)}: {formatFieldMetaValue(value)}
-              </Typography>
-            ))
-          )}
-        </Box>
-      </Box>
-    </ThemeProvider>
+    // 页面外层：保持原有留白和滚动区域高度。
+    <div className="min-h-screen bg-base-200 p-2">
+      {/* 标题区：显示字段名。 */}
+      <h1 className="mb-1.5 text-[20px] font-semibold">{fieldName ? `${fieldName} 字段元数据` : "字段元数据"}</h1>
+
+      {/* 元数据列表：可滚动浏览全部条目。 */}
+      <div className="max-h-[calc(100vh-110px)] overflow-auto pr-0.5">
+        {Object.keys(metadata).length === 0 ? (
+          // 空状态提示。
+          <p className="text-[12px] text-neutral/70">暂无字段元数据。</p>
+        ) : (
+          Object.entries(metadata).map(([key, value]) => (
+            <p
+              key={key}
+              className="block text-[12px] leading-[1.6]"
+              style={{ fontFamily: "'Cascadia Mono', Consolas, 'Courier New', monospace" }}
+            >
+              {translateFieldMetaKey(key)}: {formatFieldMetaValue(value)}
+            </p>
+          ))
+        )}
+      </div>
+    </div>
   );
 }
 

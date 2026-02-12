@@ -1,20 +1,4 @@
 ﻿import { ChangeEvent, useEffect, useRef, useState } from "react";
-import {
-  Alert,
-  Box,
-  Button,
-  CircularProgress,
-  Divider,
-  FormControl,
-  IconButton,
-  InputAdornment,
-  MenuItem,
-  Select,
-  SelectChangeEvent,
-  Stack,
-  TextField,
-  Typography
-} from "@mui/material";
 import { PanelRightOpen, Play, Plus, RotateCcw, ScrollText, Search, Trash2, X } from "lucide-react";
 import { DataGrid } from "../../components/DataGrid";
 import { Notice, TabState } from "../../types";
@@ -53,6 +37,7 @@ type RightWorkspaceProps = {
   onCloseActiveTabNotice: () => void;
 };
 
+// 右侧工作区：包含 Tab、查询工具栏、数据表格、日志面板和字段抽屉。
 export function RightWorkspace({
   tabs,
   activeTabObjectName,
@@ -86,11 +71,14 @@ export function RightWorkspace({
   onCloseWorkspaceNotice,
   onCloseActiveTabNotice
 }: RightWorkspaceProps) {
+  // 日志面板高度状态。
   const [logPanelHeight, setLogPanelHeight] = useState(220);
+  // 是否正在拖拽日志面板分隔条。
   const [draggingLogResize, setDraggingLogResize] = useState(false);
   const dragStartYRef = useRef(0);
   const dragStartHeightRef = useRef(220);
 
+  // 日志面板拖拽调整高度。
   useEffect(() => {
     if (!draggingLogResize) return;
 
@@ -115,173 +103,160 @@ export function RightWorkspace({
 
   return (
     <>
+      {/* 工作区全局提示。 */}
       {workspaceNotice && (
-        <Alert
-          severity={workspaceNotice.type === "error" ? "error" : "success"}
-          onClose={onCloseWorkspaceNotice}
-          sx={{
-            position: "fixed",
-            top: 16,
-            right: 16,
-            zIndex: 60,
-            maxWidth: 560,
-            boxShadow: 4
-          }}
+        <div
+          className={`alert fixed right-4 top-4 z-[60] max-w-[560px] shadow-lg ${workspaceNotice.type === "error" ? "alert-error" : "alert-success"}`}
         >
-          {workspaceNotice.message}
-        </Alert>
+          <span>{workspaceNotice.message}</span>
+          <button className="btn btn-ghost btn-xs" onClick={onCloseWorkspaceNotice}>
+            关闭
+          </button>
+        </div>
       )}
 
-      <Box sx={{ display: "flex", overflowX: "auto", borderBottom: "1px solid", borderColor: "divider" }}>
-        {tabs.length === 0 && (
-          <Typography variant="caption" sx={{ px: 2, py: 1.2, color: "text.secondary" }}>
-            请选择左侧 Object 打开标签页
-          </Typography>
-        )}
+      {/* Tab 栏。 */}
+      <div className="flex overflow-x-auto border-b border-base-300">
+        {tabs.length === 0 && <span className="px-2 py-1.5 text-[12px] text-neutral/70">请选择左侧 Object 打开标签页</span>}
         {tabs.map((tab) => {
           const active = tab.objectName === activeTabObjectName;
           return (
-            <Box
-              key={tab.objectName}
-              sx={{
-                display: "flex",
-                alignItems: "center",
-                borderRight: "1px solid",
-                borderColor: "divider",
-                bgcolor: active ? "background.paper" : "transparent"
-              }}
-            >
-              <Button
-                variant="text"
+            <div key={tab.objectName} className={`flex items-center border-r border-base-300 ${active ? "bg-base-100" : ""}`}>
+              <button
+                className={`min-w-0 px-3 py-2 text-[12px] ${active ? "text-primary" : "text-neutral/70"}`}
                 onClick={() => onActivateTab(tab.objectName)}
-                sx={{ px: 1.5, py: 0.8, minWidth: 0, textTransform: "none", color: active ? "primary.main" : "text.secondary" }}
               >
                 {tab.objectName}
-              </Button>
-              <IconButton onClick={() => onCloseTab(tab.objectName)} sx={{ mr: 0.5 }}>
+              </button>
+              <button className="btn btn-ghost btn-sm mr-1" onClick={() => onCloseTab(tab.objectName)}>
                 <X size={13} />
-              </IconButton>
-            </Box>
+              </button>
+            </div>
           );
         })}
-      </Box>
+      </div>
 
       {activeTab && (
-        <Box sx={{ position: "relative", display: "flex", minHeight: 0, flex: 1, overflow: "hidden" }}>
+        // 主工作区。
+        <div className="relative flex min-h-0 flex-1 overflow-hidden">
+          {/* 当前 Tab 提示。 */}
           {activeTab.notice && (
-            <Alert
-              severity={activeTab.notice.type === "error" ? "error" : "success"}
-              onClose={onCloseActiveTabNotice}
-              sx={{
-                position: "absolute",
-                top: 10,
-                right: 12,
-                zIndex: 40,
-                maxWidth: 560,
-                boxShadow: 3
-              }}
+            <div
+              className={`alert absolute right-3 top-2.5 z-40 max-w-[560px] shadow ${activeTab.notice.type === "error" ? "alert-error" : "alert-success"}`}
             >
-              {activeTab.notice.message}
-            </Alert>
+              <span>{activeTab.notice.message}</span>
+              <button className="btn btn-ghost btn-xs" onClick={onCloseActiveTabNotice}>
+                关闭
+              </button>
+            </div>
           )}
 
-          <Box sx={{ minWidth: 0, flex: 1, display: "flex", flexDirection: "column" }}>
-            <Box sx={{ px: 1.5, py: 0.75, borderBottom: "1px solid", borderColor: "divider" }}>
-              <Stack direction="row" spacing={0.5} alignItems="center">
-                <Button variant="outlined" startIcon={<Plus size={14} />} disabled={activeTab.loading} onClick={onCreateRecord} sx={{ height: 40 }}>
+          {/* 左侧主内容区：工具栏 + 查询栏 + 表格 + 日志。 */}
+          <div className="flex min-w-0 flex-1 flex-col">
+            <div className="border-b border-base-300 px-3 py-1.5">
+              <div className="flex flex-row items-center gap-1">
+                <button className="btn btn-outline btn-sm h-10" disabled={activeTab.loading} onClick={onCreateRecord}>
+                  <Plus size={14} />
                   新建记录
-                </Button>
-                <Button
-                  color="error"
-                  variant="outlined"
-                  startIcon={<Trash2 size={14} />}
+                </button>
+                <button
+                  className="btn btn-outline btn-error btn-sm h-10"
                   disabled={activeTab.loading || activeTab.selectedRecordIds.length === 0}
                   onClick={onDeleteCheckedRecords}
-                  sx={{ height: 40 }}
                 >
+                  <Trash2 size={14} />
                   删除勾选({activeTab.selectedRecordIds.length})
-                </Button>
-                <Button
-                  variant="outlined"
-                  startIcon={<Play size={14} />}
-                  disabled={activeTab.loading || !hasPendingChanges}
-                  onClick={onApplyPendingChanges}
-                  sx={{ height: 40 }}
-                >
+                </button>
+                <button className="btn btn-outline btn-sm h-10" disabled={activeTab.loading || !hasPendingChanges} onClick={onApplyPendingChanges}>
+                  <Play size={14} />
                   执行更新
-                </Button>
-                <Button
-                  variant="outlined"
-                  startIcon={<RotateCcw size={14} />}
-                  disabled={activeTab.loading || !hasPendingChanges}
-                  onClick={onDiscardPendingChanges}
-                  sx={{ height: 40 }}
-                >
+                </button>
+                <button className="btn btn-outline btn-sm h-10" disabled={activeTab.loading || !hasPendingChanges} onClick={onDiscardPendingChanges}>
+                  <RotateCcw size={14} />
                   撤回修改
-                </Button>
-                <Button variant="outlined" startIcon={<Search size={14} />} disabled={activeTab.loading} onClick={onToggleQueryBar} sx={{ height: 40 }}>
+                </button>
+                <button className="btn btn-outline btn-sm h-10" disabled={activeTab.loading} onClick={onToggleQueryBar}>
+                  <Search size={14} />
                   {activeTab.showQueryBar ? "隐藏查询栏" : "显示查询栏"}
-                </Button>
-                <Button variant="outlined" startIcon={<PanelRightOpen size={14} />} disabled={activeTab.loading} onClick={onToggleDrawer} sx={{ height: 40 }}>
+                </button>
+                <button className="btn btn-outline btn-sm h-10" disabled={activeTab.loading} onClick={onToggleDrawer}>
+                  <PanelRightOpen size={14} />
                   字段与SOQL
-                </Button>
-                <Button variant="outlined" startIcon={<ScrollText size={14} />} disabled={activeTab.loading} onClick={onToggleLogs} sx={{ height: 40 }}>
+                </button>
+                <button className="btn btn-outline btn-sm h-10" disabled={activeTab.loading} onClick={onToggleLogs}>
+                  <ScrollText size={14} />
                   日志
-                </Button>
-              </Stack>
-            </Box>
+                </button>
+              </div>
+            </div>
 
+            {/* 查询栏。 */}
             {activeTab.showQueryBar && (
-              <Box sx={{ px: 1.5, py: 1, borderBottom: "1px solid", borderColor: "divider" }}>
-                <Stack direction="row" spacing={1} alignItems="center" flexWrap="nowrap">
-                  <TextField
-                    label="WHERE"
-                    value={activeTab.whereClause}
-                    sx={{ width: 320 }}
-                    onChange={(event) => onWhereChange(event.target.value)}
-                    InputProps={{
-                      endAdornment: activeTab.whereClause ? (
-                        <InputAdornment position="end">
-                          <IconButton size="small" aria-label="清空 WHERE 条件" onClick={() => onWhereChange("")} edge="end">
-                            <X size={13} />
-                          </IconButton>
-                        </InputAdornment>
-                      ) : undefined
-                    }}
-                  />
-                  <TextField
-                    label="LIMIT"
-                    type="number"
-                    value={activeTab.limit}
-                    sx={{ width: 90 }}
-                    onChange={(event) => onLimitChange(Number(event.target.value || 200))}
-                  />
-                  <FormControl size="small" sx={{ width: 200 }}>
-                    <Select value={activeTab.sortField} onChange={(event: SelectChangeEvent) => onSortFieldChange(event.target.value)}>
+              <div className="border-b border-base-300 px-3 py-2">
+                <div className="flex flex-row items-center gap-2 flex-nowrap">
+                  <div className="w-[320px]">
+                    <label className="mb-1 block text-[12px]">WHERE</label>
+                    <div className="relative">
+                      <input
+                        className="input input-bordered input-sm w-full pr-8"
+                        value={activeTab.whereClause}
+                        onChange={(event) => onWhereChange(event.target.value)}
+                      />
+                      {activeTab.whereClause ? (
+                        <button
+                          className="btn btn-ghost btn-xs absolute right-1 top-1/2 -translate-y-1/2"
+                          aria-label="清空 WHERE 条件"
+                          onClick={() => onWhereChange("")}
+                        >
+                          <X size={13} />
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <div className="w-[90px]">
+                    <label className="mb-1 block text-[12px]">LIMIT</label>
+                    <input
+                      className="input input-bordered input-sm w-full"
+                      type="number"
+                      value={activeTab.limit}
+                      onChange={(event) => onLimitChange(Number(event.target.value || 200))}
+                    />
+                  </div>
+
+                  <div className="w-[200px]">
+                    <label className="mb-1 block text-[12px]">排序字段</label>
+                    <select className="select select-bordered select-sm w-full" value={activeTab.sortField} onChange={(event) => onSortFieldChange(event.target.value)}>
                       {(activeTab.describe?.fields || []).map((field) => (
-                        <MenuItem key={field.name} value={field.name}>
+                        <option key={field.name} value={field.name}>
                           {field.name}
-                        </MenuItem>
+                        </option>
                       ))}
-                    </Select>
-                  </FormControl>
-                  <FormControl size="small" sx={{ width: 92 }}>
-                    <Select
+                    </select>
+                  </div>
+
+                  <div className="w-[92px]">
+                    <label className="mb-1 block text-[12px]">排序</label>
+                    <select
+                      className="select select-bordered select-sm w-full"
                       value={activeTab.sortDirection}
-                      onChange={(event: SelectChangeEvent) => onSortDirectionChange(event.target.value as "ASC" | "DESC")}
+                      onChange={(event) => onSortDirectionChange(event.target.value as "ASC" | "DESC")}
                     >
-                      <MenuItem value="ASC">ASC</MenuItem>
-                      <MenuItem value="DESC">DESC</MenuItem>
-                    </Select>
-                  </FormControl>
-                  <Button startIcon={<Search size={14} />} disabled={activeTab.loading} sx={{ height: 35 }} onClick={onQuery}>
+                      <option value="ASC">ASC</option>
+                      <option value="DESC">DESC</option>
+                    </select>
+                  </div>
+
+                  <button className="btn btn-primary btn-sm mt-5 h-[35px]" disabled={activeTab.loading} onClick={onQuery}>
+                    <Search size={14} />
                     查询
-                  </Button>
-                </Stack>
-              </Box>
+                  </button>
+                </div>
+              </div>
             )}
 
-            <Box sx={{ minHeight: 0, flex: 1 }}>
+            {/* 数据网格区。 */}
+            <div className="min-h-0 flex-1">
               <DataGrid
                 result={activeTab.result}
                 visibleColumns={visibleColumns}
@@ -293,225 +268,136 @@ export function RightWorkspace({
                 onEditCell={onEditCell}
                 onShowMessage={onShowMessage}
               />
-            </Box>
+            </div>
 
+            {/* 日志面板。 */}
             {activeTab.showLogs && (
-              <Box
-                sx={{
-                  height: logPanelHeight,
-                  borderTop: "1px solid",
-                  borderColor: "divider",
-                  display: "flex",
-                  flexDirection: "column",
-                  minHeight: 0,
-                  position: "relative"
-                }}
-              >
-                <Box
+              <div className="relative flex min-h-0 flex-col border-t border-base-300" style={{ height: logPanelHeight }}>
+                <div
+                  className="absolute left-0 right-0 top-0 z-[1] h-[6px] cursor-row-resize"
                   onMouseDown={(event) => {
                     event.preventDefault();
                     dragStartYRef.current = event.clientY;
                     dragStartHeightRef.current = logPanelHeight;
                     setDraggingLogResize(true);
                   }}
-                  sx={{
-                    position: "absolute",
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    height: 6,
-                    cursor: "row-resize",
-                    zIndex: 1
-                  }}
                 />
-                <Box sx={{ px: 1.5, py: 0.75, borderBottom: "1px solid", borderColor: "divider" }}>
-                  <Stack direction="row" alignItems="center" justifyContent="space-between">
-                    <Typography variant="caption" color="text.secondary">
-                      操作日志（当前 Tab）
-                    </Typography>
-                    <IconButton size="small" onClick={onToggleLogs} aria-label="关闭日志">
+                <div className="border-b border-base-300 px-3 py-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[12px] text-neutral/70">操作日志（当前 Tab）</span>
+                    <button className="btn btn-ghost btn-xs" onClick={onToggleLogs} aria-label="关闭日志">
                       <X size={14} />
-                    </IconButton>
-                  </Stack>
-                </Box>
-                <Box sx={{ minHeight: 0, flex: 1, overflow: "auto", px: 1.5, py: 1 }}>
-                  {activeTab.logs.length === 0 && (
-                    <Typography variant="caption" color="text.secondary">
-                      暂无日志。
-                    </Typography>
-                  )}
+                    </button>
+                  </div>
+                </div>
+                <div className="min-h-0 flex-1 overflow-auto px-3 py-2">
+                  {activeTab.logs.length === 0 && <span className="text-[12px] text-neutral/70">暂无日志。</span>}
                   {activeTab.logs.map((log) => (
-                    <Box key={log.id} sx={{ mb: 1, p: 1, border: "1px solid", borderColor: "divider", bgcolor: "background.paper" }}>
-                      <Typography variant="caption" sx={{ display: "block", mb: 0.5, color: log.success ? "success.main" : "error.main" }}>
+                    <div key={log.id} className="mb-2 border border-base-300 bg-base-100 p-2">
+                      <p className={`mb-1 block text-[12px] ${log.success ? "text-success" : "text-error"}`}>
                         {formatLogTime(log.timestamp)} [{log.action}] {log.success ? "成功" : "失败"}
-                      </Typography>
-                      <Typography variant="caption" sx={{ display: "block" }}>
-                        请求: {log.request}
-                      </Typography>
-                      <Typography variant="caption" sx={{ display: "block" }}>
-                        响应: {log.summary}
-                      </Typography>
-                      {log.errorMessage && (
-                        <Typography variant="caption" sx={{ display: "block", color: "error.main" }}>
-                          错误: {log.errorMessage}
-                        </Typography>
-                      )}
-                    </Box>
+                      </p>
+                      <p className="block text-[12px]">请求: {log.request}</p>
+                      <p className="block text-[12px]">响应: {log.summary}</p>
+                      {log.errorMessage && <p className="block text-[12px] text-error">错误: {log.errorMessage}</p>}
+                    </div>
                   ))}
-                </Box>
-              </Box>
+                </div>
+              </div>
             )}
-          </Box>
+          </div>
 
+          {/* 右侧抽屉：字段列表 + SOQL 编辑器。 */}
           {activeTab.showDrawer && (
-            <Box sx={{ width: 360, minWidth: 360, borderLeft: "1px solid", borderColor: "divider", display: "flex", flexDirection: "column", minHeight: 0 }}>
-              <Box sx={{ flex: "1 1 50%", minHeight: 0, display: "flex", flexDirection: "column", borderBottom: "1px solid", borderColor: "divider" }}>
-                <Box sx={{ px: 1.5, py: 1, borderBottom: "1px solid", borderColor: "divider", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <Typography variant="caption" sx={{ color: "text.secondary" }}>
-                    Field 元数据
-                  </Typography>
-                  <Stack direction="row" spacing={0.5} alignItems="center">
-                    <Button variant="text" size="small" disabled={activeTab.loading || !activeTab.describe} onClick={onToggleAllFields}>
-                      {activeTab.describe?.fields.every((field) => (activeTab.columnVisibility[field.name] ?? true) === true)
-                        ? "取消全选"
-                        : "全选"}
-                    </Button>
-                    <IconButton size="small" onClick={onToggleDrawer} aria-label="关闭字段与SOQL">
+            <div className="flex min-h-0 w-[360px] min-w-[360px] flex-col border-l border-base-300">
+              <div className="flex min-h-0 flex-[1_1_50%] flex-col border-b border-base-300">
+                <div className="flex items-center justify-between border-b border-base-300 px-3 py-2">
+                  <span className="text-[12px] text-neutral/70">Field 元数据</span>
+                  <div className="flex flex-row items-center gap-1">
+                    <button className="btn btn-ghost btn-xs" disabled={activeTab.loading || !activeTab.describe} onClick={onToggleAllFields}>
+                      {activeTab.describe?.fields.every((field) => (activeTab.columnVisibility[field.name] ?? true) === true) ? "取消全选" : "全选"}
+                    </button>
+                    <button className="btn btn-ghost btn-xs" onClick={onToggleDrawer} aria-label="关闭字段与SOQL">
                       <X size={14} />
-                    </IconButton>
-                  </Stack>
-                </Box>
+                    </button>
+                  </div>
+                </div>
 
-                <Box sx={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+                <div className="min-h-0 flex-1 overflow-auto">
                   {!activeTab.describe && (
-                    <Box sx={{ px: 1.5, py: 1.2 }}>
-                      <Typography variant="caption" color="text.secondary">
-                        正在加载字段元数据...
-                      </Typography>
-                    </Box>
+                    <div className="px-3 py-2">
+                      <span className="text-[12px] text-neutral/70">正在加载字段元数据...</span>
+                    </div>
                   )}
                   {activeTab.describe && activeTab.describe.fields.length === 0 && (
-                    <Box sx={{ px: 1.5, py: 1.2 }}>
-                      <Typography variant="caption" color="text.secondary">
-                        未获取到字段元数据。
-                      </Typography>
-                    </Box>
+                    <div className="px-3 py-2">
+                      <span className="text-[12px] text-neutral/70">未获取到字段元数据。</span>
+                    </div>
                   )}
+
                   {activeTab.describe?.fields.map((field) => {
                     const checked = activeTab.columnVisibility[field.name] ?? true;
                     return (
-                      <Box key={field.name} sx={{ px: 1.5, py: 0.8 }}>
-                        <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1}>
-                          <Stack direction="row" alignItems="center" spacing={1}>
+                      <div key={field.name} className="px-3 py-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
                             <input
                               type="checkbox"
+                              className="checkbox checkbox-sm"
                               checked={checked}
                               disabled={activeTab.loading}
                               onChange={(event) => onToggleFieldVisibility(field.name, event.target.checked)}
                             />
-                            <Typography variant="body2">{field.name}</Typography>
-                          </Stack>
-                          <Typography variant="caption" color="text.secondary" noWrap>
-                            {field.label} / {field.dataType}
-                          </Typography>
-                        </Stack>
-                        <Divider sx={{ mt: 0.8 }} />
-                      </Box>
+                            <span className="text-[12px]">{field.name}</span>
+                          </div>
+                          <span className="truncate text-[12px] text-neutral/70">{field.label} / {field.dataType}</span>
+                        </div>
+                        <div className="mt-2 border-b border-base-300" />
+                      </div>
                     );
                   })}
-                </Box>
-              </Box>
+                </div>
+              </div>
 
-              <Box sx={{ flex: "1 1 50%", minHeight: 0, display: "flex", flexDirection: "column" }}>
-                <Box
-                  sx={{
-                    px: 1.5,
-                    py: 1,
-                    borderBottom: "1px solid",
-                    borderColor: "divider",
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center"
-                  }}
-                >
-                  <Typography variant="caption" sx={{ color: "text.secondary" }}>
-                    SOQL 执行器
-                  </Typography>
-                  <IconButton size="small" onClick={onToggleDrawer} aria-label="关闭字段与SOQL">
+              <div className="flex min-h-0 flex-[1_1_50%] flex-col">
+                <div className="flex items-center justify-between border-b border-base-300 px-3 py-2">
+                  <span className="text-[12px] text-neutral/70">SOQL 执行器</span>
+                  <button className="btn btn-ghost btn-xs" onClick={onToggleDrawer} aria-label="关闭字段与SOQL">
                     <X size={14} />
-                  </IconButton>
-                </Box>
-                <Box sx={{ flex: 1, minHeight: 0, p: 1.5, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-                  <Box
-                    sx={{
-                      flex: 1,
-                      minHeight: 0,
-                      border: "1px solid",
-                      borderColor: "divider",
-                      bgcolor: "background.paper",
-                      overflow: "hidden"
-                    }}
-                  >
-                    <Box
-                      component="textarea"
+                  </button>
+                </div>
+                <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-3">
+                  <div className="flex min-h-0 flex-1 overflow-hidden border border-base-300 bg-base-100">
+                    <textarea
                       value={activeTab.soqlDraft}
                       onChange={(event: ChangeEvent<HTMLTextAreaElement>) => onSoqlChange(event.target.value)}
-                      sx={{
-                        width: "100%",
-                        height: "100%",
-                        border: "none",
-                        outline: "none",
-                        p: 1,
-                        resize: "none",
-                        overflow: "auto",
-                        fontFamily: "'Cascadia Mono', Consolas, 'Courier New', monospace",
-                        fontSize: 12,
-                        lineHeight: 1.5,
-                        boxSizing: "border-box",
-                        bgcolor: "background.paper",
-                        color: "text.primary"
-                      }}
+                      className="h-full w-full resize-none overflow-auto border-none bg-base-100 p-2 text-[12px] outline-none"
+                      style={{ fontFamily: "'Cascadia Mono', Consolas, 'Courier New', monospace", lineHeight: 1.5 }}
                     />
-                  </Box>
-                  <Button
-                    startIcon={<Play size={14} />}
-                    sx={{ mt: 1, alignSelf: "flex-start" }}
-                    disabled={activeTab.loading || !activeTab.soqlDraft}
-                    onClick={onExecuteCustomSoql}
-                  >
+                  </div>
+                  <button className="btn btn-primary btn-sm mt-2 self-start" disabled={activeTab.loading || !activeTab.soqlDraft} onClick={onExecuteCustomSoql}>
+                    <Play size={14} />
                     执行 SOQL
-                  </Button>
-                </Box>
-              </Box>
-            </Box>
+                  </button>
+                </div>
+              </div>
+            </div>
           )}
 
+          {/* 加载遮罩。 */}
           {activeTab.loading && (
-            <Box
-              sx={{
-                position: "absolute",
-                inset: 0,
-                zIndex: 10,
-                bgcolor: "rgba(255,255,255,0.68)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                flexDirection: "column",
-                gap: 1.5
-              }}
-            >
-              <CircularProgress size={42} thickness={4.5} />
-              <Typography variant="body2" color="text.secondary">
-                Loading...
-              </Typography>
-            </Box>
+            <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-white/70">
+              <span className="loading loading-spinner" style={{ width: 42, height: 42 }} />
+              <span className="text-[12px] text-neutral/70">Loading...</span>
+            </div>
           )}
-        </Box>
+        </div>
       )}
     </>
   );
 }
 
+// 日志时间格式化。
 function formatLogTime(timestamp: string): string {
   const date = new Date(timestamp);
   if (Number.isNaN(date.getTime())) return timestamp;

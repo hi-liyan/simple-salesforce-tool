@@ -1,5 +1,5 @@
 ﻿import { useEffect, useMemo, useRef, useState } from "react";
-import { Box, FormControl, Select, Typography } from "@mui/material";
+
 import {
   CellClickedEventArgs,
   DataEditor,
@@ -103,12 +103,12 @@ export function DataGrid({
   if (records.length === 0) {
     return (
       // 空状态容器。
-      <Box sx={{ p: 2 }}>
+      <div className="p-2">
         {/* 空状态提示。 */}
-        <Typography variant="caption" color="text.secondary">
+        <span className="text-[12px] text-neutral/70">
           暂无查询结果。
-        </Typography>
-      </Box>
+        </span>
+      </div>
     );
   }
 
@@ -294,27 +294,17 @@ export function DataGrid({
 
   return (
     // 表格容器：顶部统计栏 + 数据表格。
-    <Box sx={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0, position: "relative" }}>
+    <div className="relative flex h-full min-h-0 flex-col">
       {/* 顶部工具栏：仅显示统计。 */}
-      <Box
-        sx={{
-          px: 1.5,
-          py: 0.5,
-          borderBottom: "1px solid",
-          borderColor: "divider",
-          display: "flex",
-          alignItems: "center",
-          gap: 1.2
-        }}
-      >
+      <div className="flex items-center gap-1.5 border-b border-base-300 px-3 py-1">
         {/* 统计信息。 */}
-        <Typography variant="caption" color="text.secondary">
+        <span className="text-[12px] text-neutral/70">
           Rows: {result.totalSize}
-        </Typography>
-      </Box>
+        </span>
+      </div>
 
       {/* 数据表格主体。 */}
-      <Box ref={gridBodyRef} sx={{ flex: 1, minHeight: 0, position: "relative" }}>
+      <div ref={gridBodyRef} className="relative min-h-0 flex-1">
         {/* Glide Data Grid 组件：承载行列渲染、编辑、选择、列宽调整等核心交互。 */}
         <DataEditor
           // 列定义：包含选择列、序号列和业务字段列。
@@ -358,19 +348,17 @@ export function DataGrid({
             return (props) => {
               const textValue = props.value as TextCell;
               return (
-                <FormControl
-                  size="small"
-                  sx={{
-                    position: "absolute",
+                <div
+                  className="absolute"
+                  style={{
                     left: props.target.x,
                     top: props.target.y,
-                    width: Math.max(props.target.width, 180),
-                    bgcolor: "background.paper"
+                    width: Math.max(props.target.width, 180)
                   }}
                 >
-                  <Select
+                  <select
                     autoFocus
-                    native
+                    className="select select-bordered select-sm w-full bg-base-100"
                     value={normalizeSelectValue(textValue.data, options)}
                     onBlur={() => props.onFinishedEditing(undefined, [0, 0])}
                     onChange={(event) => {
@@ -389,8 +377,8 @@ export function DataGrid({
                         {item.label}
                       </option>
                     ))}
-                  </Select>
-                </FormControl>
+                  </select>
+                </div>
               );
             };
           }}
@@ -543,10 +531,10 @@ export function DataGrid({
         />
         {/* 表头字段元数据悬浮提示：仅在 hover 到 info icon 时显示。 */}
         {hoveredHeaderMeta && (
-          <Box
-            sx={{
+          <div
+            className="fixed z-20 max-h-[320px] w-[420px] overflow-auto rounded border p-1.5"
+            style={{
               // 使用 fixed + viewport 坐标，避免父容器偏移导致的错位问题。
-              position: "fixed",
               left: Math.min(
                 Math.max(8, hoveredHeaderMeta.anchorClientX - 210),
                 Math.max(8, window.innerWidth - 420 - 8)
@@ -555,15 +543,9 @@ export function DataGrid({
                 Math.max(8, hoveredHeaderMeta.anchorClientY + 8),
                 Math.max(8, window.innerHeight - 320 - 8)
               ),
-              width: 420,
-              maxHeight: 320,
-              overflow: "auto",
-              p: 1.2,
-              bgcolor: "#223047",
-              border: "1px solid #3a557f",
-              borderRadius: 1,
+              backgroundColor: "#223047",
+              borderColor: "#3a557f",
               boxShadow: "0 10px 28px rgba(15, 23, 42, 0.35)",
-              zIndex: 20,
               pointerEvents: "auto"
             }}
             onMouseEnter={() => {
@@ -576,30 +558,25 @@ export function DataGrid({
             }}
           >
             {/* 元数据标题：展示当前字段名。 */}
-            <Typography variant="caption" sx={{ display: "block", mb: 0.75, color: "white", fontWeight: 700 }}>
+            <p className="mb-1 block text-[12px] font-bold text-white">
               {hoveredHeaderMeta.fieldName} 字段元数据
-            </Typography>
+            </p>
             {/* 元数据明细：逐条输出字段属性键值，便于核对权限与类型。 */}
-            <Box sx={{ pr: 0.5 }}>
+            <div className="pr-0.5">
               {Object.entries(hoveredHeaderMeta.metadata).map(([key, value]) => (
-                <Typography
+                <p
                   key={key}
-                  variant="caption"
-                  sx={{
-                    display: "block",
-                    lineHeight: 1.5,
-                    color: "#dbe7ff",
-                    fontFamily: "'Cascadia Mono', Consolas, 'Courier New', monospace"
-                  }}
+                  className="block text-[12px] leading-[1.5]"
+                  style={{ color: "#dbe7ff", fontFamily: "'Cascadia Mono', Consolas, 'Courier New', monospace" }}
                 >
                   {translateFieldMetaKey(key)}: {formatFieldMetaValue(value)}
-                </Typography>
+                </p>
               ))}
-            </Box>
-          </Box>
+            </div>
+          </div>
         )}
-      </Box>
-    </Box>
+      </div>
+    </div>
   );
 }
 
@@ -834,3 +811,4 @@ function extractEditableNumber(value: EditableGridCell): number | undefined {
   const parsed = Number(text);
   return Number.isFinite(parsed) ? parsed : undefined;
 }
+

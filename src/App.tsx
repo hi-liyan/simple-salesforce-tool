@@ -24,8 +24,10 @@ export default function App() {
   const page = resolvePageByWindowLabel();
 
   return (
-    <ErrorBoundary>
-      {page === "auth" ? <AuthPage /> : page === "field-meta" ? <FieldMetaPage /> : <MainPage />}
-    </ErrorBoundary>
+    <div data-theme="salesforce" className="h-full w-full">
+      <ErrorBoundary>
+        {page === "auth" ? <AuthPage /> : page === "field-meta" ? <FieldMetaPage /> : <MainPage />}
+      </ErrorBoundary>
+    </div>
   );
 }
