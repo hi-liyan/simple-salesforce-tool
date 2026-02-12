@@ -40,11 +40,20 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText }: SoqlExe
     [tabs, activeTabId]
   );
 
+  // 结果表专用数据：关系字段扁平化后用于 DataGrid 展示。
+  const gridResult = useMemo<QueryResult>(() => {
+    if (!activeTab) return { totalSize: 0, records: [] };
+    return {
+      totalSize: activeTab.result.totalSize,
+      records: activeTab.result.records.map((record) => flattenRecordForGrid(record))
+    };
+  }, [activeTab]);
+
   // 当前标签的可见列：从结果记录动态抽取顶层字段。
   const visibleColumns = useMemo(() => {
     if (!activeTab) return [];
-    return extractVisibleColumns(activeTab.result.records);
-  }, [activeTab]);
+    return extractVisibleColumns(gridResult.records);
+  }, [activeTab, gridResult.records]);
 
   // 当前标签的字段元数据映射：执行器模式统一只读，避免误编辑。
   const fieldMetadataMap = useMemo(() => {
@@ -251,7 +260,7 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText }: SoqlExe
       <div className="min-h-0 flex-1">
         {bottomView === "result" ? (
           <DataGrid
-            result={activeTab.result}
+            result={gridResult}
             visibleColumns={visibleColumns}
             fieldMetadataMap={fieldMetadataMap}
             dirtyCellKeys={[]}
@@ -455,6 +464,39 @@ function extractVisibleColumns(records: Record<string, unknown>[]): string[] {
 }
 
 // 归一化查询结果，避免后端异常格式影响 UI。
+// 记录扁平化：将关系字段对象展开为点路径键。
+function flattenRecordForGrid(record: Record<string, unknown>): Record<string, unknown> {
+  const output: Record<string, unknown> = {};
+  flattenNodeToColumns(record, "", output);
+  return output;
+}
+
+// 递归展开节点：例如 `YobuzoTicket__TA_applicant__r.Name` -> 值。
+function flattenNodeToColumns(node: unknown, prefix: string, output: Record<string, unknown>) {
+  if (node === null || node === undefined) {
+    if (prefix) output[prefix] = node;
+    return;
+  }
+
+  if (typeof node !== "object") {
+    if (prefix) output[prefix] = node;
+    return;
+  }
+
+  if (Array.isArray(node)) {
+    if (!prefix) return;
+    // 子查询数组不展开多列，保留 JSON 字符串便于查看。
+    output[prefix] = JSON.stringify(node);
+    return;
+  }
+
+  const entries = Object.entries(node as Record<string, unknown>).filter(([key]) => key !== "attributes");
+  entries.forEach(([key, value]) => {
+    const nextPrefix = prefix ? `${prefix}.${key}` : key;
+    flattenNodeToColumns(value, nextPrefix, output);
+  });
+}
+
 function normalizeQueryResult(input: QueryResult): QueryResult {
   const records = Array.isArray(input?.records) ? input.records : [];
   const totalSize = typeof input?.totalSize === "number" ? input.totalSize : records.length;

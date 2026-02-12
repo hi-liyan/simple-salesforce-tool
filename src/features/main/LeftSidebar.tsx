@@ -25,6 +25,8 @@ type LeftSidebarProps = {
   onOpenObject: (item: SalesforceObject) => void;
   // 点击不可查询徽标回调。
   onNotQueryableObjectClick?: (item: SalesforceObject) => void;
+  // 对象列表展示模式：`list` 为原列表，`tree` 为树形展开字段。
+  objectListMode?: "list" | "tree";
 };
 
 // 左侧栏：数据源选择与对象列表。
@@ -39,7 +41,8 @@ export function LeftSidebar({
   objects,
   activeTabObjectName,
   onOpenObject,
-  onNotQueryableObjectClick
+  onNotQueryableObjectClick,
+  objectListMode = "list"
 }: LeftSidebarProps) {
   return (
     <>
@@ -88,9 +91,11 @@ export function LeftSidebar({
         ) : (
           <ObjectList
             objects={objects}
+            sourceId={selectedSourceId}
             activeObjectName={activeTabObjectName}
             onOpenObject={onOpenObject}
             onNotQueryableClick={onNotQueryableObjectClick}
+            treeMode={objectListMode === "tree"}
           />
         )}
       </div>
