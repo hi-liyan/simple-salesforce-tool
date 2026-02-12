@@ -1,10 +1,33 @@
 ﻿import { useEffect, useMemo, useRef, useState } from "react";
-import { Play, Plus, Table2, X } from "lucide-react";
+import { MessageSquare, Play, Plus, Table2, WandSparkles, X } from "lucide-react";
+import { listen } from "@tauri-apps/api/event";
 import { DataGrid } from "../../components/DataGrid";
 import { NoticeAlert } from "../../components/NoticeAlert";
 import { SoqlMonacoEditor } from "../../components/SoqlMonacoEditor";
 import { api } from "../../api";
-import { Notice, QueryResult, SalesforceObject, TabLog } from "../../types";
+import { Notice, QueryResult, SalesforceObject, SoqlConversationResponse, TabLog } from "../../types";
+
+type AiConversationItem = {
+  // 消息唯一标识，用于流式更新定位。
+  id: string;
+  // 消息发送方：user=用户输入，assistant=AI 回复。
+  role: "user" | "assistant";
+  // 消息正文。
+  content: string;
+  // AI 回复状态：clarify=继续澄清，ready=可应用 SOQL。
+  status?: "clarify" | "ready";
+  // AI 引导问题列表（仅 clarify 时展示）。
+  questions?: string[];
+  // AI 产出的 SOQL（仅 ready 时展示）。
+  soql?: string;
+};
+
+type AiStreamChunkPayload = {
+  // 流式请求 ID。
+  requestId: string;
+  // 增量文本片段。
+  chunk: string;
+};
 
 type SoqlExecutorTab = {
   id: string;
@@ -19,6 +42,18 @@ type SoqlExecutorTab = {
   selectedRecordIds: string[];
   // 是否显示底部结果/日志区域：默认新建 Tab 隐藏，查询成功后展示。
   showBottomPanel: boolean;
+  // AI 多轮会话 ID：为空时由后端创建。
+  aiConversationId: string;
+  // AI 对话输入草稿。
+  aiPromptDraft: string;
+  // AI 会话消息列表（用户与助手交替展示）。
+  aiMessages: AiConversationItem[];
+  // AI 请求加载状态。
+  aiLoading: boolean;
+  // AI 模式开关：开启后用聊天界面替代 SOQL 编辑器。
+  aiMode: boolean;
+  // 当前流式请求 ID：用于把 chunk 路由到当前 Tab 对话。
+  aiStreamRequestId: string;
 };
 
 type SoqlExecutorWorkspaceProps = {
@@ -65,6 +100,11 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText, objects }
     () => tabs.find((item) => item.id === activeTabId) || null,
     [tabs, activeTabId]
   );
+  // 平台检测：用于区分 Mac 的 Command 键与 Windows 的 Alt 键发送快捷键。
+  const isMacPlatform = useMemo(() => {
+    if (typeof navigator === "undefined") return false;
+    return /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent);
+  }, []);
 
   useEffect(() => {
     if (!activeTab?.notice) return;
@@ -77,6 +117,35 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText, objects }
       window.clearTimeout(timer); // 切换 Tab 或 notice 变化时清理旧定时器。
     };
   }, [activeTab?.id, activeTab?.notice]);
+
+  useEffect(() => {
+    // 监听后端流式事件：按 requestId 路由到对应 Tab 的 AI 回复气泡。
+    let alive = true;
+    let unlisten: (() => void) | null = null;
+    void listen<AiStreamChunkPayload>("llm:soql-stream-chunk", (event) => {
+      if (!alive) return;
+      const requestId = event.payload?.requestId || "";
+      const chunk = event.payload?.chunk || "";
+      if (!requestId || !chunk) return;
+      setTabs((current) =>
+        current.map((tab) => {
+          if (tab.aiStreamRequestId !== requestId) return tab;
+          const nextMessages = tab.aiMessages.map((item) => {
+            if (item.id !== requestId || item.role !== "assistant") return item;
+            return { ...item, content: nextStreamingPlaceholder(item.content) };
+          });
+          return { ...tab, aiMessages: nextMessages };
+        })
+      );
+    }).then((dispose) => {
+      unlisten = dispose;
+    });
+
+    return () => {
+      alive = false;
+      unlisten?.();
+    };
+  }, []);
 
   useEffect(() => {
     // 切换 Tab 或状态更新时同步 ref，保证执行入口读取到当前激活 Tab 的选区文本。
@@ -269,6 +338,115 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText, objects }
     }
   }
 
+  // 向 AI 发送一轮消息：支持澄清追问和最终 SOQL 生成。
+  async function sendAiPrompt() {
+    if (!activeTab) return;
+    if (!selectedSourceId) {
+      patchActiveTab((tab) => ({
+        ...tab,
+        notice: { type: "error", message: "请先在左侧选择数据源。" }
+      }));
+      return;
+    }
+
+    const prompt = activeTab.aiPromptDraft.trim();
+    if (!prompt) {
+      patchActiveTab((tab) => ({
+        ...tab,
+        notice: { type: "error", message: "请输入自然语言需求后再发送。" }
+      }));
+      return;
+    }
+
+    const contextObjectHint = extractFromObjectNames(activeTab.soqlDraft)[0] || "";
+    const streamRequestId = `ai-stream-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    patchActiveTab((tab) => ({
+      ...tab,
+      aiLoading: true,
+      aiStreamRequestId: streamRequestId,
+      aiPromptDraft: "",
+      aiMessages: [
+        ...tab.aiMessages,
+        { id: `user-${streamRequestId}`, role: "user", content: prompt },
+        { id: streamRequestId, role: "assistant", content: "AI 正在生成" }
+      ]
+    }));
+
+    try {
+      const response = await api.generateSoqlFromConversation({
+        sourceId: selectedSourceId,
+        conversationId: activeTab.aiConversationId || undefined,
+        userMessage: prompt,
+        contextObjectHint: contextObjectHint || undefined,
+        streamRequestId
+      });
+      patchActiveTab((tab) => applyAiResponseToTab(tab, response, streamRequestId));
+    } catch (error) {
+      patchActiveTab((tab) => {
+        if (tab.aiStreamRequestId !== streamRequestId) return tab;
+        return {
+          ...tab,
+          aiLoading: false,
+          aiStreamRequestId: "",
+          notice: { type: "error", message: `AI 生成失败：${String(error)}` },
+          aiMessages: tab.aiMessages.map((item) =>
+            item.id === streamRequestId
+              ? {
+                  ...item,
+                  content: `生成失败：${String(error)}`,
+                  status: "clarify" as const,
+                  questions: ["请确认 LLM 设置（baseUrl、model、apiKey）是否已正确保存。"]
+                }
+              : item
+          )
+        };
+      });
+    }
+  }
+
+  // 停止当前流式输出：通知后端取消并收敛前端加载状态。
+  async function stopAiStreaming() {
+    if (!activeTab?.aiStreamRequestId) return;
+    const requestId = activeTab.aiStreamRequestId;
+    try {
+      await api.stopLlmStreamGeneration(requestId);
+    } catch {
+      // 停止动作失败不阻塞前端状态收敛。
+    }
+    patchActiveTab((tab) => ({
+      ...tab,
+      aiLoading: false,
+      aiStreamRequestId: "",
+      aiMessages: tab.aiMessages.map((item) =>
+        item.id === requestId && item.role === "assistant"
+          ? { ...item, content: "已停止生成。", status: "clarify" as const, questions: [] }
+          : item
+      ),
+      notice: { type: "success", message: "已停止 AI 生成。" }
+    }));
+  }
+
+  // 将 AI 返回的 SOQL 直接应用到编辑器草稿。
+  function applyAiSoql(soql: string) {
+    patchActiveTab((tab) => ({
+      ...tab,
+      soqlDraft: soql,
+      notice: { type: "success", message: "已将 AI 生成的 SOQL 回填到编辑器。" }
+    }));
+  }
+
+  // 创建新 Tab 并将 AI 生成的 SOQL 应用到新 Tab。
+  function createTabAndApplyAiSoql(soql: string) {
+    const nextIndex = tabs.length + 1;
+    const nextTab = {
+      ...createSoqlExecutorTab(nextIndex),
+      soqlDraft: soql,
+      aiMode: false // 创建后回到传统编辑模式，便于直接执行与调整。
+    };
+    setTabs((current) => [...current, nextTab]);
+    setActiveTabId(nextTab.id);
+  }
+
   if (!activeTab) {
     return (
       // 防御分支：理论上不会触发，兜底给出可操作入口。
@@ -321,12 +499,14 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText, objects }
         />
       )}
 
-      {/* 顶部工具栏：包含执行按钮。 */}
+      {/* 顶部工具栏：左侧执行按钮，右侧 AI 模式开关。 */}
       <div className="border-b border-base-300 px-3 py-2">
+        {/* 工具行容器。 */}
         <div className="flex items-center gap-2">
+          {/* 左侧执行按钮：仅传统模式可用。 */}
           <button
             className="btn btn-primary btn-sm"
-            disabled={activeTab.loading}
+            disabled={activeTab.loading || activeTab.aiMode}
             onMouseDown={(event) => {
               event.preventDefault(); // 阻止按钮按下时抢占焦点，避免 Monaco 选区在点击瞬间丢失。
             }}
@@ -335,129 +515,223 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText, objects }
             <Play size={14} />
             执行
           </button>
-          <span className="text-[12px] text-neutral/70">支持复杂 SOQL（含子查询），结果展示在底部。</span>
+          {/* 中间说明文本。 */}
+          <span className="text-[12px] text-neutral/70">
+            {activeTab.aiMode ? "AI 模式：通过对话生成 SOQL，可一键新建 Tab 应用。" : "支持复杂 SOQL（含子查询），结果展示在底部。"}
+          </span>
+          {/* 占位弹性空间，将 AI 模式按钮推到右侧。 */}
+          <div className="flex-1" />
+          {/* AI 模式切换按钮：切换后隐藏/展示 SOQL 编辑器。 */}
+          <button
+            className={`btn btn-sm ${activeTab.aiMode ? "btn-primary" : "btn-outline"}`}
+            onClick={() => {
+              patchActiveTab((tab) => ({ ...tab, aiMode: !tab.aiMode }));
+            }}
+          >
+            <MessageSquare size={14} />
+            AI模式
+          </button>
         </div>
       </div>
 
-      {/* 编辑器与底部结果区分栏容器：底部显示时由拖拽改变分栏高度。 */}
+      {/* 主内容区：传统模式显示编辑器，AI 模式显示聊天界面。 */}
       <div ref={splitContainerRef} className="min-h-0 flex flex-1 flex-col overflow-hidden">
-        {/* SOQL 编辑器区域：始终占剩余空间，底部面板显示时会随拖拽动态伸缩。 */}
-        <div className={activeTab.showBottomPanel ? "min-h-0 flex-1 border-b border-base-300 p-3" : "min-h-0 flex-1 p-3"}>
-          {/* SOQL 编辑器：统一复用 Monaco 组件，保持与主工作区一致的编辑体验。 */}
-          <SoqlMonacoEditor
-            value={activeTab.soqlDraft}
-            onChange={(value) => {
-              patchActiveTab((tab) => ({ ...tab, soqlDraft: value })); // 同步当前标签草稿。
-            }}
-            onSelectionTextChange={(selectionText) => {
-              selectedSoqlTextRef.current = selectionText; // 同步更新 ref，确保“点执行”的同一时刻可读取到最新选区。
-              patchActiveTab((tab) => ({ ...tab, selectedSoqlText: selectionText })); // 同步当前标签选区文本。
-            }}
-            fieldNames={fallbackFieldNames}
-            objectNames={objectNames}
-            objectFieldsMap={objectFieldsMap}
-            height="100%"
-            className="h-full"
-          />
-        </div>
-
-        {/* 底部结果日志区：默认新建 Tab 不显示，查询成功后显示并支持拖拽高度。 */}
-        {activeTab.showBottomPanel && (
-          <div className="relative mb-3 flex min-h-0 shrink-0 flex-col border-t border-base-300" style={{ height: bottomPanelHeight }}>
-          <div
-            className="absolute left-0 right-0 top-0 z-[1] h-[6px] cursor-row-resize"
-            onMouseDown={(event) => {
-              event.preventDefault(); // 阻止拖拽起点触发文本选中。
-              dragStartYRef.current = event.clientY; // 记录本次拖拽起点 Y。
-              dragStartHeightRef.current = bottomPanelHeight; // 记录本次拖拽起始高度。
-              setDraggingBottomResize(true); // 进入拖拽状态。
-            }}
-          />
-
-          {/* 底部结果区头部：切换结果 / 日志。 */}
-          <div className="flex items-center gap-1 border-b border-base-300 px-3 py-1.5">
-            <button
-              className={`btn btn-xs ${bottomView === "result" ? "btn-primary" : "btn-ghost"}`}
-              onClick={() => setBottomView("result")}
-            >
-              <Table2 size={12} />
-              结果
-            </button>
-            <button
-              className={`btn btn-xs ${bottomView === "logs" ? "btn-primary" : "btn-ghost"}`}
-              onClick={() => setBottomView("logs")}
-            >
-              日志
-            </button>
-            <div className="flex-1" />
-            <button
-              className="btn btn-circle btn-ghost btn-xs"
-              aria-label="关闭结果日志区域"
-              onClick={() => {
-                patchActiveTab((tab) => ({ ...tab, showBottomPanel: false })); // 关闭当前 Tab 底部结果日志区域。
-              }}
-            >
-              <X size={12} />
-            </button>
+        {activeTab.aiMode ? (
+          // AI 模式主体：仿聊天布局（消息区 + 输入区）。
+          <div className="min-h-0 flex flex-1 flex-col p-3">
+            {/* 消息滚动区：使用左右气泡模拟聊天体验。 */}
+            <div className="min-h-0 flex-1 overflow-auto rounded border border-base-300 bg-base-100 p-3">
+              {activeTab.aiMessages.length === 0 ? (
+                <div className="flex h-full items-center justify-center text-[12px] text-neutral/60">
+                  请输入你的问题，AI 会先对话，明确后再生成 SOQL。
+                </div>
+              ) : (
+                activeTab.aiMessages.map((item, index) => {
+                  const userSide = item.role === "user";
+                  return (
+                    <div key={item.id} className={`mb-3 flex ${userSide ? "justify-end" : "justify-start"}`}>
+                      <div className={`max-w-[78%] rounded-2xl px-3 py-2 text-[12px] ${userSide ? "bg-primary text-primary-content" : "bg-base-200 text-base-content"}`}>
+                        <p>{item.content || (item.role === "assistant" ? "..." : "")}</p>
+                        {item.status === "clarify" && (item.questions?.length || 0) > 0 && (
+                          <div className="mt-2 text-[12px]">
+                            {item.questions?.map((question, questionIndex) => (
+                              <p key={`${index}-q-${questionIndex}`}>{questionIndex + 1}. {question}</p>
+                            ))}
+                          </div>
+                        )}
+                        {item.status === "ready" && item.soql && (
+                          <div className="mt-2">
+                            <pre className="overflow-auto rounded bg-base-300/40 px-2 py-1 text-[11px]">{item.soql}</pre>
+                            <div className="mt-2 flex gap-2">
+                              <button className="btn btn-xs btn-outline" onClick={() => applyAiSoql(item.soql || "")}>
+                                <WandSparkles size={12} />
+                                应用当前Tab
+                              </button>
+                              <button className="btn btn-xs btn-primary" onClick={() => createTabAndApplyAiSoql(item.soql || "")}>
+                                <Plus size={12} />
+                                新建Tab并应用
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+            {/* 输入区：位于底部，支持连续多轮对话。 */}
+            <div className="mt-2 flex items-center gap-2">
+              <input
+                className="input input-bordered input-sm w-full"
+                value={activeTab.aiPromptDraft}
+                placeholder="输入问题或明确说“请生成 SOQL”"
+                onChange={(event) => {
+                  patchActiveTab((tab) => ({ ...tab, aiPromptDraft: event.target.value })); // 同步 AI 对话输入草稿。
+                }}
+                onKeyDown={(event) => {
+                  // 发送快捷键：macOS 使用 Command+Enter，Windows 使用 Alt+Enter。
+                  if (event.key !== "Enter") return;
+                  const canSend = isMacPlatform ? event.metaKey : event.altKey;
+                  if (!canSend) return;
+                  event.preventDefault(); // 阻止回车触发表单默认提交或换行行为。
+                  if (activeTab.aiLoading) return; // 正在请求时忽略回车，避免重复并发发送。
+                  void sendAiPrompt();
+                }}
+                disabled={activeTab.aiLoading}
+              />
+              <button className="btn btn-primary btn-sm" disabled={activeTab.aiLoading} onClick={() => void sendAiPrompt()}>
+                <WandSparkles size={14} />
+                {activeTab.aiLoading ? "发送中" : "发送"}
+              </button>
+              {activeTab.aiLoading && (
+                <button className="btn btn-outline btn-sm" onClick={() => void stopAiStreaming()}>
+                  停止
+                </button>
+              )}
+            </div>
           </div>
+        ) : (
+          <>
+            {/* SOQL 编辑器区域：始终占剩余空间，底部面板显示时会随拖拽动态伸缩。 */}
+            <div className={activeTab.showBottomPanel ? "min-h-0 flex-1 border-b border-base-300 p-3" : "min-h-0 flex-1 p-3"}>
+              {/* SOQL 编辑器：统一复用 Monaco 组件，保持与主工作区一致的编辑体验。 */}
+              <SoqlMonacoEditor
+                value={activeTab.soqlDraft}
+                onChange={(value) => {
+                  patchActiveTab((tab) => ({ ...tab, soqlDraft: value })); // 同步当前标签草稿。
+                }}
+                onSelectionTextChange={(selectionText) => {
+                  selectedSoqlTextRef.current = selectionText; // 同步更新 ref，确保“点执行”的同一时刻可读取到最新选区。
+                  patchActiveTab((tab) => ({ ...tab, selectedSoqlText: selectionText })); // 同步当前标签选区文本。
+                }}
+                fieldNames={fallbackFieldNames}
+                objectNames={objectNames}
+                objectFieldsMap={objectFieldsMap}
+                height="100%"
+                className="h-full"
+              />
+            </div>
 
-          {/* 底部结果内容区。 */}
-          <div className="min-h-0 flex-1">
-            {bottomView === "result" ? (
-              <DataGrid
-                result={gridResult}
-                visibleColumns={visibleColumns}
-                fieldMetadataMap={fieldMetadataMap}
-                dirtyCellKeys={[]}
-                selectedRecordIds={activeTab.selectedRecordIds}
-                pendingDeleteRecordIds={[]}
-                showHeaderMetadata={false}
-                enableReadonlyCellHint={false}
-                showSelectionColumn={false}
-                onToggleRecord={(recordId, checked) => {
-                  patchActiveTab((tab) => ({
-                    ...tab,
-                    selectedRecordIds: checked
-                      ? Array.from(new Set([...tab.selectedRecordIds, recordId]))
-                      : tab.selectedRecordIds.filter((id) => id !== recordId)
-                  }));
-                }}
-                onToggleAll={(checked, recordIds) => {
-                  patchActiveTab((tab) => ({
-                    ...tab,
-                    selectedRecordIds: checked ? recordIds : []
-                  }));
-                }}
-                onEditCell={() => {
-                  // 执行器结果表为只读，保持空实现。
-                }}
-                onShowMessage={(message) => {
-                  patchActiveTab((tab) => ({
-                    ...tab,
-                    notice: { type: "error", message }
-                  }));
+            {/* 底部结果日志区：默认新建 Tab 不显示，查询成功后显示并支持拖拽高度。 */}
+            {activeTab.showBottomPanel && (
+              <div className="relative mb-3 flex min-h-0 shrink-0 flex-col border-t border-base-300" style={{ height: bottomPanelHeight }}>
+              <div
+                className="absolute left-0 right-0 top-0 z-[1] h-[6px] cursor-row-resize"
+                onMouseDown={(event) => {
+                  event.preventDefault(); // 阻止拖拽起点触发文本选中。
+                  dragStartYRef.current = event.clientY; // 记录本次拖拽起点 Y。
+                  dragStartHeightRef.current = bottomPanelHeight; // 记录本次拖拽起始高度。
+                  setDraggingBottomResize(true); // 进入拖拽状态。
                 }}
               />
-            ) : (
-              <div className="h-full overflow-auto p-3">
-                {activeTab.logs.length === 0 ? (
-                  <span className="text-[12px] text-neutral/70">暂无日志。</span>
+
+              {/* 底部结果区头部：切换结果 / 日志。 */}
+              <div className="flex items-center gap-1 border-b border-base-300 px-3 py-1.5">
+                <button
+                  className={`btn btn-xs ${bottomView === "result" ? "btn-primary" : "btn-ghost"}`}
+                  onClick={() => setBottomView("result")}
+                >
+                  <Table2 size={12} />
+                  结果
+                </button>
+                <button
+                  className={`btn btn-xs ${bottomView === "logs" ? "btn-primary" : "btn-ghost"}`}
+                  onClick={() => setBottomView("logs")}
+                >
+                  日志
+                </button>
+                <div className="flex-1" />
+                <button
+                  className="btn btn-circle btn-ghost btn-xs"
+                  aria-label="关闭结果日志区域"
+                  onClick={() => {
+                    patchActiveTab((tab) => ({ ...tab, showBottomPanel: false })); // 关闭当前 Tab 底部结果日志区域。
+                  }}
+                >
+                  <X size={12} />
+                </button>
+              </div>
+
+              {/* 底部结果内容区。 */}
+              <div className="min-h-0 flex-1">
+                {bottomView === "result" ? (
+                  <DataGrid
+                    result={gridResult}
+                    visibleColumns={visibleColumns}
+                    fieldMetadataMap={fieldMetadataMap}
+                    dirtyCellKeys={[]}
+                    selectedRecordIds={activeTab.selectedRecordIds}
+                    pendingDeleteRecordIds={[]}
+                    showHeaderMetadata={false}
+                    enableReadonlyCellHint={false}
+                    showSelectionColumn={false}
+                    onToggleRecord={(recordId, checked) => {
+                      patchActiveTab((tab) => ({
+                        ...tab,
+                        selectedRecordIds: checked
+                          ? Array.from(new Set([...tab.selectedRecordIds, recordId]))
+                          : tab.selectedRecordIds.filter((id) => id !== recordId)
+                      }));
+                    }}
+                    onToggleAll={(checked, recordIds) => {
+                      patchActiveTab((tab) => ({
+                        ...tab,
+                        selectedRecordIds: checked ? recordIds : []
+                      }));
+                    }}
+                    onEditCell={() => {
+                      // 执行器结果表为只读，保持空实现。
+                    }}
+                    onShowMessage={(message) => {
+                      patchActiveTab((tab) => ({
+                        ...tab,
+                        notice: { type: "error", message }
+                      }));
+                    }}
+                  />
                 ) : (
-                  activeTab.logs.map((log) => (
-                    <div key={log.id} className="mb-2 border border-base-300 bg-base-100 p-2">
-                      <p className={`mb-1 block text-[12px] ${log.success ? "text-success" : "text-error"}`}>
-                        {formatLogTime(log.timestamp)} [{log.action}] {log.success ? "成功" : "失败"}
-                      </p>
-                      <p className="block text-[12px]">请求: {log.request}</p>
-                      <p className="block text-[12px]">响应: {log.summary}</p>
-                      {log.errorMessage && <p className="block text-[12px] text-error">错误: {log.errorMessage}</p>}
-                    </div>
-                  ))
+                  <div className="h-full overflow-auto p-3">
+                    {activeTab.logs.length === 0 ? (
+                      <span className="text-[12px] text-neutral/70">暂无日志。</span>
+                    ) : (
+                      activeTab.logs.map((log) => (
+                        <div key={log.id} className="mb-2 border border-base-300 bg-base-100 p-2">
+                          <p className={`mb-1 block text-[12px] ${log.success ? "text-success" : "text-error"}`}>
+                            {formatLogTime(log.timestamp)} [{log.action}] {log.success ? "成功" : "失败"}
+                          </p>
+                          <p className="block text-[12px]">请求: {log.request}</p>
+                          <p className="block text-[12px]">响应: {log.summary}</p>
+                          {log.errorMessage && <p className="block text-[12px] text-error">错误: {log.errorMessage}</p>}
+                        </div>
+                      ))
+                    )}
+                  </div>
                 )}
               </div>
+              </div>
             )}
-          </div>
-          </div>
+          </>
         )}
       </div>
 
@@ -484,7 +758,13 @@ function createSoqlExecutorTab(index: number): SoqlExecutorTab {
     notice: null,
     logs: [],
     selectedRecordIds: [],
-    showBottomPanel: false
+    showBottomPanel: false,
+    aiConversationId: "",
+    aiPromptDraft: "",
+    aiMessages: [],
+    aiLoading: false,
+    aiMode: false,
+    aiStreamRequestId: ""
   };
 }
 
@@ -498,6 +778,48 @@ function buildSoqlLog(success: boolean, request: string, summary: string, errorM
     request,
     summary,
     errorMessage
+  };
+}
+
+// 将后端 AI 响应映射到当前 Tab：统一写入会话、状态与提示。
+function applyAiResponseToTab(
+  tab: SoqlExecutorTab,
+  response: SoqlConversationResponse,
+  streamRequestId: string
+): SoqlExecutorTab {
+  const message: AiConversationItem =
+    response.status === "ready"
+      ? {
+          id: streamRequestId,
+          role: "assistant",
+          content: response.answer || response.reason || tab.aiMessages.find((item) => item.id === streamRequestId)?.content || "已生成 SOQL，可选择应用到编辑器。",
+          status: "ready",
+          soql: response.soql || "",
+          questions: []
+        }
+      : {
+          id: streamRequestId,
+          role: "assistant",
+          content: response.answer || response.reason || tab.aiMessages.find((item) => item.id === streamRequestId)?.content || "当前需求存在模糊点，请补充以下信息。",
+          status: "clarify",
+          questions: response.questions
+        };
+
+  const existed = tab.aiMessages.some((item) => item.id === streamRequestId);
+  const nextMessages = existed
+    ? tab.aiMessages.map((item) => (item.id === streamRequestId ? { ...item, ...message } : item))
+    : [...tab.aiMessages, message];
+
+  return {
+    ...tab,
+    aiLoading: false,
+    aiStreamRequestId: "",
+    aiConversationId: response.conversationId || tab.aiConversationId,
+    aiMessages: nextMessages,
+    notice:
+      response.status === "ready"
+        ? { type: "success", message: "AI 已生成 SOQL，请确认后应用。" }
+        : { type: "success", message: "AI 需要继续澄清，请补充回答。" }
   };
 }
 
@@ -609,4 +931,12 @@ function formatLogTime(timestamp: string): string {
   const date = new Date(timestamp);
   if (Number.isNaN(date.getTime())) return timestamp;
   return date.toLocaleString();
+}
+
+// 生成流式占位文案：避免把原始 JSON 片段直接渲染到聊天气泡。
+function nextStreamingPlaceholder(current: string): string {
+  const base = "AI 正在生成";
+  const suffix = current.startsWith(base) ? current.slice(base.length) : "";
+  const dotCount = Math.min(3, (suffix.match(/\./g) || []).length + 1);
+  return `${base}${".".repeat(dotCount)}`;
 }

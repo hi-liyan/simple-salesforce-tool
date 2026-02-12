@@ -162,3 +162,43 @@ export type CliPathStatus = {
   latestVersion: string | null;
   detail: string;
 };
+
+// LLM 设置视图（apiKey 仅返回掩码信息）。
+export type LlmSettings = {
+  provider: string;
+  baseUrl: string;
+  model: string;
+  apiKeyConfigured: boolean;
+  apiKeyMasked: string;
+  timeoutMs: number;
+};
+
+// 保存 LLM 设置负载（apiKey 可选覆盖）。
+export type LlmSettingsSavePayload = {
+  baseUrl: string;
+  model: string;
+  apiKey?: string;
+  timeoutMs?: number;
+};
+
+// 多轮 SOQL 对话请求参数。
+export type SoqlConversationRequest = {
+  sourceId: string;
+  conversationId?: string;
+  userMessage: string;
+  contextObjectHint?: string;
+  streamRequestId?: string;
+};
+
+// 多轮 SOQL 对话返回结果。
+export type SoqlConversationResponse = {
+  conversationId: string;
+  mode: "answer" | "generate" | "clarify";
+  status: "clarify" | "ready";
+  questions: string[];
+  soql?: string;
+  objectName?: string;
+  fieldNames: string[];
+  reason: string;
+  answer?: string;
+};

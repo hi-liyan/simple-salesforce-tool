@@ -212,3 +212,86 @@ pub struct CliPathStatus {
     /// 诊断详情（错误或提示信息）。
     pub detail: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LlmSettings {
+    /// 协议提供方，第一阶段固定为 openai。
+    pub provider: String,
+    /// OpenAI 接口基础地址。
+    pub base_url: String,
+    /// OpenAI 模型名称。
+    pub model: String,
+    /// OpenAI 密钥（仅后端持有明文）。
+    pub api_key: String,
+    /// 超时时间（毫秒）。
+    pub timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LlmSettingsView {
+    /// 协议提供方，前端展示用。
+    pub provider: String,
+    /// OpenAI 接口基础地址。
+    pub base_url: String,
+    /// OpenAI 模型名称。
+    pub model: String,
+    /// apiKey 是否已配置。
+    pub api_key_configured: bool,
+    /// apiKey 掩码文本。
+    pub api_key_masked: String,
+    /// 超时时间（毫秒）。
+    pub timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveLlmSettingsPayload {
+    /// OpenAI 接口基础地址。
+    pub base_url: String,
+    /// OpenAI 模型名称。
+    pub model: String,
+    /// 新的 apiKey（可空，空时表示不覆盖）。
+    pub api_key: Option<String>,
+    /// 超时时间（毫秒）。
+    pub timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SoqlConversationRequest {
+    /// Salesforce 数据源 ID。
+    pub source_id: String,
+    /// 多轮对话 ID（为空时新建）。
+    pub conversation_id: Option<String>,
+    /// 用户当前轮输入。
+    pub user_message: String,
+    /// 可选对象提示（由前端上下文传入）。
+    pub context_object_hint: Option<String>,
+    /// 前端本次流式请求 ID（用于事件分发到正确聊天气泡）。
+    pub stream_request_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SoqlConversationResponse {
+    /// 多轮对话 ID。
+    pub conversation_id: String,
+    /// 响应模式：answer=问答，generate=生成SOQL，clarify=澄清追问。
+    pub mode: String,
+    /// 当前状态：clarify=继续澄清，ready=可生成。
+    pub status: String,
+    /// 需要用户补充的信息问题列表。
+    pub questions: Vec<String>,
+    /// 最终 SOQL（ready 时返回）。
+    pub soql: Option<String>,
+    /// 推断对象名（可空）。
+    pub object_name: Option<String>,
+    /// 推断字段列表。
+    pub field_names: Vec<String>,
+    /// 说明文本。
+    pub reason: String,
+    /// 对用户问题的直接回答（可空）。
+    pub answer: Option<String>,
+}

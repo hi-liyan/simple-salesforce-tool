@@ -1,13 +1,15 @@
-﻿#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app_state;
 mod commands;
 mod db;
 mod error;
+mod llm;
 mod models;
 mod salesforce;
 mod sf_cli;
 
+use std::collections::HashMap;
 use std::sync::Mutex;
 
 use app_state::{ensure_data_dir, AppState};
@@ -30,6 +32,8 @@ fn main() {
                 db: Mutex::new(connection),
                 sf_client: SalesforceClient::new(),
                 cli_login_cancel: Mutex::new(None),
+                llm_conversations: Mutex::new(HashMap::new()),
+                llm_stream_cancels: Mutex::new(HashMap::new()),
             });
 
             Ok(())
@@ -61,7 +65,12 @@ fn main() {
             commands::create_record,
             commands::save_records,
             commands::update_record,
-            commands::delete_record
+            commands::delete_record,
+            commands::get_llm_settings,
+            commands::save_llm_settings,
+            commands::generate_soql_from_conversation
+            ,
+            commands::stop_llm_stream_generation
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
