@@ -226,7 +226,6 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText }: SoqlExe
           onChange={(value) => {
             patchActiveTab((tab) => ({ ...tab, soqlDraft: value })); // 同步当前标签草稿。
           }}
-          placeholder="请输入 SOQL，例如：SELECT Id, Name FROM Account LIMIT 20"
           height="220px"
         />
       </div>

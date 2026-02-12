@@ -52,3 +52,10 @@ button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
 }
+
+/* SOQL 编辑器当前行样式：移除边框线，并将正文与行号区统一为浅蓝背景。 */
+.soql-monaco-editor .monaco-editor .view-overlays .current-line,
+.soql-monaco-editor .monaco-editor .margin-view-overlays .current-line-margin {
+  border: none !important;
+  background-color: #eaf4ff !important;
+}
