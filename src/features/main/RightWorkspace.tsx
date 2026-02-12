@@ -1,6 +1,7 @@
 ﻿import { ChangeEvent, useEffect, useRef, useState } from "react";
 import { PanelRightOpen, Play, Plus, RotateCcw, ScrollText, Search, Trash2, X } from "lucide-react";
 import { DataGrid } from "../../components/DataGrid";
+import { NoticeAlert } from "../../components/NoticeAlert";
 import { Notice, TabState } from "../../types";
 
 type RightWorkspaceProps = {
@@ -105,14 +106,12 @@ export function RightWorkspace({
     <>
       {/* 工作区全局提示。 */}
       {workspaceNotice && (
-        <div
-          className={`alert fixed right-4 top-4 z-[60] max-w-[560px] shadow-lg ${workspaceNotice.type === "error" ? "alert-error" : "alert-success"}`}
-        >
-          <span>{workspaceNotice.message}</span>
-          <button className="btn btn-ghost btn-xs" onClick={onCloseWorkspaceNotice}>
-            关闭
-          </button>
-        </div>
+        <NoticeAlert
+          tone={workspaceNotice.type === "error" ? "error" : "success"}
+          message={workspaceNotice.message}
+          onClose={onCloseWorkspaceNotice}
+          className="fixed right-4 top-4 z-[60] max-w-[560px] shadow-lg"
+        />
       )}
 
       {/* Tab 栏。 */}
@@ -128,7 +127,7 @@ export function RightWorkspace({
               >
                 {tab.objectName}
               </button>
-              <button className="btn btn-ghost btn-sm mr-1" onClick={() => onCloseTab(tab.objectName)}>
+              <button className="btn btn-circle btn-ghost btn-xs mr-1" onClick={() => onCloseTab(tab.objectName)}>
                 <X size={13} />
               </button>
             </div>
@@ -141,14 +140,12 @@ export function RightWorkspace({
         <div className="relative flex min-h-0 flex-1 overflow-hidden">
           {/* 当前 Tab 提示。 */}
           {activeTab.notice && (
-            <div
-              className={`alert absolute right-3 top-2.5 z-40 max-w-[560px] shadow ${activeTab.notice.type === "error" ? "alert-error" : "alert-success"}`}
-            >
-              <span>{activeTab.notice.message}</span>
-              <button className="btn btn-ghost btn-xs" onClick={onCloseActiveTabNotice}>
-                关闭
-              </button>
-            </div>
+            <NoticeAlert
+              tone={activeTab.notice.type === "error" ? "error" : "success"}
+              message={activeTab.notice.message}
+              onClose={onCloseActiveTabNotice}
+              className="absolute right-3 top-2.5 z-40 max-w-[560px] shadow"
+            />
           )}
 
           {/* 左侧主内容区：工具栏 + 查询栏 + 表格 + 日志。 */}
@@ -204,7 +201,7 @@ export function RightWorkspace({
                       />
                       {activeTab.whereClause ? (
                         <button
-                          className="btn btn-ghost btn-xs absolute right-1 top-1/2 -translate-y-1/2"
+                          className="btn btn-circle btn-ghost btn-xs absolute right-1 top-1/2 -translate-y-1/2"
                           aria-label="清空 WHERE 条件"
                           onClick={() => onWhereChange("")}
                         >
@@ -285,7 +282,7 @@ export function RightWorkspace({
                 <div className="border-b border-base-300 px-3 py-1.5">
                   <div className="flex items-center justify-between">
                     <span className="text-[12px] text-neutral/70">操作日志（当前 Tab）</span>
-                    <button className="btn btn-ghost btn-xs" onClick={onToggleLogs} aria-label="关闭日志">
+                    <button className="btn btn-circle btn-ghost btn-xs" onClick={onToggleLogs} aria-label="关闭日志">
                       <X size={14} />
                     </button>
                   </div>
@@ -317,7 +314,7 @@ export function RightWorkspace({
                     <button className="btn btn-ghost btn-xs" disabled={activeTab.loading || !activeTab.describe} onClick={onToggleAllFields}>
                       {activeTab.describe?.fields.every((field) => (activeTab.columnVisibility[field.name] ?? true) === true) ? "取消全选" : "全选"}
                     </button>
-                    <button className="btn btn-ghost btn-xs" onClick={onToggleDrawer} aria-label="关闭字段与SOQL">
+                    <button className="btn btn-circle btn-ghost btn-xs" onClick={onToggleDrawer} aria-label="关闭字段与SOQL">
                       <X size={14} />
                     </button>
                   </div>
@@ -362,7 +359,7 @@ export function RightWorkspace({
               <div className="flex min-h-0 flex-[1_1_50%] flex-col">
                 <div className="flex items-center justify-between border-b border-base-300 px-3 py-2">
                   <span className="text-[12px] text-neutral/70">SOQL 执行器</span>
-                  <button className="btn btn-ghost btn-xs" onClick={onToggleDrawer} aria-label="关闭字段与SOQL">
+                  <button className="btn btn-circle btn-ghost btn-xs" onClick={onToggleDrawer} aria-label="关闭字段与SOQL">
                     <X size={14} />
                   </button>
                 </div>
@@ -403,3 +400,7 @@ function formatLogTime(timestamp: string): string {
   if (Number.isNaN(date.getTime())) return timestamp;
   return date.toLocaleString();
 }
+
+
+
+
