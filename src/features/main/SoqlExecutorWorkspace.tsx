@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { Play, Plus, Table2, TreePine, X } from "lucide-react";
+﻿import { useMemo, useState } from "react";
+import { Play, Plus, Table2, X } from "lucide-react";
 import { DataGrid } from "../../components/DataGrid";
 import { NoticeAlert } from "../../components/NoticeAlert";
 import { api } from "../../api";
@@ -23,15 +23,15 @@ type SoqlExecutorWorkspaceProps = {
   loadingText: string;
 };
 
-type BottomView = "result" | "hierarchy" | "logs";
+type BottomView = "result" | "logs";
 
-// SOQL 执行器工作区：支持多 Tab、执行、结果展示、层级展示与查询日志。
+// SOQL 执行器工作区：支持多 Tab、执行、结果展示与查询日志。
 export function SoqlExecutorWorkspace({ selectedSourceId, loadingText }: SoqlExecutorWorkspaceProps) {
   // SOQL 执行器的多标签状态。
   const [tabs, setTabs] = useState<SoqlExecutorTab[]>(() => [createSoqlExecutorTab(1)]);
   // 当前激活标签 ID。
   const [activeTabId, setActiveTabId] = useState<string>(tabs[0].id);
-  // 底部展示模式：结果 / 层级 / 日志。
+  // 底部展示模式：结果 / 日志。
   const [bottomView, setBottomView] = useState<BottomView>("result");
 
   // 当前激活标签数据。
@@ -40,22 +40,22 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText }: SoqlExe
     [tabs, activeTabId]
   );
 
-  // 结果表专用数据：关系字段扁平化后用于 DataGrid 展示。
+  // 结果表专用数据：关系字段扁平化 + 子查询展开为多行。
   const gridResult = useMemo<QueryResult>(() => {
     if (!activeTab) return { totalSize: 0, records: [] };
     return {
       totalSize: activeTab.result.totalSize,
-      records: activeTab.result.records.map((record) => flattenRecordForGrid(record))
+      records: activeTab.result.records.flatMap((record) => expandRecordForGridRows(record))
     };
   }, [activeTab]);
 
-  // 当前标签的可见列：从结果记录动态抽取顶层字段。
+  // 当前标签可见列：从扁平化后的结果记录动态抽取字段。
   const visibleColumns = useMemo(() => {
     if (!activeTab) return [];
     return extractVisibleColumns(gridResult.records);
   }, [activeTab, gridResult.records]);
 
-  // 当前标签的字段元数据映射：执行器模式统一只读，避免误编辑。
+  // 当前标签字段元数据映射：执行器模式统一只读，避免误编辑。
   const fieldMetadataMap = useMemo(() => {
     return visibleColumns.reduce((acc, fieldName) => {
       acc[fieldName] = {
@@ -137,7 +137,7 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText }: SoqlExe
           ...tab.logs
         ].slice(0, 200)
       }));
-      // 执行成功后自动切到结果视图，提升连续查询效率。
+      // 执行成功后自动切换到结果视图。
       setBottomView("result");
     } catch (error) {
       patchActiveTab((tab) => ({
@@ -149,7 +149,7 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText }: SoqlExe
           ...tab.logs
         ].slice(0, 200)
       }));
-      // 执行失败后切到日志视图，便于快速定位问题。
+      // 执行失败后切换到日志视图，便于快速定位问题。
       setBottomView("logs");
     }
   }
@@ -167,7 +167,7 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText }: SoqlExe
   }
 
   return (
-    // 执行器主容器：顶部标签 + 工具条 + 编辑器 + 底部结果区。
+    // 执行器主容器：顶部标签 + 工具栏 + 编辑器 + 底部结果区。
     <div className="relative flex h-full min-h-0 flex-col overflow-hidden">
       {/* Tab 栏：支持切换、关闭与右侧新增。 */}
       <div className="flex items-center border-b border-base-300">
@@ -206,7 +206,7 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText }: SoqlExe
         />
       )}
 
-      {/* 顶部工具条：包含执行按钮。 */}
+      {/* 顶部工具栏：包含执行按钮。 */}
       <div className="border-b border-base-300 px-3 py-2">
         <div className="flex items-center gap-2">
           <button className="btn btn-primary btn-sm" disabled={activeTab.loading} onClick={() => void executeActiveTabSoql()}>
@@ -232,7 +232,7 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText }: SoqlExe
         </div>
       </div>
 
-      {/* 底部结果区头部：切换结果 / 层级 / 日志。 */}
+      {/* 底部结果区头部：切换结果 / 日志。 */}
       <div className="flex items-center gap-1 border-b border-base-300 px-3 py-1.5">
         <button
           className={`btn btn-xs ${bottomView === "result" ? "btn-primary" : "btn-ghost"}`}
@@ -240,13 +240,6 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText }: SoqlExe
         >
           <Table2 size={12} />
           结果
-        </button>
-        <button
-          className={`btn btn-xs ${bottomView === "hierarchy" ? "btn-primary" : "btn-ghost"}`}
-          onClick={() => setBottomView("hierarchy")}
-        >
-          <TreePine size={12} />
-          层级
         </button>
         <button
           className={`btn btn-xs ${bottomView === "logs" ? "btn-primary" : "btn-ghost"}`}
@@ -290,25 +283,6 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText }: SoqlExe
               }));
             }}
           />
-        ) : bottomView === "hierarchy" ? (
-          <div className="h-full overflow-auto p-3">
-            {activeTab.result.records.length === 0 ? (
-              <span className="text-[12px] text-neutral/70">暂无查询结果。</span>
-            ) : (
-              <div className="space-y-2">
-                {activeTab.result.records.map((record, index) => (
-                  <details key={`hier-${index}`} className="rounded border border-base-300 bg-base-100 p-2" open={index === 0}>
-                    <summary className="cursor-pointer text-[12px] font-medium">
-                      记录 {index + 1} {record.Id ? `(Id: ${String(record.Id)})` : ""}
-                    </summary>
-                    <div className="mt-2">
-                      <HierarchyTree data={record} level={0} />
-                    </div>
-                  </details>
-                ))}
-              </div>
-            )}
-          </div>
         ) : (
           <div className="h-full overflow-auto p-3">
             {activeTab.logs.length === 0 ? (
@@ -338,90 +312,6 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText }: SoqlExe
       )}
     </div>
   );
-}
-
-type HierarchyTreeProps = {
-  data: unknown;
-  level: number;
-};
-
-// 层级树渲染：用于展示复杂 SOQL 返回的一对多结构（子查询 records）。
-function HierarchyTree({ data, level }: HierarchyTreeProps) {
-  if (data === null || data === undefined) {
-    return <p className="text-[12px] text-neutral/70">null</p>;
-  }
-
-  if (typeof data !== "object") {
-    return <p className="text-[12px]">{String(data)}</p>;
-  }
-
-  if (Array.isArray(data)) {
-    if (data.length === 0) {
-      return <p className="text-[12px] text-neutral/70">[]</p>;
-    }
-    return (
-      <div className="space-y-1">
-        {data.map((item, index) => (
-          <div key={`arr-${level}-${index}`} className="pl-4">
-            <p className="text-[12px] text-neutral/70">[{index}]</p>
-            <HierarchyTree data={item} level={level + 1} />
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  const entries = Object.entries(data as Record<string, unknown>).filter(([key]) => key !== "attributes");
-  if (entries.length === 0) {
-    return <p className="text-[12px] text-neutral/70">{"{}"}</p>;
-  }
-
-  return (
-    <div className="space-y-1">
-      {entries.map(([key, value]) => {
-        const isChildQueryNode = isSalesforceChildQueryNode(value);
-        if (isChildQueryNode) {
-          const childRecords = Array.isArray((value as { records?: unknown[] }).records)
-            ? ((value as { records: unknown[] }).records || [])
-            : [];
-          return (
-            <details key={`${level}-${key}`} className="rounded border border-base-300 bg-base-100 p-2" open={level < 1}>
-              <summary className="cursor-pointer text-[12px]">
-                {key}（子记录 {childRecords.length} 条）
-              </summary>
-              <div className="mt-2 pl-4">
-                <HierarchyTree data={childRecords} level={level + 1} />
-              </div>
-            </details>
-          );
-        }
-
-        if (value && typeof value === "object") {
-          return (
-            <details key={`${level}-${key}`} className="rounded border border-base-300 bg-base-100 p-2" open={level < 1}>
-              <summary className="cursor-pointer text-[12px]">{key}</summary>
-              <div className="mt-2 pl-4">
-                <HierarchyTree data={value} level={level + 1} />
-              </div>
-            </details>
-          );
-        }
-
-        return (
-          <p key={`${level}-${key}`} className="text-[12px]">
-            <span className="text-neutral/70">{key}:</span> {String(value)}
-          </p>
-        );
-      })}
-    </div>
-  );
-}
-
-// 判断节点是否为 Salesforce 一对多子查询结构（包含 records 数组）。
-function isSalesforceChildQueryNode(value: unknown): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const node = value as Record<string, unknown>;
-  return Array.isArray(node.records) && typeof node.totalSize === "number";
 }
 
 // 创建新的 SOQL 执行器标签默认值。
@@ -463,12 +353,44 @@ function extractVisibleColumns(records: Record<string, unknown>[]): string[] {
   return Array.from(columnSet);
 }
 
-// 归一化查询结果，避免后端异常格式影响 UI。
-// 记录扁平化：将关系字段对象展开为点路径键。
-function flattenRecordForGrid(record: Record<string, unknown>): Record<string, unknown> {
-  const output: Record<string, unknown> = {};
-  flattenNodeToColumns(record, "", output);
-  return output;
+// 主记录展开：主记录 1 行 + 每条子查询记录 1 行。
+function expandRecordForGridRows(record: Record<string, unknown>): Record<string, unknown>[] {
+  const baseRow: Record<string, unknown> = {};
+  const childQueries: Array<{ relationKey: string; records: Record<string, unknown>[] }> = [];
+
+  Object.entries(record).forEach(([key, value]) => {
+    if (key === "attributes") return;
+
+    if (isSalesforceChildQueryNode(value)) {
+      const childRows = Array.isArray((value as { records?: unknown[] }).records)
+        ? ((value as { records: Record<string, unknown>[] }).records || [])
+        : [];
+      childQueries.push({ relationKey: key, records: childRows });
+      return;
+    }
+
+    // 展开普通字段和父关系字段（如 xxx__r.Name）。
+    flattenNodeToColumns(value, key, baseRow);
+  });
+
+  const rows: Record<string, unknown>[] = [];
+
+  childQueries.forEach(({ relationKey, records }) => {
+    records.forEach((childRecord, index) => {
+      // 近似“合并单元格”效果：仅首行保留主记录字段，其余子行清空主字段。
+      const childRow = index === 0 ? { ...baseRow } : ({} as Record<string, unknown>);
+      // 子查询字段展开为 `Contacts.Name` 这类点路径列。
+      flattenNodeToColumns(childRecord, relationKey, childRow);
+      rows.push(childRow);
+    });
+  });
+
+  // 若存在子查询记录，则仅展示子记录行；若无子记录，则回退展示主记录一行。
+  if (rows.length === 0) {
+    rows.push(baseRow);
+  }
+
+  return rows;
 }
 
 // 递归展开节点：例如 `YobuzoTicket__TA_applicant__r.Name` -> 值。
@@ -485,7 +407,7 @@ function flattenNodeToColumns(node: unknown, prefix: string, output: Record<stri
 
   if (Array.isArray(node)) {
     if (!prefix) return;
-    // 子查询数组不展开多列，保留 JSON 字符串便于查看。
+    // 非子查询数组不展开多列，保留 JSON 文本便于查看。
     output[prefix] = JSON.stringify(node);
     return;
   }
@@ -497,6 +419,14 @@ function flattenNodeToColumns(node: unknown, prefix: string, output: Record<stri
   });
 }
 
+// 判断节点是否为 Salesforce 一对多子查询结构（包含 records 数组）。
+function isSalesforceChildQueryNode(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const node = value as Record<string, unknown>;
+  return Array.isArray(node.records) && typeof node.totalSize === "number";
+}
+
+// 归一化查询结果，避免后端异常格式影响 UI。
 function normalizeQueryResult(input: QueryResult): QueryResult {
   const records = Array.isArray(input?.records) ? input.records : [];
   const totalSize = typeof input?.totalSize === "number" ? input.totalSize : records.length;
