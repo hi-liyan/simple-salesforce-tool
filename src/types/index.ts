@@ -152,3 +152,13 @@ export type CliPathSettings = {
   resolvedCliVersion: string | null;
   probes: CliPathProbe[];
 };
+
+// CLI 路径检测状态：用于展示可用性、版本与更新信息。
+export type CliPathStatus = {
+  path: string | null;
+  ok: boolean;
+  version: string | null;
+  hasUpdate: boolean | null;
+  latestVersion: string | null;
+  detail: string;
+};
