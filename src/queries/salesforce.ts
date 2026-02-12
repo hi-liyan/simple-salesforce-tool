@@ -1,12 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
-import { SalesforceObject, SalesforceSource } from "../types";
+import { SalesforceObject, SalesforceSource, SystemLogPage } from "../types";
 
 // React Query Key：数据源列表。
 const sourcesKey = ["sources"] as const;
 
 // React Query Key：对象列表。
 const objectsKey = (sourceId: string) => ["objects", sourceId] as const;
+const systemLogsKey = (page: number, pageSize: number) => ["system-logs", page, pageSize] as const;
 
 // 数据源列表查询（普通刷新）。
 export function useSourcesQuery() {
@@ -46,4 +47,12 @@ export function useRefreshObjects() {
 export function useRefreshSources() {
   const queryClient = useQueryClient();
   return () => queryClient.invalidateQueries({ queryKey: sourcesKey });
+}
+
+// 系统日志分页查询（按时间倒序）。
+export function useSystemLogsQuery(page: number, pageSize: number) {
+  return useQuery<SystemLogPage>({
+    queryKey: systemLogsKey(page, pageSize),
+    queryFn: () => api.listSystemLogs(page, pageSize)
+  });
 }

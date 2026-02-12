@@ -8,7 +8,9 @@ use crate::salesforce::SalesforceClient;
 
 /// 全局应用状态：包含数据库连接和 HTTP 客户端。
 pub struct AppState {
+    /// SQLite 连接（通过 Mutex 串行化 DB 访问，避免并发写冲突）。
     pub db: Mutex<Connection>,
+    /// Salesforce HTTP 客户端（可复用连接池）。
     pub sf_client: SalesforceClient,
 }
 

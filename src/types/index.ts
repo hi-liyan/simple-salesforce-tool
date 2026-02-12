@@ -102,6 +102,7 @@ export type TabState = {
   selectedRecordIds: string[];
   currentSoql: string;
   soqlDraft: string;
+  showQueryBar: boolean;
   showDrawer: boolean;
   showLogs: boolean;
   logs: TabLog[];
@@ -110,4 +111,26 @@ export type TabState = {
   baselineRecords: Record<string, Record<string, unknown>>;
   notice: Notice | null;
   loading: boolean;
+};
+
+// 系统日志条目（后端 SQLite 持久化）。
+export type SystemLogEntry = {
+  id: number;
+  createdAt: string;
+  level: string;
+  category: string;
+  action: string;
+  sourceId?: string;
+  target?: string;
+  success: boolean;
+  message: string;
+  detail?: string;
+};
+
+// 系统日志分页结果。
+export type SystemLogPage = {
+  items: SystemLogEntry[];
+  page: number;
+  pageSize: number;
+  total: number;
 };

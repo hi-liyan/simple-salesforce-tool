@@ -40,6 +40,7 @@ fn main() {
             commands::open_auth_window,
             commands::close_auth_window,
             commands::open_field_meta_window,
+            commands::list_system_logs,
             commands::create_source,
             commands::update_source,
             commands::delete_source,
