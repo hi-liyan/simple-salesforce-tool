@@ -577,7 +577,7 @@ export function DataGrid({
             </p>
             {/* 元数据明细：逐条输出字段属性键值，便于核对权限与类型。 */}
             <div className="pr-0.5">
-              {Object.entries(hoveredHeaderMeta.metadata).map(([key, value]) => (
+              {sortFieldMetadataEntries(hoveredHeaderMeta.metadata).map(([key, value]) => (
                 <p
                   key={key}
                   className="block text-[12px] leading-[1.5]"
@@ -814,6 +814,51 @@ function formatFieldMetaValue(value: unknown): string {
     return "-";
   }
   return String(value);
+}
+
+// 按业务可读性排序字段元数据：优先展示类型与基础信息，其次展示约束与扩展属性。
+function sortFieldMetadataEntries(metadata: Record<string, unknown>): Array<[string, unknown]> {
+  // 预设优先级：将“字段类型”等高价值信息放在前面，便于快速判断字段行为。
+  const priorityKeys = [
+    "type",
+    "name",
+    "label",
+    "referenceTo",
+    "relationshipName",
+    "picklistValues",
+    "nillable",
+    "createable",
+    "updateable",
+    "defaultedOnCreate",
+    "calculated",
+    "calculatedFormula",
+    "length",
+    "precision",
+    "scale",
+    "byteLength",
+    "unique",
+    "externalId",
+    "filterable",
+    "sortable",
+    "groupable",
+    "defaultValue",
+    "defaultValueFormula",
+    "inlineHelpText"
+  ];
+  const priorityOrder = priorityKeys.reduce<Record<string, number>>((acc, key, index) => {
+    acc[key] = index;
+    return acc;
+  }, {});
+
+  return Object.entries(metadata).sort(([leftKey], [rightKey]) => {
+    const leftRank = priorityOrder[leftKey] ?? Number.MAX_SAFE_INTEGER;
+    const rightRank = priorityOrder[rightKey] ?? Number.MAX_SAFE_INTEGER;
+    if (leftRank !== rightRank) {
+      return leftRank - rightRank;
+    }
+    // 同优先级时按键名排序，保证展示顺序稳定。
+    return leftKey.localeCompare(rightKey);
+  });
 }
 
 // 将值转换为数字。
