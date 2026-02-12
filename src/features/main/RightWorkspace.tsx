@@ -107,6 +107,9 @@ export function RightWorkspace({
     };
   }, [draggingLogResize]);
 
+  // 当前对象可排序字段：仅展示字段元数据中 sortable=true 的字段。
+  const sortableFields = (activeTab?.describe?.fields || []).filter((field) => field.metadata?.sortable === true);
+
   return (
     <>
       {/* 工作区全局提示。 */}
@@ -228,8 +231,14 @@ export function RightWorkspace({
 
                   <div className="w-[200px]">
                     <label className="mb-1 block text-[12px]">排序字段</label>
-                    <select className="select select-bordered select-sm w-full" value={activeTab.sortField} onChange={(event) => onSortFieldChange(event.target.value)}>
-                      {(activeTab.describe?.fields || []).map((field) => (
+                    <select
+                      className="select select-bordered select-sm w-full"
+                      value={activeTab.sortField}
+                      disabled={sortableFields.length === 0}
+                      onChange={(event) => onSortFieldChange(event.target.value)}
+                    >
+                      {sortableFields.length === 0 && <option value="">无可排序字段</option>}
+                      {sortableFields.map((field) => (
                         <option key={field.name} value={field.name}>
                           {field.name}
                         </option>
@@ -242,6 +251,7 @@ export function RightWorkspace({
                     <select
                       className="select select-bordered select-sm w-full"
                       value={activeTab.sortDirection}
+                      disabled={!activeTab.sortField}
                       onChange={(event) => onSortDirectionChange(event.target.value as "ASC" | "DESC")}
                     >
                       <option value="ASC">ASC</option>
