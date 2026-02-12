@@ -7,6 +7,8 @@ type SoqlMonacoEditorProps = {
   value: string;
   // 编辑器内容变更回调。
   onChange: (value: string) => void;
+  // 编辑器选中文本变化回调：无选中时返回空字符串。
+  onSelectionTextChange?: (selectionText: string) => void;
   // 编辑器占位提示。
   placeholder?: string;
   // 编辑器高度。
@@ -335,6 +337,7 @@ function getPlaceholderPosition(editor: Monaco.editor.IStandaloneCodeEditor): Pl
 export function SoqlMonacoEditor({
   value,
   onChange,
+  onSelectionTextChange,
   placeholder = "",
   height = "220px",
   fieldNames = [],
@@ -347,8 +350,22 @@ export function SoqlMonacoEditor({
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
   // 布局监听句柄：组件卸载时释放，避免重复注册。
   const layoutDisposeRef = useRef<Monaco.IDisposable | null>(null);
+  // 选区监听句柄：组件卸载时释放，避免重复注册。
+  const selectionDisposeRef = useRef<Monaco.IDisposable | null>(null);
   // 占位符实际定位：默认值作为 Monaco 尚未挂载时的兜底。
   const [placeholderPosition, setPlaceholderPosition] = useState<PlaceholderPosition>({ left: 48, top: 2 });
+
+  // 将当前选区文本同步到上层：无选区时回传空字符串。
+  function emitSelectionText(editor: Monaco.editor.IStandaloneCodeEditor) {
+    if (!onSelectionTextChange) return;
+    const selection = editor.getSelection();
+    if (!selection || selection.isEmpty()) {
+      onSelectionTextChange("");
+      return;
+    }
+    const selectionText = editor.getModel()?.getValueInRange(selection) ?? "";
+    onSelectionTextChange(selectionText);
+  }
 
   useEffect(() => {
     if (!monaco) return;
@@ -360,7 +377,9 @@ export function SoqlMonacoEditor({
   useEffect(() => {
     return () => {
       layoutDisposeRef.current?.dispose(); // 组件卸载时释放 Monaco 布局监听。
+      selectionDisposeRef.current?.dispose(); // 组件卸载时释放 Monaco 选区监听。
       layoutDisposeRef.current = null;
+      selectionDisposeRef.current = null;
       editorRef.current = null;
     };
   }, []);
@@ -381,10 +400,18 @@ export function SoqlMonacoEditor({
           layoutDisposeRef.current = editor.onDidLayoutChange(() => {
             setPlaceholderPosition(getPlaceholderPosition(editor)); // 编辑器尺寸变化时保持占位符与行号对齐。
           });
+          selectionDisposeRef.current?.dispose();
+          selectionDisposeRef.current = editor.onDidChangeCursorSelection(() => {
+            emitSelectionText(editor); // 选区变化时同步到上层，供“仅执行选中内容”使用。
+          });
+          emitSelectionText(editor); // 初次挂载后立即同步一次选区状态。
         }}
         onChange={(nextValue) => {
           // 保证上层拿到稳定字符串，避免 undefined 状态分支。
           onChange(nextValue ?? "");
+          if (editorRef.current) {
+            emitSelectionText(editorRef.current); // 内容变化时同步选区文本，避免选区失效后状态滞留。
+          }
         }}
         options={{
           minimap: { enabled: false },
