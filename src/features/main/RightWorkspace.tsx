@@ -12,6 +12,8 @@ type RightWorkspaceProps = {
   visibleColumns: string[];
   fieldMetadataMap: Record<string, Record<string, unknown>>;
   hasPendingChanges: boolean;
+  // 待删除记录 Id 列表：用于在表格中高亮“将要删除”的行。
+  pendingDeleteRecordIds: string[];
   onActivateTab: (objectName: string) => void;
   onCloseTab: (objectName: string) => void;
   onCreateRecord: () => void;
@@ -47,6 +49,7 @@ export function RightWorkspace({
   visibleColumns,
   fieldMetadataMap,
   hasPendingChanges,
+  pendingDeleteRecordIds,
   onActivateTab,
   onCloseTab,
   onCreateRecord,
@@ -260,6 +263,7 @@ export function RightWorkspace({
                 fieldMetadataMap={fieldMetadataMap}
                 dirtyCellKeys={activeTab.dirtyCellKeys}
                 selectedRecordIds={activeTab.selectedRecordIds}
+                pendingDeleteRecordIds={pendingDeleteRecordIds}
                 onToggleRecord={onToggleRecord}
                 onToggleAll={onToggleAllRecords}
                 onEditCell={onEditCell}
@@ -400,7 +404,6 @@ function formatLogTime(timestamp: string): string {
   if (Number.isNaN(date.getTime())) return timestamp;
   return date.toLocaleString();
 }
-
 
 
 

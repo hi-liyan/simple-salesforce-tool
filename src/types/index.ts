@@ -82,7 +82,7 @@ export type Notice = {
 export type TabLog = {
   id: string;
   timestamp: string;
-  action: "QUERY" | "SOQL" | "DELETE" | "UPSERT";
+  action: "QUERY" | "SOQL" | "DELETE" | "UPSERT" | "DISCARD";
   success: boolean;
   request: string;
   summary: string;
@@ -100,6 +100,8 @@ export type TabState = {
   sortField: string;
   sortDirection: "ASC" | "DESC";
   selectedRecordIds: string[];
+  // 待删除记录 Id 列表：点击“删除勾选”后仅做标记，执行更新时才真正提交删除。
+  pendingDeleteRecordIds: string[];
   currentSoql: string;
   soqlDraft: string;
   showQueryBar: boolean;
