@@ -102,7 +102,9 @@ pub fn refresh_cli_source_by_id(
         .strip_prefix("cli-")
         .ok_or_else(|| AppError::Biz(format!("仅支持 CLI 数据源刷新: {source_id}")))?;
 
-    let stdout = run_sf_org_display_json(org_id, preferred_cli_path)?;
+    // 优先使用 alias/username 作为 target-org，最后回退 orgId，兼容不同 CLI 的识别差异。
+    let target_org_candidates = resolve_org_display_targets(org_id, preferred_cli_path);
+    let stdout = run_sf_org_display_json(&target_org_candidates, preferred_cli_path)?;
     let text = String::from_utf8(stdout)
         .map_err(|error| AppError::Serde(format!("解析 CLI 输出文本失败: {error}")))?;
     let value: Value = serde_json::from_str(&text)?;
@@ -288,7 +290,10 @@ fn run_sf_login_web_json(
 
 /// 执行 `sf org display --target-org <orgId> --verbose --json`
 /// 或 `sfdx force:org:display -u <orgId> --verbose --json`。
-fn run_sf_org_display_json(org_id: &str, preferred_cli_path: Option<&str>) -> Result<Vec<u8>, AppError> {
+fn run_sf_org_display_json(
+    target_org_candidates: &[String],
+    preferred_cli_path: Option<&str>,
+) -> Result<Vec<u8>, AppError> {
     // Windows 下先尝试清理残留 CLI 进程，避免僵尸进程或句柄占用导致刷新失败。
     cleanup_stale_cli_processes();
 
@@ -296,19 +301,19 @@ fn run_sf_org_display_json(org_id: &str, preferred_cli_path: Option<&str>) -> Re
     let mut errors = Vec::new();
 
     for cli in &candidates {
-        let args = org_display_args_for(cli, org_id);
-        match Command::new(cli).args(&args).output() {
-            Ok(output) if output.status.success() => return Ok(output.stdout),
-            Ok(output) => {
-                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                let status = output
-                    .status
-                    .code()
-                    .map(|code| code.to_string())
-                    .unwrap_or_else(|| "unknown".to_string());
-                errors.push(format!("{cli}: exit={status}, stderr={stderr}"));
+        for target_org in target_org_candidates {
+            let args = org_display_args_for(cli, target_org);
+            match Command::new(cli).args(&args).output() {
+                Ok(output) if output.status.success() => return Ok(output.stdout),
+                Ok(output) => {
+                    // 同时记录 stdout/stderr；sf 很多错误信息写在 stdout JSON 的 message 字段。
+                    errors.push(format!(
+                        "{cli} (target={target_org}): {}",
+                        format_cli_failure(&output)
+                    ));
+                }
+                Err(error) => errors.push(format!("{cli} (target={target_org}): {error}")),
             }
-            Err(error) => errors.push(format!("{cli}: {error}")),
         }
     }
 
@@ -317,6 +322,48 @@ fn run_sf_org_display_json(org_id: &str, preferred_cli_path: Option<&str>) -> Re
         candidates.join(", "),
         errors.join(" | ")
     )))
+}
+
+/// 根据 orgId 解析可用于 `--target-org` 的候选值。
+/// 顺序：alias -> username -> orgId。
+fn resolve_org_display_targets(org_id: &str, preferred_cli_path: Option<&str>) -> Vec<String> {
+    let mut targets = Vec::new();
+
+    // 辅助函数：保持插入顺序去重。
+    let mut push_unique = |value: &str| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        if !targets.iter().any(|item| item == trimmed) {
+            targets.push(trimmed.to_string());
+        }
+    };
+
+    if let Ok(stdout) = run_sf_auth_list_json(preferred_cli_path) {
+        if let Ok(text) = String::from_utf8(stdout) {
+            if let Ok(parsed) = serde_json::from_str::<SfAuthListResponse>(&text) {
+                if parsed.status == 0 {
+                    if let Some(matched_org) = parsed.result.into_iter().find(|item| item.org_id == org_id) {
+                        if let Some(alias_raw) = matched_org.alias {
+                            // alias 可能是 "a,b"；优先使用第一项。
+                            let alias = alias_raw
+                                .split(',')
+                                .map(|item| item.trim())
+                                .find(|item| !item.is_empty())
+                                .unwrap_or("");
+                            push_unique(alias);
+                        }
+                        push_unique(&matched_org.username);
+                    }
+                }
+            }
+        }
+    }
+
+    // 回退：始终保留 orgId，避免候选为空。
+    push_unique(org_id);
+    targets
 }
 
 /// 清理可能残留的 Salesforce CLI 进程。
@@ -368,7 +415,7 @@ fn login_args_for(cli: &str, instance_url: &str) -> Vec<String> {
     }
 }
 
-fn org_display_args_for(cli: &str, org_id: &str) -> Vec<String> {
+fn org_display_args_for(cli: &str, org_identifier: &str) -> Vec<String> {
     let filename = Path::new(cli)
         .file_name()
         .and_then(|value| value.to_str())
@@ -381,7 +428,7 @@ fn org_display_args_for(cli: &str, org_id: &str) -> Vec<String> {
         vec![
             "force:org:display".to_string(),
             "-u".to_string(),
-            org_id.to_string(),
+            org_identifier.to_string(),
             "--verbose".to_string(),
             "--json".to_string(),
         ]
@@ -390,11 +437,55 @@ fn org_display_args_for(cli: &str, org_id: &str) -> Vec<String> {
             "org".to_string(),
             "display".to_string(),
             "--target-org".to_string(),
-            org_id.to_string(),
+            org_identifier.to_string(),
             "--verbose".to_string(),
             "--json".to_string(),
         ]
     }
+}
+
+/// 统一格式化 CLI 失败输出，优先提取 stdout JSON 的 message 字段。
+fn format_cli_failure(output: &Output) -> String {
+    let status = output
+        .status
+        .code()
+        .map(|code| code.to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let message = extract_cli_message(&stdout).unwrap_or_default();
+    let short_stdout = truncate_for_log(&stdout, 280);
+
+    if !message.is_empty() {
+        format!("exit={status}, message={message}, stderr={stderr}, stdout={short_stdout}")
+    } else {
+        format!("exit={status}, stderr={stderr}, stdout={short_stdout}")
+    }
+}
+
+/// 从 CLI 的 JSON stdout 提取可读错误信息（如 message 字段）。
+fn extract_cli_message(stdout: &str) -> Option<String> {
+    if stdout.trim().is_empty() {
+        return None;
+    }
+
+    let value: Value = serde_json::from_str(stdout).ok()?;
+    let message = value.get("message").and_then(|item| item.as_str())?;
+    let trimmed = message.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
+/// 截断日志文本，避免错误明细过长影响可读性。
+fn truncate_for_log(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let mut shortened = text.chars().take(max_chars).collect::<String>();
+    shortened.push_str("...");
+    shortened
 }
 
 /// 从 CLI 登录响应里提取 orgId，兼容不同字段命名。
