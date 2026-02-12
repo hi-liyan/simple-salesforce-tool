@@ -44,6 +44,11 @@ fn write_system_log(
 }
 
 fn set_main_window_enabled(app: &tauri::AppHandle, enabled: bool) {
+    // macOS 下禁用父窗口后，子窗口（parent 关系）可能也出现不可交互问题。
+    // 仅在 macOS 跳过 set_enabled，避免主窗口和登录窗口同时“失焦/不可点击”。
+    if cfg!(target_os = "macos") {
+        return;
+    }
     if let Some(main_window) = app.get_webview_window("main") {
         let _ = main_window.set_enabled(enabled);
     }
@@ -1026,7 +1031,6 @@ fn validate_payload(payload: &SourceUpsertPayload) -> Result<(), String> {
     }
     Ok(())
 }
-
 
 
 
