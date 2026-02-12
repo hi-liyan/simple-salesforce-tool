@@ -272,6 +272,25 @@ export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, 
     }
   }
 
+  // 右键菜单动作：打开当前组织的 Salesforce Object 管理页面（自动登录）。
+  async function openSalesforceObjectEditPageFromMenu() {
+    if (!objectContextMenu) return;
+    const { objectItem } = objectContextMenu;
+    if (!sourceId) {
+      setObjectContextMenu(null);
+      return;
+    }
+    try {
+      // 混合策略：CLI 数据源由后端直接打开；非 CLI 返回 frontdoor URL 由前端打开。
+      const openUrl = await api.openObjectEditPage(sourceId, objectItem.name);
+      if (openUrl) {
+        window.open(openUrl, "_blank", "noopener,noreferrer"); // 在系统浏览器打开目标页面。
+      }
+    } finally {
+      setObjectContextMenu(null); // 执行后关闭菜单。
+    }
+  }
+
   return (
     // 容器：输入框 + 可滚动树形列表。
     <div className="flex h-full min-h-0 flex-col">
@@ -454,12 +473,21 @@ export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, 
         >
           <button
             className="btn btn-ghost btn-xs w-full justify-start"
-            disabled={!objectContextMenu.objectItem.queryable}
+            disabled={!sourceId || !objectContextMenu.objectItem.queryable}
             onClick={() => {
               void openSalesforceListPageFromMenu(); // 触发菜单动作并关闭菜单。
             }}
           >
             打开 Salesforce 列表页
+          </button>
+          <button
+            className="btn btn-ghost btn-xs w-full justify-start"
+            disabled={!sourceId}
+            onClick={() => {
+              void openSalesforceObjectEditPageFromMenu(); // 触发菜单动作并关闭菜单。
+            }}
+          >
+            打开 Edit Object 页面
           </button>
         </div>
       )}
