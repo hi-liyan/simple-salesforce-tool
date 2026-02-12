@@ -64,6 +64,14 @@ export function DataGrid({
   const gridBodyRef = useRef<HTMLDivElement | null>(null);
   const closeMetaTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  useEffect(() => {
+    return () => {
+      if (!closeMetaTimerRef.current) return;
+      clearTimeout(closeMetaTimerRef.current);
+      closeMetaTimerRef.current = null;
+    };
+  }, []);
+
   // 列宽状态：支持用户拖拽后即时更新列宽。
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
   // 表头元数据提示：鼠标经过 info icon 时展示。
@@ -283,8 +291,6 @@ export function DataGrid({
       setHoveredHeaderMeta(null);
     }, 180);
   };
-
-  useEffect(() => () => cancelMetaClose(), []);
 
   return (
     // 表格容器：顶部统计栏 + 数据表格。

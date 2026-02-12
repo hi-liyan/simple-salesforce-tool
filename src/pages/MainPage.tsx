@@ -360,7 +360,8 @@ export function MainPage() {
 
     try {
       const soql = buildQuerySoql(objectName, selectedFields, whereClause, sortField, sortDirection, limit);
-      const result = await api.queryRecords(selectedSourceId, soql);
+      const rawResult = await api.queryRecords(selectedSourceId, soql);
+      const result = normalizeQueryResult(rawResult);
 
       patchTab(objectName, (item) => ({
         ...item,
@@ -448,7 +449,8 @@ export function MainPage() {
 
     patchTab(activeTab.objectName, (item) => ({ ...item, loading: true }));
     try {
-      const result = await api.queryRecords(selectedSourceId, activeTab.soqlDraft);
+      const rawResult = await api.queryRecords(selectedSourceId, activeTab.soqlDraft);
+      const result = normalizeQueryResult(rawResult);
       const nextVisibility = buildVisibilityFromSoql(activeTab.soqlDraft, activeTab.describe, activeTab.columnVisibility);
 
       patchTab(activeTab.objectName, (item) => ({
@@ -972,4 +974,10 @@ function stringifyComparableValue(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function normalizeQueryResult(input: QueryResult): QueryResult {
+  const records = Array.isArray(input?.records) ? input.records : [];
+  const totalSize = typeof input?.totalSize === "number" ? input.totalSize : records.length;
+  return { totalSize, records };
 }

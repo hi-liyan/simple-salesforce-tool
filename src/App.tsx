@@ -1,4 +1,5 @@
 ﻿import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { AuthPage } from "./pages/AuthPage";
 import { FieldMetaPage } from "./pages/FieldMetaPage";
 import { MainPage } from "./pages/MainPage";
@@ -23,8 +24,8 @@ export default function App() {
   const page = resolvePageByWindowLabel();
 
   return (
-    <>
+    <ErrorBoundary>
       {page === "auth" ? <AuthPage /> : page === "field-meta" ? <FieldMetaPage /> : <MainPage />}
-    </>
+    </ErrorBoundary>
   );
 }
