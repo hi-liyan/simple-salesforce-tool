@@ -106,6 +106,18 @@ export function RightWorkspace({
   const [draggingLogResize, setDraggingLogResize] = useState(false);
   const dragStartYRef = useRef(0);
   const dragStartHeightRef = useRef(220);
+  // 字段与 SOQL 抽屉宽度状态：支持鼠标拖拽调整。
+  const [drawerWidth, setDrawerWidth] = useState(360);
+  // 是否正在拖拽抽屉宽度分隔条。
+  const [draggingDrawerResize, setDraggingDrawerResize] = useState(false);
+  // 抽屉拖拽起始点 X 坐标。
+  const drawerResizeStartXRef = useRef(0);
+  // 抽屉拖拽起始宽度。
+  const drawerResizeStartWidthRef = useRef(360);
+  // 拖拽前 body 的 user-select 样式，结束拖拽后恢复。
+  const prevBodyUserSelectRef = useRef("");
+  // 拖拽前 body 的 cursor 样式，结束拖拽后恢复。
+  const prevBodyCursorRef = useRef("");
   // Tab 右键菜单状态：记录显示位置和目标 Tab。
   const [tabContextMenu, setTabContextMenu] = useState<{ x: number; y: number; objectName: string } | null>(null);
   // 编辑器对象字段缓存：支持 FROM 任意对象后做字段补全。
@@ -133,6 +145,39 @@ export function RightWorkspace({
       window.removeEventListener("mouseup", onMouseUp);
     };
   }, [draggingLogResize]);
+
+  // 字段与 SOQL 抽屉拖拽调整宽度：鼠标移动时更新宽度，抬起时结束拖拽。
+  useEffect(() => {
+    if (!draggingDrawerResize) return;
+
+    // 进入拖拽：禁用文本选中并统一鼠标样式，避免误选中与拖拽卡顿。
+    prevBodyUserSelectRef.current = document.body.style.userSelect;
+    prevBodyCursorRef.current = document.body.style.cursor;
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "col-resize";
+
+    const onMouseMove = (event: MouseEvent) => {
+      const deltaX = drawerResizeStartXRef.current - event.clientX; // 抽屉从左边缘拖拽，向左移动时宽度增大。
+      const rawWidth = drawerResizeStartWidthRef.current + deltaX;
+      const maxWidth = Math.min(560, Math.max(420, Math.floor(window.innerWidth * 0.5))); // 双重上限：按窗口比例限制，并设置固定封顶，避免大屏下抽屉过宽。
+      const nextWidth = Math.max(280, Math.min(maxWidth, rawWidth)); // 最小宽度限制：避免抽屉内容不可读。
+      setDrawerWidth(nextWidth);
+    };
+
+    const onMouseUp = () => {
+      setDraggingDrawerResize(false); // 结束拖拽状态，解除全局监听。
+    };
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+      // 退出拖拽：恢复页面原有光标与文本选中样式。
+      document.body.style.userSelect = prevBodyUserSelectRef.current;
+      document.body.style.cursor = prevBodyCursorRef.current;
+    };
+  }, [draggingDrawerResize]);
 
   // 全局关闭右键菜单：点击空白、滚动、按下 ESC 时关闭菜单。
   useEffect(() => {
@@ -491,7 +536,20 @@ export function RightWorkspace({
 
           {/* 右侧抽屉：字段列表 + SOQL 编辑器。 */}
           {activeTab.showDrawer && (
-            <div className="flex min-h-0 w-[360px] min-w-[360px] flex-col border-l border-base-300">
+            <div className="relative flex min-h-0 shrink-0 flex-col border-l border-base-300" style={{ width: drawerWidth, minWidth: drawerWidth }}>
+              {/* 抽屉左侧拖拽热区：用于调整“字段与 SOQL”抽屉宽度。 */}
+              <div
+                className="absolute -left-[3px] top-0 z-20 h-full w-[6px] cursor-col-resize"
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="拖拽调整字段与SOQL抽屉宽度"
+                onMouseDown={(event) => {
+                  event.preventDefault(); // 阻止拖拽起点触发文本选中。
+                  drawerResizeStartXRef.current = event.clientX; // 记录本次拖拽起点 X。
+                  drawerResizeStartWidthRef.current = drawerWidth; // 记录本次拖拽起始宽度。
+                  setDraggingDrawerResize(true); // 进入拖拽状态。
+                }}
+              />
               <div className="flex min-h-0 flex-[1_1_50%] flex-col border-b border-base-300">
                 <div className="flex items-center justify-between border-b border-base-300 px-3 py-2">
                   <span className="text-[12px] text-neutral/70">Field 元数据</span>
@@ -554,6 +612,10 @@ export function RightWorkspace({
                       onChange={(value) => onSoqlChange(value)}
                       height="100%"
                       className="h-full"
+                      // 抽屉编辑区较窄：按列宽自动换行，避免长 SOQL 一直横向单行滚动。
+                      wordWrapMode="bounded"
+                      // bounded 模式下的列宽：在当前抽屉宽度下可稳定触发可读换行。
+                      wordWrapColumn={56}
                       // 当前对象字段名补全（作为回退候选）。
                       fieldNames={activeTab.describe?.fields.map((field) => field.name) || []}
                       // 当前数据源对象名补全，便于 FROM 子句输入。
