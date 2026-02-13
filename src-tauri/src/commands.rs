@@ -1599,10 +1599,6 @@ async fn hydrate_reference_field_child_relationship_names(
 ) -> Result<(), AppError> {
     let current_object_name = describe.name.trim().to_string();
     let mut parent_describe_cache: HashMap<String, ObjectDescribe> = HashMap::new();
-    println!(
-        "[DEBUG][child-relationship] start object={} source={}",
-        current_object_name, source_id
-    );
 
     for field in describe.fields.iter_mut() {
         if !field.data_type.eq_ignore_ascii_case("reference") {
@@ -1624,14 +1620,9 @@ async fn hydrate_reference_field_child_relationship_names(
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        println!(
-            "[DEBUG][child-relationship] field={} referenceTo={:?}",
-            current_field_name, reference_to_object_names
-        );
 
         let mut relationship_names: Vec<String> = Vec::new();
         let mut seen_relationship_names: HashSet<String> = HashSet::new();
-        let mut matched_relation_details: Vec<String> = Vec::new();
 
         for parent_object_name in &reference_to_object_names {
             if !parent_describe_cache.contains_key(parent_object_name) {
@@ -1646,18 +1637,9 @@ async fn hydrate_reference_field_child_relationship_names(
                 .await
                 {
                     Ok(parent_describe) => {
-                        println!(
-                            "[DEBUG][child-relationship] parent describe loaded object={} childRelationships={}",
-                            parent_object_name,
-                            parent_describe.child_relationships.len()
-                        );
                         parent_describe_cache.insert(parent_object_name.clone(), parent_describe);
                     }
-                    Err(error) => {
-                        eprintln!(
-                            "[DEBUG][child-relationship] parent describe failed current={}.{} parent={} error={}",
-                            current_object_name, current_field_name, parent_object_name, error
-                        );
+                    Err(_) => {
                         continue;
                     }
                 }
@@ -1682,10 +1664,6 @@ async fn hydrate_reference_field_child_relationship_names(
                     }
                     if seen_relationship_names.insert(relationship_name.to_string()) {
                         relationship_names.push(relationship_name.to_string());
-                        matched_relation_details.push(format!(
-                            "{}.{} -> {}",
-                            child.child_sobject, child.field, relationship_name
-                        ));
                     }
                 }
             }
@@ -1697,50 +1675,7 @@ async fn hydrate_reference_field_child_relationship_names(
             serde_json::Value::String(relationship_names.join(", ")),
         );
 
-        // 未命中时输出样本，便于与 Postman 返回逐项对比。
-        if relationship_names.is_empty() {
-            for parent_object_name in &reference_to_object_names {
-                if let Some(parent_describe) = parent_describe_cache.get(parent_object_name) {
-                    let sample = parent_describe
-                        .child_relationships
-                        .iter()
-                        .take(8)
-                        .map(|item| {
-                            format!(
-                                "{{childSObject='{}', field='{}', deprecatedAndHidden={}, relationshipName='{}'}}",
-                                item.child_sobject,
-                                item.field,
-                                item.deprecated_and_hidden,
-                                item.relationship_name
-                            )
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    println!(
-                        "[DEBUG][child-relationship] no-match sample current={}.{} parent={} sample=[{}]",
-                        current_object_name, current_field_name, parent_object_name, sample
-                    );
-                }
-            }
-        }
-
-        println!(
-            "[DEBUG][child-relationship] resolved current={}.{} matched={} result={}",
-            current_object_name,
-            current_field_name,
-            if matched_relation_details.is_empty() {
-                "[]".to_string()
-            } else {
-                matched_relation_details.join(" | ")
-            },
-            relationship_names.join(", ")
-        );
     }
-
-    println!(
-        "[DEBUG][child-relationship] finish object={}",
-        current_object_name
-    );
     Ok(())
 }
 
@@ -1771,7 +1706,7 @@ pub async fn describe_object(
 
     match describe_result {
         Ok(mut describe) => {
-            if let Err(error) = hydrate_reference_field_child_relationship_names(
+            if let Err(_) = hydrate_reference_field_child_relationship_names(
                 &app,
                 &state,
                 &source_id,
@@ -1779,12 +1714,7 @@ pub async fn describe_object(
                 &mut describe,
             )
             .await
-            {
-                eprintln!(
-                    "[DEBUG][child-relationship] hydrate failed object={} source={} error={}",
-                    object_name, source_id, error
-                );
-            }
+            {}
             write_system_log(
                 &state,
                 "INFO",
