@@ -751,6 +751,16 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText, objects }
 function buildAiErrorQuestions(errorText: string): string[] {
   const normalized = errorText.toLowerCase();
   if (
+    normalized.includes("超时") ||
+    normalized.includes("timeout") ||
+    normalized.includes("timed out")
+  ) {
+    return [
+      "本次更像是 LLM 请求超时，请先缩小查询范围（明确对象与字段）后重试。",
+      "你也可以到设置页适当增大 timeoutMs，或检查代理/网关响应速度。"
+    ];
+  }
+  if (
     normalized.includes("apikey 未配置") ||
     normalized.includes("llm apikey 未配置") ||
     normalized.includes("401") ||
@@ -761,11 +771,43 @@ function buildAiErrorQuestions(errorText: string): string[] {
   if (
     normalized.includes("读取 openai 流式响应失败") ||
     normalized.includes("error decoding response body") ||
-    normalized.includes("connection reset")
+    normalized.includes("connection reset") ||
+    normalized.includes("响应解码失败")
   ) {
     return [
-      "当前更像是网络或网关流式传输异常，请重试一次；系统会自动降级为非流式。",
-      "若频繁出现，请检查代理/网关是否稳定支持 SSE（text/event-stream）。"
+      "当前更像是网络或网关响应体传输异常，请重试一次。",
+      "若频繁出现，请检查代理/网关是否有响应压缩、截断或连接重置问题。"
+    ];
+  }
+  if (
+    normalized.includes("状态码 429") ||
+    normalized.includes("too many requests")
+  ) {
+    return ["LLM 网关触发限流（429），请稍后重试或降低并发请求。"];
+  }
+  if (
+    normalized.includes("状态码 5") ||
+    normalized.includes("server error")
+  ) {
+    return ["LLM 网关返回服务端异常（5xx），建议稍后重试并检查网关健康状态。"];
+  }
+  if (
+    normalized.includes("未返回有效 json") ||
+    normalized.includes("返回 json 解析失败") ||
+    normalized.includes("不是合法 json")
+  ) {
+    return [
+      "模型本轮返回内容格式异常（非约定 JSON），请重试一次。",
+      "若频繁出现，请更换更稳定的模型，或检查网关是否改写了响应内容。"
+    ];
+  }
+  if (
+    normalized.includes("重复请求相同工具参数") ||
+    normalized.includes("避免卡死已终止")
+  ) {
+    return [
+      "AI 本轮陷入重复工具调用，系统已自动中止以避免长时间卡住。",
+      "请在需求中明确对象 API 名、字段 API 名或过滤条件后再重试。"
     ];
   }
   return ["请补充你的查询目标对象和字段，我会继续协助生成 SOQL。"];

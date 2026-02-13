@@ -1,19 +1,22 @@
+use serde::Serialize;
+use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use serde::Serialize;
+use std::time::{Duration, Instant};
 use tauri::Emitter;
-use tauri::State;
 use tauri::Manager;
+use tauri::State;
 
 use crate::app_state::AppState;
 use crate::db;
 use crate::error::AppError;
-use crate::llm::{openai_chat_json, openai_chat_json_stream, LlmChatMessage, LlmChatRole};
+use crate::llm::{openai_chat_completion_with_tools, LlmChatMessage, LlmChatRole, OpenAiToolCall};
 use crate::models::{
-    CliPathProbe, CliPathSettings, CliPathStatus, LlmSettings, LlmSettingsView, ObjectDescribe, QueryResult,
-    RecordMutationPayload, RecordSavePayload, SalesforceObject, SalesforceSource, SaveLlmSettingsPayload,
-    SoqlConversationRequest, SoqlConversationResponse, SourceUpsertPayload, SystemLogPage,
+    CliPathProbe, CliPathSettings, CliPathStatus, LlmSettings, LlmSettingsView, ObjectDescribe,
+    QueryResult, RecordMutationPayload, RecordSavePayload, SalesforceObject, SalesforceSource,
+    SaveLlmSettingsPayload, SoqlConversationRequest, SoqlConversationResponse, SourceUpsertPayload,
+    SystemLogPage,
 };
 use crate::sf_cli;
 
@@ -91,7 +94,11 @@ fn clear_cli_login_cancel_token(state: &State<'_, AppState>) {
     }
 }
 
-fn set_llm_stream_cancel_token(state: &State<'_, AppState>, request_id: &str, token: Arc<AtomicBool>) {
+fn set_llm_stream_cancel_token(
+    state: &State<'_, AppState>,
+    request_id: &str,
+    token: Arc<AtomicBool>,
+) {
     if let Ok(mut map) = state.llm_stream_cancels.lock() {
         map.insert(request_id.to_string(), token);
     }
@@ -120,17 +127,17 @@ fn is_unauthorized_error(error: &AppError) -> bool {
     )
 }
 
-/// 判断流式输出是否出现可重试的传输层解码错误。
-fn is_retryable_stream_decode_error(error: &AppError) -> bool {
-    match error {
-        AppError::Http(message) => {
-            let normalized = message.to_lowercase();
-            normalized.contains("读取 openai 流式响应失败")
-                || normalized.contains("error decoding response body")
-                || normalized.contains("connection reset")
-                || normalized.contains("incomplete message")
-        }
-        _ => false,
+/// 推送 AI 进度文本到前端聊天气泡（仅当存在 stream requestId 时）。
+fn emit_ai_progress_chunk(app: &tauri::AppHandle, request_id: Option<&str>, message: &str) {
+    if let Some(current_request_id) = request_id {
+        let _ = app.emit_to(
+            "main",
+            "llm:soql-stream-chunk",
+            json!({
+                "requestId": current_request_id,
+                "chunk": message
+            }),
+        );
     }
 }
 
@@ -382,16 +389,18 @@ pub async fn open_auth_window(app: tauri::AppHandle) -> Result<(), String> {
         "sf-auth",
         tauri::WebviewUrl::App("index.html".into()),
     )
-        .title("Salesforce 登录")
-        .inner_size(480.0, 360.0)
-        .resizable(false)
-        .focused(true)
-        .skip_taskbar(false)
-        .center()
-        .visible(true);
+    .title("Salesforce 登录")
+    .inner_size(480.0, 360.0)
+    .resizable(false)
+    .focused(true)
+    .skip_taskbar(false)
+    .center()
+    .visible(true);
 
     if let Some(main_window) = app.get_webview_window("main") {
-        builder = builder.parent(&main_window).map_err(|error| error.to_string())?;
+        builder = builder
+            .parent(&main_window)
+            .map_err(|error| error.to_string())?;
     }
 
     let auth_window = match builder.build() {
@@ -513,7 +522,6 @@ pub fn list_system_logs(
     db::list_system_logs(&connection, page, page_size).map_err(AppError::to_string_error)
 }
 
-
 /// 新建数据源。
 #[tauri::command]
 pub fn create_source(
@@ -626,9 +634,10 @@ pub async fn list_objects(
     let objects_result = match state.sf_client.list_objects(&source).await {
         Ok(items) => Ok(items),
         Err(error) if is_unauthorized_error(&error) && source_id.starts_with("cli-") => {
-            let refreshed_source = refresh_cli_source_token(&app, &state, &source_id, "list_objects", None)
-                .await
-                .map_err(AppError::to_string_error)?;
+            let refreshed_source =
+                refresh_cli_source_token(&app, &state, &source_id, "list_objects", None)
+                    .await
+                    .map_err(AppError::to_string_error)?;
             state.sf_client.list_objects(&refreshed_source).await
         }
         Err(error) => Err(error),
@@ -773,8 +782,10 @@ pub fn save_llm_settings(
             .db
             .lock()
             .map_err(|error| format!("Database lock failed: {error}"))?;
-        let raw = serde_json::to_string(&current).map_err(|error| AppError::to_string_error(error.into()))?;
-        db::write_app_setting(&connection, LLM_SETTINGS_KEY, &raw).map_err(AppError::to_string_error)?;
+        let raw = serde_json::to_string(&current)
+            .map_err(|error| AppError::to_string_error(error.into()))?;
+        db::write_app_setting(&connection, LLM_SETTINGS_KEY, &raw)
+            .map_err(AppError::to_string_error)?;
     }
 
     Ok(to_llm_settings_view(&current))
@@ -782,7 +793,10 @@ pub fn save_llm_settings(
 
 /// 停止指定 requestId 的 LLM 流式生成。
 #[tauri::command]
-pub fn stop_llm_stream_generation(state: State<'_, AppState>, request_id: String) -> Result<(), String> {
+pub fn stop_llm_stream_generation(
+    state: State<'_, AppState>,
+    request_id: String,
+) -> Result<(), String> {
     let normalized = request_id.trim().to_string();
     if normalized.is_empty() {
         return Err("requestId 不能为空".to_string());
@@ -808,7 +822,7 @@ pub async fn generate_soql_from_conversation(
         return Err("LLM apiKey 未配置，请先到设置页保存。".to_string());
     }
 
-    let source = {
+    let mut source = {
         let connection = state
             .db
             .lock()
@@ -818,105 +832,10 @@ pub async fn generate_soql_from_conversation(
     // 对话模式与生成模式分流：只有命中“生成 SOQL”意图才走自动生成兜底。
     let generate_mode = should_generate_soql(&user_message);
 
-    // 元数据阶段仅调用对象列表与字段 describe，严格禁止 query/data 写入接口。
-    let all_objects = match state.sf_client.list_objects(&source).await {
-        Ok(items) => items.into_iter().filter(|item| item.queryable).collect::<Vec<_>>(),
-        Err(error) if is_unauthorized_error(&error) && payload.source_id.starts_with("cli-") => {
-            let refreshed_source = refresh_cli_source_token(
-                &app,
-                &state,
-                &payload.source_id,
-                "generate_soql_from_conversation",
-                None,
-            )
-            .await
-            .map_err(AppError::to_string_error)?;
-            state
-                .sf_client
-                .list_objects(&refreshed_source)
-                .await
-                .map_err(AppError::to_string_error)?
-                .into_iter()
-                .filter(|item| item.queryable)
-                .collect::<Vec<_>>()
-        }
-        Err(error) => return Err(AppError::to_string_error(error)),
-    };
-
-    let candidate_objects = pick_candidate_objects(
-        &all_objects,
-        &user_message,
-        payload.context_object_hint.as_deref(),
-    );
-
-    let object_name_map = all_objects
-        .iter()
-        .map(|item| (item.name.to_lowercase(), item.name.clone()))
-        .collect::<HashMap<_, _>>();
+    // 严格限制：AI 阶段不在主流程直接访问 Salesforce 元数据接口，统一通过 tools 触发。
+    let all_objects: Vec<SalesforceObject> = Vec::new();
     let mut object_metadata_map: HashMap<String, LlmObjectMetadataSummary> = HashMap::new();
     let mut described_set: HashSet<String> = HashSet::new();
-    let mut describe_queue = candidate_objects
-        .iter()
-        .take(6)
-        .cloned()
-        .collect::<Vec<_>>();
-
-    // 按候选对象逐步 describe，并把父引用对象加入队列，补齐子查询推导所需关系元数据。
-    while let Some(next_object_name) = describe_queue.pop() {
-        let normalized_name = next_object_name.to_lowercase();
-        if described_set.contains(&normalized_name) {
-            continue;
-        }
-        described_set.insert(normalized_name);
-
-        let describe = match state.sf_client.describe_object(&source, &next_object_name).await {
-            Ok(item) => item,
-            Err(error) if is_unauthorized_error(&error) && payload.source_id.starts_with("cli-") => {
-                let refreshed_source = refresh_cli_source_token(
-                    &app,
-                    &state,
-                    &payload.source_id,
-                    "generate_soql_from_conversation",
-                    Some(&next_object_name),
-                )
-                .await
-                .map_err(AppError::to_string_error)?;
-                state
-                    .sf_client
-                    .describe_object(&refreshed_source, &next_object_name)
-                    .await
-                    .map_err(AppError::to_string_error)?
-            }
-            Err(_) => continue, // 个别对象 describe 失败时忽略，不阻塞整体生成流程。
-        };
-
-        let summary = build_object_metadata_summary(&describe);
-        for reference in summary.reference_fields.iter() {
-            for reference_to in reference.reference_to.iter() {
-                let lookup_key = reference_to.to_lowercase();
-                if let Some(canonical_name) = object_name_map.get(&lookup_key) {
-                    let canonical_lower = canonical_name.to_lowercase();
-                    if described_set.contains(&canonical_lower) {
-                        continue;
-                    }
-                    if object_metadata_map.len() + describe_queue.len() >= 12 {
-                        continue;
-                    }
-                    if !describe_queue
-                        .iter()
-                        .any(|item| item.eq_ignore_ascii_case(canonical_name))
-                    {
-                        describe_queue.push(canonical_name.clone());
-                    }
-                }
-            }
-        }
-
-        object_metadata_map.insert(summary.object_name.clone(), summary);
-        if object_metadata_map.len() >= 12 {
-            break;
-        }
-    }
 
     let conversation_id = payload
         .conversation_id
@@ -947,11 +866,17 @@ pub async fn generate_soql_from_conversation(
         .as_deref()
         .map(str::trim)
         .filter(|item| !item.is_empty());
-    let llm_raw = call_llm_with_optional_stream(
+    let llm_raw = call_llm_with_tools_loop(
         &app,
         &state,
+        &payload.source_id,
         &llm_settings,
+        &mut source,
+        &mut object_metadata_map,
+        &mut described_set,
         &prompt_messages,
+        payload.context_object_hint.as_deref(),
+        generate_mode,
         stream_request_id,
     )
     .await?;
@@ -959,16 +884,28 @@ pub async fn generate_soql_from_conversation(
 
     // 生成模式下若首轮未产出 SOQL，则自动做一次修复重试（不走流式，避免重复事件）。
     if generate_mode && parsed.soql.is_none() {
-        let mut repair_messages = prompt_messages.clone();
+        let mut repair_messages = build_llm_messages(
+            &history,
+            &all_objects,
+            &object_metadata_map,
+            payload.context_object_hint.as_deref(),
+            generate_mode,
+        );
         repair_messages.push(LlmChatMessage {
             role: LlmChatRole::System,
             content: "上一轮未产出可用 soql。请基于已有上下文修复，必须返回 mode=generate 且提供非空 soql；若确实无法生成则返回 mode=clarify 并给出最小问题列表。".to_string(),
         });
-        if let Ok(retry_raw) = call_llm_with_optional_stream(
+        if let Ok(retry_raw) = call_llm_with_tools_loop(
             &app,
             &state,
+            &payload.source_id,
             &llm_settings,
+            &mut source,
+            &mut object_metadata_map,
+            &mut described_set,
             &repair_messages,
+            payload.context_object_hint.as_deref(),
+            generate_mode,
             None,
         )
         .await
@@ -1070,7 +1007,10 @@ pub async fn generate_soql_from_conversation(
         None,
         true,
         "SOQL 生成完成（仅元数据链路）。",
-        Some(&format!("conversationId={conversation_id}, status={}", response.status)),
+        Some(&format!(
+            "conversationId={conversation_id}, status={}",
+            response.status
+        )),
     );
 
     Ok(response)
@@ -1094,9 +1034,10 @@ pub async fn refresh_objects(
     let objects_result = match state.sf_client.list_objects(&source).await {
         Ok(items) => Ok(items),
         Err(error) if is_unauthorized_error(&error) && source_id.starts_with("cli-") => {
-            let refreshed_source = refresh_cli_source_token(&app, &state, &source_id, "refresh_objects", None)
-                .await
-                .map_err(AppError::to_string_error)?;
+            let refreshed_source =
+                refresh_cli_source_token(&app, &state, &source_id, "refresh_objects", None)
+                    .await
+                    .map_err(AppError::to_string_error)?;
             state.sf_client.list_objects(&refreshed_source).await
         }
         Err(error) => Err(error),
@@ -1573,17 +1514,14 @@ async fn load_object_describe_with_auto_refresh(
     match state.sf_client.describe_object(source, object_name).await {
         Ok(describe) => Ok(describe),
         Err(error) if is_unauthorized_error(&error) && source_id.starts_with("cli-") => {
-            let refreshed_source = refresh_cli_source_token(
-                app,
-                state,
-                source_id,
-                action,
-                Some(object_name),
-            )
-            .await?;
+            let refreshed_source =
+                refresh_cli_source_token(app, state, source_id, action, Some(object_name)).await?;
             // 刷新成功后覆盖当前 source，确保后续父对象 describe 复用最新 token。
             *source = refreshed_source.clone();
-            state.sf_client.describe_object(&refreshed_source, object_name).await
+            state
+                .sf_client
+                .describe_object(&refreshed_source, object_name)
+                .await
         }
         Err(error) => Err(error),
     }
@@ -1674,7 +1612,6 @@ async fn hydrate_reference_field_child_relationship_names(
             "childRelationshipName".to_string(),
             serde_json::Value::String(relationship_names.join(", ")),
         );
-
     }
     Ok(())
 }
@@ -1771,7 +1708,11 @@ pub async fn resolve_field_child_relationship_name(
 
     let resolve_result = match state
         .sf_client
-        .resolve_field_child_relationship_name(&source, &normalized_object_name, &normalized_field_name)
+        .resolve_field_child_relationship_name(
+            &source,
+            &normalized_object_name,
+            &normalized_field_name,
+        )
         .await
     {
         Ok(value) => Ok(value),
@@ -1857,10 +1798,14 @@ pub async fn query_records(
     let query_result = match state.sf_client.query_records(&source, &soql).await {
         Ok(result) => Ok(result),
         Err(error) if is_unauthorized_error(&error) && source_id.starts_with("cli-") => {
-            let refreshed_source = refresh_cli_source_token(&app, &state, &source_id, "query_records", None)
+            let refreshed_source =
+                refresh_cli_source_token(&app, &state, &source_id, "query_records", None)
+                    .await
+                    .map_err(AppError::to_string_error)?;
+            state
+                .sf_client
+                .query_records(&refreshed_source, &soql)
                 .await
-                .map_err(AppError::to_string_error)?;
-            state.sf_client.query_records(&refreshed_source, &soql).await
         }
         Err(error) => Err(error),
     };
@@ -2014,7 +1959,12 @@ pub async fn save_records(
             .map_err(AppError::to_string_error)?;
             state
                 .sf_client
-                .save_records(&refreshed_source, &object_name, creates.clone(), updates.clone())
+                .save_records(
+                    &refreshed_source,
+                    &object_name,
+                    creates.clone(),
+                    updates.clone(),
+                )
                 .await
         }
         Err(error) => Err(error),
@@ -2030,7 +1980,10 @@ pub async fn save_records(
                 Some(&payload.source_id),
                 Some(&payload.object_name),
                 true,
-                &format!("批量保存成功，新增 {} 条，更新 {} 条。", create_count, update_count),
+                &format!(
+                    "批量保存成功，新增 {} 条，更新 {} 条。",
+                    create_count, update_count
+                ),
                 None,
             );
             Ok(())
@@ -2210,6 +2163,8 @@ struct LlmReferenceFieldSummary {
     reference_to: Vec<String>,
     /// 父关系名（用于父字段访问，如 Parent__r.Name）。
     relationship_name: String,
+    /// 子关系名列表（由 childRelationshipName 补齐，和前端字段展开逻辑一致）。
+    child_relationship_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2316,64 +2271,506 @@ fn mask_api_key(api_key: &str) -> String {
     format!("{}****{}", &trimmed[0..3], tail)
 }
 
-/// 调用 LLM：可选开启流式事件推送。
-async fn call_llm_with_optional_stream(
+/// LLM 工具：按关键词检索对象列表。
+const TOOL_FIND_OBJECTS: &str = "find_salesforce_objects";
+/// LLM 工具：获取对象字段与关系元数据。
+const TOOL_GET_OBJECT_METADATA: &str = "get_salesforce_object_metadata";
+
+/// 调用 LLM（工具循环版）：允许模型按需拉取元数据后再返回最终 JSON。
+async fn call_llm_with_tools_loop(
     app: &tauri::AppHandle,
     state: &State<'_, AppState>,
+    source_id: &str,
     llm_settings: &LlmSettings,
+    source: &mut SalesforceSource,
+    object_metadata_map: &mut HashMap<String, LlmObjectMetadataSummary>,
+    described_set: &mut HashSet<String>,
     messages: &[LlmChatMessage],
+    _context_object_hint: Option<&str>,
+    generate_mode: bool,
     stream_request_id: Option<&str>,
-) -> Result<serde_json::Value, String> {
-    if let Some(request_id) = stream_request_id {
-        let cancel_token = Arc::new(AtomicBool::new(false));
-        set_llm_stream_cancel_token(state, request_id, cancel_token.clone());
-        let stream_result = openai_chat_json_stream(
-            &llm_settings.base_url,
-            &llm_settings.api_key,
-            &llm_settings.model,
-            messages,
-            llm_settings.timeout_ms,
-            |chunk| {
-                app.emit_to(
-                    "main",
-                    "llm:soql-stream-chunk",
-                    serde_json::json!({
-                        "requestId": request_id,
-                        "chunk": chunk
-                    }),
-                )
-                .map_err(|error| AppError::Biz(format!("推送流式事件失败: {error}")))?;
-                Ok(())
-            },
-            || cancel_token.load(Ordering::Relaxed),
-        )
-        .await;
-        clear_llm_stream_cancel_token(state, request_id);
-        match stream_result {
-            Ok(value) => Ok(value),
-            // 流式链路偶发“响应体解码失败”时，自动降级为非流式一次，避免误报配置问题。
-            Err(error) if is_retryable_stream_decode_error(&error) => openai_chat_json(
+) -> Result<Value, String> {
+    let mode_label = if generate_mode {
+        "生成模式"
+    } else {
+        "对话模式"
+    };
+    // 先推送“进入工具模式”的提示片段，避免前端长时间停在初始占位文案。
+    emit_ai_progress_chunk(
+        app,
+        stream_request_id,
+        &format!("AI 正在补充 Salesforce 元数据（{mode_label}）…\n"),
+    );
+
+    let cancel_token = stream_request_id.map(|request_id| {
+        let token = Arc::new(AtomicBool::new(false));
+        set_llm_stream_cancel_token(state, request_id, token.clone());
+        token
+    });
+
+    let result = async {
+        let tools = build_soql_llm_tools();
+        let mut round = 0usize;
+        let max_rounds = 3usize;
+        // 工具循环总耗时上限：避免单次请求长时间无响应。
+        let max_loop_duration = Duration::from_millis(
+            llm_settings
+                .timeout_ms
+                .max(15_000)
+                .saturating_mul(2)
+                .min(120_000),
+        );
+        let started_at = Instant::now();
+        let mut tool_messages = build_openai_messages_from_history(messages);
+        // 对象列表缓存：只在工具触发时懒加载，避免主流程直连 Salesforce 元数据接口。
+        let mut cached_queryable_objects: Option<Vec<SalesforceObject>> = None;
+        // 记录工具调用签名，避免模型陷入重复调用导致长时间无响应。
+        let mut tool_signature_counter: HashMap<String, usize> = HashMap::new();
+
+        while round < max_rounds {
+            if cancel_token
+                .as_ref()
+                .map(|item| item.load(Ordering::Relaxed))
+                .unwrap_or(false)
+            {
+                return Err("用户已停止生成。".to_string());
+            }
+            if started_at.elapsed() > max_loop_duration {
+                return Err(format!(
+                    "AI 生成超时：工具链路已运行超过 {} 秒，请缩小查询范围或稍后重试。",
+                    max_loop_duration.as_secs()
+                ));
+            }
+            round += 1;
+            emit_ai_progress_chunk(
+                app,
+                stream_request_id,
+                &format!("AI 正在执行第 {round} 轮推理…\n"),
+            );
+            let completion = match openai_chat_completion_with_tools(
                 &llm_settings.base_url,
                 &llm_settings.api_key,
                 &llm_settings.model,
-                messages,
+                &tool_messages,
+                &tools,
                 llm_settings.timeout_ms,
             )
             .await
-            .map_err(AppError::to_string_error),
-            Err(error) => Err(AppError::to_string_error(error)),
+            {
+                Ok(value) => value,
+                Err(error) => return Err(AppError::to_string_error(error)),
+            };
+
+            // 先回填 assistant 本轮消息，保证工具调用上下文完整。
+            tool_messages.push(completion.assistant_message.clone());
+            if completion.tool_calls.is_empty() {
+                if let Some(parsed) = completion.parsed_json {
+                    emit_ai_progress_chunk(app, stream_request_id, "AI 已完成生成。\n");
+                    return Ok(parsed);
+                }
+                let content_preview = completion.raw_content.chars().take(600).collect::<String>();
+                return Err(format!(
+                    "{}。模型原始输出片段：{}",
+                    completion
+                        .parsed_json_error
+                        .unwrap_or_else(|| "LLM 返回内容不是合法 JSON 对象".to_string()),
+                    content_preview
+                ));
+            }
+
+            // 依次执行模型请求的工具调用，并把结果作为 tool 角色消息回灌。
+            for tool_call in completion.tool_calls.iter() {
+                let signature = format!("{}::{}", tool_call.name, tool_call.arguments.trim());
+                let next_count = tool_signature_counter
+                    .get(&signature)
+                    .copied()
+                    .unwrap_or(0)
+                    + 1;
+                tool_signature_counter.insert(signature, next_count);
+                if next_count > 1 {
+                    return Err(format!(
+                        "AI 重复请求相同工具参数（{}），为避免卡死已终止。请补充更明确的对象/字段后重试。",
+                        tool_call.name
+                    ));
+                }
+                emit_ai_progress_chunk(
+                    app,
+                    stream_request_id,
+                    &format!("AI 正在调用工具：{}…\n", tool_call.name),
+                );
+                let tool_result = execute_soql_llm_tool_call(
+                    app,
+                    state,
+                    source_id,
+                    source,
+                    &mut cached_queryable_objects,
+                    object_metadata_map,
+                    described_set,
+                    tool_call,
+                )
+                    .await;
+
+                let content = match tool_result {
+                    Ok(value) => value,
+                    Err(error) => json!({
+                        "ok": false,
+                        "error": error,
+                        "tool": tool_call.name
+                    }),
+                };
+
+                tool_messages.push(json!({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": content.to_string()
+                }));
+            }
+
+            // 每轮工具执行后仅注入轻量提示，避免重复塞入大体量快照导致上下文膨胀。
+            tool_messages.push(json!({
+                "role": "system",
+                "content": "请基于最新 tool 结果继续推理；优先直接产出最终 JSON，不要重复请求已获取过的对象元数据。"
+            }));
+            if round > 1 {
+                tool_messages.push(json!({
+                    "role": "system",
+                    "content": format!("当前已执行 {round} 轮工具调用。若信息已足够，请直接返回最终 JSON，不要重复调用工具。")
+                }));
+            }
         }
-    } else {
-        openai_chat_json(
-            &llm_settings.base_url,
-            &llm_settings.api_key,
-            &llm_settings.model,
-            messages,
-            llm_settings.timeout_ms,
+
+        Err("LLM 工具调用超过最大轮次，请补充更明确的对象/字段信息后重试。".to_string())
+    }
+    .await;
+
+    if let Some(request_id) = stream_request_id {
+        clear_llm_stream_cancel_token(state, request_id);
+    }
+    result
+}
+
+/// 构建 SOQL 场景可用的工具定义。
+fn build_soql_llm_tools() -> Vec<Value> {
+    vec![
+        json!({
+            "type": "function",
+            "function": {
+                "name": TOOL_FIND_OBJECTS,
+                "description": "Search Salesforce queryable objects by API name or label.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "keyword": {
+                            "type": "string",
+                            "description": "Partial object API name or label. For example: account, contact."
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Max number of results, default 10, max 50.",
+                            "minimum": 1,
+                            "maximum": 50
+                        }
+                    },
+                    "required": ["keyword"]
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": TOOL_GET_OBJECT_METADATA,
+                "description": "Get one Salesforce object's field metadata summary, including field API names, lookup references, and childRelationshipNames on reference fields.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "object_name": {
+                            "type": "string",
+                            "description": "Object API name, for example Account."
+                        },
+                        "include_reference_parents": {
+                            "type": "boolean",
+                            "description": "If true, also load parent objects from referenceTo for relationship inference."
+                        }
+                    },
+                    "required": ["object_name"]
+                }
+            }
+        }),
+    ]
+}
+
+/// 将内部 LLM 消息转换为 OpenAI messages 数组。
+fn build_openai_messages_from_history(messages: &[LlmChatMessage]) -> Vec<Value> {
+    messages
+        .iter()
+        .map(|item| {
+            let role = match item.role {
+                LlmChatRole::System => "system",
+                LlmChatRole::User => "user",
+                LlmChatRole::Assistant => "assistant",
+            };
+            json!({
+                "role": role,
+                "content": item.content
+            })
+        })
+        .collect::<Vec<_>>()
+}
+
+/// 执行单个工具调用：读取本地已授权 Salesforce 元数据并返回 JSON 结果。
+async fn execute_soql_llm_tool_call(
+    app: &tauri::AppHandle,
+    state: &State<'_, AppState>,
+    source_id: &str,
+    source: &mut SalesforceSource,
+    cached_queryable_objects: &mut Option<Vec<SalesforceObject>>,
+    object_metadata_map: &mut HashMap<String, LlmObjectMetadataSummary>,
+    described_set: &mut HashSet<String>,
+    tool_call: &OpenAiToolCall,
+) -> Result<Value, String> {
+    let args = serde_json::from_str::<Value>(tool_call.arguments.trim()).map_err(|error| {
+        format!(
+            "工具 `{}` 参数解析失败：{error}。arguments={}",
+            tool_call.name, tool_call.arguments
+        )
+    })?;
+    match tool_call.name.as_str() {
+        TOOL_FIND_OBJECTS => {
+            let keyword = args
+                .get("keyword")
+                .and_then(|item| item.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_lowercase();
+            let limit = args
+                .get("limit")
+                .and_then(|item| item.as_u64())
+                .map(|item| item.clamp(1, 50) as usize)
+                .unwrap_or(10);
+            if cached_queryable_objects.is_none() {
+                *cached_queryable_objects = Some(
+                    load_queryable_objects_with_auto_refresh(app, state, source_id, source).await?,
+                );
+            }
+            let object_items = cached_queryable_objects
+                .as_ref()
+                .map(|item| item.as_slice())
+                .unwrap_or(&[]);
+            let matches = if keyword.is_empty() {
+                Vec::new()
+            } else {
+                object_items
+                    .iter()
+                    .filter(|item| {
+                        item.name.to_lowercase().contains(&keyword)
+                            || item.label.to_lowercase().contains(&keyword)
+                    })
+                    .take(limit)
+                    .map(|item| {
+                        json!({
+                            "name": item.name,
+                            "label": item.label,
+                            "queryable": item.queryable
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            };
+            Ok(json!({
+                "ok": true,
+                "keyword": keyword,
+                "matches": matches
+            }))
+        }
+        TOOL_GET_OBJECT_METADATA => {
+            let object_name = args
+                .get("object_name")
+                .and_then(|item| item.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if object_name.is_empty() {
+                return Ok(json!({
+                    "ok": false,
+                    "error": "object_name 不能为空"
+                }));
+            }
+            let include_reference_parents = args
+                .get("include_reference_parents")
+                .and_then(|item| item.as_bool())
+                .unwrap_or(true);
+            if cached_queryable_objects.is_none() {
+                *cached_queryable_objects = Some(
+                    load_queryable_objects_with_auto_refresh(app, state, source_id, source).await?,
+                );
+            }
+            let loaded_object_names = ensure_object_metadata_loaded(
+                app,
+                state,
+                source_id,
+                source,
+                object_metadata_map,
+                described_set,
+                &object_name,
+                include_reference_parents,
+                20,
+            )
+            .await?;
+            let canonical = resolve_canonical_object_name_from_objects(
+                cached_queryable_objects
+                    .as_ref()
+                    .map(|items| items.as_slice())
+                    .unwrap_or(&[]),
+                &object_name,
+            )
+            .unwrap_or_else(|| object_name.clone());
+            let metadata = object_metadata_map.get(&canonical).map(|item| json!(item));
+            Ok(json!({
+                "ok": metadata.is_some(),
+                "objectName": canonical,
+                "metadata": metadata,
+                "loadedObjects": loaded_object_names
+            }))
+        }
+        _ => Err(format!("未知工具调用：{}", tool_call.name)),
+    }
+}
+
+/// 确保对象元数据已加载到摘要缓存；可选连带加载 referenceTo 父对象。
+async fn ensure_object_metadata_loaded(
+    app: &tauri::AppHandle,
+    state: &State<'_, AppState>,
+    source_id: &str,
+    source: &mut SalesforceSource,
+    object_metadata_map: &mut HashMap<String, LlmObjectMetadataSummary>,
+    described_set: &mut HashSet<String>,
+    root_object_name: &str,
+    include_reference_parents: bool,
+    max_total_metadata: usize,
+) -> Result<Vec<String>, String> {
+    let canonical_root = root_object_name.trim().to_string();
+    if canonical_root.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut queue = vec![canonical_root];
+    let mut loaded_names: Vec<String> = Vec::new();
+    while let Some(next_name) = queue.pop() {
+        if object_metadata_map.len() >= max_total_metadata {
+            break;
+        }
+        let normalized = next_name.to_lowercase();
+        if described_set.contains(&normalized)
+            && object_metadata_map
+                .keys()
+                .any(|item| item.eq_ignore_ascii_case(&next_name))
+        {
+            continue;
+        }
+        described_set.insert(normalized);
+
+        // 每次仅 describe 必需对象；失败时不中断整个工具链。
+        let mut describe = match load_object_describe_with_auto_refresh(
+            app,
+            state,
+            source_id,
+            source,
+            &next_name,
+            "llm_tool_get_object_metadata",
         )
         .await
-        .map_err(AppError::to_string_error)
+        {
+            Ok(item) => item,
+            Err(error) => {
+                if next_name.eq_ignore_ascii_case(root_object_name) {
+                    return Err(format!(
+                        "读取对象 `{}` 元数据失败：{}",
+                        root_object_name, error
+                    ));
+                }
+                continue;
+            }
+        };
+        // 与前端字段展开一致：为引用字段补齐 childRelationshipName。
+        let _ = hydrate_reference_field_child_relationship_names(
+            app,
+            state,
+            source_id,
+            source,
+            &mut describe,
+        )
+        .await;
+        let summary = build_object_metadata_summary(&describe);
+        loaded_names.push(summary.object_name.clone());
+        if include_reference_parents {
+            for reference in summary.reference_fields.iter() {
+                for reference_to in reference.reference_to.iter() {
+                    let canonical_parent = reference_to.trim().to_string();
+                    if canonical_parent.is_empty() {
+                        continue;
+                    }
+                    if !described_set.contains(&canonical_parent.to_lowercase())
+                        && !queue
+                            .iter()
+                            .any(|item| item.eq_ignore_ascii_case(&canonical_parent))
+                    {
+                        queue.push(canonical_parent);
+                    }
+                }
+            }
+        }
+        object_metadata_map.insert(summary.object_name.clone(), summary);
     }
+    let root_loaded = object_metadata_map
+        .keys()
+        .any(|item| item.eq_ignore_ascii_case(root_object_name));
+    if !root_loaded {
+        return Err(format!(
+            "未找到对象 `{}` 的元数据，请确认对象 API Name 是否正确。",
+            root_object_name
+        ));
+    }
+    Ok(loaded_names)
+}
+
+/// 将对象名称解析为对象列表中的标准 API Name。
+fn resolve_canonical_object_name_from_objects(
+    objects: &[SalesforceObject],
+    object_name: &str,
+) -> Option<String> {
+    let trimmed = object_name.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    objects
+        .iter()
+        .find(|item| item.name.eq_ignore_ascii_case(trimmed))
+        .map(|item| item.name.clone())
+}
+
+/// 按需读取可查询对象列表，并在 CLI 数据源 401 时自动刷新 token。
+async fn load_queryable_objects_with_auto_refresh(
+    app: &tauri::AppHandle,
+    state: &State<'_, AppState>,
+    source_id: &str,
+    source: &mut SalesforceSource,
+) -> Result<Vec<SalesforceObject>, String> {
+    let objects_result = match state.sf_client.list_objects(source).await {
+        Ok(items) => Ok(items),
+        Err(error) if is_unauthorized_error(&error) && source_id.starts_with("cli-") => {
+            let refreshed_source =
+                refresh_cli_source_token(app, state, source_id, "llm_tool_find_objects", None)
+                    .await
+                    .map_err(AppError::to_string_error)?;
+            *source = refreshed_source.clone();
+            state.sf_client.list_objects(&refreshed_source).await
+        }
+        Err(error) => Err(error),
+    }
+    .map_err(AppError::to_string_error)?;
+    Ok(objects_result
+        .into_iter()
+        .filter(|item| item.queryable)
+        .collect::<Vec<_>>())
 }
 
 /// 从模型原始 JSON 解析结构化载荷，解析失败时降级为 clarify。
@@ -2493,11 +2890,23 @@ fn build_object_metadata_summary(describe: &ObjectDescribe) -> LlmObjectMetadata
                 .unwrap_or("")
                 .trim()
                 .to_string();
+            let child_relationship_names = field
+                .metadata
+                .get("childRelationshipName")
+                .and_then(|item| item.as_str())
+                .map(|item| {
+                    item.split(',')
+                        .map(|part| part.trim().to_string())
+                        .filter(|part| !part.is_empty())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
 
             Some(LlmReferenceFieldSummary {
                 field_name: field.name.clone(),
                 reference_to: references,
                 relationship_name,
+                child_relationship_names,
             })
         })
         .collect::<Vec<_>>();
@@ -2548,14 +2957,15 @@ fn build_llm_messages(
    - clarify: 需求模糊，提出问题直到明确
 3) 若用户明确要求“生成SOQL”，优先返回 mode=generate 且给出 soql。
 4) 仅当“对象无法确定”或“业务冲突无法消解”时返回 mode=clarify。
-5) 若用户要求“父对象 + 子对象”或给了子对象 API 名，先基于 metadata 中的 child_relationships / reference_fields 自动推导父对象 API 与子关系名，不要直接反问。
-6) 如果 metadata 仍不足，才提问；提问必须使用中文。
-7) 若用户说“全部数据/全量数据”，按 SOQL 特性处理：使用对象全部可用字段（不允许 SELECT *），默认附加 LIMIT 200 与可读排序（如 CreatedDate DESC）。
-8) 除非用户明确要求，不要因为 IsDeleted/LIMIT/排序等默认边界反复追问；可在 reason 里说明默认假设。
-9) 仅允许输出 SELECT 语句，可包含子查询、聚合、分组、排序、函数。
-10) 禁止输出 INSERT/UPDATE/DELETE/UPSERT/MERGE。
-11) 只能使用给定元数据中的对象与字段，不能臆造。
-12) 仅输出 JSON 对象，不要输出额外文本。
+5) 你只能通过 tools 获取 Salesforce 元数据；禁止假设不存在于工具结果中的对象、字段、关系。
+6) 若用户要求“父对象 + 子对象”或给了子对象 API 名，先基于 metadata 中的 child_relationships / reference_fields 自动推导父对象 API 与子关系名，不要直接反问。
+7) 如果 metadata 仍不足，优先调用工具补齐，再提问；提问必须使用中文。
+8) 若用户说“全部数据/全量数据”，按 SOQL 特性处理：使用对象全部可用字段（不允许 SELECT *），默认附加 LIMIT 200 与可读排序（如 CreatedDate DESC）。
+9) 除非用户明确要求，不要因为 IsDeleted/LIMIT/排序等默认边界反复追问；可在 reason 里说明默认假设。
+10) 仅允许输出 SELECT 语句，可包含子查询、聚合、分组、排序、函数。
+11) 禁止输出 INSERT/UPDATE/DELETE/UPSERT/MERGE。
+12) 只能使用给定元数据中的对象与字段，不能臆造。
+13) 仅输出 JSON 对象，不要输出额外文本。
 JSON 结构：
 {
   \"mode\": \"answer|generate|clarify\",
@@ -2571,7 +2981,8 @@ JSON 结构：
         .trim()
     );
 
-    let metadata_snapshot = build_layered_metadata_snapshot(all_objects, object_metadata_map, context_object_hint);
+    let metadata_snapshot =
+        build_layered_metadata_snapshot(all_objects, object_metadata_map, context_object_hint);
 
     let mut messages = vec![LlmChatMessage {
         role: LlmChatRole::System,
@@ -2606,7 +3017,12 @@ fn build_layered_metadata_snapshot(
     let focus_object_details = object_metadata_map
         .values()
         .map(|item| {
-            let sample_fields = item.field_names.iter().take(60).cloned().collect::<Vec<_>>();
+            let sample_fields = item
+                .field_names
+                .iter()
+                .take(60)
+                .cloned()
+                .collect::<Vec<_>>();
             let reference_fields = item
                 .reference_fields
                 .iter()
@@ -2615,7 +3031,8 @@ fn build_layered_metadata_snapshot(
                     serde_json::json!({
                         "field": reference.field_name,
                         "referenceTo": reference.reference_to,
-                        "relationshipName": reference.relationship_name
+                        "relationshipName": reference.relationship_name,
+                        "childRelationshipNames": reference.child_relationship_names
                     })
                 })
                 .collect::<Vec<_>>();
@@ -2652,7 +3069,10 @@ fn build_layered_metadata_snapshot(
 
 /// 压缩上下文：超过阈值时，把旧消息汇总为摘要并保留最近消息。
 fn compress_history_in_place(history: &mut Vec<LlmChatMessage>, max_chars: usize) {
-    let total_chars = history.iter().map(|item| item.content.chars().count()).sum::<usize>();
+    let total_chars = history
+        .iter()
+        .map(|item| item.content.chars().count())
+        .sum::<usize>();
     if total_chars <= max_chars || history.len() <= 24 {
         return;
     }
@@ -2707,48 +3127,14 @@ fn should_generate_soql(user_message: &str) -> bool {
     hit_keywords.iter().any(|item| lower.contains(item))
 }
 
-/// 根据输入文本与上下文对象提示，筛选候选对象，避免 describe 全量对象导致性能开销过高。
-fn pick_candidate_objects(
-    objects: &[SalesforceObject],
-    user_message: &str,
-    context_object_hint: Option<&str>,
-) -> Vec<String> {
-    let mut picked: Vec<String> = Vec::new();
-    let lower_message = user_message.to_lowercase();
-
-    if let Some(hint) = context_object_hint.map(|item| item.trim()).filter(|item| !item.is_empty()) {
-        if let Some(found) = objects
-            .iter()
-            .find(|item| item.name.eq_ignore_ascii_case(hint) || item.label.eq_ignore_ascii_case(hint))
-        {
-            picked.push(found.name.clone());
-        }
-    }
-
-    for item in objects {
-        let name_hit = lower_message.contains(&item.name.to_lowercase());
-        let label_hit = lower_message.contains(&item.label.to_lowercase());
-        if name_hit || label_hit {
-            if !picked.iter().any(|name| name.eq_ignore_ascii_case(&item.name)) {
-                picked.push(item.name.clone());
-            }
-        }
-    }
-
-    if picked.is_empty() {
-        picked.extend(objects.iter().take(8).map(|item| item.name.clone()));
-    }
-    picked
-}
-
 /// 生成默认澄清问题，确保模糊场景下始终可继续对话。
 fn fallback_questions() -> Vec<String> {
     vec![
         "请先明确要查询的 Salesforce 对象（例如 Account、Contact）。".to_string(),
-        "如果对象已明确，我将按默认边界先生成可执行 SOQL（LIMIT 200、默认排序），你再按需调整。".to_string(),
+        "如果对象已明确，我将按默认边界先生成可执行 SOQL（LIMIT 200、默认排序），你再按需调整。"
+            .to_string(),
     ]
 }
-
 
 /// 校验数据源写入参数，避免保存明显非法值。
 fn validate_payload(payload: &SourceUpsertPayload) -> Result<(), String> {

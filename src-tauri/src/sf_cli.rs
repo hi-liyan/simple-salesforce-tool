@@ -1,4 +1,4 @@
-﻿use serde::Deserialize;
+use serde::Deserialize;
 use serde_json::Value;
 use std::cmp::Ordering as CmpOrdering;
 use std::collections::HashSet;
@@ -72,7 +72,10 @@ pub fn load_cli_sources(preferred_cli_path: Option<&str>) -> Result<Vec<CliSourc
     let parsed: SfAuthListResponse = serde_json::from_str(&text)?;
 
     if parsed.status != 0 {
-        return Err(AppError::Biz(format!("Salesforce CLI 状态异常: {}", parsed.status)));
+        return Err(AppError::Biz(format!(
+            "Salesforce CLI 状态异常: {}",
+            parsed.status
+        )));
     }
 
     let mut seeds = Vec::new();
@@ -123,7 +126,10 @@ pub fn refresh_cli_source_by_id(
         .map_err(|error| AppError::Serde(format!("解析 CLI 输出文本失败: {error}")))?;
     let value: Value = serde_json::from_str(&text)?;
 
-    let status = value.get("status").and_then(|item| item.as_i64()).unwrap_or(1);
+    let status = value
+        .get("status")
+        .and_then(|item| item.as_i64())
+        .unwrap_or(1);
     if status != 0 {
         let message = value
             .get("message")
@@ -272,9 +278,8 @@ pub fn login_web(
         }
     }
 
-    let org_id = extract_org_id(&value).ok_or_else(|| {
-        AppError::Biz("Salesforce CLI 登录成功，但未能解析 orgId。".to_string())
-    })?;
+    let org_id = extract_org_id(&value)
+        .ok_or_else(|| AppError::Biz("Salesforce CLI 登录成功，但未能解析 orgId。".to_string()))?;
 
     Ok(CliLoginResult { org_id })
 }
@@ -406,7 +411,9 @@ fn resolve_org_display_targets(org_id: &str, preferred_cli_path: Option<&str>) -
         if let Ok(text) = String::from_utf8(stdout) {
             if let Ok(parsed) = serde_json::from_str::<SfAuthListResponse>(&text) {
                 if parsed.status == 0 {
-                    if let Some(matched_org) = parsed.result.into_iter().find(|item| item.org_id == org_id) {
+                    if let Some(matched_org) =
+                        parsed.result.into_iter().find(|item| item.org_id == org_id)
+                    {
                         if let Some(alias_raw) = matched_org.alias {
                             // alias 可能是 "a,b"；优先使用第一项。
                             let alias = alias_raw
@@ -717,7 +724,9 @@ fn build_cli_candidates(preferred_cli_path: Option<&str>) -> Vec<String> {
         }
 
         // 仅对包含路径分隔符的候选做文件存在性检查。
-        if (normalized.contains('\\') || normalized.contains('/')) && !Path::new(&normalized).exists() {
+        if (normalized.contains('\\') || normalized.contains('/'))
+            && !Path::new(&normalized).exists()
+        {
             continue;
         }
 
@@ -762,7 +771,10 @@ fn run_command_with_cancel_and_timeout(
         if started_at.elapsed() >= timeout {
             let _ = child.kill();
             let _ = child.wait();
-            return Err(AppError::Biz(format!("登录超时（{} 秒）。", timeout.as_secs())));
+            return Err(AppError::Biz(format!(
+                "登录超时（{} 秒）。",
+                timeout.as_secs()
+            )));
         }
 
         match child.try_wait() {
@@ -798,7 +810,9 @@ pub fn read_cli_path_settings(custom_cli_path: Option<String>) -> CliPathSetting
 
 /// 解析当前生效的 CLI 路径（不校验有效性）。
 pub fn resolve_effective_cli_path(custom_cli_path: Option<String>) -> Option<String> {
-    build_cli_candidates(custom_cli_path.as_deref()).into_iter().next()
+    build_cli_candidates(custom_cli_path.as_deref())
+        .into_iter()
+        .next()
 }
 
 /// 自动探测本地可用 CLI 路径：仅返回探测成功的候选项。
@@ -835,7 +849,9 @@ pub fn check_cli_path_status(input_cli_path: Option<String>) -> CliPathStatus {
                 .as_ref()
                 .and_then(|value| extract_semver(value));
             let has_update = match (current_semver.as_deref(), latest_semver.as_deref()) {
-                (Some(current), Some(latest)) => Some(compare_semver(current, latest) == CmpOrdering::Less),
+                (Some(current), Some(latest)) => {
+                    Some(compare_semver(current, latest) == CmpOrdering::Less)
+                }
                 _ => None,
             };
             CliPathStatus {
