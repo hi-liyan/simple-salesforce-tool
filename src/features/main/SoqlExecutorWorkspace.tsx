@@ -382,20 +382,21 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText, objects }
       });
       patchActiveTab((tab) => applyAiResponseToTab(tab, response, streamRequestId));
     } catch (error) {
+      const errorText = String(error);
       patchActiveTab((tab) => {
         if (tab.aiStreamRequestId !== streamRequestId) return tab;
         return {
           ...tab,
           aiLoading: false,
           aiStreamRequestId: "",
-          notice: { type: "error", message: `AI 生成失败：${String(error)}` },
+          notice: { type: "error", message: `AI 生成失败：${errorText}` },
           aiMessages: tab.aiMessages.map((item) =>
             item.id === streamRequestId
               ? {
                   ...item,
-                  content: `生成失败：${String(error)}`,
+                  content: `生成失败：${errorText}`,
                   status: "clarify" as const,
-                  questions: ["请确认 LLM 设置（baseUrl、model、apiKey）是否已正确保存。"]
+                  questions: buildAiErrorQuestions(errorText)
                 }
               : item
           )
@@ -744,6 +745,30 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText, objects }
       )}
     </div>
   );
+}
+
+// 根据错误内容生成更准确的引导问题，避免把网络问题误导成配置问题。
+function buildAiErrorQuestions(errorText: string): string[] {
+  const normalized = errorText.toLowerCase();
+  if (
+    normalized.includes("apikey 未配置") ||
+    normalized.includes("llm apikey 未配置") ||
+    normalized.includes("401") ||
+    normalized.includes("认证失败")
+  ) {
+    return ["请确认 LLM 设置（baseUrl、model、apiKey）是否已正确保存。"];
+  }
+  if (
+    normalized.includes("读取 openai 流式响应失败") ||
+    normalized.includes("error decoding response body") ||
+    normalized.includes("connection reset")
+  ) {
+    return [
+      "当前更像是网络或网关流式传输异常，请重试一次；系统会自动降级为非流式。",
+      "若频繁出现，请检查代理/网关是否稳定支持 SSE（text/event-stream）。"
+    ];
+  }
+  return ["请补充你的查询目标对象和字段，我会继续协助生成 SOQL。"];
 }
 
 // 创建新的 SOQL 执行器标签默认值。

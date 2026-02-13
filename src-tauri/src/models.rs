@@ -79,6 +79,21 @@ pub struct ObjectDescribe {
     pub label: String,
     /// 字段元数据列表。
     pub fields: Vec<ObjectField>,
+    /// 子关系元数据列表（用于构建父对象子查询）。
+    pub child_relationships: Vec<ObjectChildRelationship>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ObjectChildRelationship {
+    /// 子对象 API Name。
+    pub child_sobject: String,
+    /// 子对象上的父引用字段 API Name。
+    pub field: String,
+    /// 子查询 relationshipName（用于 SELECT (SELECT ... FROM <relationshipName>)）。
+    pub relationship_name: String,
+    /// 该关系是否被 Salesforce 标记为隐藏/废弃。
+    pub deprecated_and_hidden: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
