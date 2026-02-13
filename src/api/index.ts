@@ -64,6 +64,8 @@ export const api = {
     invokeApi<string | null>("open_record_page", { sourceId, objectName, recordId }),
   describeObject: (sourceId: string, objectName: string) =>
     invokeApi<ObjectDescribe>("describe_object", { sourceId, objectName }),
+  resolveFieldChildRelationshipName: (sourceId: string, objectName: string, fieldName: string) =>
+    invokeApi<string | null>("resolve_field_child_relationship_name", { sourceId, objectName, fieldName }),
   queryRecords: (sourceId: string, soql: string) =>
     invokeApi<QueryResult>("query_records", { sourceId, soql }),
   createRecord: (payload: RecordMutationPayload) => invokeApi<string>("create_record", { payload }),

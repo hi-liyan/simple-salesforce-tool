@@ -76,7 +76,8 @@ impl SalesforceClient {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct DescribeChildRelationship {
-            #[serde(default)]
+            // Salesforce 原始字段名为 childSObject（注意 Object 的 O 大写），这里显式映射避免丢值。
+            #[serde(default, rename = "childSObject")]
             child_sobject: String,
             #[serde(default)]
             field: String,
@@ -151,6 +152,56 @@ impl SalesforceClient {
                 })
                 .collect(),
         })
+    }
+
+    /// 解析字段配置的 Child Relationship Name（优先对齐 Salesforce Setup 页面）。
+    pub async fn resolve_field_child_relationship_name(
+        &self,
+        source: &SalesforceSource,
+        object_name: &str,
+        field_name: &str,
+    ) -> Result<Option<String>, AppError> {
+        #[derive(Deserialize)]
+        struct ToolingQueryResponse {
+            #[serde(rename = "totalSize")]
+            total_size: usize,
+            #[serde(default)]
+            records: Vec<Value>,
+        }
+
+        let normalized_object_name = object_name.trim();
+        let normalized_field_name = field_name.trim();
+        if normalized_object_name.is_empty() || normalized_field_name.is_empty() {
+            return Ok(None);
+        }
+
+        // Tooling CustomField 的 DeveloperName 不含命名空间与 __c 后缀。
+        let Some(developer_name) = extract_custom_field_developer_name(normalized_field_name) else {
+            return Ok(None);
+        };
+
+        let object_literal = escape_soql_literal(normalized_object_name);
+        let developer_literal = escape_soql_literal(&developer_name);
+        let soql = format!(
+            "SELECT RelationshipName FROM CustomField WHERE TableEnumOrId = '{object_literal}' AND DeveloperName = '{developer_literal}' ORDER BY NamespacePrefix DESC LIMIT 1"
+        );
+        let encoded = urlencoding::encode(&soql);
+        let url = build_url(source, &format!("tooling/query/?q={encoded}"));
+        let body: ToolingQueryResponse = self.request_json(source, Method::GET, &url, None).await?;
+
+        if body.total_size == 0 {
+            return Ok(None);
+        }
+
+        let relationship_name = body.records.into_iter().find_map(|record| {
+            record
+                .as_object()
+                .and_then(|item| item.get("RelationshipName"))
+                .and_then(Value::as_str)
+                .map(|item| item.trim().to_string())
+                .filter(|item| !item.is_empty())
+        });
+        Ok(relationship_name)
     }
 
     /// 执行 SOQL 并返回记录集。
@@ -376,6 +427,32 @@ impl SalesforceClient {
         let text = response.text().await.unwrap_or_default();
         Err(AppError::Http(format!("Salesforce 调用失败，状态码 {status}: {text}")))
     }
+}
+
+/// 提取 CustomField.DeveloperName：去掉命名空间前缀与 __c 后缀。
+fn extract_custom_field_developer_name(field_api_name: &str) -> Option<String> {
+    let trimmed = field_api_name.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let without_suffix = trimmed
+        .strip_suffix("__c")
+        .or_else(|| trimmed.strip_suffix("__pc"))
+        .unwrap_or(trimmed);
+    let segments = without_suffix.split("__").collect::<Vec<_>>();
+    if segments.is_empty() {
+        return None;
+    }
+    let developer_name = segments.last().copied().unwrap_or_default().trim().to_string();
+    if developer_name.is_empty() {
+        return None;
+    }
+    Some(developer_name)
+}
+
+/// SOQL 字符串字面量转义：单引号替换为 \\'
+fn escape_soql_literal(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('\'', "\\'")
 }
 
 /// 构造 Salesforce REST API 绝对路径。
