@@ -82,7 +82,7 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText, objects }
   // SOQL 执行器的多标签状态。
   const [tabs, setTabs] = useState<SoqlExecutorTab[]>(() => [createSoqlExecutorTab(1)]);
   // 当前激活标签 ID。
-  const [activeTabId, setActiveTabId] = useState<string>(tabs[0].id);
+  const [activeTabId, setActiveTabId] = useState<string>(() => tabs[0]?.id || "");
   // 底部展示模式：结果 / 日志。
   const [bottomView, setBottomView] = useState<BottomView>("result");
   // 底部结果日志区高度：支持鼠标拖拽调整。
@@ -91,6 +91,8 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText, objects }
   const [draggingBottomResize, setDraggingBottomResize] = useState(false);
   const dragStartYRef = useRef(0);
   const dragStartHeightRef = useRef(260);
+  // Tab 右键菜单状态：记录菜单位置与目标 Tab。
+  const [tabContextMenu, setTabContextMenu] = useState<{ x: number; y: number; tabId: string } | null>(null);
   // 编辑器与底部面板的分栏容器：用于按容器高度约束拖拽范围。
   const splitContainerRef = useRef<HTMLDivElement | null>(null);
   // 当前激活编辑器的最新选中文本（同步引用）：避免点击执行时读取到异步状态旧值。
@@ -134,6 +136,28 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText, objects }
       window.clearTimeout(timer); // 切换 Tab 或 notice 变化时清理旧定时器。
     };
   }, [activeTab?.id, activeTab?.notice]);
+
+  useEffect(() => {
+    if (!tabContextMenu) return;
+
+    const closeMenu = () => {
+      setTabContextMenu(null); // 关闭菜单，避免残留浮层。
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      closeMenu(); // ESC 快捷关闭菜单。
+    };
+
+    window.addEventListener("click", closeMenu);
+    window.addEventListener("scroll", closeMenu, true);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("click", closeMenu);
+      window.removeEventListener("scroll", closeMenu, true);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [tabContextMenu]);
 
   useEffect(() => {
     // 监听后端流式事件：按 requestId 路由到对应 Tab 的 AI 回复气泡。
@@ -290,21 +314,49 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText, objects }
     setActiveTabId(nextTab.id);
   }
 
-  // 关闭指定标签，并收敛激活项到可用标签。
-  function closeTab(tabId: string) {
+  // 批量关闭 Tab：统一处理激活项收敛，保持菜单动作行为一致。
+  function closeTabsByIds(tabIds: string[]) {
+    if (tabIds.length === 0) return;
+    const closeSet = new Set(tabIds);
     setTabs((current) => {
-      const nextTabs = current.filter((item) => item.id !== tabId);
+      const nextTabs = current.filter((item) => !closeSet.has(item.id));
       if (nextTabs.length === 0) {
         const fallback = createSoqlExecutorTab(1);
-        setActiveTabId(fallback.id);
+        setActiveTabId(fallback.id); // 关闭到最后一个时，自动创建并激活一个全新 Tab。
         return [fallback];
       }
-
-      if (activeTabId === tabId) {
-        setActiveTabId(nextTabs[0].id);
-      }
+      setActiveTabId((currentActiveId) => (closeSet.has(currentActiveId) ? nextTabs[0].id : currentActiveId)); // 当前激活项被关闭时切到第一个剩余 Tab。
       return nextTabs;
     });
+  }
+
+  // 关闭指定标签，并收敛激活项到可用标签。
+  function closeTab(tabId: string) {
+    closeTabsByIds([tabId]); // 单个关闭复用批量逻辑，避免分支行为不一致。
+  }
+
+  // 右键动作：关闭目标 Tab 左侧全部。
+  function closeLeftTabs(tabId: string) {
+    const index = tabs.findIndex((tab) => tab.id === tabId);
+    if (index <= 0) return;
+    closeTabsByIds(tabs.slice(0, index).map((tab) => tab.id));
+  }
+
+  // 右键动作：关闭目标 Tab 右侧全部。
+  function closeRightTabs(tabId: string) {
+    const index = tabs.findIndex((tab) => tab.id === tabId);
+    if (index < 0 || index >= tabs.length - 1) return;
+    closeTabsByIds(tabs.slice(index + 1).map((tab) => tab.id));
+  }
+
+  // 右键动作：关闭除目标 Tab 外的其它 Tab。
+  function closeOtherTabs(tabId: string) {
+    closeTabsByIds(tabs.filter((tab) => tab.id !== tabId).map((tab) => tab.id));
+  }
+
+  // 右键动作：关闭全部 Tab。
+  function closeAllTabs() {
+    closeTabsByIds(tabs.map((tab) => tab.id));
   }
 
   // 更新当前激活标签（复用函数式更新，避免并发状态覆盖）。
@@ -504,8 +556,20 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText, objects }
         <div className="flex min-w-0 flex-1 overflow-x-auto">
           {tabs.map((tab) => {
             const active = tab.id === activeTabId;
+            const tabIndex = tabs.findIndex((item) => item.id === tab.id);
+            const hasLeftTabs = tabIndex > 0;
+            const hasRightTabs = tabIndex >= 0 && tabIndex < tabs.length - 1;
+            const hasOtherTabs = tabs.length > 1;
             return (
-              <div key={tab.id} className={`flex items-center border-r border-base-300 ${active ? "bg-base-100" : ""}`}>
+              <div
+                key={tab.id}
+                className={`flex items-center border-r border-base-300 ${active ? "bg-base-100" : ""}`}
+                onContextMenu={(event) => {
+                  event.preventDefault(); // 阻止浏览器默认右键菜单。
+                  setActiveTabId(tab.id); // 右键时先切换到目标 Tab，避免操作目标不一致。
+                  setTabContextMenu({ x: event.clientX, y: event.clientY, tabId: tab.id }); // 打开自定义菜单。
+                }}
+              >
                 <button
                   className={`min-w-0 px-3 py-2 text-[12px] ${active ? "text-primary" : "text-neutral/70"}`}
                   onClick={() => setActiveTabId(tab.id)}
@@ -515,6 +579,64 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText, objects }
                 <button className="btn btn-circle btn-ghost btn-xs mr-1" onClick={() => closeTab(tab.id)} aria-label={`关闭 ${tab.name}`}>
                   <X size={13} />
                 </button>
+                {/* Tab 右键菜单：提供常见批量关闭操作。 */}
+                {tabContextMenu?.tabId === tab.id && (
+                  <div
+                    className="fixed z-[80] min-w-[132px] rounded border border-base-300 bg-base-100 p-1 shadow-xl"
+                    style={{ left: tabContextMenu.x, top: tabContextMenu.y }}
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    <button
+                      className="btn btn-ghost btn-xs w-full justify-start"
+                      onClick={() => {
+                        closeTab(tab.id); // 关闭当前 Tab。
+                        setTabContextMenu(null); // 执行后关闭菜单。
+                      }}
+                    >
+                      关闭当前
+                    </button>
+                    <button
+                      className="btn btn-ghost btn-xs w-full justify-start"
+                      disabled={!hasLeftTabs}
+                      onClick={() => {
+                        closeLeftTabs(tab.id); // 关闭目标 Tab 左侧所有 Tab。
+                        setTabContextMenu(null); // 执行后关闭菜单。
+                      }}
+                    >
+                      关闭左侧
+                    </button>
+                    <button
+                      className="btn btn-ghost btn-xs w-full justify-start"
+                      disabled={!hasRightTabs}
+                      onClick={() => {
+                        closeRightTabs(tab.id); // 关闭目标 Tab 右侧所有 Tab。
+                        setTabContextMenu(null); // 执行后关闭菜单。
+                      }}
+                    >
+                      关闭右侧
+                    </button>
+                    <button
+                      className="btn btn-ghost btn-xs w-full justify-start"
+                      disabled={!hasOtherTabs}
+                      onClick={() => {
+                        closeOtherTabs(tab.id); // 仅保留目标 Tab，关闭其它 Tab。
+                        setTabContextMenu(null); // 执行后关闭菜单。
+                      }}
+                    >
+                      关闭其他
+                    </button>
+                    <button
+                      className="btn btn-ghost btn-xs w-full justify-start"
+                      disabled={tabs.length === 0}
+                      onClick={() => {
+                        closeAllTabs(); // 关闭全部 Tab。
+                        setTabContextMenu(null); // 执行后关闭菜单。
+                      }}
+                    >
+                      全部关闭
+                    </button>
+                  </div>
+                )}
               </div>
             );
           })}
