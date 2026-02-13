@@ -30,11 +30,20 @@ export type ObjectField = {
   metadata: Record<string, unknown>;
 };
 
+// 子关系元数据：用于子查询 relationshipName 推导。
+export type ObjectChildRelationship = {
+  childSobject: string;
+  field: string;
+  relationshipName: string;
+  deprecatedAndHidden: boolean;
+};
+
 // 对象描述信息（字段列表等）。
 export type ObjectDescribe = {
   name: string;
   label: string;
   fields: ObjectField[];
+  childRelationships: ObjectChildRelationship[];
 };
 
 // SOQL 查询结果。

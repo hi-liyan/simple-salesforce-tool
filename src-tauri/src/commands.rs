@@ -1,4 +1,4 @@
-﻿use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use serde::Serialize;
@@ -118,6 +118,20 @@ fn is_unauthorized_error(error: &AppError) -> bool {
                 || message.contains("status code 401")
                 || message.contains("401 Unauthorized")
     )
+}
+
+/// 判断流式输出是否出现可重试的传输层解码错误。
+fn is_retryable_stream_decode_error(error: &AppError) -> bool {
+    match error {
+        AppError::Http(message) => {
+            let normalized = message.to_lowercase();
+            normalized.contains("读取 openai 流式响应失败")
+                || normalized.contains("error decoding response body")
+                || normalized.contains("connection reset")
+                || normalized.contains("incomplete message")
+        }
+        _ => false,
+    }
 }
 
 /// 仅针对 CLI 数据源：发生 401 后通过 CLI 刷新 token，并回写本地数据源。
@@ -835,9 +849,27 @@ pub async fn generate_soql_from_conversation(
         payload.context_object_hint.as_deref(),
     );
 
-    let mut object_fields_map: HashMap<String, Vec<String>> = HashMap::new();
-    for object_name in candidate_objects.iter().take(6) {
-        let describe = match state.sf_client.describe_object(&source, object_name).await {
+    let object_name_map = all_objects
+        .iter()
+        .map(|item| (item.name.to_lowercase(), item.name.clone()))
+        .collect::<HashMap<_, _>>();
+    let mut object_metadata_map: HashMap<String, LlmObjectMetadataSummary> = HashMap::new();
+    let mut described_set: HashSet<String> = HashSet::new();
+    let mut describe_queue = candidate_objects
+        .iter()
+        .take(6)
+        .cloned()
+        .collect::<Vec<_>>();
+
+    // 按候选对象逐步 describe，并把父引用对象加入队列，补齐子查询推导所需关系元数据。
+    while let Some(next_object_name) = describe_queue.pop() {
+        let normalized_name = next_object_name.to_lowercase();
+        if described_set.contains(&normalized_name) {
+            continue;
+        }
+        described_set.insert(normalized_name);
+
+        let describe = match state.sf_client.describe_object(&source, &next_object_name).await {
             Ok(item) => item,
             Err(error) if is_unauthorized_error(&error) && payload.source_id.starts_with("cli-") => {
                 let refreshed_source = refresh_cli_source_token(
@@ -845,23 +877,45 @@ pub async fn generate_soql_from_conversation(
                     &state,
                     &payload.source_id,
                     "generate_soql_from_conversation",
-                    Some(object_name),
+                    Some(&next_object_name),
                 )
                 .await
                 .map_err(AppError::to_string_error)?;
                 state
                     .sf_client
-                    .describe_object(&refreshed_source, object_name)
+                    .describe_object(&refreshed_source, &next_object_name)
                     .await
                     .map_err(AppError::to_string_error)?
             }
             Err(_) => continue, // 个别对象 describe 失败时忽略，不阻塞整体生成流程。
         };
 
-        object_fields_map.insert(
-            object_name.clone(),
-            describe.fields.into_iter().map(|field| field.name).collect(),
-        );
+        let summary = build_object_metadata_summary(&describe);
+        for reference in summary.reference_fields.iter() {
+            for reference_to in reference.reference_to.iter() {
+                let lookup_key = reference_to.to_lowercase();
+                if let Some(canonical_name) = object_name_map.get(&lookup_key) {
+                    let canonical_lower = canonical_name.to_lowercase();
+                    if described_set.contains(&canonical_lower) {
+                        continue;
+                    }
+                    if object_metadata_map.len() + describe_queue.len() >= 12 {
+                        continue;
+                    }
+                    if !describe_queue
+                        .iter()
+                        .any(|item| item.eq_ignore_ascii_case(canonical_name))
+                    {
+                        describe_queue.push(canonical_name.clone());
+                    }
+                }
+            }
+        }
+
+        object_metadata_map.insert(summary.object_name.clone(), summary);
+        if object_metadata_map.len() >= 12 {
+            break;
+        }
     }
 
     let conversation_id = payload
@@ -884,7 +938,7 @@ pub async fn generate_soql_from_conversation(
     let prompt_messages = build_llm_messages(
         &history,
         &all_objects,
-        &object_fields_map,
+        &object_metadata_map,
         payload.context_object_hint.as_deref(),
         generate_mode,
     );
@@ -1940,6 +1994,40 @@ pub async fn delete_record(
     }
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct LlmReferenceFieldSummary {
+    /// 查找/主从字段 API Name。
+    field_name: String,
+    /// 父对象候选 API Name 列表（referenceTo）。
+    reference_to: Vec<String>,
+    /// 父关系名（用于父字段访问，如 Parent__r.Name）。
+    relationship_name: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct LlmChildRelationshipSummary {
+    /// 子对象 API Name。
+    child_object: String,
+    /// 子对象上的父引用字段 API Name。
+    field_name: String,
+    /// 子查询 relationshipName（用于 SELECT (SELECT ... FROM relationshipName)）。
+    relationship_name: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct LlmObjectMetadataSummary {
+    /// 对象 API Name。
+    object_name: String,
+    /// 对象标签。
+    object_label: String,
+    /// 字段 API Name 列表。
+    field_names: Vec<String>,
+    /// 引用关系字段摘要（用于自动推导父对象）。
+    reference_fields: Vec<LlmReferenceFieldSummary>,
+    /// 子关系摘要（用于自动推导子查询 relationshipName）。
+    child_relationships: Vec<LlmChildRelationshipSummary>,
+}
+
 #[derive(Debug, Clone)]
 struct ParsedSoqlPayload {
     /// 响应模式：answer/generate/clarify。
@@ -2053,7 +2141,20 @@ async fn call_llm_with_optional_stream(
         )
         .await;
         clear_llm_stream_cancel_token(state, request_id);
-        stream_result.map_err(AppError::to_string_error)
+        match stream_result {
+            Ok(value) => Ok(value),
+            // 流式链路偶发“响应体解码失败”时，自动降级为非流式一次，避免误报配置问题。
+            Err(error) if is_retryable_stream_decode_error(&error) => openai_chat_json(
+                &llm_settings.base_url,
+                &llm_settings.api_key,
+                &llm_settings.model,
+                messages,
+                llm_settings.timeout_ms,
+            )
+            .await
+            .map_err(AppError::to_string_error),
+            Err(error) => Err(AppError::to_string_error(error)),
+        }
     } else {
         openai_chat_json(
             &llm_settings.base_url,
@@ -2147,11 +2248,77 @@ fn parse_llm_soql_payload(raw: &serde_json::Value) -> ParsedSoqlPayload {
     }
 }
 
+/// 将 describe 结果压缩为 LLM 需要的关系摘要，避免暴露无关噪声字段。
+fn build_object_metadata_summary(describe: &ObjectDescribe) -> LlmObjectMetadataSummary {
+    let field_names = describe
+        .fields
+        .iter()
+        .map(|field| field.name.clone())
+        .collect::<Vec<_>>();
+
+    let reference_fields = describe
+        .fields
+        .iter()
+        .filter_map(|field| {
+            let references = field
+                .metadata
+                .get("referenceTo")
+                .and_then(|item| item.as_array())
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|item| item.as_str())
+                        .map(|item| item.trim().to_string())
+                        .filter(|item| !item.is_empty())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+
+            if references.is_empty() {
+                return None;
+            }
+
+            let relationship_name = field
+                .metadata
+                .get("relationshipName")
+                .and_then(|item| item.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+
+            Some(LlmReferenceFieldSummary {
+                field_name: field.name.clone(),
+                reference_to: references,
+                relationship_name,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let child_relationships = describe
+        .child_relationships
+        .iter()
+        .filter(|item| !item.relationship_name.trim().is_empty() && !item.deprecated_and_hidden)
+        .map(|item| LlmChildRelationshipSummary {
+            child_object: item.child_sobject.clone(),
+            field_name: item.field.clone(),
+            relationship_name: item.relationship_name.clone(),
+        })
+        .collect::<Vec<_>>();
+
+    LlmObjectMetadataSummary {
+        object_name: describe.name.clone(),
+        object_label: describe.label.clone(),
+        field_names,
+        reference_fields,
+        child_relationships,
+    }
+}
+
 /// 构造模型输入消息：包含系统约束、元数据摘要和多轮历史。
 fn build_llm_messages(
     history: &[LlmChatMessage],
     all_objects: &[SalesforceObject],
-    object_fields_map: &HashMap<String, Vec<String>>,
+    object_metadata_map: &HashMap<String, LlmObjectMetadataSummary>,
     context_object_hint: Option<&str>,
     generate_mode: bool,
 ) -> Vec<LlmChatMessage> {
@@ -2173,12 +2340,14 @@ fn build_llm_messages(
    - clarify: 需求模糊，提出问题直到明确
 3) 若用户明确要求“生成SOQL”，优先返回 mode=generate 且给出 soql。
 4) 仅当“对象无法确定”或“业务冲突无法消解”时返回 mode=clarify。
-3) 若用户说“全部数据/全量数据”，按 SOQL 特性处理：使用对象全部可用字段（不允许 SELECT *），默认附加 LIMIT 200 与可读排序（如 CreatedDate DESC）。
-4) 除非用户明确要求，不要因为 IsDeleted/LIMIT/排序等默认边界反复追问；可在 reason 里说明默认假设。
-5) 仅允许输出 SELECT 语句，可包含子查询、聚合、分组、排序、函数。
-6) 禁止输出 INSERT/UPDATE/DELETE/UPSERT/MERGE。
-7) 只能使用给定元数据中的对象与字段，不能臆造。
-8) 仅输出 JSON 对象，不要输出额外文本。
+5) 若用户要求“父对象 + 子对象”或给了子对象 API 名，先基于 metadata 中的 child_relationships / reference_fields 自动推导父对象 API 与子关系名，不要直接反问。
+6) 如果 metadata 仍不足，才提问；提问必须使用中文。
+7) 若用户说“全部数据/全量数据”，按 SOQL 特性处理：使用对象全部可用字段（不允许 SELECT *），默认附加 LIMIT 200 与可读排序（如 CreatedDate DESC）。
+8) 除非用户明确要求，不要因为 IsDeleted/LIMIT/排序等默认边界反复追问；可在 reason 里说明默认假设。
+9) 仅允许输出 SELECT 语句，可包含子查询、聚合、分组、排序、函数。
+10) 禁止输出 INSERT/UPDATE/DELETE/UPSERT/MERGE。
+11) 只能使用给定元数据中的对象与字段，不能臆造。
+12) 仅输出 JSON 对象，不要输出额外文本。
 JSON 结构：
 {
   \"mode\": \"answer|generate|clarify\",
@@ -2194,7 +2363,7 @@ JSON 结构：
         .trim()
     );
 
-    let metadata_snapshot = build_layered_metadata_snapshot(all_objects, object_fields_map, context_object_hint);
+    let metadata_snapshot = build_layered_metadata_snapshot(all_objects, object_metadata_map, context_object_hint);
 
     let mut messages = vec![LlmChatMessage {
         role: LlmChatRole::System,
@@ -2211,7 +2380,7 @@ JSON 结构：
 /// 构建分层元数据快照：对象摘要 + 重点对象字段 + 按需补充说明。
 fn build_layered_metadata_snapshot(
     all_objects: &[SalesforceObject],
-    object_fields_map: &HashMap<String, Vec<String>>,
+    object_metadata_map: &HashMap<String, LlmObjectMetadataSummary>,
     context_object_hint: Option<&str>,
 ) -> serde_json::Value {
     let object_summaries = all_objects
@@ -2226,14 +2395,41 @@ fn build_layered_metadata_snapshot(
         })
         .collect::<Vec<_>>();
 
-    let focus_object_details = object_fields_map
-        .iter()
-        .map(|(object_name, fields)| {
-            let sample_fields = fields.iter().take(60).cloned().collect::<Vec<_>>();
+    let focus_object_details = object_metadata_map
+        .values()
+        .map(|item| {
+            let sample_fields = item.field_names.iter().take(60).cloned().collect::<Vec<_>>();
+            let reference_fields = item
+                .reference_fields
+                .iter()
+                .take(20)
+                .map(|reference| {
+                    serde_json::json!({
+                        "field": reference.field_name,
+                        "referenceTo": reference.reference_to,
+                        "relationshipName": reference.relationship_name
+                    })
+                })
+                .collect::<Vec<_>>();
+            let child_relationships = item
+                .child_relationships
+                .iter()
+                .take(20)
+                .map(|child| {
+                    serde_json::json!({
+                        "childObject": child.child_object,
+                        "field": child.field_name,
+                        "relationshipName": child.relationship_name
+                    })
+                })
+                .collect::<Vec<_>>();
             serde_json::json!({
-                "object": object_name,
-                "fieldCount": fields.len(),
-                "sampleFields": sample_fields
+                "object": item.object_name,
+                "label": item.object_label,
+                "fieldCount": item.field_names.len(),
+                "sampleFields": sample_fields,
+                "referenceFields": reference_fields,
+                "childRelationships": child_relationships
             })
         })
         .collect::<Vec<_>>();

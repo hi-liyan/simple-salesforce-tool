@@ -168,7 +168,7 @@ where
 
     // 构建独立 HTTP 客户端并附加超时，避免模型调用阻塞主流程。
     let client = Client::builder()
-        .timeout(Duration::from_millis(timeout_ms.max(1000)))
+        .timeout(Duration::from_millis(timeout_ms.max(60_000)))
         .build()
         .map_err(|error| AppError::Http(format!("创建 LLM HTTP 客户端失败: {error}")))?;
 
@@ -230,6 +230,20 @@ where
                 if !delta.is_empty() {
                     aggregated.push_str(&delta);
                     on_chunk(&delta)?; // 每个片段推送给上层（前端做流式展示）。
+                }
+            }
+        }
+    }
+
+    // 兼容“最后一个 data 行不带换行”的网关实现，避免丢失尾包导致 JSON 不完整。
+    let trailing = buffer.trim();
+    if trailing.starts_with("data:") {
+        let payload = trailing.trim_start_matches("data:").trim();
+        if payload != "[DONE]" {
+            if let Some(delta) = extract_stream_delta_content(payload) {
+                if !delta.is_empty() {
+                    aggregated.push_str(&delta);
+                    on_chunk(&delta)?;
                 }
             }
         }

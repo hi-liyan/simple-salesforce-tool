@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use crate::error::AppError;
 use crate::models::{
-    ObjectDescribe, ObjectField, QueryResult, RecordUpdatePayload, SalesforceObject, SalesforceSource,
+    ObjectChildRelationship, ObjectDescribe, ObjectField, QueryResult, RecordUpdatePayload, SalesforceObject, SalesforceSource,
 };
 
 /// Salesforce API 客户端，负责所有外部 HTTP 通讯。
@@ -69,6 +69,20 @@ impl SalesforceClient {
             name: String,
             label: String,
             fields: Vec<Value>,
+            #[serde(default, rename = "childRelationships")]
+            child_relationships: Vec<DescribeChildRelationship>,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct DescribeChildRelationship {
+            #[serde(default)]
+            child_sobject: String,
+            #[serde(default)]
+            field: String,
+            relationship_name: Option<String>,
+            #[serde(default)]
+            deprecated_and_hidden: bool,
         }
 
         let url = build_url(source, &format!("sobjects/{object_name}/describe"));
@@ -126,6 +140,16 @@ impl SalesforceClient {
                     })
                 })
                 .collect::<Result<Vec<_>, AppError>>()?,
+            child_relationships: body
+                .child_relationships
+                .into_iter()
+                .map(|item| ObjectChildRelationship {
+                    child_sobject: item.child_sobject,
+                    field: item.field,
+                    relationship_name: item.relationship_name.unwrap_or_default(),
+                    deprecated_and_hidden: item.deprecated_and_hidden,
+                })
+                .collect(),
         })
     }
 
