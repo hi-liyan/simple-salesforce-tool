@@ -209,6 +209,14 @@ export function RightWorkspace({
     setSoqlObjectFieldsMap({}); // 切换数据源后清空缓存，避免跨源字段污染。
   }, [selectedSourceId]);
 
+  // 抽屉 SOQL 自动格式化：把“单行长 SQL”转换为多行，提升可读性。
+  useEffect(() => {
+    if (!activeTab) return;
+    const formattedSoql = formatSingleLineSoqlForDrawer(activeTab.soqlDraft);
+    if (formattedSoql === activeTab.soqlDraft) return;
+    onSoqlChange(formattedSoql); // 仅在格式化结果变化时写回，避免循环更新。
+  }, [activeTab, onSoqlChange]);
+
   useEffect(() => {
     if (!selectedSourceId || !activeTab) return;
     const fromObjectNames = extractFromObjectNames(activeTab.soqlDraft);
@@ -667,4 +675,38 @@ function extractFromObjectNames(soql: string): string[] {
     fromObjectNames.push(match[1]); // 逐个记录 FROM 对象，供后续去重与懒加载。
   }
   return Array.from(new Set(fromObjectNames));
+}
+
+// 将抽屉中的单行 SOQL 规整为多行：仅处理常见 SELECT/FROM/WHERE/ORDER BY/LIMIT 模式。
+function formatSingleLineSoqlForDrawer(soql: string): string {
+  if (!soql.trim()) return soql;
+  if (soql.includes("\n")) return soql; // 已是多行时不重复格式化。
+
+  const normalized = soql.replace(/\s+/g, " ").trim();
+  // 复杂语句（聚合/分组/偏移等）不自动改写，避免误改用户手写结构。
+  if (/\b(group\s+by|having|offset|for\s+view|for\s+reference|all\s+rows)\b/i.test(normalized)) {
+    return soql;
+  }
+
+  const fromMatch = normalized.match(/\bfrom\s+([A-Za-z_][\w.]*)\b/i);
+  if (!fromMatch) return soql;
+  const selectMatch = normalized.match(/^select\s+(.+?)\s+from\s+[A-Za-z_][\w.]*\b/i);
+  if (!selectMatch) return soql;
+
+  const fields = selectMatch[1]
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+  if (fields.length === 0) return soql;
+
+  const whereMatch = normalized.match(/\bwhere\s+(.+?)(?=\border\s+by\b|\blimit\b|$)/i);
+  const orderMatch = normalized.match(/\border\s+by\s+(.+?)(?=\blimit\b|$)/i);
+  const limitMatch = normalized.match(/\blimit\s+(\d+)\b/i);
+
+  const selectSegment = fields.map((field, index) => `  ${field}${index < fields.length - 1 ? "," : ""}`).join("\n");
+  const whereSegment = whereMatch?.[1]?.trim() ? `\nWHERE ${whereMatch[1].trim()}` : "";
+  const orderBySegment = orderMatch?.[1]?.trim() ? `\nORDER BY ${orderMatch[1].trim()}` : "";
+  const limitSegment = limitMatch?.[1] ? `\nLIMIT ${limitMatch[1]}` : "";
+
+  return `SELECT\n${selectSegment}\nFROM ${fromMatch[1]}${whereSegment}${orderBySegment}${limitSegment}`;
 }
