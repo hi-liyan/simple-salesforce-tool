@@ -14,8 +14,6 @@ import {
   RecordSavePayload,
   SalesforceObject,
   SalesforceSource,
-  SoqlConversationRequest,
-  SoqlConversationResponse,
   SourceUpsertPayload,
   SystemLogPage
 } from "../types";
@@ -42,8 +40,6 @@ export const api = {
     invokeApi<AiChatTurnV2Response>("ai_chat_turn_v2", { payload }),
   aiStopTurn: (requestId: string) => invokeApi<void>("ai_stop_turn", { requestId }),
   aiGetCapabilities: () => invokeApi<AiCapabilities>("ai_get_capabilities"),
-  generateSoqlFromConversation: (payload: SoqlConversationRequest) =>
-    invokeApi<SoqlConversationResponse>("generate_soql_from_conversation", { payload }),
   stopLlmStreamGeneration: (requestId: string) => invokeApi<void>("stop_llm_stream_generation", { requestId }),
   syncCliSources: () => invokeApi<SalesforceSource[]>("sync_cli_sources"),
   loginCliOrg: (instanceUrl: string) => invokeApi<string>("login_cli_org", { instanceUrl }),
