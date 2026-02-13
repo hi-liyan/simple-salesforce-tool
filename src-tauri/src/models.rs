@@ -1,4 +1,4 @@
-﻿use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -309,4 +309,82 @@ pub struct SoqlConversationResponse {
     pub reason: String,
     /// 对用户问题的直接回答（可空）。
     pub answer: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiUiContext {
+    /// 当前激活 Tab 的 SOQL 草稿（可空）。
+    pub current_tab_soql: Option<String>,
+    /// 当前激活 Tab 的对象提示（可空）。
+    pub context_object_hint: Option<String>,
+    /// 当前激活 Tab 的字段提示列表（可空）。
+    pub selected_fields: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiChatTurnV2Request {
+    /// Salesforce 数据源 ID。
+    pub source_id: String,
+    /// 多轮对话 ID（为空时由后端创建）。
+    pub conversation_id: Option<String>,
+    /// 用户本轮输入。
+    pub message: String,
+    /// 前端流式请求 ID（用于路由增量事件）。
+    pub stream_request_id: Option<String>,
+    /// 前端上下文（可选）。
+    pub ui_context: Option<AiUiContext>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiActionItem {
+    /// 动作类型：APPLY_CURRENT_TAB / APPLY_NEW_TAB / ASK_MORE。
+    pub action_type: String,
+    /// 动作展示文案。
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiDiagnostics {
+    /// 本轮使用的工具名称列表。
+    pub tools_used: Vec<String>,
+    /// 风险等级：low / medium / high。
+    pub risk_level: String,
+    /// 风险与提醒文案。
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiChatTurnV2Response {
+    /// 多轮对话 ID。
+    pub conversation_id: String,
+    /// 当前状态：answer / clarify / ready。
+    pub state: String,
+    /// 助手消息文本。
+    pub assistant_message: String,
+    /// 追问问题列表（clarify 时返回）。
+    pub questions: Vec<String>,
+    /// 提议的 SOQL（ready 时返回）。
+    pub proposed_soql: Option<String>,
+    /// 助手动作列表。
+    pub actions: Vec<AiActionItem>,
+    /// 诊断信息。
+    pub diagnostics: AiDiagnostics,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiCapabilities {
+    /// 后端 AI API 版本号。
+    pub version: String,
+    /// 当前 provider。
+    pub provider: String,
+    /// 当前模型名称。
+    pub model: String,
+    /// 可用工具列表。
+    pub tools: Vec<String>,
 }

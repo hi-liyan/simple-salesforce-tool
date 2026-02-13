@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app_state;
+mod ai;
 mod commands;
 mod db;
 mod error;
@@ -70,6 +71,9 @@ fn main() {
             commands::delete_record,
             commands::get_llm_settings,
             commands::save_llm_settings,
+            commands::ai_get_capabilities,
+            commands::ai_chat_turn_v2,
+            commands::ai_stop_turn,
             commands::generate_soql_from_conversation,
             commands::stop_llm_stream_generation
         ])
