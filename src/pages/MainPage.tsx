@@ -1197,10 +1197,12 @@ function buildQuerySoql(
   limit: number
 ): string {
   const fields = selectedFields.length > 0 ? selectedFields : ["Id"];
-  const whereSegment = whereClause.trim() ? ` WHERE ${whereClause.trim()}` : "";
+  // SELECT 字段逐行展开：生成“真实换行”的多行 SOQL，避免编辑器内只有单行内容。
+  const selectFieldsSegment = fields.map((field, index) => `  ${field}${index < fields.length - 1 ? "," : ""}`).join("\n");
+  const whereSegment = whereClause.trim() ? `\nWHERE ${whereClause.trim()}` : "";
   // 当排序字段为空时，明确不拼接 ORDER BY，避免生成无效 SOQL。
-  const orderBySegment = sortField.trim() ? ` ORDER BY ${sortField} ${sortDirection}` : "";
-  return `SELECT ${fields.join(", ")} FROM ${objectName}${whereSegment}${orderBySegment} LIMIT ${limit}`;
+  const orderBySegment = sortField.trim() ? `\nORDER BY ${sortField} ${sortDirection}` : "";
+  return `SELECT\n${selectFieldsSegment}\nFROM ${objectName}${whereSegment}${orderBySegment}\nLIMIT ${limit}`;
 }
 
 // 判断字段是否可排序：依据后端返回的字段元数据 `sortable`。
