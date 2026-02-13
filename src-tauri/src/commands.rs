@@ -3,7 +3,6 @@ use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 use tauri::Emitter;
 use tauri::Manager;
 use tauri::State;
@@ -12,12 +11,12 @@ use crate::ai::orchestrator::AiOrchestrator;
 use crate::app_state::AppState;
 use crate::db;
 use crate::error::AppError;
-use crate::llm::{openai_chat_completion_with_tools, LlmChatMessage, LlmChatRole, OpenAiToolCall};
+use crate::llm::{LlmChatMessage, LlmChatRole};
 use crate::models::{
     AiCapabilities, AiChatTurnV2Request, AiChatTurnV2Response, CliPathProbe, CliPathSettings,
-    CliPathStatus, LlmSettings, LlmSettingsView, ObjectDescribe, QueryResult, RecordMutationPayload,
-    RecordSavePayload, SalesforceObject, SalesforceSource, SaveLlmSettingsPayload,
-    SoqlConversationRequest, SoqlConversationResponse, SourceUpsertPayload, SystemLogPage,
+    CliPathStatus, LlmSettings, LlmSettingsView, ObjectDescribe, QueryResult,
+    RecordMutationPayload, RecordSavePayload, SalesforceObject, SalesforceSource,
+    SaveLlmSettingsPayload, SourceUpsertPayload, SystemLogPage,
 };
 use crate::sf_cli;
 
@@ -95,27 +94,11 @@ fn clear_cli_login_cancel_token(state: &State<'_, AppState>) {
     }
 }
 
-fn set_llm_stream_cancel_token(
-    state: &State<'_, AppState>,
-    request_id: &str,
-    token: Arc<AtomicBool>,
-) {
-    if let Ok(mut map) = state.llm_stream_cancels.lock() {
-        map.insert(request_id.to_string(), token);
-    }
-}
-
 fn cancel_llm_stream_by_request_id(state: &State<'_, AppState>, request_id: &str) {
     if let Ok(map) = state.llm_stream_cancels.lock() {
         if let Some(token) = map.get(request_id) {
             token.store(true, Ordering::Relaxed);
         }
-    }
-}
-
-fn clear_llm_stream_cancel_token(state: &State<'_, AppState>, request_id: &str) {
-    if let Ok(mut map) = state.llm_stream_cancels.lock() {
-        map.remove(request_id);
     }
 }
 fn is_unauthorized_error(error: &AppError) -> bool {
@@ -128,19 +111,6 @@ fn is_unauthorized_error(error: &AppError) -> bool {
     )
 }
 
-/// 推送 AI 进度文本到前端聊天气泡(仅当存在 stream requestId 时)。
-fn emit_ai_progress_chunk(app: &tauri::AppHandle, request_id: Option<&str>, message: &str) {
-    if let Some(current_request_id) = request_id {
-        let _ = app.emit_to(
-            "main",
-            "llm:soql-stream-chunk",
-            json!({
-                "requestId": current_request_id,
-                "chunk": message
-            }),
-        );
-    }
-}
 
 /// 仅针对 CLI 数据源:发生 401 后通过 CLI 刷新 token,并回写本地数据源。
 async fn refresh_cli_source_token(
@@ -3005,6 +2975,7 @@ fn build_llm_messages(
 11) 禁止输出 INSERT/UPDATE/DELETE/UPSERT/MERGE。
 12) 只能使用给定元数据中的对象与字段,不能臆造。
 13) 仅输出 JSON 对象,不要输出额外文本。
+14) 回答默认使用中文；仅当用户明确要求其他语言时，才可切换对应语言作答。
 JSON 结构:
 {
   \"mode\": \"answer|generate|clarify\",

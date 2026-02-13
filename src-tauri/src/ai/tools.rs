@@ -378,4 +378,3 @@ impl Tool for GetRelationshipGraphTool {
         }))
     }
 }
-

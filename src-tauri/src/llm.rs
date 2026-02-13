@@ -1,6 +1,5 @@
 use std::time::Duration;
 
-use futures_util::StreamExt;
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -163,80 +162,6 @@ fn classify_reqwest_error(stage: &str, error: reqwest::Error) -> AppError {
     AppError::Http(format!("{stage}失败：{error}"))
 }
 
-/// 调用 OpenAI Chat Completions，并要求返回 JSON 结构。
-pub async fn openai_chat_json(
-    base_url: &str,
-    api_key: &str,
-    model: &str,
-    messages: &[LlmChatMessage],
-    timeout_ms: u64,
-) -> Result<Value, AppError> {
-    let normalized_base = base_url.trim_end_matches('/');
-    if normalized_base.is_empty() {
-        return Err(AppError::Biz("LLM baseUrl 不能为空。".to_string()));
-    }
-    if api_key.trim().is_empty() {
-        return Err(AppError::Biz("LLM apiKey 未配置。".to_string()));
-    }
-    if model.trim().is_empty() {
-        return Err(AppError::Biz("LLM model 不能为空。".to_string()));
-    }
-
-    // 构建独立 HTTP 客户端并附加超时，避免模型调用阻塞主流程。
-    let client = build_llm_http_client(timeout_ms)?;
-
-    let payload_messages: Vec<Value> = messages
-        .iter()
-        .map(|item| {
-            let role = match item.role {
-                LlmChatRole::System => "system",
-                LlmChatRole::User => "user",
-                LlmChatRole::Assistant => "assistant",
-            };
-            json!({ "role": role, "content": item.content })
-        })
-        .collect();
-
-    let request_body = json!({
-        "model": model,
-        "messages": payload_messages,
-        "temperature": 0.1,
-        "response_format": { "type": "json_object" }
-    });
-
-    let endpoint = format!("{normalized_base}/chat/completions");
-    let response = client
-        .post(&endpoint)
-        .bearer_auth(api_key)
-        .header("Content-Type", "application/json")
-        .json(&request_body)
-        .send()
-        .await
-        .map_err(|error| classify_reqwest_error("调用 OpenAI", error))?;
-
-    if !response.status().is_success() {
-        return Err(build_openai_http_error(response, model).await);
-    }
-
-    let body: OpenAiChatResponse = response
-        .json()
-        .await
-        .map_err(|error| classify_reqwest_error("解析 OpenAI 响应", error))?;
-
-    let content = body
-        .choices
-        .first()
-        .and_then(|item| item.message.content.clone())
-        .unwrap_or_default();
-
-    // 某些模型会返回 markdown code fence，这里做一层清洗再解析 JSON。
-    let normalized = strip_markdown_json_fence(&content);
-    let parsed: Value = serde_json::from_str(&normalized)
-        .map_err(|error| AppError::Biz(format!("LLM 返回 JSON 解析失败: {error}")))?;
-
-    Ok(parsed)
-}
-
 /// 调用 OpenAI Chat Completions（工具模式）：返回 assistant 消息、工具调用和可选 JSON 内容。
 pub async fn openai_chat_completion_with_tools(
     base_url: &str,
@@ -360,118 +285,6 @@ pub async fn openai_chat_completion_with_tools(
     })
 }
 
-/// 调用 OpenAI Chat Completions（流式），并在每个增量文本片段到达时回调。
-pub async fn openai_chat_json_stream<F, C>(
-    base_url: &str,
-    api_key: &str,
-    model: &str,
-    messages: &[LlmChatMessage],
-    timeout_ms: u64,
-    mut on_chunk: F,
-    should_cancel: C,
-) -> Result<Value, AppError>
-where
-    F: FnMut(&str) -> Result<(), AppError>,
-    C: Fn() -> bool,
-{
-    let normalized_base = base_url.trim_end_matches('/');
-    if normalized_base.is_empty() {
-        return Err(AppError::Biz("LLM baseUrl 不能为空。".to_string()));
-    }
-    if api_key.trim().is_empty() {
-        return Err(AppError::Biz("LLM apiKey 未配置。".to_string()));
-    }
-    if model.trim().is_empty() {
-        return Err(AppError::Biz("LLM model 不能为空。".to_string()));
-    }
-
-    // 构建独立 HTTP 客户端并附加超时，避免模型调用阻塞主流程。
-    let client = build_llm_http_client(timeout_ms.max(60_000))?;
-
-    let payload_messages: Vec<Value> = messages
-        .iter()
-        .map(|item| {
-            let role = match item.role {
-                LlmChatRole::System => "system",
-                LlmChatRole::User => "user",
-                LlmChatRole::Assistant => "assistant",
-            };
-            json!({ "role": role, "content": item.content })
-        })
-        .collect();
-
-    let request_body = json!({
-        "model": model,
-        "messages": payload_messages,
-        "temperature": 0.1,
-        "stream": true
-    });
-
-    let endpoint = format!("{normalized_base}/chat/completions");
-    let response = client
-        .post(&endpoint)
-        .bearer_auth(api_key)
-        .header("Content-Type", "application/json")
-        .json(&request_body)
-        .send()
-        .await
-        .map_err(|error| classify_reqwest_error("调用 OpenAI", error))?;
-
-    if !response.status().is_success() {
-        return Err(build_openai_http_error(response, model).await);
-    }
-
-    let mut buffer = String::new();
-    let mut aggregated = String::new();
-    let mut stream = response.bytes_stream();
-    while let Some(chunk_result) = stream.next().await {
-        if should_cancel() {
-            return Err(AppError::Biz("用户已停止生成。".to_string()));
-        }
-        let chunk =
-            chunk_result.map_err(|error| classify_reqwest_error("读取 OpenAI 流式响应", error))?;
-        let text = String::from_utf8_lossy(&chunk).to_string();
-        buffer.push_str(&text);
-
-        while let Some(line_end) = buffer.find('\n') {
-            let line = buffer[..line_end].trim().to_string();
-            buffer = buffer[line_end + 1..].to_string();
-            if line.is_empty() || !line.starts_with("data:") {
-                continue;
-            }
-            let payload = line.trim_start_matches("data:").trim();
-            if payload == "[DONE]" {
-                break;
-            }
-            if let Some(delta) = extract_stream_delta_content(payload) {
-                if !delta.is_empty() {
-                    aggregated.push_str(&delta);
-                    on_chunk(&delta)?; // 每个片段推送给上层（前端做流式展示）。
-                }
-            }
-        }
-    }
-
-    // 兼容“最后一个 data 行不带换行”的网关实现，避免丢失尾包导致 JSON 不完整。
-    let trailing = buffer.trim();
-    if trailing.starts_with("data:") {
-        let payload = trailing.trim_start_matches("data:").trim();
-        if payload != "[DONE]" {
-            if let Some(delta) = extract_stream_delta_content(payload) {
-                if !delta.is_empty() {
-                    aggregated.push_str(&delta);
-                    on_chunk(&delta)?;
-                }
-            }
-        }
-    }
-
-    let normalized = strip_markdown_json_fence(&aggregated);
-    let parsed: Value = serde_json::from_str(&normalized)
-        .map_err(|error| AppError::Biz(format!("LLM 返回 JSON 解析失败: {error}")))?;
-    Ok(parsed)
-}
-
 /// 去掉可能包裹在 ```json ... ``` 的 markdown 外壳。
 fn strip_markdown_json_fence(text: &str) -> String {
     let trimmed = text.trim();
@@ -485,19 +298,6 @@ fn strip_markdown_json_fence(text: &str) -> String {
         .trim();
     let without_suffix = without_prefix.trim_end_matches("```").trim();
     without_suffix.to_string()
-}
-
-/// 从流式 chunk JSON 中提取 delta.content 文本。
-fn extract_stream_delta_content(raw: &str) -> Option<String> {
-    let value = serde_json::from_str::<Value>(raw).ok()?;
-    value
-        .get("choices")
-        .and_then(|item| item.as_array())
-        .and_then(|items| items.first())
-        .and_then(|item| item.get("delta"))
-        .and_then(|item| item.get("content"))
-        .and_then(|item| item.as_str())
-        .map(|item| item.to_string())
 }
 
 /// 尝试从 OpenAI 错误响应中提取可读错误信息，失败时回退原文。
