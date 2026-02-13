@@ -25,8 +25,9 @@ fn main() {
                 .map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error))?;
             let db_path = data_dir.join("app.db");
             let connection = Connection::open(db_path)?;
-            db::init_schema(&connection)
-                .map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error.to_string()))?;
+            db::init_schema(&connection).map_err(|error| {
+                std::io::Error::new(std::io::ErrorKind::Other, error.to_string())
+            })?;
 
             app.manage(AppState {
                 db: Mutex::new(connection),
@@ -69,8 +70,7 @@ fn main() {
             commands::delete_record,
             commands::get_llm_settings,
             commands::save_llm_settings,
-            commands::generate_soql_from_conversation
-            ,
+            commands::generate_soql_from_conversation,
             commands::stop_llm_stream_generation
         ])
         .run(tauri::generate_context!())
