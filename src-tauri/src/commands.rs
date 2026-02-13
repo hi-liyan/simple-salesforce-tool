@@ -1561,6 +1561,189 @@ pub async fn open_record_page(
 }
 
 /// 读取对象字段元数据（Describe）。
+/// 读取对象 describe，并在 CLI 数据源 401 时自动刷新 token 后重试。
+async fn load_object_describe_with_auto_refresh(
+    app: &tauri::AppHandle,
+    state: &State<'_, AppState>,
+    source_id: &str,
+    source: &mut SalesforceSource,
+    object_name: &str,
+    action: &str,
+) -> Result<ObjectDescribe, AppError> {
+    match state.sf_client.describe_object(source, object_name).await {
+        Ok(describe) => Ok(describe),
+        Err(error) if is_unauthorized_error(&error) && source_id.starts_with("cli-") => {
+            let refreshed_source = refresh_cli_source_token(
+                app,
+                state,
+                source_id,
+                action,
+                Some(object_name),
+            )
+            .await?;
+            // 刷新成功后覆盖当前 source，确保后续父对象 describe 复用最新 token。
+            *source = refreshed_source.clone();
+            state.sf_client.describe_object(&refreshed_source, object_name).await
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// 在后端补齐 reference 字段 childRelationshipName，前端仅负责展示。
+async fn hydrate_reference_field_child_relationship_names(
+    app: &tauri::AppHandle,
+    state: &State<'_, AppState>,
+    source_id: &str,
+    source: &mut SalesforceSource,
+    describe: &mut ObjectDescribe,
+) -> Result<(), AppError> {
+    let current_object_name = describe.name.trim().to_string();
+    let mut parent_describe_cache: HashMap<String, ObjectDescribe> = HashMap::new();
+    println!(
+        "[DEBUG][child-relationship] start object={} source={}",
+        current_object_name, source_id
+    );
+
+    for field in describe.fields.iter_mut() {
+        if !field.data_type.eq_ignore_ascii_case("reference") {
+            continue;
+        }
+        let current_field_name = field.name.trim().to_string();
+
+        // 使用当前字段 referenceTo 作为父对象候选。
+        let reference_to_object_names = field
+            .metadata
+            .get("referenceTo")
+            .and_then(|value| value.as_array())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str())
+                    .map(|item| item.trim().to_string())
+                    .filter(|item| !item.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        println!(
+            "[DEBUG][child-relationship] field={} referenceTo={:?}",
+            current_field_name, reference_to_object_names
+        );
+
+        let mut relationship_names: Vec<String> = Vec::new();
+        let mut seen_relationship_names: HashSet<String> = HashSet::new();
+        let mut matched_relation_details: Vec<String> = Vec::new();
+
+        for parent_object_name in &reference_to_object_names {
+            if !parent_describe_cache.contains_key(parent_object_name) {
+                match load_object_describe_with_auto_refresh(
+                    app,
+                    state,
+                    source_id,
+                    source,
+                    parent_object_name,
+                    "describe_object_parent",
+                )
+                .await
+                {
+                    Ok(parent_describe) => {
+                        println!(
+                            "[DEBUG][child-relationship] parent describe loaded object={} childRelationships={}",
+                            parent_object_name,
+                            parent_describe.child_relationships.len()
+                        );
+                        parent_describe_cache.insert(parent_object_name.clone(), parent_describe);
+                    }
+                    Err(error) => {
+                        eprintln!(
+                            "[DEBUG][child-relationship] parent describe failed current={}.{} parent={} error={}",
+                            current_object_name, current_field_name, parent_object_name, error
+                        );
+                        continue;
+                    }
+                }
+            }
+
+            if let Some(parent_describe) = parent_describe_cache.get(parent_object_name) {
+                for child in parent_describe.child_relationships.iter() {
+                    if child.deprecated_and_hidden {
+                        continue;
+                    }
+                    // 严格匹配：childSObject 必须等于当前对象名。
+                    if child.child_sobject.trim() != current_object_name {
+                        continue;
+                    }
+                    // 严格匹配：field 必须等于当前字段名。
+                    if child.field.trim() != current_field_name {
+                        continue;
+                    }
+                    let relationship_name = child.relationship_name.trim();
+                    if relationship_name.is_empty() {
+                        continue;
+                    }
+                    if seen_relationship_names.insert(relationship_name.to_string()) {
+                        relationship_names.push(relationship_name.to_string());
+                        matched_relation_details.push(format!(
+                            "{}.{} -> {}",
+                            child.child_sobject, child.field, relationship_name
+                        ));
+                    }
+                }
+            }
+        }
+
+        // 统一回写到字段元数据，前端直接展示该值。
+        field.metadata.insert(
+            "childRelationshipName".to_string(),
+            serde_json::Value::String(relationship_names.join(", ")),
+        );
+
+        // 未命中时输出样本，便于与 Postman 返回逐项对比。
+        if relationship_names.is_empty() {
+            for parent_object_name in &reference_to_object_names {
+                if let Some(parent_describe) = parent_describe_cache.get(parent_object_name) {
+                    let sample = parent_describe
+                        .child_relationships
+                        .iter()
+                        .take(8)
+                        .map(|item| {
+                            format!(
+                                "{{childSObject='{}', field='{}', deprecatedAndHidden={}, relationshipName='{}'}}",
+                                item.child_sobject,
+                                item.field,
+                                item.deprecated_and_hidden,
+                                item.relationship_name
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    println!(
+                        "[DEBUG][child-relationship] no-match sample current={}.{} parent={} sample=[{}]",
+                        current_object_name, current_field_name, parent_object_name, sample
+                    );
+                }
+            }
+        }
+
+        println!(
+            "[DEBUG][child-relationship] resolved current={}.{} matched={} result={}",
+            current_object_name,
+            current_field_name,
+            if matched_relation_details.is_empty() {
+                "[]".to_string()
+            } else {
+                matched_relation_details.join(" | ")
+            },
+            relationship_names.join(", ")
+        );
+    }
+
+    println!(
+        "[DEBUG][child-relationship] finish object={}",
+        current_object_name
+    );
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn describe_object(
     app: tauri::AppHandle,
@@ -1568,7 +1751,7 @@ pub async fn describe_object(
     source_id: String,
     object_name: String,
 ) -> Result<ObjectDescribe, String> {
-    let source = {
+    let mut source = {
         let connection = state
             .db
             .lock()
@@ -1576,25 +1759,32 @@ pub async fn describe_object(
         db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
     };
 
-    let describe_result = match state.sf_client.describe_object(&source, &object_name).await {
-        Ok(describe) => Ok(describe),
-        Err(error) if is_unauthorized_error(&error) && source_id.starts_with("cli-") => {
-            let refreshed_source = refresh_cli_source_token(
+    let describe_result = load_object_describe_with_auto_refresh(
+        &app,
+        &state,
+        &source_id,
+        &mut source,
+        &object_name,
+        "describe_object",
+    )
+    .await;
+
+    match describe_result {
+        Ok(mut describe) => {
+            if let Err(error) = hydrate_reference_field_child_relationship_names(
                 &app,
                 &state,
                 &source_id,
-                "describe_object",
-                Some(&object_name),
+                &mut source,
+                &mut describe,
             )
             .await
-            .map_err(AppError::to_string_error)?;
-            state.sf_client.describe_object(&refreshed_source, &object_name).await
-        }
-        Err(error) => Err(error),
-    };
-
-    match describe_result {
-        Ok(describe) => {
+            {
+                eprintln!(
+                    "[DEBUG][child-relationship] hydrate failed object={} source={} error={}",
+                    object_name, source_id, error
+                );
+            }
             write_system_log(
                 &state,
                 "INFO",
@@ -1619,6 +1809,94 @@ pub async fn describe_object(
                 Some(&object_name),
                 false,
                 "获取对象字段元数据失败。",
+                Some(&message),
+            );
+            Err(message)
+        }
+    }
+}
+
+/// 解析字段配置的 Child Relationship Name（优先使用 Tooling API）。
+#[tauri::command]
+pub async fn resolve_field_child_relationship_name(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    source_id: String,
+    object_name: String,
+    field_name: String,
+) -> Result<Option<String>, String> {
+    let normalized_object_name = object_name.trim().to_string();
+    let normalized_field_name = field_name.trim().to_string();
+    if normalized_object_name.is_empty() || normalized_field_name.is_empty() {
+        return Ok(None);
+    }
+
+    let source = {
+        let connection = state
+            .db
+            .lock()
+            .map_err(|error| format!("Database lock failed: {error}"))?;
+        db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
+    };
+
+    let resolve_result = match state
+        .sf_client
+        .resolve_field_child_relationship_name(&source, &normalized_object_name, &normalized_field_name)
+        .await
+    {
+        Ok(value) => Ok(value),
+        Err(error) if is_unauthorized_error(&error) && source_id.starts_with("cli-") => {
+            let refreshed_source = refresh_cli_source_token(
+                &app,
+                &state,
+                &source_id,
+                "resolve_field_child_relationship_name",
+                Some(&normalized_object_name),
+            )
+            .await
+            .map_err(AppError::to_string_error)?;
+            state
+                .sf_client
+                .resolve_field_child_relationship_name(
+                    &refreshed_source,
+                    &normalized_object_name,
+                    &normalized_field_name,
+                )
+                .await
+        }
+        Err(error) => Err(error),
+    };
+
+    match resolve_result {
+        Ok(relationship_name) => {
+            write_system_log(
+                &state,
+                "INFO",
+                "SALESFORCE_API",
+                "resolve_field_child_relationship_name",
+                Some(&source_id),
+                Some(&normalized_object_name),
+                true,
+                "解析字段 Child Relationship Name 成功。",
+                Some(&format!(
+                    "field={} relationshipName={}",
+                    normalized_field_name,
+                    relationship_name.clone().unwrap_or_default()
+                )),
+            );
+            Ok(relationship_name)
+        }
+        Err(error) => {
+            let message = AppError::to_string_error(error);
+            write_system_log(
+                &state,
+                "ERROR",
+                "SALESFORCE_API",
+                "resolve_field_child_relationship_name",
+                Some(&source_id),
+                Some(&normalized_object_name),
+                false,
+                "解析字段 Child Relationship Name 失败。",
                 Some(&message),
             );
             Err(message)

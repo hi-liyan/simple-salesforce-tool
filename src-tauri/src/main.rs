@@ -61,6 +61,7 @@ fn main() {
             commands::open_object_edit_page,
             commands::open_record_page,
             commands::describe_object,
+            commands::resolve_field_child_relationship_name,
             commands::query_records,
             commands::create_record,
             commands::save_records,

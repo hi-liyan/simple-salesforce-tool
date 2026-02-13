@@ -86,7 +86,7 @@ export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, 
   const [expandedObjectNames, setExpandedObjectNames] = useState<string[]>([]);
   // 已展开字段集合（key: objectName.fieldName）。
   const [expandedFieldKeys, setExpandedFieldKeys] = useState<string[]>([]);
-  // 对象描述缓存：避免重复请求 describe，并复用 childRelationships。
+  // 对象描述缓存：避免重复请求 describe。
   const [describeByObjectName, setDescribeByObjectName] = useState<Record<string, ObjectDescribe>>({});
   // 对象字段加载状态。
   const [loadingByObjectName, setLoadingByObjectName] = useState<Record<string, boolean>>({});
@@ -130,91 +130,6 @@ export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, 
     return `${objectName}.${fieldName}`;
   }
 
-  // 归一化 Salesforce API 名：用于跨命名空间/大小写差异的稳健匹配。
-  function normalizeApiName(value: string): string {
-    const trimmed = value.trim().toLowerCase();
-    if (!trimmed) return "";
-    const segments = trimmed.split("__");
-    // 处理 ns__Object__c / ns__Field__c：匹配时忽略命名空间前缀。
-    if (segments.length >= 3) {
-      return segments.slice(1).join("__");
-    }
-    return trimmed;
-  }
-
-  // 判断两个 API 名是否可视为同一值。
-  function isSameApiName(left: string, right: string): boolean {
-    const normalizedLeft = normalizeApiName(left);
-    const normalizedRight = normalizeApiName(right);
-    if (!normalizedLeft || !normalizedRight) return false;
-    return normalizedLeft === normalizedRight;
-  }
-
-  // 从 reference 字段元数据提取父对象候选列表（referenceTo）。
-  function getReferenceTargetObjectNames(field: ObjectField): string[] {
-    if (field.dataType !== "reference") return [];
-    const rawReferenceTo = field.metadata?.referenceTo;
-    if (!Array.isArray(rawReferenceTo)) return [];
-    return rawReferenceTo
-      .map((item) => (typeof item === "string" ? item.trim() : ""))
-      .filter((item) => item.length > 0);
-  }
-
-  // 从 describe 缓存中查找对象（支持命名空间/大小写容错）。
-  function findDescribeByObjectName(objectName: string): ObjectDescribe | null {
-    if (describeByObjectName[objectName]) return describeByObjectName[objectName];
-    const matchedKey = Object.keys(describeByObjectName).find((key) => isSameApiName(key, objectName));
-    if (!matchedKey) return null;
-    return describeByObjectName[matchedKey];
-  }
-
-  // 预拉取父对象 describe：为 childRelationships 反查准备上下文。
-  async function preloadParentObjectDescribes(currentObjectName: string, currentDescribe: ObjectDescribe) {
-    if (!sourceId) return;
-    const parentObjectNames = Array.from(
-      new Set(
-        currentDescribe.fields
-          .flatMap((field) => getReferenceTargetObjectNames(field))
-          .filter((name) => !isSameApiName(name, currentObjectName))
-      )
-    );
-    const unresolvedParentObjectNames = parentObjectNames.filter((name) => !findDescribeByObjectName(name));
-    if (unresolvedParentObjectNames.length === 0) return;
-    const loadedEntries = await Promise.all(
-      unresolvedParentObjectNames.map(async (parentObjectName) => {
-        try {
-          const parentDescribe = await api.describeObject(sourceId, parentObjectName);
-          return [parentObjectName, parentDescribe] as const;
-        } catch {
-          return null; // 单个父对象 describe 失败不影响当前对象树展示。
-        }
-      })
-    );
-    const validEntries = loadedEntries.filter((item): item is readonly [string, ObjectDescribe] => item !== null);
-    if (validEntries.length === 0) return;
-    setDescribeByObjectName((current) => ({ ...current, ...Object.fromEntries(validEntries) }));
-  }
-
-  // 从父对象 childRelationships 反查当前字段的 Child Relationship Name。
-  function getChildRelationshipNamesForField(currentObjectName: string, field: ObjectField): string[] {
-    const referenceTargetObjectNames = getReferenceTargetObjectNames(field);
-    if (referenceTargetObjectNames.length === 0) return [];
-    const relationshipNameSet = new Set<string>();
-    referenceTargetObjectNames.forEach((parentObjectName) => {
-      const parentDescribe = findDescribeByObjectName(parentObjectName);
-      if (!parentDescribe) return;
-      parentDescribe.childRelationships.forEach((item) => {
-        if (item.deprecatedAndHidden) return;
-        if (!isSameApiName(item.childSobject, currentObjectName)) return;
-        if (!isSameApiName(item.field, field.name)) return;
-        const relationshipName = item.relationshipName.trim();
-        if (!relationshipName) return;
-        relationshipNameSet.add(relationshipName);
-      });
-    });
-    return Array.from(relationshipNameSet);
-  }
-
   // 展开/折叠对象节点，并在首次展开时懒加载字段列表。
   async function toggleObjectNode(objectItem: SalesforceObject) {
     const objectName = objectItem.name;
@@ -229,9 +144,8 @@ export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, 
     // 先更新为展开状态，提升交互响应速度。
     setExpandedObjectNames((current) => [...current, objectName]);
 
-    // 已有缓存时不再请求当前对象 describe，但继续后台预拉取父对象 describe。
+    // 已有缓存时不再重复请求 describe。
     if (describeByObjectName[objectName]) {
-      void preloadParentObjectDescribes(objectName, describeByObjectName[objectName]); // 异步补全父对象上下文。
       return;
     }
     if (loadingByObjectName[objectName]) return;
@@ -244,10 +158,9 @@ export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, 
     setErrorByObjectName((current) => ({ ...current, [objectName]: "" }));
 
     try {
-      // 调用后端对象描述接口，获取字段与子关系元数据。
+      // 调用后端对象描述接口，后端已补齐 reference 字段 childRelationshipName。
       const describe = await api.describeObject(sourceId, objectName);
       setDescribeByObjectName((current) => ({ ...current, [objectName]: describe }));
-      await preloadParentObjectDescribes(objectName, describe); // 当前对象加载后立即补拉父对象 describe。
     } catch (error) {
       setErrorByObjectName((current) => ({ ...current, [objectName]: `加载字段失败：${String(error)}` }));
     } finally {
@@ -277,13 +190,15 @@ export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, 
     return "Lookup";
   }
 
-  // 组装字段展示元数据：覆盖 type，并补充子关系名，确保展开后直接看这份元数据即可。
-  function buildDisplayMetadata(field: ObjectField, childRelationshipNames: string[]): Record<string, unknown> {
+  // 组装字段展示元数据：覆盖 type，子关系名直接读取后端回填值。
+  function buildDisplayMetadata(field: ObjectField): Record<string, unknown> {
     const metadata = { ...(field.metadata || {}) };
     metadata.type = getDisplayFieldType(field);
-    // 参照字段统一输出子关系名键：有值显示关系名，无值显示“-”。
+    // 参照字段统一输出子关系名键：后端负责计算，前端仅兜底格式。
     if (field.dataType === "reference") {
-      metadata.childRelationshipName = childRelationshipNames.join(", ");
+      const resolvedValue =
+        typeof metadata.childRelationshipName === "string" ? metadata.childRelationshipName.trim() : "";
+      metadata.childRelationshipName = resolvedValue;
     }
     return metadata;
   }
@@ -553,10 +468,8 @@ export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, 
                     objectFields.map((field) => {
                       const fieldKey = buildFieldKey(objectName, field.name);
                       const fieldExpanded = expandedFieldKeys.includes(fieldKey);
-                      // 当前 reference 字段的 Child Relationship Name：来自父对象 childRelationships 反查。
-                      const childRelationshipNames = getChildRelationshipNamesForField(objectName, field);
-                      // 展示前统一加工元数据：类型细分 + 子关系名补齐。
-                      const displayMetadata = buildDisplayMetadata(field, childRelationshipNames);
+                      // 展示前统一加工元数据：类型细分 + 子关系名兜底。
+                      const displayMetadata = buildDisplayMetadata(field);
                       const metadataEntries = sortMetadataEntries(displayMetadata);
 
                       return (
