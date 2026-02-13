@@ -190,28 +190,6 @@ export type LlmSettingsSavePayload = {
   timeoutMs?: number;
 };
 
-// 多轮 SOQL 对话请求参数。
-export type SoqlConversationRequest = {
-  sourceId: string;
-  conversationId?: string;
-  userMessage: string;
-  contextObjectHint?: string;
-  streamRequestId?: string;
-};
-
-// 多轮 SOQL 对话返回结果。
-export type SoqlConversationResponse = {
-  conversationId: string;
-  mode: "answer" | "generate" | "clarify";
-  status: "clarify" | "ready";
-  questions: string[];
-  soql?: string;
-  objectName?: string;
-  fieldNames: string[];
-  reason: string;
-  answer?: string;
-};
-
 // AI 对话上下文：用于给后端提供当前 Tab 辅助信息。
 export type AiUiContext = {
   currentTabSoql?: string;

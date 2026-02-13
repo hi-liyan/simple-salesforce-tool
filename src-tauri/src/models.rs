@@ -275,44 +275,6 @@ pub struct SaveLlmSettingsPayload {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SoqlConversationRequest {
-    /// Salesforce 数据源 ID。
-    pub source_id: String,
-    /// 多轮对话 ID（为空时新建）。
-    pub conversation_id: Option<String>,
-    /// 用户当前轮输入。
-    pub user_message: String,
-    /// 可选对象提示（由前端上下文传入）。
-    pub context_object_hint: Option<String>,
-    /// 前端本次流式请求 ID（用于事件分发到正确聊天气泡）。
-    pub stream_request_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SoqlConversationResponse {
-    /// 多轮对话 ID。
-    pub conversation_id: String,
-    /// 响应模式：answer=问答，generate=生成SOQL，clarify=澄清追问。
-    pub mode: String,
-    /// 当前状态：clarify=继续澄清，ready=可生成。
-    pub status: String,
-    /// 需要用户补充的信息问题列表。
-    pub questions: Vec<String>,
-    /// 最终 SOQL（ready 时返回）。
-    pub soql: Option<String>,
-    /// 推断对象名（可空）。
-    pub object_name: Option<String>,
-    /// 推断字段列表。
-    pub field_names: Vec<String>,
-    /// 说明文本。
-    pub reason: String,
-    /// 对用户问题的直接回答（可空）。
-    pub answer: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct AiUiContext {
     /// 当前激活 Tab 的 SOQL 草稿（可空）。
     pub current_tab_soql: Option<String>,

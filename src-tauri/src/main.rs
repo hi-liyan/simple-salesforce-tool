@@ -74,7 +74,6 @@ fn main() {
             commands::ai_get_capabilities,
             commands::ai_chat_turn_v2,
             commands::ai_stop_turn,
-            commands::generate_soql_from_conversation,
             commands::stop_llm_stream_generation
         ])
         .run(tauri::generate_context!())
