@@ -1,7 +1,7 @@
 ﻿import { ChevronDown, ChevronRight } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
-import { ObjectField, SalesforceObject } from "../types";
+import { ObjectDescribe, ObjectField, SalesforceObject } from "../types";
 
 // 元数据键名中文映射：用于字段元数据展示时的中文化。
 const METADATA_KEY_LABELS: Record<string, string> = {
@@ -48,6 +48,7 @@ const METADATA_KEY_LABELS: Record<string, string> = {
   referenceTargetField: "关联目标字段",
   referenceTo: "关联对象",
   relationshipName: "关系名",
+  childRelationshipName: "子关系名",
   relationshipOrder: "关系顺序",
   restrictedDelete: "受限删除",
   restrictedPicklist: "受限选项列表",
@@ -85,8 +86,8 @@ export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, 
   const [expandedObjectNames, setExpandedObjectNames] = useState<string[]>([]);
   // 已展开字段集合（key: objectName.fieldName）。
   const [expandedFieldKeys, setExpandedFieldKeys] = useState<string[]>([]);
-  // 对象字段缓存：避免重复请求 describe。
-  const [fieldsByObjectName, setFieldsByObjectName] = useState<Record<string, ObjectField[]>>({});
+  // 对象描述缓存：避免重复请求 describe，并复用 childRelationships。
+  const [describeByObjectName, setDescribeByObjectName] = useState<Record<string, ObjectDescribe>>({});
   // 对象字段加载状态。
   const [loadingByObjectName, setLoadingByObjectName] = useState<Record<string, boolean>>({});
   // 对象字段加载错误信息。
@@ -129,6 +130,91 @@ export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, 
     return `${objectName}.${fieldName}`;
   }
 
+  // 归一化 Salesforce API 名：用于跨命名空间/大小写差异的稳健匹配。
+  function normalizeApiName(value: string): string {
+    const trimmed = value.trim().toLowerCase();
+    if (!trimmed) return "";
+    const segments = trimmed.split("__");
+    // 处理 ns__Object__c / ns__Field__c：匹配时忽略命名空间前缀。
+    if (segments.length >= 3) {
+      return segments.slice(1).join("__");
+    }
+    return trimmed;
+  }
+
+  // 判断两个 API 名是否可视为同一值。
+  function isSameApiName(left: string, right: string): boolean {
+    const normalizedLeft = normalizeApiName(left);
+    const normalizedRight = normalizeApiName(right);
+    if (!normalizedLeft || !normalizedRight) return false;
+    return normalizedLeft === normalizedRight;
+  }
+
+  // 从 reference 字段元数据提取父对象候选列表（referenceTo）。
+  function getReferenceTargetObjectNames(field: ObjectField): string[] {
+    if (field.dataType !== "reference") return [];
+    const rawReferenceTo = field.metadata?.referenceTo;
+    if (!Array.isArray(rawReferenceTo)) return [];
+    return rawReferenceTo
+      .map((item) => (typeof item === "string" ? item.trim() : ""))
+      .filter((item) => item.length > 0);
+  }
+
+  // 从 describe 缓存中查找对象（支持命名空间/大小写容错）。
+  function findDescribeByObjectName(objectName: string): ObjectDescribe | null {
+    if (describeByObjectName[objectName]) return describeByObjectName[objectName];
+    const matchedKey = Object.keys(describeByObjectName).find((key) => isSameApiName(key, objectName));
+    if (!matchedKey) return null;
+    return describeByObjectName[matchedKey];
+  }
+
+  // 预拉取父对象 describe：为 childRelationships 反查准备上下文。
+  async function preloadParentObjectDescribes(currentObjectName: string, currentDescribe: ObjectDescribe) {
+    if (!sourceId) return;
+    const parentObjectNames = Array.from(
+      new Set(
+        currentDescribe.fields
+          .flatMap((field) => getReferenceTargetObjectNames(field))
+          .filter((name) => !isSameApiName(name, currentObjectName))
+      )
+    );
+    const unresolvedParentObjectNames = parentObjectNames.filter((name) => !findDescribeByObjectName(name));
+    if (unresolvedParentObjectNames.length === 0) return;
+    const loadedEntries = await Promise.all(
+      unresolvedParentObjectNames.map(async (parentObjectName) => {
+        try {
+          const parentDescribe = await api.describeObject(sourceId, parentObjectName);
+          return [parentObjectName, parentDescribe] as const;
+        } catch {
+          return null; // 单个父对象 describe 失败不影响当前对象树展示。
+        }
+      })
+    );
+    const validEntries = loadedEntries.filter((item): item is readonly [string, ObjectDescribe] => item !== null);
+    if (validEntries.length === 0) return;
+    setDescribeByObjectName((current) => ({ ...current, ...Object.fromEntries(validEntries) }));
+  }
+
+  // 从父对象 childRelationships 反查当前字段的 Child Relationship Name。
+  function getChildRelationshipNamesForField(currentObjectName: string, field: ObjectField): string[] {
+    const referenceTargetObjectNames = getReferenceTargetObjectNames(field);
+    if (referenceTargetObjectNames.length === 0) return [];
+    const relationshipNameSet = new Set<string>();
+    referenceTargetObjectNames.forEach((parentObjectName) => {
+      const parentDescribe = findDescribeByObjectName(parentObjectName);
+      if (!parentDescribe) return;
+      parentDescribe.childRelationships.forEach((item) => {
+        if (item.deprecatedAndHidden) return;
+        if (!isSameApiName(item.childSobject, currentObjectName)) return;
+        if (!isSameApiName(item.field, field.name)) return;
+        const relationshipName = item.relationshipName.trim();
+        if (!relationshipName) return;
+        relationshipNameSet.add(relationshipName);
+      });
+    });
+    return Array.from(relationshipNameSet);
+  }
+
   // 展开/折叠对象节点，并在首次展开时懒加载字段列表。
   async function toggleObjectNode(objectItem: SalesforceObject) {
     const objectName = objectItem.name;
@@ -143,8 +229,12 @@ export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, 
     // 先更新为展开状态，提升交互响应速度。
     setExpandedObjectNames((current) => [...current, objectName]);
 
-    // 已有缓存时不再请求 describe，直接使用本地字段列表。
-    if (fieldsByObjectName[objectName] || loadingByObjectName[objectName]) return;
+    // 已有缓存时不再请求当前对象 describe，但继续后台预拉取父对象 describe。
+    if (describeByObjectName[objectName]) {
+      void preloadParentObjectDescribes(objectName, describeByObjectName[objectName]); // 异步补全父对象上下文。
+      return;
+    }
+    if (loadingByObjectName[objectName]) return;
     if (!sourceId) {
       setErrorByObjectName((current) => ({ ...current, [objectName]: "请先选择数据源。" }));
       return;
@@ -154,9 +244,10 @@ export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, 
     setErrorByObjectName((current) => ({ ...current, [objectName]: "" }));
 
     try {
-      // 调用后端对象描述接口，获取字段与字段元数据。
+      // 调用后端对象描述接口，获取字段与子关系元数据。
       const describe = await api.describeObject(sourceId, objectName);
-      setFieldsByObjectName((current) => ({ ...current, [objectName]: describe.fields || [] }));
+      setDescribeByObjectName((current) => ({ ...current, [objectName]: describe }));
+      await preloadParentObjectDescribes(objectName, describe); // 当前对象加载后立即补拉父对象 describe。
     } catch (error) {
       setErrorByObjectName((current) => ({ ...current, [objectName]: `加载字段失败：${String(error)}` }));
     } finally {
@@ -170,6 +261,31 @@ export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, 
     setExpandedFieldKeys((current) =>
       current.includes(key) ? current.filter((item) => item !== key) : [...current, key]
     );
+  }
+
+  // 字段类型展示转换：reference 进一步细分为 参照关系（Lookup） / 父子关系（Master-Detail）。
+  function getDisplayFieldType(field: ObjectField): string {
+    if (field.dataType !== "reference") return field.dataType;
+    const relationshipOrder = field.metadata?.relationshipOrder;
+    const hasRelationshipOrder = typeof relationshipOrder === "number";
+    const writeRequiresMasterRead = field.metadata?.writeRequiresMasterRead === true;
+    const cascadeDelete = field.metadata?.cascadeDelete === true;
+    // 经验规则：Master-Detail 常带 relationshipOrder / writeRequiresMasterRead / cascadeDelete。
+    if (hasRelationshipOrder || writeRequiresMasterRead || cascadeDelete) {
+      return "Master-Detail";
+    }
+    return "Lookup";
+  }
+
+  // 组装字段展示元数据：覆盖 type，并补充子关系名，确保展开后直接看这份元数据即可。
+  function buildDisplayMetadata(field: ObjectField, childRelationshipNames: string[]): Record<string, unknown> {
+    const metadata = { ...(field.metadata || {}) };
+    metadata.type = getDisplayFieldType(field);
+    // 参照字段统一输出子关系名键：有值显示关系名，无值显示“-”。
+    if (field.dataType === "reference") {
+      metadata.childRelationshipName = childRelationshipNames.join(", ");
+    }
+    return metadata;
   }
 
   // 将 metadata 值转换为可读文本，复杂对象转 JSON 字符串。
@@ -213,6 +329,7 @@ export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, 
       "label",
       "referenceTo",
       "relationshipName",
+      "childRelationshipName",
       "picklistValues",
       "nillable",
       "createable",
@@ -376,7 +493,8 @@ export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, 
           const tooltip = `名称: ${objectName}\n标签: ${item.label}\n可查询: ${item.queryable}\n可新增: ${item.createable}\n可更新: ${item.updateable}\n可删除: ${item.deletable}`;
           const selected = objectName === activeObjectName;
           const expanded = expandedObjectNames.includes(objectName);
-          const objectFields = fieldsByObjectName[objectName] || [];
+          const objectDescribe = describeByObjectName[objectName];
+          const objectFields = objectDescribe?.fields || [];
           const objectLoading = loadingByObjectName[objectName] === true;
           const objectError = errorByObjectName[objectName];
 
@@ -435,7 +553,11 @@ export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, 
                     objectFields.map((field) => {
                       const fieldKey = buildFieldKey(objectName, field.name);
                       const fieldExpanded = expandedFieldKeys.includes(fieldKey);
-                      const metadataEntries = sortMetadataEntries(field.metadata || {});
+                      // 当前 reference 字段的 Child Relationship Name：来自父对象 childRelationships 反查。
+                      const childRelationshipNames = getChildRelationshipNamesForField(objectName, field);
+                      // 展示前统一加工元数据：类型细分 + 子关系名补齐。
+                      const displayMetadata = buildDisplayMetadata(field, childRelationshipNames);
+                      const metadataEntries = sortMetadataEntries(displayMetadata);
 
                       return (
                         <div key={fieldKey} className="mb-1 rounded border border-base-300 bg-base-100">
@@ -450,28 +572,20 @@ export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, 
                             {fieldExpanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
                             <span className="truncate text-[11px] font-medium">{field.label}</span>
                             <span className="truncate text-[11px] text-neutral/70">({field.name})</span>
-                            <span className="ml-auto shrink-0 text-[10px] text-neutral/60">{field.dataType}</span>
+                            <span className="ml-auto shrink-0 text-[10px] text-neutral/60">{getDisplayFieldType(field)}</span>
                           </button>
 
                           {/* 字段元数据：展示常用属性与 metadata 原始键值。 */}
                           {fieldExpanded && (
                             <div className="border-t border-base-300 px-2 py-1.5 text-[11px]">
-                              <p>标签: {field.label}</p>
-                              <p>API 名称: {field.name}</p>
-                              <p>字段类型: {field.dataType}</p>
-                              <p>可为空: {formatMetadataValue(field.nillable)}</p>
-                              <p>可创建: {formatMetadataValue(field.createable)}</p>
-                              <p>可更新: {formatMetadataValue(field.updateable)}</p>
-                              {metadataEntries.length > 0 && (
-                                <div className="mt-1 border-t border-base-300 pt-1">
-                                  <p className="text-neutral/70">元数据:</p>
-                                  {metadataEntries.map(([metaKey, metaValue]) => (
-                                    <p key={`${fieldKey}-meta-${metaKey}`} className="break-all">
-                                      {translateMetadataKey(metaKey)}: {formatMetadataValue(metaValue)}
-                                    </p>
-                                  ))}
-                                </div>
+                              {metadataEntries.length === 0 && (
+                                <p className="text-neutral/70">暂无元数据。</p>
                               )}
+                              {metadataEntries.map(([metaKey, metaValue]) => (
+                                <p key={`${fieldKey}-meta-${metaKey}`} className="break-all">
+                                  {translateMetadataKey(metaKey)}: {formatMetadataValue(metaValue)}
+                                </p>
+                              ))}
                             </div>
                           )}
                         </div>
