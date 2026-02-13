@@ -1,5 +1,8 @@
 ﻿import { invoke } from "@tauri-apps/api/core";
 import {
+  AiCapabilities,
+  AiChatTurnV2Request,
+  AiChatTurnV2Response,
   CliPathProbe,
   CliPathSettings,
   CliPathStatus,
@@ -35,6 +38,10 @@ export const api = {
   detectLocalCliPaths: () => invokeApi<CliPathProbe[]>("detect_local_cli_paths"),
   getLlmSettings: () => invokeApi<LlmSettings>("get_llm_settings"),
   saveLlmSettings: (payload: LlmSettingsSavePayload) => invokeApi<LlmSettings>("save_llm_settings", { payload }),
+  aiChatTurnV2: (payload: AiChatTurnV2Request) =>
+    invokeApi<AiChatTurnV2Response>("ai_chat_turn_v2", { payload }),
+  aiStopTurn: (requestId: string) => invokeApi<void>("ai_stop_turn", { requestId }),
+  aiGetCapabilities: () => invokeApi<AiCapabilities>("ai_get_capabilities"),
   generateSoqlFromConversation: (payload: SoqlConversationRequest) =>
     invokeApi<SoqlConversationResponse>("generate_soql_from_conversation", { payload }),
   stopLlmStreamGeneration: (requestId: string) => invokeApi<void>("stop_llm_stream_generation", { requestId }),

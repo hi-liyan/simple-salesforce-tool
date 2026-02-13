@@ -211,3 +211,51 @@ export type SoqlConversationResponse = {
   reason: string;
   answer?: string;
 };
+
+// AI 对话上下文：用于给后端提供当前 Tab 辅助信息。
+export type AiUiContext = {
+  currentTabSoql?: string;
+  contextObjectHint?: string;
+  selectedFields?: string[];
+};
+
+// AI v2 对话请求参数。
+export type AiChatTurnV2Request = {
+  sourceId: string;
+  conversationId?: string;
+  message: string;
+  streamRequestId?: string;
+  uiContext?: AiUiContext;
+};
+
+// AI 可执行动作项。
+export type AiActionItem = {
+  actionType: "APPLY_CURRENT_TAB" | "APPLY_NEW_TAB" | "ASK_MORE";
+  label: string;
+};
+
+// AI 诊断信息。
+export type AiDiagnostics = {
+  toolsUsed: string[];
+  riskLevel: "low" | "medium" | "high";
+  warnings: string[];
+};
+
+// AI v2 对话响应结构。
+export type AiChatTurnV2Response = {
+  conversationId: string;
+  state: "answer" | "clarify" | "ready";
+  assistantMessage: string;
+  questions: string[];
+  proposedSoql?: string;
+  actions: AiActionItem[];
+  diagnostics: AiDiagnostics;
+};
+
+// AI 能力清单：用于前端按能力自适应渲染。
+export type AiCapabilities = {
+  version: string;
+  provider: string;
+  model: string;
+  tools: string[];
+};

@@ -5,7 +5,7 @@ import { DataGrid } from "../../components/DataGrid";
 import { NoticeAlert } from "../../components/NoticeAlert";
 import { SoqlMonacoEditor } from "../../components/SoqlMonacoEditor";
 import { api } from "../../api";
-import { Notice, QueryResult, SalesforceObject, SoqlConversationResponse, TabLog } from "../../types";
+import { AiChatTurnV2Response, Notice, QueryResult, SalesforceObject, TabLog } from "../../types";
 
 type AiConversationItem = {
   // 消息唯一标识，用于流式更新定位。
@@ -373,12 +373,15 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText, objects }
     }));
 
     try {
-      const response = await api.generateSoqlFromConversation({
+      const response = await api.aiChatTurnV2({
         sourceId: selectedSourceId,
         conversationId: activeTab.aiConversationId || undefined,
-        userMessage: prompt,
-        contextObjectHint: contextObjectHint || undefined,
-        streamRequestId
+        message: prompt,
+        streamRequestId,
+        uiContext: {
+          currentTabSoql: activeTab.soqlDraft || undefined,
+          contextObjectHint: contextObjectHint || undefined
+        }
       });
       patchActiveTab((tab) => applyAiResponseToTab(tab, response, streamRequestId));
     } catch (error) {
@@ -410,7 +413,7 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText, objects }
     if (!activeTab?.aiStreamRequestId) return;
     const requestId = activeTab.aiStreamRequestId;
     try {
-      await api.stopLlmStreamGeneration(requestId);
+      await api.aiStopTurn(requestId);
     } catch {
       // 停止动作失败不阻塞前端状态收敛。
     }
@@ -851,23 +854,24 @@ function buildSoqlLog(success: boolean, request: string, summary: string, errorM
 // 将后端 AI 响应映射到当前 Tab：统一写入会话、状态与提示。
 function applyAiResponseToTab(
   tab: SoqlExecutorTab,
-  response: SoqlConversationResponse,
+  response: AiChatTurnV2Response,
   streamRequestId: string
 ): SoqlExecutorTab {
+  const isReady = response.state === "ready" && Boolean(response.proposedSoql);
   const message: AiConversationItem =
-    response.status === "ready"
+    isReady
       ? {
           id: streamRequestId,
           role: "assistant",
-          content: response.answer || response.reason || tab.aiMessages.find((item) => item.id === streamRequestId)?.content || "已生成 SOQL，可选择应用到编辑器。",
+          content: response.assistantMessage || tab.aiMessages.find((item) => item.id === streamRequestId)?.content || "已生成 SOQL，可选择应用到编辑器。",
           status: "ready",
-          soql: response.soql || "",
+          soql: response.proposedSoql || "",
           questions: []
         }
       : {
           id: streamRequestId,
           role: "assistant",
-          content: response.answer || response.reason || tab.aiMessages.find((item) => item.id === streamRequestId)?.content || "当前需求存在模糊点，请补充以下信息。",
+          content: response.assistantMessage || tab.aiMessages.find((item) => item.id === streamRequestId)?.content || "当前需求存在模糊点，请补充以下信息。",
           status: "clarify",
           questions: response.questions
         };
@@ -884,7 +888,7 @@ function applyAiResponseToTab(
     aiConversationId: response.conversationId || tab.aiConversationId,
     aiMessages: nextMessages,
     notice:
-      response.status === "ready"
+      isReady
         ? { type: "success", message: "AI 已生成 SOQL，请确认后应用。" }
         : { type: "success", message: "AI 需要继续澄清，请补充回答。" }
   };

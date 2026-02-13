@@ -8,20 +8,21 @@ use tauri::Emitter;
 use tauri::Manager;
 use tauri::State;
 
+use crate::ai::orchestrator::AiOrchestrator;
 use crate::app_state::AppState;
 use crate::db;
 use crate::error::AppError;
 use crate::llm::{openai_chat_completion_with_tools, LlmChatMessage, LlmChatRole, OpenAiToolCall};
 use crate::models::{
-    CliPathProbe, CliPathSettings, CliPathStatus, LlmSettings, LlmSettingsView, ObjectDescribe,
-    QueryResult, RecordMutationPayload, RecordSavePayload, SalesforceObject, SalesforceSource,
-    SaveLlmSettingsPayload, SoqlConversationRequest, SoqlConversationResponse, SourceUpsertPayload,
-    SystemLogPage,
+    AiCapabilities, AiChatTurnV2Request, AiChatTurnV2Response, CliPathProbe, CliPathSettings,
+    CliPathStatus, LlmSettings, LlmSettingsView, ObjectDescribe, QueryResult, RecordMutationPayload,
+    RecordSavePayload, SalesforceObject, SalesforceSource, SaveLlmSettingsPayload,
+    SoqlConversationRequest, SoqlConversationResponse, SourceUpsertPayload, SystemLogPage,
 };
 use crate::sf_cli;
 
 /// 写系统日志的统一入口。
-/// 说明：日志写入失败不应影响主流程，因此这里吞掉错误。
+/// 说明:日志写入失败不应影响主流程,因此这里吞掉错误。
 fn write_system_log(
     state: &State<'_, AppState>,
     level: &str,
@@ -62,8 +63,8 @@ fn read_configured_cli_path(state: &State<'_, AppState>) -> Option<String> {
 }
 
 fn set_main_window_enabled(app: &tauri::AppHandle, enabled: bool) {
-    // macOS 下禁用父窗口后，子窗口（parent 关系）可能也出现不可交互问题。
-    // 仅在 macOS 跳过 set_enabled，避免主窗口和登录窗口同时“失焦/不可点击”。
+    // macOS 下禁用父窗口后,子窗口(parent 关系)可能也出现不可交互问题。
+    // 仅在 macOS 跳过 set_enabled,避免主窗口和登录窗口同时"失焦/不可点击"。
     if cfg!(target_os = "macos") {
         return;
     }
@@ -127,7 +128,7 @@ fn is_unauthorized_error(error: &AppError) -> bool {
     )
 }
 
-/// 推送 AI 进度文本到前端聊天气泡（仅当存在 stream requestId 时）。
+/// 推送 AI 进度文本到前端聊天气泡(仅当存在 stream requestId 时)。
 fn emit_ai_progress_chunk(app: &tauri::AppHandle, request_id: Option<&str>, message: &str) {
     if let Some(current_request_id) = request_id {
         let _ = app.emit_to(
@@ -141,7 +142,7 @@ fn emit_ai_progress_chunk(app: &tauri::AppHandle, request_id: Option<&str>, mess
     }
 }
 
-/// 仅针对 CLI 数据源：发生 401 后通过 CLI 刷新 token，并回写本地数据源。
+/// 仅针对 CLI 数据源:发生 401 后通过 CLI 刷新 token,并回写本地数据源。
 async fn refresh_cli_source_token(
     app: &tauri::AppHandle,
     state: &State<'_, AppState>,
@@ -162,7 +163,7 @@ async fn refresh_cli_source_token(
         Some(source_id),
         target,
         true,
-        "检测到 401，开始通过 CLI 刷新 token。",
+        "检测到 401,开始通过 CLI 刷新 token。",
         None,
     );
 
@@ -191,7 +192,7 @@ async fn refresh_cli_source_token(
             Some(source_id),
             target,
             true,
-            "通过 CLI 刷新 token 成功，准备重试请求。",
+            "通过 CLI 刷新 token 成功,准备重试请求。",
             None,
         );
 
@@ -263,7 +264,7 @@ pub fn sync_cli_sources(state: State<'_, AppState>) -> Result<Vec<SalesforceSour
             .lock()
             .map_err(|error| format!("Database lock failed: {error}"))?;
 
-        // 逐条 upsert，保证同一个 org 重复同步只更新不新增。
+        // 逐条 upsert,保证同一个 org 重复同步只更新不新增。
         for seed in seeds {
             db::upsert_source_with_id(&connection, &seed.id, seed.payload)
                 .map_err(AppError::to_string_error)?;
@@ -281,13 +282,13 @@ pub fn sync_cli_sources(state: State<'_, AppState>) -> Result<Vec<SalesforceSour
         None,
         None,
         true,
-        &format!("同步 Salesforce CLI 数据源成功，共 {} 个。", sources.len()),
+        &format!("同步 Salesforce CLI 数据源成功,共 {} 个。", sources.len()),
         None,
     );
     Ok(sources)
 }
 
-/// 调用 CLI 打开网页登录流程，登录成功后返回 orgId。
+/// 调用 CLI 打开网页登录流程,登录成功后返回 orgId。
 #[tauri::command]
 pub async fn login_cli_org(
     app: tauri::AppHandle,
@@ -303,7 +304,7 @@ pub async fn login_cli_org(
     let cancel_token = create_cli_login_cancel_token(&state);
     let preferred_cli_path = read_configured_cli_path(&state);
 
-    // CLI 命令会阻塞，放入 blocking 线程池避免卡住 async runtime。
+    // CLI 命令会阻塞,放入 blocking 线程池避免卡住 async runtime。
     let result = tauri::async_runtime::spawn_blocking(move || {
         sf_cli::login_web(trimmed.trim(), cancel_token, preferred_cli_path.as_deref())
             .map_err(AppError::to_string_error)
@@ -372,7 +373,7 @@ pub async fn login_cli_org(
     Ok(org_id)
 }
 
-/// 打开认证子窗口（已存在时仅激活并聚焦）。
+/// 打开认证子窗口(已存在时仅激活并聚焦)。
 #[tauri::command]
 pub async fn open_auth_window(app: tauri::AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("sf-auth") {
@@ -464,7 +465,7 @@ struct FieldMetaWindowPayload {
     metadata: HashMap<String, serde_json::Value>,
 }
 
-/// 打开字段元数据窗口，并向目标窗口发送当前字段 payload。
+/// 打开字段元数据窗口,并向目标窗口发送当前字段 payload。
 #[tauri::command]
 pub async fn open_field_meta_window(
     app: tauri::AppHandle,
@@ -500,7 +501,7 @@ pub async fn open_field_meta_window(
 
     let app_handle = app.clone();
     std::thread::spawn(move || {
-        // 新窗口刚创建时可能尚未完成事件订阅，延迟重发一次确保前端能收到。
+        // 新窗口刚创建时可能尚未完成事件订阅,延迟重发一次确保前端能收到。
         std::thread::sleep(std::time::Duration::from_millis(220));
         let _ = app_handle.emit_to("sf-field-meta", "sf:field-meta-open", payload);
     });
@@ -508,7 +509,7 @@ pub async fn open_field_meta_window(
     Ok(())
 }
 
-/// 分页查询系统日志（倒序）。
+/// 分页查询系统日志(倒序)。
 #[tauri::command]
 pub fn list_system_logs(
     state: State<'_, AppState>,
@@ -593,7 +594,7 @@ pub fn save_column_visibility(
         .map_err(AppError::to_string_error)
 }
 
-/// 读取对象列表（优先走缓存，缓存失效后再请求 Salesforce）。
+/// 读取对象列表(优先走缓存,缓存失效后再请求 Salesforce)。
 #[tauri::command]
 pub async fn list_objects(
     app: tauri::AppHandle,
@@ -617,7 +618,7 @@ pub async fn list_objects(
             Some(&source_id),
             None,
             true,
-            &format!("命中对象缓存，共 {} 个。", cached.len()),
+            &format!("命中对象缓存,共 {} 个。", cached.len()),
             None,
         );
         return Ok(cached);
@@ -667,7 +668,7 @@ pub async fn list_objects(
             .db
             .lock()
             .map_err(|error| format!("Database lock failed: {error}"))?;
-        // 请求成功后写入缓存，后续短时间内避免重复调用远端接口。
+        // 请求成功后写入缓存,后续短时间内避免重复调用远端接口。
         db::write_object_cache(&connection, &source_id, &objects)
             .map_err(AppError::to_string_error)?;
     }
@@ -680,7 +681,7 @@ pub async fn list_objects(
         Some(&source_id),
         None,
         true,
-        &format!("拉取对象列表成功，共 {} 个。", objects.len()),
+        &format!("拉取对象列表成功,共 {} 个。", objects.len()),
         None,
     );
 
@@ -694,7 +695,7 @@ pub fn get_cli_path_settings(state: State<'_, AppState>) -> Result<CliPathSettin
     Ok(sf_cli::read_cli_path_settings(custom))
 }
 
-/// 保存 Salesforce CLI 自定义路径（传空会清除配置）。
+/// 保存 Salesforce CLI 自定义路径(传空会清除配置)。
 #[tauri::command]
 pub fn save_cli_path_settings(
     state: State<'_, AppState>,
@@ -721,7 +722,7 @@ pub fn save_cli_path_settings(
     Ok(sf_cli::read_cli_path_settings(normalized))
 }
 
-/// 检测指定 Salesforce CLI 路径是否可用，并返回版本与更新状态。
+/// 检测指定 Salesforce CLI 路径是否可用,并返回版本与更新状态。
 #[tauri::command]
 pub fn check_cli_path_status(
     state: State<'_, AppState>,
@@ -735,21 +736,21 @@ pub fn check_cli_path_status(
     Ok(sf_cli::check_cli_path_status(input))
 }
 
-/// 自动探测本地可用 CLI 路径，并返回可用于下拉选择的候选项。
+/// 自动探测本地可用 CLI 路径,并返回可用于下拉选择的候选项。
 #[tauri::command]
 pub fn detect_local_cli_paths(state: State<'_, AppState>) -> Result<Vec<CliPathProbe>, String> {
     let custom = read_configured_cli_path(&state);
     Ok(sf_cli::detect_available_cli_paths(custom))
 }
 
-/// 读取 LLM 设置（apiKey 仅返回掩码与是否已配置）。
+/// 读取 LLM 设置(apiKey 仅返回掩码与是否已配置)。
 #[tauri::command]
 pub fn get_llm_settings(state: State<'_, AppState>) -> Result<LlmSettingsView, String> {
     let settings = read_llm_settings(&state)?;
     Ok(to_llm_settings_view(&settings))
 }
 
-/// 保存 LLM 设置（apiKey 采用覆盖保存策略）。
+/// 保存 LLM 设置(apiKey 采用覆盖保存策略)。
 #[tauri::command]
 pub fn save_llm_settings(
     state: State<'_, AppState>,
@@ -769,7 +770,7 @@ pub fn save_llm_settings(
     current.model = model.to_string();
     current.timeout_ms = payload.timeout_ms.unwrap_or(current.timeout_ms).max(1000);
 
-    // 仅当用户输入了新值时覆盖 apiKey，空字符串视为不覆盖。
+    // 仅当用户输入了新值时覆盖 apiKey,空字符串视为不覆盖。
     if let Some(next_key) = payload.api_key {
         let trimmed = next_key.trim();
         if !trimmed.is_empty() {
@@ -805,7 +806,39 @@ pub fn stop_llm_stream_generation(
     Ok(())
 }
 
-/// 基于多轮对话生成 SOQL（仅允许读取 Salesforce 元数据，不允许触达数据接口）。
+#[tauri::command]
+pub fn ai_stop_turn(state: State<'_, AppState>, request_id: String) -> Result<(), String> {
+    stop_llm_stream_generation(state, request_id)
+}
+
+#[tauri::command]
+pub fn ai_get_capabilities(state: State<'_, AppState>) -> Result<AiCapabilities, String> {
+    let llm_settings = read_llm_settings(&state)?;
+    Ok(AiCapabilities {
+        version: "v2".to_string(),
+        provider: llm_settings.provider,
+        model: llm_settings.model,
+        tools: vec![
+            TOOL_FIND_OBJECTS.to_string(),
+            TOOL_GET_OBJECT_METADATA.to_string(),
+            TOOL_SEARCH_OBJECT_FIELDS.to_string(),
+            TOOL_GET_FIELD_METADATA.to_string(),
+            TOOL_GET_OBJECT_RELATIONSHIP_GRAPH.to_string(),
+        ],
+    })
+}
+
+#[tauri::command]
+pub async fn ai_chat_turn_v2(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    payload: AiChatTurnV2Request,
+) -> Result<AiChatTurnV2Response, String> {
+    let llm_settings = read_llm_settings(&state)?;
+    AiOrchestrator::run_turn(&app, &state, &llm_settings, &payload).await
+}
+
+/// 基于多轮对话生成 SOQL(仅允许读取 Salesforce 元数据,不允许触达数据接口)。
 #[tauri::command]
 pub async fn generate_soql_from_conversation(
     app: tauri::AppHandle,
@@ -819,7 +852,7 @@ pub async fn generate_soql_from_conversation(
 
     let llm_settings = read_llm_settings(&state)?;
     if llm_settings.api_key.trim().is_empty() {
-        return Err("LLM apiKey 未配置，请先到设置页保存。".to_string());
+        return Err("LLM apiKey 未配置,请先到设置页保存。".to_string());
     }
 
     let mut source = {
@@ -829,10 +862,10 @@ pub async fn generate_soql_from_conversation(
             .map_err(|error| format!("Database lock failed: {error}"))?;
         db::get_source(&connection, &payload.source_id).map_err(AppError::to_string_error)?
     };
-    // 对话模式与生成模式分流：只有命中“生成 SOQL”意图才走自动生成兜底。
+    // 对话模式与生成模式分流:只有命中"生成 SOQL"意图才走自动生成兜底。
     let generate_mode = should_generate_soql(&user_message);
 
-    // 严格限制：AI 阶段不在主流程直接访问 Salesforce 元数据接口，统一通过 tools 触发。
+    // 严格限制:AI 阶段不在主流程直接访问 Salesforce 元数据接口,统一通过 tools 触发。
     let all_objects: Vec<SalesforceObject> = Vec::new();
     let mut object_metadata_map: HashMap<String, LlmObjectMetadataSummary> = HashMap::new();
     let mut described_set: HashSet<String> = HashSet::new();
@@ -882,7 +915,7 @@ pub async fn generate_soql_from_conversation(
     .await?;
     let mut parsed = parse_llm_soql_payload(&llm_raw);
 
-    // 生成模式下若首轮未产出 SOQL，则自动做一次修复重试（不走流式，避免重复事件）。
+    // 生成模式下若首轮未产出 SOQL,则自动做一次修复重试(不走流式,避免重复事件)。
     if generate_mode && parsed.soql.is_none() {
         let mut repair_messages = build_llm_messages(
             &history,
@@ -893,7 +926,7 @@ pub async fn generate_soql_from_conversation(
         );
         repair_messages.push(LlmChatMessage {
             role: LlmChatRole::System,
-            content: "上一轮未产出可用 soql。请基于已有上下文修复，必须返回 mode=generate 且提供非空 soql；若确实无法生成则返回 mode=clarify 并给出最小问题列表。".to_string(),
+            content: "上一轮未产出可用 soql。请基于已有上下文修复,必须返回 mode=generate 且提供非空 soql;若确实无法生成则返回 mode=clarify 并给出最小问题列表。".to_string(),
         });
         if let Ok(retry_raw) = call_llm_with_tools_loop(
             &app,
@@ -948,7 +981,7 @@ pub async fn generate_soql_from_conversation(
                 object_name: parsed.object_name.clone(),
                 field_names: parsed.field_names.clone(),
                 reason: if parsed.reason.trim().is_empty() {
-                    "当前信息仍不足以生成 SOQL，请按问题补充。".to_string()
+                    "当前信息仍不足以生成 SOQL,请按问题补充。".to_string()
                 } else {
                     parsed.reason.clone()
                 },
@@ -977,7 +1010,7 @@ pub async fn generate_soql_from_conversation(
             object_name: parsed.object_name.clone(),
             field_names: parsed.field_names.clone(),
             reason: if parsed.reason.trim().is_empty() {
-                "已按对话模式回答。若需要，请继续明确“生成 SOQL”。".to_string()
+                "已按对话模式回答。若需要,请继续明确“生成 SOQL”。".to_string()
             } else {
                 parsed.reason.clone()
             },
@@ -989,7 +1022,7 @@ pub async fn generate_soql_from_conversation(
         role: LlmChatRole::Assistant,
         content: serde_json::to_string(&response).unwrap_or_else(|_| "{}".to_string()),
     });
-    compress_history_in_place(&mut history, 140_000); // 超上下文阈值时改为摘要压缩，而不是直接截断。
+    compress_history_in_place(&mut history, 140_000); // 超上下文阈值时改为摘要压缩,而不是直接截断。
     {
         let mut map = state
             .llm_conversations
@@ -1006,7 +1039,7 @@ pub async fn generate_soql_from_conversation(
         Some(&payload.source_id),
         None,
         true,
-        "SOQL 生成完成（仅元数据链路）。",
+        "SOQL 生成完成(仅元数据链路)。",
         Some(&format!(
             "conversationId={conversation_id}, status={}",
             response.status
@@ -1016,7 +1049,7 @@ pub async fn generate_soql_from_conversation(
     Ok(response)
 }
 
-/// 强制刷新对象列表（跳过缓存，直接请求 Salesforce API 并回写缓存）。
+/// 强制刷新对象列表(跳过缓存,直接请求 Salesforce API 并回写缓存)。
 #[tauri::command]
 pub async fn refresh_objects(
     app: tauri::AppHandle,
@@ -1067,7 +1100,7 @@ pub async fn refresh_objects(
             .db
             .lock()
             .map_err(|error| format!("Database lock failed: {error}"))?;
-        // 强制刷新成功后覆盖缓存，保证后续列表读取为最新远端快照。
+        // 强制刷新成功后覆盖缓存,保证后续列表读取为最新远端快照。
         db::write_object_cache(&connection, &source_id, &objects)
             .map_err(AppError::to_string_error)?;
     }
@@ -1080,14 +1113,14 @@ pub async fn refresh_objects(
         Some(&source_id),
         None,
         true,
-        &format!("强制刷新对象列表成功，共 {} 个。", objects.len()),
+        &format!("强制刷新对象列表成功,共 {} 个。", objects.len()),
         None,
     );
 
     Ok(objects)
 }
 
-/// 打开 Salesforce 对象列表页（混合方案：CLI 数据源优先走 CLI，非 CLI 走 frontdoor URL）。
+/// 打开 Salesforce 对象列表页(混合方案:CLI 数据源优先走 CLI,非 CLI 走 frontdoor URL)。
 #[tauri::command]
 pub async fn open_object_list_page(
     app: tauri::AppHandle,
@@ -1111,7 +1144,7 @@ pub async fn open_object_list_page(
         db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
     };
 
-    // CLI 数据源：后端直接调用 CLI 打开系统浏览器。
+    // CLI 数据源:后端直接调用 CLI 打开系统浏览器。
     if source_id.starts_with("cli-") {
         let source_id_cloned = source_id.clone();
         let list_path_cloned = list_path.clone();
@@ -1151,7 +1184,7 @@ pub async fn open_object_list_page(
                     Some(&source_id),
                     Some(&normalized_object_name),
                     false,
-                    "通过 Salesforce CLI 打开对象列表页失败，回退 frontdoor URL。",
+                    "通过 Salesforce CLI 打开对象列表页失败,回退 frontdoor URL。",
                     Some(&detail),
                 );
             }
@@ -1164,14 +1197,14 @@ pub async fn open_object_list_page(
                     Some(&source_id),
                     Some(&normalized_object_name),
                     false,
-                    "通过 Salesforce CLI 打开对象列表页线程失败，回退 frontdoor URL。",
+                    "通过 Salesforce CLI 打开对象列表页线程失败,回退 frontdoor URL。",
                     Some(&error),
                 );
             }
         }
     }
 
-    // 回退策略：构建 frontdoor URL，交由前端打开（仍可自动带登录态）。
+    // 回退策略:构建 frontdoor URL,交由前端打开(仍可自动带登录态)。
     let effective_source = if source_id.starts_with("cli-") {
         match refresh_cli_source_token(
             &app,
@@ -1193,7 +1226,7 @@ pub async fn open_object_list_page(
                     Some(&source_id),
                     Some(&normalized_object_name),
                     false,
-                    "刷新 token 失败，回退使用本地 token 构建 frontdoor 地址。",
+                    "刷新 token 失败,回退使用本地 token 构建 frontdoor 地址。",
                     Some(&detail),
                 );
                 source.clone()
@@ -1223,7 +1256,7 @@ pub async fn open_object_list_page(
     Ok(Some(final_url))
 }
 
-/// 打开 Salesforce Object 管理页（混合方案：CLI 数据源优先走 CLI，非 CLI 走 frontdoor URL）。
+/// 打开 Salesforce Object 管理页(混合方案:CLI 数据源优先走 CLI,非 CLI 走 frontdoor URL)。
 #[tauri::command]
 pub async fn open_object_edit_page(
     app: tauri::AppHandle,
@@ -1247,7 +1280,7 @@ pub async fn open_object_edit_page(
         db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
     };
 
-    // CLI 数据源：后端直接调用 CLI 打开系统浏览器。
+    // CLI 数据源:后端直接调用 CLI 打开系统浏览器。
     if source_id.starts_with("cli-") {
         let source_id_cloned = source_id.clone();
         let edit_path_cloned = edit_path.clone();
@@ -1287,7 +1320,7 @@ pub async fn open_object_edit_page(
                     Some(&source_id),
                     Some(&normalized_object_name),
                     false,
-                    "通过 Salesforce CLI 打开 Object 管理页失败，回退 frontdoor URL。",
+                    "通过 Salesforce CLI 打开 Object 管理页失败,回退 frontdoor URL。",
                     Some(&detail),
                 );
             }
@@ -1300,14 +1333,14 @@ pub async fn open_object_edit_page(
                     Some(&source_id),
                     Some(&normalized_object_name),
                     false,
-                    "通过 Salesforce CLI 打开 Object 管理页线程失败，回退 frontdoor URL。",
+                    "通过 Salesforce CLI 打开 Object 管理页线程失败,回退 frontdoor URL。",
                     Some(&error),
                 );
             }
         }
     }
 
-    // 回退策略：构建 frontdoor URL，交由前端打开（仍可自动带登录态）。
+    // 回退策略:构建 frontdoor URL,交由前端打开(仍可自动带登录态)。
     let effective_source = if source_id.starts_with("cli-") {
         match refresh_cli_source_token(
             &app,
@@ -1329,7 +1362,7 @@ pub async fn open_object_edit_page(
                     Some(&source_id),
                     Some(&normalized_object_name),
                     false,
-                    "刷新 token 失败，回退使用本地 token 构建 frontdoor 地址。",
+                    "刷新 token 失败,回退使用本地 token 构建 frontdoor 地址。",
                     Some(&detail),
                 );
                 source.clone()
@@ -1359,7 +1392,7 @@ pub async fn open_object_edit_page(
     Ok(Some(final_url))
 }
 
-/// 打开 Salesforce 记录详情页（混合方案：CLI 数据源优先走 CLI，非 CLI 走 frontdoor URL）。
+/// 打开 Salesforce 记录详情页(混合方案:CLI 数据源优先走 CLI,非 CLI 走 frontdoor URL)。
 #[tauri::command]
 pub async fn open_record_page(
     app: tauri::AppHandle,
@@ -1389,7 +1422,7 @@ pub async fn open_record_page(
         db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
     };
 
-    // CLI 数据源：后端直接调用 CLI 打开系统浏览器。
+    // CLI 数据源:后端直接调用 CLI 打开系统浏览器。
     if source_id.starts_with("cli-") {
         let source_id_cloned = source_id.clone();
         let record_path_cloned = record_path.clone();
@@ -1429,7 +1462,7 @@ pub async fn open_record_page(
                     Some(&source_id),
                     Some(&normalized_record_id),
                     false,
-                    "通过 Salesforce CLI 打开记录详情页失败，回退 frontdoor URL。",
+                    "通过 Salesforce CLI 打开记录详情页失败,回退 frontdoor URL。",
                     Some(&detail),
                 );
             }
@@ -1442,14 +1475,14 @@ pub async fn open_record_page(
                     Some(&source_id),
                     Some(&normalized_record_id),
                     false,
-                    "通过 Salesforce CLI 打开记录详情页线程失败，回退 frontdoor URL。",
+                    "通过 Salesforce CLI 打开记录详情页线程失败,回退 frontdoor URL。",
                     Some(&error),
                 );
             }
         }
     }
 
-    // 回退策略：构建 frontdoor URL，交由前端打开（仍可自动带登录态）。
+    // 回退策略:构建 frontdoor URL,交由前端打开(仍可自动带登录态)。
     let effective_source = if source_id.starts_with("cli-") {
         match refresh_cli_source_token(
             &app,
@@ -1471,7 +1504,7 @@ pub async fn open_record_page(
                     Some(&source_id),
                     Some(&normalized_record_id),
                     false,
-                    "刷新 token 失败，回退使用本地 token 构建 frontdoor 地址。",
+                    "刷新 token 失败,回退使用本地 token 构建 frontdoor 地址。",
                     Some(&detail),
                 );
                 source.clone()
@@ -1501,8 +1534,8 @@ pub async fn open_record_page(
     Ok(Some(final_url))
 }
 
-/// 读取对象字段元数据（Describe）。
-/// 读取对象 describe，并在 CLI 数据源 401 时自动刷新 token 后重试。
+/// 读取对象字段元数据(Describe)。
+/// 读取对象 describe,并在 CLI 数据源 401 时自动刷新 token 后重试。
 async fn load_object_describe_with_auto_refresh(
     app: &tauri::AppHandle,
     state: &State<'_, AppState>,
@@ -1516,7 +1549,7 @@ async fn load_object_describe_with_auto_refresh(
         Err(error) if is_unauthorized_error(&error) && source_id.starts_with("cli-") => {
             let refreshed_source =
                 refresh_cli_source_token(app, state, source_id, action, Some(object_name)).await?;
-            // 刷新成功后覆盖当前 source，确保后续父对象 describe 复用最新 token。
+            // 刷新成功后覆盖当前 source,确保后续父对象 describe 复用最新 token。
             *source = refreshed_source.clone();
             state
                 .sf_client
@@ -1527,7 +1560,7 @@ async fn load_object_describe_with_auto_refresh(
     }
 }
 
-/// 在后端补齐 reference 字段 childRelationshipName，前端仅负责展示。
+/// 在后端补齐 reference 字段 childRelationshipName,前端仅负责展示。
 async fn hydrate_reference_field_child_relationship_names(
     app: &tauri::AppHandle,
     state: &State<'_, AppState>,
@@ -1588,11 +1621,11 @@ async fn hydrate_reference_field_child_relationship_names(
                     if child.deprecated_and_hidden {
                         continue;
                     }
-                    // 严格匹配：childSObject 必须等于当前对象名。
+                    // 严格匹配:childSObject 必须等于当前对象名。
                     if child.child_sobject.trim() != current_object_name {
                         continue;
                     }
-                    // 严格匹配：field 必须等于当前字段名。
+                    // 严格匹配:field 必须等于当前字段名。
                     if child.field.trim() != current_field_name {
                         continue;
                     }
@@ -1607,7 +1640,7 @@ async fn hydrate_reference_field_child_relationship_names(
             }
         }
 
-        // 统一回写到字段元数据，前端直接展示该值。
+        // 统一回写到字段元数据,前端直接展示该值。
         field.metadata.insert(
             "childRelationshipName".to_string(),
             serde_json::Value::String(relationship_names.join(", ")),
@@ -1683,7 +1716,7 @@ pub async fn describe_object(
     }
 }
 
-/// 解析字段配置的 Child Relationship Name（优先使用 Tooling API）。
+/// 解析字段配置的 Child Relationship Name(优先使用 Tooling API)。
 #[tauri::command]
 pub async fn resolve_field_child_relationship_name(
     app: tauri::AppHandle,
@@ -1820,7 +1853,7 @@ pub async fn query_records(
                 Some(&source_id),
                 None,
                 true,
-                &format!("执行查询成功，返回 {} 条。", result.total_size),
+                &format!("执行查询成功,返回 {} 条。", result.total_size),
                 Some(&soql),
             );
             Ok(result)
@@ -1917,7 +1950,7 @@ pub async fn create_record(
     }
 }
 
-/// 批量保存记录（同时支持新增与更新）。
+/// 批量保存记录(同时支持新增与更新)。
 #[tauri::command]
 pub async fn save_records(
     app: tauri::AppHandle,
@@ -1981,7 +2014,7 @@ pub async fn save_records(
                 Some(&payload.object_name),
                 true,
                 &format!(
-                    "批量保存成功，新增 {} 条，更新 {} 条。",
+                    "批量保存成功,新增 {} 条,更新 {} 条。",
                     create_count, update_count
                 ),
                 None,
@@ -2159,11 +2192,11 @@ pub async fn delete_record(
 struct LlmReferenceFieldSummary {
     /// 查找/主从字段 API Name。
     field_name: String,
-    /// 父对象候选 API Name 列表（referenceTo）。
+    /// 父对象候选 API Name 列表(referenceTo)。
     reference_to: Vec<String>,
-    /// 父关系名（用于父字段访问，如 Parent__r.Name）。
+    /// 父关系名(用于父字段访问,如 Parent__r.Name)。
     relationship_name: String,
-    /// 子关系名列表（由 childRelationshipName 补齐，和前端字段展开逻辑一致）。
+    /// 子关系名列表(由 childRelationshipName 补齐,和前端字段展开逻辑一致)。
     child_relationship_names: Vec<String>,
 }
 
@@ -2173,7 +2206,7 @@ struct LlmChildRelationshipSummary {
     child_object: String,
     /// 子对象上的父引用字段 API Name。
     field_name: String,
-    /// 子查询 relationshipName（用于 SELECT (SELECT ... FROM relationshipName)）。
+    /// 子查询 relationshipName(用于 SELECT (SELECT ... FROM relationshipName))。
     relationship_name: String,
 }
 
@@ -2185,15 +2218,15 @@ struct LlmObjectMetadataSummary {
     object_label: String,
     /// 字段 API Name 列表。
     field_names: Vec<String>,
-    /// 引用关系字段摘要（用于自动推导父对象）。
+    /// 引用关系字段摘要(用于自动推导父对象)。
     reference_fields: Vec<LlmReferenceFieldSummary>,
-    /// 子关系摘要（用于自动推导子查询 relationshipName）。
+    /// 子关系摘要(用于自动推导子查询 relationshipName)。
     child_relationships: Vec<LlmChildRelationshipSummary>,
 }
 
 #[derive(Debug, Clone)]
 struct ParsedSoqlPayload {
-    /// 响应模式：answer/generate/clarify。
+    /// 响应模式:answer/generate/clarify。
     mode: String,
     /// 需要继续确认的问题列表。
     questions: Vec<String>,
@@ -2209,7 +2242,7 @@ struct ParsedSoqlPayload {
     answer: Option<String>,
 }
 
-/// 读取 LLM 设置，未配置时返回默认值。
+/// 读取 LLM 设置,未配置时返回默认值。
 fn read_llm_settings(state: &State<'_, AppState>) -> Result<LlmSettings, String> {
     let connection = state
         .db
@@ -2245,7 +2278,7 @@ fn read_llm_settings(state: &State<'_, AppState>) -> Result<LlmSettings, String>
     Ok(parsed)
 }
 
-/// 生成对前端安全的 LLM 设置视图（隐藏 apiKey 明文）。
+/// 生成对前端安全的 LLM 设置视图(隐藏 apiKey 明文)。
 fn to_llm_settings_view(settings: &LlmSettings) -> LlmSettingsView {
     let configured = !settings.api_key.trim().is_empty();
     LlmSettingsView {
@@ -2258,7 +2291,7 @@ fn to_llm_settings_view(settings: &LlmSettings) -> LlmSettingsView {
     }
 }
 
-/// 对 apiKey 做掩码处理，避免前端拿到明文。
+/// 对 apiKey 做掩码处理,避免前端拿到明文。
 fn mask_api_key(api_key: &str) -> String {
     let trimmed = api_key.trim();
     if trimmed.is_empty() {
@@ -2271,12 +2304,18 @@ fn mask_api_key(api_key: &str) -> String {
     format!("{}****{}", &trimmed[0..3], tail)
 }
 
-/// LLM 工具：按关键词检索对象列表。
+/// LLM 工具:按关键词检索对象列表。
 const TOOL_FIND_OBJECTS: &str = "find_salesforce_objects";
-/// LLM 工具：获取对象字段与关系元数据。
+/// LLM 工具:获取对象字段与关系元数据。
 const TOOL_GET_OBJECT_METADATA: &str = "get_salesforce_object_metadata";
+/// LLM 工具:按关键词搜索对象字段。
+const TOOL_SEARCH_OBJECT_FIELDS: &str = "search_salesforce_object_fields";
+/// LLM 工具:获取单个字段元数据。
+const TOOL_GET_FIELD_METADATA: &str = "get_salesforce_field_metadata";
+/// LLM 工具:获取对象关系图。
+const TOOL_GET_OBJECT_RELATIONSHIP_GRAPH: &str = "get_salesforce_object_relationship_graph";
 
-/// 调用 LLM（工具循环版）：允许模型按需拉取元数据后再返回最终 JSON。
+/// 调用 LLM(工具循环版):允许模型按需拉取元数据后再返回最终 JSON。
 async fn call_llm_with_tools_loop(
     app: &tauri::AppHandle,
     state: &State<'_, AppState>,
@@ -2295,11 +2334,11 @@ async fn call_llm_with_tools_loop(
     } else {
         "对话模式"
     };
-    // 先推送“进入工具模式”的提示片段，避免前端长时间停在初始占位文案。
+    // 先推送"进入工具模式"的提示片段,避免前端长时间停在初始占位文案。
     emit_ai_progress_chunk(
         app,
         stream_request_id,
-        &format!("AI 正在补充 Salesforce 元数据（{mode_label}）…\n"),
+        &format!("AI 正在补充 Salesforce 元数据({mode_label})…\n"),
     );
 
     let cancel_token = stream_request_id.map(|request_id| {
@@ -2312,7 +2351,7 @@ async fn call_llm_with_tools_loop(
         let tools = build_soql_llm_tools();
         let mut round = 0usize;
         let max_rounds = 3usize;
-        // 工具循环总耗时上限：避免单次请求长时间无响应。
+        // 工具循环总耗时上限:避免单次请求长时间无响应。
         let max_loop_duration = Duration::from_millis(
             llm_settings
                 .timeout_ms
@@ -2322,9 +2361,9 @@ async fn call_llm_with_tools_loop(
         );
         let started_at = Instant::now();
         let mut tool_messages = build_openai_messages_from_history(messages);
-        // 对象列表缓存：只在工具触发时懒加载，避免主流程直连 Salesforce 元数据接口。
+        // 对象列表缓存:只在工具触发时懒加载,避免主流程直连 Salesforce 元数据接口。
         let mut cached_queryable_objects: Option<Vec<SalesforceObject>> = None;
-        // 记录工具调用签名，避免模型陷入重复调用导致长时间无响应。
+        // 记录工具调用签名,避免模型陷入重复调用导致长时间无响应。
         let mut tool_signature_counter: HashMap<String, usize> = HashMap::new();
 
         while round < max_rounds {
@@ -2337,7 +2376,7 @@ async fn call_llm_with_tools_loop(
             }
             if started_at.elapsed() > max_loop_duration {
                 return Err(format!(
-                    "AI 生成超时：工具链路已运行超过 {} 秒，请缩小查询范围或稍后重试。",
+                    "AI 生成超时:工具链路已运行超过 {} 秒,请缩小查询范围或稍后重试。",
                     max_loop_duration.as_secs()
                 ));
             }
@@ -2361,7 +2400,7 @@ async fn call_llm_with_tools_loop(
                 Err(error) => return Err(AppError::to_string_error(error)),
             };
 
-            // 先回填 assistant 本轮消息，保证工具调用上下文完整。
+            // 先回填 assistant 本轮消息,保证工具调用上下文完整。
             tool_messages.push(completion.assistant_message.clone());
             if completion.tool_calls.is_empty() {
                 if let Some(parsed) = completion.parsed_json {
@@ -2370,7 +2409,7 @@ async fn call_llm_with_tools_loop(
                 }
                 let content_preview = completion.raw_content.chars().take(600).collect::<String>();
                 return Err(format!(
-                    "{}。模型原始输出片段：{}",
+                    "{}。模型原始输出片段:{}",
                     completion
                         .parsed_json_error
                         .unwrap_or_else(|| "LLM 返回内容不是合法 JSON 对象".to_string()),
@@ -2378,7 +2417,7 @@ async fn call_llm_with_tools_loop(
                 ));
             }
 
-            // 依次执行模型请求的工具调用，并把结果作为 tool 角色消息回灌。
+            // 依次执行模型请求的工具调用,并把结果作为 tool 角色消息回灌。
             for tool_call in completion.tool_calls.iter() {
                 let signature = format!("{}::{}", tool_call.name, tool_call.arguments.trim());
                 let next_count = tool_signature_counter
@@ -2389,14 +2428,14 @@ async fn call_llm_with_tools_loop(
                 tool_signature_counter.insert(signature, next_count);
                 if next_count > 1 {
                     return Err(format!(
-                        "AI 重复请求相同工具参数（{}），为避免卡死已终止。请补充更明确的对象/字段后重试。",
+                        "AI 重复请求相同工具参数({}),为避免卡死已终止。请补充更明确的对象/字段后重试。",
                         tool_call.name
                     ));
                 }
                 emit_ai_progress_chunk(
                     app,
                     stream_request_id,
-                    &format!("AI 正在调用工具：{}…\n", tool_call.name),
+                    &format!("AI 正在调用工具:{}…\n", tool_call.name),
                 );
                 let tool_result = execute_soql_llm_tool_call(
                     app,
@@ -2426,20 +2465,20 @@ async fn call_llm_with_tools_loop(
                 }));
             }
 
-            // 每轮工具执行后仅注入轻量提示，避免重复塞入大体量快照导致上下文膨胀。
+            // 每轮工具执行后仅注入轻量提示,避免重复塞入大体量快照导致上下文膨胀。
             tool_messages.push(json!({
                 "role": "system",
-                "content": "请基于最新 tool 结果继续推理；优先直接产出最终 JSON，不要重复请求已获取过的对象元数据。"
+                "content": "请基于最新 tool 结果继续推理;优先直接产出最终 JSON,不要重复请求已获取过的对象元数据。"
             }));
             if round > 1 {
                 tool_messages.push(json!({
                     "role": "system",
-                    "content": format!("当前已执行 {round} 轮工具调用。若信息已足够，请直接返回最终 JSON，不要重复调用工具。")
+                    "content": format!("当前已执行 {round} 轮工具调用。若信息已足够,请直接返回最终 JSON,不要重复调用工具。")
                 }));
             }
         }
 
-        Err("LLM 工具调用超过最大轮次，请补充更明确的对象/字段信息后重试。".to_string())
+        Err("LLM 工具调用超过最大轮次,请补充更明确的对象/字段信息后重试。".to_string())
     }
     .await;
 
@@ -2517,7 +2556,7 @@ fn build_openai_messages_from_history(messages: &[LlmChatMessage]) -> Vec<Value>
         .collect::<Vec<_>>()
 }
 
-/// 执行单个工具调用：读取本地已授权 Salesforce 元数据并返回 JSON 结果。
+/// 执行单个工具调用:读取本地已授权 Salesforce 元数据并返回 JSON 结果。
 async fn execute_soql_llm_tool_call(
     app: &tauri::AppHandle,
     state: &State<'_, AppState>,
@@ -2530,7 +2569,7 @@ async fn execute_soql_llm_tool_call(
 ) -> Result<Value, String> {
     let args = serde_json::from_str::<Value>(tool_call.arguments.trim()).map_err(|error| {
         format!(
-            "工具 `{}` 参数解析失败：{error}。arguments={}",
+            "工具 `{}` 参数解析失败:{error}。arguments={}",
             tool_call.name, tool_call.arguments
         )
     })?;
@@ -2631,11 +2670,11 @@ async fn execute_soql_llm_tool_call(
                 "loadedObjects": loaded_object_names
             }))
         }
-        _ => Err(format!("未知工具调用：{}", tool_call.name)),
+        _ => Err(format!("未知工具调用:{}", tool_call.name)),
     }
 }
 
-/// 确保对象元数据已加载到摘要缓存；可选连带加载 referenceTo 父对象。
+/// 确保对象元数据已加载到摘要缓存;可选连带加载 referenceTo 父对象。
 async fn ensure_object_metadata_loaded(
     app: &tauri::AppHandle,
     state: &State<'_, AppState>,
@@ -2668,7 +2707,7 @@ async fn ensure_object_metadata_loaded(
         }
         described_set.insert(normalized);
 
-        // 每次仅 describe 必需对象；失败时不中断整个工具链。
+        // 每次仅 describe 必需对象;失败时不中断整个工具链。
         let mut describe = match load_object_describe_with_auto_refresh(
             app,
             state,
@@ -2683,14 +2722,14 @@ async fn ensure_object_metadata_loaded(
             Err(error) => {
                 if next_name.eq_ignore_ascii_case(root_object_name) {
                     return Err(format!(
-                        "读取对象 `{}` 元数据失败：{}",
+                        "读取对象 `{}` 元数据失败:{}",
                         root_object_name, error
                     ));
                 }
                 continue;
             }
         };
-        // 与前端字段展开一致：为引用字段补齐 childRelationshipName。
+        // 与前端字段展开一致:为引用字段补齐 childRelationshipName。
         let _ = hydrate_reference_field_child_relationship_names(
             app,
             state,
@@ -2725,7 +2764,7 @@ async fn ensure_object_metadata_loaded(
         .any(|item| item.eq_ignore_ascii_case(root_object_name));
     if !root_loaded {
         return Err(format!(
-            "未找到对象 `{}` 的元数据，请确认对象 API Name 是否正确。",
+            "未找到对象 `{}` 的元数据,请确认对象 API Name 是否正确。",
             root_object_name
         ));
     }
@@ -2747,7 +2786,7 @@ fn resolve_canonical_object_name_from_objects(
         .map(|item| item.name.clone())
 }
 
-/// 按需读取可查询对象列表，并在 CLI 数据源 401 时自动刷新 token。
+/// 按需读取可查询对象列表,并在 CLI 数据源 401 时自动刷新 token。
 async fn load_queryable_objects_with_auto_refresh(
     app: &tauri::AppHandle,
     state: &State<'_, AppState>,
@@ -2773,7 +2812,7 @@ async fn load_queryable_objects_with_auto_refresh(
         .collect::<Vec<_>>())
 }
 
-/// 从模型原始 JSON 解析结构化载荷，解析失败时降级为 clarify。
+/// 从模型原始 JSON 解析结构化载荷,解析失败时降级为 clarify。
 fn parse_llm_soql_payload(raw: &serde_json::Value) -> ParsedSoqlPayload {
     let mode = raw
         .get("mode")
@@ -2853,7 +2892,7 @@ fn parse_llm_soql_payload(raw: &serde_json::Value) -> ParsedSoqlPayload {
     }
 }
 
-/// 将 describe 结果压缩为 LLM 需要的关系摘要，避免暴露无关噪声字段。
+/// 将 describe 结果压缩为 LLM 需要的关系摘要,避免暴露无关噪声字段。
 fn build_object_metadata_summary(describe: &ObjectDescribe) -> LlmObjectMetadataSummary {
     let field_names = describe
         .fields
@@ -2931,7 +2970,7 @@ fn build_object_metadata_summary(describe: &ObjectDescribe) -> LlmObjectMetadata
     }
 }
 
-/// 构造模型输入消息：包含系统约束、元数据摘要和多轮历史。
+/// 构造模型输入消息:包含系统约束、元数据摘要和多轮历史。
 fn build_llm_messages(
     history: &[LlmChatMessage],
     all_objects: &[SalesforceObject],
@@ -2940,38 +2979,38 @@ fn build_llm_messages(
     generate_mode: bool,
 ) -> Vec<LlmChatMessage> {
     let mode_prompt = if generate_mode {
-        "当前模式：生成模式。优先输出可执行 SOQL。"
+        "当前模式:生成模式。优先输出可执行 SOQL。"
     } else {
-        "当前模式：对话模式。仅回答问题，不要输出 SOQL，除非用户明确要求“生成SOQL”。"
+        "当前模式:对话模式。仅回答问题,不要输出 SOQL,除非用户明确要求“生成SOQL”。"
     };
     let system_prompt = format!(
         "{}\n{}",
         mode_prompt,
         r#"
 你是 Salesforce SOQL 生成助手。
-必须遵守：
-1) 你是专业 Salesforce 工程师，先回答用户问题，再决定是否生成 SOQL。
-2) 必须输出 mode：
-   - answer: 只回答，不生成 SOQL
+必须遵守:
+1) 你是专业 Salesforce 工程师,先回答用户问题,再决定是否生成 SOQL。
+2) 必须输出 mode:
+   - answer: 只回答,不生成 SOQL
    - generate: 回答 + 生成 SOQL
-   - clarify: 需求模糊，提出问题直到明确
-3) 若用户明确要求“生成SOQL”，优先返回 mode=generate 且给出 soql。
-4) 仅当“对象无法确定”或“业务冲突无法消解”时返回 mode=clarify。
-5) 你只能通过 tools 获取 Salesforce 元数据；禁止假设不存在于工具结果中的对象、字段、关系。
-6) 若用户要求“父对象 + 子对象”或给了子对象 API 名，先基于 metadata 中的 child_relationships / reference_fields 自动推导父对象 API 与子关系名，不要直接反问。
-7) 如果 metadata 仍不足，优先调用工具补齐，再提问；提问必须使用中文。
-8) 若用户说“全部数据/全量数据”，按 SOQL 特性处理：使用对象全部可用字段（不允许 SELECT *），默认附加 LIMIT 200 与可读排序（如 CreatedDate DESC）。
-9) 除非用户明确要求，不要因为 IsDeleted/LIMIT/排序等默认边界反复追问；可在 reason 里说明默认假设。
-10) 仅允许输出 SELECT 语句，可包含子查询、聚合、分组、排序、函数。
+   - clarify: 需求模糊,提出问题直到明确
+3) 若用户明确要求"生成SOQL",优先返回 mode=generate 且给出 soql。
+4) 仅当"对象无法确定"或"业务冲突无法消解"时返回 mode=clarify。
+5) 你只能通过 tools 获取 Salesforce 元数据;禁止假设不存在于工具结果中的对象、字段、关系。
+6) 若用户要求"父对象 + 子对象"或给了子对象 API 名,先基于 metadata 中的 child_relationships / reference_fields 自动推导父对象 API 与子关系名,不要直接反问。
+7) 如果 metadata 仍不足,优先调用工具补齐,再提问;提问必须使用中文。
+8) 若用户说"全部数据/全量数据",按 SOQL 特性处理:使用对象全部可用字段(不允许 SELECT *),默认附加 LIMIT 200 与可读排序(如 CreatedDate DESC)。
+9) 除非用户明确要求,不要因为 IsDeleted/LIMIT/排序等默认边界反复追问;可在 reason 里说明默认假设。
+10) 仅允许输出 SELECT 语句,可包含子查询、聚合、分组、排序、函数。
 11) 禁止输出 INSERT/UPDATE/DELETE/UPSERT/MERGE。
-12) 只能使用给定元数据中的对象与字段，不能臆造。
-13) 仅输出 JSON 对象，不要输出额外文本。
-JSON 结构：
+12) 只能使用给定元数据中的对象与字段,不能臆造。
+13) 仅输出 JSON 对象,不要输出额外文本。
+JSON 结构:
 {
   \"mode\": \"answer|generate|clarify\",
   \"status\": \"clarify|ready\",
   \"questions\": [\"...\"],
-  \"answer\": \"...（对用户问题的专业回答）\",
+  \"answer\": \"...(对用户问题的专业回答)\",
   \"soql\": \"...\",
   \"object\": \"...\",
   \"fields\": [\"...\"],
@@ -2990,13 +3029,13 @@ JSON 结构：
     }];
     messages.push(LlmChatMessage {
         role: LlmChatRole::System,
-        content: format!("元数据上下文：{}", metadata_snapshot),
+        content: format!("元数据上下文:{}", metadata_snapshot),
     });
     messages.extend_from_slice(history);
     messages
 }
 
-/// 构建分层元数据快照：对象摘要 + 重点对象字段 + 按需补充说明。
+/// 构建分层元数据快照:对象摘要 + 重点对象字段 + 按需补充说明。
 fn build_layered_metadata_snapshot(
     all_objects: &[SalesforceObject],
     object_metadata_map: &HashMap<String, LlmObjectMetadataSummary>,
@@ -3062,12 +3101,12 @@ fn build_layered_metadata_snapshot(
     serde_json::json!({
         "layer1ObjectSummaries": object_summaries,
         "layer2FocusObjectDetails": focus_object_details,
-        "layer3OnDemandPolicy": "若字段不足，可在对话中向用户确认后按需补充；优先使用已提供字段生成或回答。",
+        "layer3OnDemandPolicy": "若字段不足,可在对话中向用户确认后按需补充;优先使用已提供字段生成或回答。",
         "contextObjectHint": context_object_hint.unwrap_or("")
     })
 }
 
-/// 压缩上下文：超过阈值时，把旧消息汇总为摘要并保留最近消息。
+/// 压缩上下文:超过阈值时,把旧消息汇总为摘要并保留最近消息。
 fn compress_history_in_place(history: &mut Vec<LlmChatMessage>, max_chars: usize) {
     let total_chars = history
         .iter()
@@ -3093,7 +3132,7 @@ fn compress_history_in_place(history: &mut Vec<LlmChatMessage>, max_chars: usize
         summary_lines.push(format!("[{role}] {snippet}"));
     }
     let mut summary_text = format!(
-        "【历史对话摘要（自动压缩）】\n{}\n【摘要结束】",
+        "【历史对话摘要(自动压缩)】\n{}\n【摘要结束】",
         summary_lines.join("\n")
     );
     if summary_text.chars().count() > 6000 {
@@ -3108,7 +3147,7 @@ fn compress_history_in_place(history: &mut Vec<LlmChatMessage>, max_chars: usize
     *history = next_history;
 }
 
-/// 判断用户当前输入是否明确要求“生成/输出 SOQL”。
+/// 判断用户当前输入是否明确要求"生成/输出 SOQL"。
 fn should_generate_soql(user_message: &str) -> bool {
     let lower = user_message.to_lowercase();
     let hit_keywords = [
@@ -3127,16 +3166,16 @@ fn should_generate_soql(user_message: &str) -> bool {
     hit_keywords.iter().any(|item| lower.contains(item))
 }
 
-/// 生成默认澄清问题，确保模糊场景下始终可继续对话。
+/// 生成默认澄清问题,确保模糊场景下始终可继续对话。
 fn fallback_questions() -> Vec<String> {
     vec![
-        "请先明确要查询的 Salesforce 对象（例如 Account、Contact）。".to_string(),
-        "如果对象已明确，我将按默认边界先生成可执行 SOQL（LIMIT 200、默认排序），你再按需调整。"
+        "请先明确要查询的 Salesforce 对象(例如 Account、Contact)。".to_string(),
+        "如果对象已明确,我将按默认边界先生成可执行 SOQL(LIMIT 200、默认排序),你再按需调整。"
             .to_string(),
     ]
 }
 
-/// 校验数据源写入参数，避免保存明显非法值。
+/// 校验数据源写入参数,避免保存明显非法值。
 fn validate_payload(payload: &SourceUpsertPayload) -> Result<(), String> {
     if payload.name.trim().is_empty() {
         return Err("Source name cannot be empty".to_string());
