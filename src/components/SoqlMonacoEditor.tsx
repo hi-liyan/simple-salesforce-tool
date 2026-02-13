@@ -19,6 +19,10 @@ type SoqlMonacoEditorProps = {
   objectNames?: string[];
   // 对象到字段名列表的映射：用于基于 FROM 对象做上下文补全。
   objectFieldsMap?: Record<string, string[]>;
+  // 自动换行模式：默认按视口宽度换行，可按调用方场景覆盖。
+  wordWrapMode?: "off" | "on" | "wordWrapColumn" | "bounded";
+  // 自动换行列宽：当使用 wordWrapColumn/bounded 时生效。
+  wordWrapColumn?: number;
   // 额外样式类名。
   className?: string;
 };
@@ -343,6 +347,8 @@ export function SoqlMonacoEditor({
   fieldNames = [],
   objectNames = [],
   objectFieldsMap = {},
+  wordWrapMode = "on",
+  wordWrapColumn = 80,
   className = ""
 }: SoqlMonacoEditorProps) {
   const monaco = useMonaco();
@@ -415,7 +421,8 @@ export function SoqlMonacoEditor({
         }}
         options={{
           minimap: { enabled: false },
-          wordWrap: "on",
+          wordWrap: wordWrapMode,
+          wordWrapColumn,
           // 关闭 Monaco 的词汇型建议，避免与自定义 SOQL 补全混合导致“看起来重复”。
           wordBasedSuggestions: "off",
           renderLineHighlight: "all",
