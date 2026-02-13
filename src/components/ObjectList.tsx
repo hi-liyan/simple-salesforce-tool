@@ -1,67 +1,13 @@
 ﻿import { ChevronDown, ChevronRight } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
-import { ObjectDescribe, ObjectField, SalesforceObject } from "../types";
-
-// 元数据键名中文映射：用于字段元数据展示时的中文化。
-const METADATA_KEY_LABELS: Record<string, string> = {
-  aggregatable: "可聚合",
-  aiPredictionField: "AI 预测字段",
-  autoNumber: "自动编号",
-  byteLength: "字节长度",
-  calculated: "计算字段",
-  calculatedFormula: "计算公式",
-  cascadeDelete: "级联删除",
-  caseSensitive: "区分大小写",
-  compoundFieldName: "复合字段名",
-  controllerName: "控制字段",
-  createable: "可创建",
-  custom: "自定义字段",
-  defaultValue: "默认值",
-  defaultedOnCreate: "创建时默认赋值",
-  deleteConstraint: "删除约束",
-  dependentPicklist: "从属选项列表",
-  deprecatedAndHidden: "已弃用且隐藏",
-  digits: "数字位数",
-  displayLocationInDecimal: "地理位置小数位",
-  encrypted: "加密字段",
-  externalId: "外部 ID",
-  filterable: "可过滤",
-  groupable: "可分组",
-  highScaleNumber: "高精度数值",
-  htmlFormatted: "HTML 格式化",
-  idLookup: "ID 查找",
-  inlineHelpText: "内联帮助文本",
-  label: "标签",
-  length: "长度",
-  mask: "掩码",
-  maskType: "掩码类型",
-  name: "名称",
-  nameField: "名称字段",
-  namePointing: "名称指向",
-  nillable: "可为空",
-  permissionable: "可授权",
-  picklistValues: "选项值",
-  polymorphicForeignKey: "多态外键",
-  precision: "精度",
-  queryByDistance: "支持距离查询",
-  referenceTargetField: "关联目标字段",
-  referenceTo: "关联对象",
-  relationshipName: "关系名",
-  childRelationshipName: "子关系名",
-  relationshipOrder: "关系顺序",
-  restrictedDelete: "受限删除",
-  restrictedPicklist: "受限选项列表",
-  scale: "小数位",
-  searchable: "可搜索",
-  soapType: "SOAP 类型",
-  sortable: "可排序",
-  type: "类型",
-  defaultValueFormula: "默认值公式",
-  unique: "唯一",
-  updateable: "可更新",
-  writeRequiresMasterRead: "写入需主记录读取权限"
-};
+import { ObjectDescribe, SalesforceObject } from "../types";
+import {
+  buildDisplayMetadataFromField,
+  formatFieldMetadataValue,
+  sortFieldMetadataEntries,
+  translateFieldMetadataKey
+} from "../utils/fieldMetadata";
 
 type Props = {
   // 对象数据列表。
@@ -174,110 +120,6 @@ export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, 
     setExpandedFieldKeys((current) =>
       current.includes(key) ? current.filter((item) => item !== key) : [...current, key]
     );
-  }
-
-  // 字段类型展示转换：reference 进一步细分为 参照关系（Lookup） / 父子关系（Master-Detail）。
-  function getDisplayFieldType(field: ObjectField): string {
-    if (field.dataType !== "reference") return field.dataType;
-    const relationshipOrder = field.metadata?.relationshipOrder;
-    const hasRelationshipOrder = typeof relationshipOrder === "number";
-    const writeRequiresMasterRead = field.metadata?.writeRequiresMasterRead === true;
-    const cascadeDelete = field.metadata?.cascadeDelete === true;
-    // 经验规则：Master-Detail 常带 relationshipOrder / writeRequiresMasterRead / cascadeDelete。
-    if (hasRelationshipOrder || writeRequiresMasterRead || cascadeDelete) {
-      return "Master-Detail";
-    }
-    return "Lookup";
-  }
-
-  // 组装字段展示元数据：覆盖 type，子关系名直接读取后端回填值。
-  function buildDisplayMetadata(field: ObjectField): Record<string, unknown> {
-    const metadata = { ...(field.metadata || {}) };
-    metadata.type = getDisplayFieldType(field);
-    // 参照字段统一输出子关系名键：后端负责计算，前端仅兜底格式。
-    if (field.dataType === "reference") {
-      const resolvedValue =
-        typeof metadata.childRelationshipName === "string" ? metadata.childRelationshipName.trim() : "";
-      metadata.childRelationshipName = resolvedValue;
-    }
-    return metadata;
-  }
-
-  // 将 metadata 值转换为可读文本，复杂对象转 JSON 字符串。
-  function stringifyMetadataValue(value: unknown): string {
-    if (value === null || value === undefined) return "";
-    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
-    try {
-      return JSON.stringify(value);
-    } catch {
-      return String(value);
-    }
-  }
-
-  // 元数据键名中文化：若没有映射则回退为原键名，避免信息丢失。
-  function translateMetadataKey(metaKey: string): string {
-    return METADATA_KEY_LABELS[metaKey] || metaKey;
-  }
-
-  // 元数据值格式化：与对象页表格保持一致（布尔值显示“是/否”）。
-  function formatMetadataValue(value: unknown): string {
-    if (typeof value === "boolean") {
-      return value ? "是" : "否";
-    }
-    if (Array.isArray(value)) {
-      return value.length === 0 ? "[]" : JSON.stringify(value);
-    }
-    if (value && typeof value === "object") {
-      return JSON.stringify(value);
-    }
-    if (value === null || value === undefined || value === "") {
-      return "-";
-    }
-    return stringifyMetadataValue(value);
-  }
-
-  // 元数据排序：优先展示高价值信息，其次按键名排序，提升可读性。
-  function sortMetadataEntries(metadata: Record<string, unknown>): Array<[string, unknown]> {
-    const priorityKeys = [
-      "type",
-      "name",
-      "label",
-      "referenceTo",
-      "relationshipName",
-      "childRelationshipName",
-      "picklistValues",
-      "nillable",
-      "createable",
-      "updateable",
-      "defaultedOnCreate",
-      "calculated",
-      "calculatedFormula",
-      "length",
-      "precision",
-      "scale",
-      "byteLength",
-      "unique",
-      "externalId",
-      "filterable",
-      "sortable",
-      "groupable",
-      "defaultValue",
-      "defaultValueFormula",
-      "inlineHelpText"
-    ];
-    const priorityOrder = priorityKeys.reduce<Record<string, number>>((acc, key, index) => {
-      acc[key] = index;
-      return acc;
-    }, {});
-
-    return Object.entries(metadata).sort(([leftKey], [rightKey]) => {
-      const leftRank = priorityOrder[leftKey] ?? Number.MAX_SAFE_INTEGER;
-      const rightRank = priorityOrder[rightKey] ?? Number.MAX_SAFE_INTEGER;
-      if (leftRank !== rightRank) {
-        return leftRank - rightRank;
-      }
-      return leftKey.localeCompare(rightKey);
-    });
   }
 
   // 右键菜单动作：打开当前组织的 Salesforce 对象列表页（自动登录）。
@@ -468,9 +310,9 @@ export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, 
                     objectFields.map((field) => {
                       const fieldKey = buildFieldKey(objectName, field.name);
                       const fieldExpanded = expandedFieldKeys.includes(fieldKey);
-                      // 展示前统一加工元数据：类型细分 + 子关系名兜底。
-                      const displayMetadata = buildDisplayMetadata(field);
-                      const metadataEntries = sortMetadataEntries(displayMetadata);
+                      // 展示前统一加工元数据：复用公共逻辑，确保与对象页 info icon 完全一致。
+                      const displayMetadata = buildDisplayMetadataFromField(field);
+                      const metadataEntries = sortFieldMetadataEntries(displayMetadata);
 
                       return (
                         <div key={fieldKey} className="mb-1 rounded border border-base-300 bg-base-100">
@@ -485,7 +327,7 @@ export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, 
                             {fieldExpanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
                             <span className="truncate text-[11px] font-medium">{field.label}</span>
                             <span className="truncate text-[11px] text-neutral/70">({field.name})</span>
-                            <span className="ml-auto shrink-0 text-[10px] text-neutral/60">{getDisplayFieldType(field)}</span>
+                            <span className="ml-auto shrink-0 text-[10px] text-neutral/60">{String(displayMetadata.type || "-")}</span>
                           </button>
 
                           {/* 字段元数据：展示常用属性与 metadata 原始键值。 */}
@@ -496,7 +338,7 @@ export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, 
                               )}
                               {metadataEntries.map(([metaKey, metaValue]) => (
                                 <p key={`${fieldKey}-meta-${metaKey}`} className="break-all">
-                                  {translateMetadataKey(metaKey)}: {formatMetadataValue(metaValue)}
+                                  {translateFieldMetadataKey(metaKey)}: {formatFieldMetadataValue(metaValue)}
                                 </p>
                               ))}
                             </div>

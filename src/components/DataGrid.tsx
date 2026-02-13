@@ -14,6 +14,12 @@ import {
 import "@glideapps/glide-data-grid/dist/index.css";
 import { api } from "../api";
 import { QueryResult } from "../types";
+import {
+  buildDisplayMetadataFromRaw,
+  formatFieldMetadataValue,
+  sortFieldMetadataEntries,
+  translateFieldMetadataKey
+} from "../utils/fieldMetadata";
 
 type Props = {
   result: QueryResult;
@@ -612,7 +618,8 @@ export function DataGrid({
 
             setHoveredHeaderMeta({
               fieldName: columnId,
-              metadata,
+              // 元数据展示统一走共享格式化逻辑，确保与 SOQL 执行器字段展开完全一致。
+              metadata: buildDisplayMetadataFromRaw(metadata),
               anchorClientX,
               anchorClientY
             });
@@ -682,7 +689,7 @@ export function DataGrid({
                   className="block text-[12px] leading-[1.5]"
                   style={{ color: "#dbe7ff", fontFamily: "'Cascadia Mono', Consolas, 'Courier New', monospace" }}
                 >
-                  {translateFieldMetaKey(key)}: {formatFieldMetaValue(value)}
+                  {translateFieldMetadataKey(key)}: {formatFieldMetadataValue(value)}
                 </p>
               ))}
             </div>
@@ -883,99 +890,6 @@ function normalizeBooleanText(value: unknown): string {
 function normalizeSelectValue(raw: string, options: { label: string; value: string }[]): string {
   if (options.some((item) => item.value === raw)) return raw;
   return options[0]?.value ?? "";
-}
-
-// 字段元数据键名中文映射。
-function translateFieldMetaKey(key: string): string {
-  const map: Record<string, string> = {
-    name: "API 名称",
-    label: "标签",
-    type: "字段类型",
-    nillable: "可为空",
-    createable: "可创建",
-    updateable: "可更新",
-    defaultedOnCreate: "创建时默认值",
-    calculated: "是否公式字段",
-    calculatedFormula: "公式表达式",
-    length: "长度",
-    precision: "精度",
-    scale: "小数位",
-    unique: "是否唯一",
-    externalId: "外部 ID",
-    filterable: "可筛选",
-    sortable: "可排序",
-    groupable: "可分组",
-    referenceTo: "引用对象",
-    relationshipName: "关系名称",
-    byteLength: "字节长度",
-    inlineHelpText: "帮助文本",
-    defaultValue: "默认值",
-    defaultValueFormula: "默认值公式",
-    picklistValues: "选项列表"
-  };
-  return map[key] || key;
-}
-
-// 字段元数据值格式化。
-function formatFieldMetaValue(value: unknown): string {
-  if (typeof value === "boolean") {
-    return value ? "是" : "否";
-  }
-  if (Array.isArray(value)) {
-    return value.length === 0 ? "[]" : JSON.stringify(value);
-  }
-  if (value && typeof value === "object") {
-    return JSON.stringify(value);
-  }
-  if (value === null || value === undefined || value === "") {
-    return "-";
-  }
-  return String(value);
-}
-
-// 按业务可读性排序字段元数据：优先展示类型与基础信息，其次展示约束与扩展属性。
-function sortFieldMetadataEntries(metadata: Record<string, unknown>): Array<[string, unknown]> {
-  // 预设优先级：将“字段类型”等高价值信息放在前面，便于快速判断字段行为。
-  const priorityKeys = [
-    "type",
-    "name",
-    "label",
-    "referenceTo",
-    "relationshipName",
-    "picklistValues",
-    "nillable",
-    "createable",
-    "updateable",
-    "defaultedOnCreate",
-    "calculated",
-    "calculatedFormula",
-    "length",
-    "precision",
-    "scale",
-    "byteLength",
-    "unique",
-    "externalId",
-    "filterable",
-    "sortable",
-    "groupable",
-    "defaultValue",
-    "defaultValueFormula",
-    "inlineHelpText"
-  ];
-  const priorityOrder = priorityKeys.reduce<Record<string, number>>((acc, key, index) => {
-    acc[key] = index;
-    return acc;
-  }, {});
-
-  return Object.entries(metadata).sort(([leftKey], [rightKey]) => {
-    const leftRank = priorityOrder[leftKey] ?? Number.MAX_SAFE_INTEGER;
-    const rightRank = priorityOrder[rightKey] ?? Number.MAX_SAFE_INTEGER;
-    if (leftRank !== rightRank) {
-      return leftRank - rightRank;
-    }
-    // 同优先级时按键名排序，保证展示顺序稳定。
-    return leftKey.localeCompare(rightKey);
-  });
 }
 
 // 将值转换为数字。
