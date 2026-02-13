@@ -1,5 +1,5 @@
 ﻿import { useEffect, useMemo, useRef, useState } from "react";
-import { MessageSquare, Play, Plus, Table2, WandSparkles, X } from "lucide-react";
+import { Loader2, MessageSquare, Play, Plus, Table2, WandSparkles, X } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import { DataGrid } from "../../components/DataGrid";
 import { NoticeAlert } from "../../components/NoticeAlert";
@@ -67,6 +67,16 @@ type SoqlExecutorWorkspaceProps = {
 
 type BottomView = "result" | "logs";
 
+// AI 等待文案池：用于长耗时阶段轮换展示，降低“卡住感”。
+const AI_STREAMING_COPY_POOL = [
+  "AI 正在玩命思考中",
+  "正在翻工具箱找最稳的写法",
+  "正在和 Salesforce 元数据对暗号",
+  "正在把需求翻译成可执行 SOQL",
+  "正在检查字段和关系是否可用",
+  "马上就好，正在做最后一轮推理"
+];
+
 // SOQL 执行器工作区：支持多 Tab、执行、结果展示与查询日志。
 export function SoqlExecutorWorkspace({ selectedSourceId, loadingText, objects }: SoqlExecutorWorkspaceProps) {
   // SOQL 执行器的多标签状态。
@@ -100,11 +110,18 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText, objects }
     () => tabs.find((item) => item.id === activeTabId) || null,
     [tabs, activeTabId]
   );
+  // 是否存在任意进行中的 AI 流式任务：用于控制等待文案轮换定时器。
+  const hasLoadingAiTask = useMemo(
+    () => tabs.some((tab) => tab.aiLoading && Boolean(tab.aiStreamRequestId)),
+    [tabs]
+  );
   // 平台检测：用于区分 Mac 的 Command 键与 Windows 的 Alt 键发送快捷键。
   const isMacPlatform = useMemo(() => {
     if (typeof navigator === "undefined") return false;
     return /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent);
   }, []);
+  // 发送快捷键提示文案：按平台区分显示。
+  const aiSendShortcutHint = isMacPlatform ? "发送快捷键：Command + Enter" : "发送快捷键：Alt + Enter";
 
   useEffect(() => {
     if (!activeTab?.notice) return;
@@ -130,11 +147,7 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText, objects }
       setTabs((current) =>
         current.map((tab) => {
           if (tab.aiStreamRequestId !== requestId) return tab;
-          const nextMessages = tab.aiMessages.map((item) => {
-            if (item.id !== requestId || item.role !== "assistant") return item;
-            return { ...item, content: nextStreamingPlaceholder(item.content) };
-          });
-          return { ...tab, aiMessages: nextMessages };
+          return advanceStreamingPlaceholderForTab(tab, requestId);
         })
       );
     }).then((dispose) => {
@@ -146,6 +159,26 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText, objects }
       unlisten?.();
     };
   }, []);
+
+  useEffect(() => {
+    if (!hasLoadingAiTask) return;
+    // 定时轮换等待文案：即使后端暂时没有新 chunk，也能持续反馈“AI 正在工作”。
+    const timer = window.setInterval(() => {
+      setTabs((current) => {
+        let changed = false;
+        const next = current.map((tab) => {
+          if (!tab.aiLoading || !tab.aiStreamRequestId) return tab;
+          const nextTab = advanceStreamingPlaceholderForTab(tab, tab.aiStreamRequestId);
+          if (nextTab !== tab) changed = true;
+          return nextTab;
+        });
+        return changed ? next : current;
+      });
+    }, 950);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [hasLoadingAiTask]);
 
   useEffect(() => {
     // 切换 Tab 或状态更新时同步 ref，保证执行入口读取到当前激活 Tab 的选区文本。
@@ -368,7 +401,7 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText, objects }
       aiMessages: [
         ...tab.aiMessages,
         { id: `user-${streamRequestId}`, role: "user", content: prompt },
-        { id: streamRequestId, role: "assistant", content: "AI 正在生成" }
+        { id: streamRequestId, role: "assistant", content: createInitialStreamingPlaceholder() }
       ]
     }));
 
@@ -552,10 +585,27 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText, objects }
               ) : (
                 activeTab.aiMessages.map((item, index) => {
                   const userSide = item.role === "user";
+                  // 等待态判定：仅对当前流式请求的 assistant 气泡展示动效与增强文案。
+                  const assistantThinking = !userSide && activeTab.aiLoading && item.id === activeTab.aiStreamRequestId;
                   return (
                     <div key={item.id} className={`mb-3 flex ${userSide ? "justify-end" : "justify-start"}`}>
-                      <div className={`max-w-[78%] rounded-2xl px-3 py-2 text-[12px] ${userSide ? "bg-primary text-primary-content" : "bg-base-200 text-base-content"}`}>
-                        <p>{item.content || (item.role === "assistant" ? "..." : "")}</p>
+                      <div
+                        className={`max-w-[78%] rounded-2xl px-3 py-2 text-[12px] ${userSide ? "bg-primary text-primary-content" : "bg-base-200 text-base-content"} ${assistantThinking ? "border border-primary/30 bg-primary/5 shadow-sm" : ""}`}
+                      >
+                        {/* 等待态正文：用旋转图标和脉冲文案强化“AI 正在工作”。 */}
+                        <p className={assistantThinking ? "flex items-center gap-2 motion-safe:animate-pulse" : ""}>
+                          {assistantThinking && (
+                            // 等待态图标：旋转动效用于反馈系统存活。
+                            <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-primary/15 text-primary">
+                              <Loader2 size={11} className="animate-spin" />
+                            </span>
+                          )}
+                          <span>{item.content || (item.role === "assistant" ? "..." : "")}</span>
+                        </p>
+                        {assistantThinking && (
+                          // 等待态辅助提示：告诉用户可主动停止本轮请求。
+                          <p className="mt-1 text-[11px] text-neutral/70">AI 正在持续推理中，可点击右侧“停止”结束本轮。</p>
+                        )}
                         {item.status === "clarify" && (item.questions?.length || 0) > 0 && (
                           <div className="mt-2 text-[12px]">
                             {item.questions?.map((question, questionIndex) => (
@@ -585,34 +635,42 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText, objects }
               )}
             </div>
             {/* 输入区：位于底部，支持连续多轮对话。 */}
-            <div className="mt-2 flex items-center gap-2">
-              <input
-                className="input input-bordered input-sm w-full"
-                value={activeTab.aiPromptDraft}
-                placeholder="输入问题或明确说“请生成 SOQL”"
-                onChange={(event) => {
-                  patchActiveTab((tab) => ({ ...tab, aiPromptDraft: event.target.value })); // 同步 AI 对话输入草稿。
-                }}
-                onKeyDown={(event) => {
-                  // 发送快捷键：macOS 使用 Command+Enter，Windows 使用 Alt+Enter。
-                  if (event.key !== "Enter") return;
-                  const canSend = isMacPlatform ? event.metaKey : event.altKey;
-                  if (!canSend) return;
-                  event.preventDefault(); // 阻止回车触发表单默认提交或换行行为。
-                  if (activeTab.aiLoading) return; // 正在请求时忽略回车，避免重复并发发送。
-                  void sendAiPrompt();
-                }}
-                disabled={activeTab.aiLoading}
-              />
-              <button className="btn btn-primary btn-sm" disabled={activeTab.aiLoading} onClick={() => void sendAiPrompt()}>
-                <WandSparkles size={14} />
-                {activeTab.aiLoading ? "发送中" : "发送"}
-              </button>
-              {activeTab.aiLoading && (
-                <button className="btn btn-outline btn-sm" onClick={() => void stopAiStreaming()}>
-                  停止
+            <div className="mt-2">
+              {/* 输入与操作按钮行。 */}
+              <div className="flex items-end gap-2">
+                {/* 多行输入框：支持自然换行与多段描述输入。 */}
+                <textarea
+                  className="textarea textarea-bordered textarea-sm w-full min-h-[84px] max-h-40 resize-y leading-5"
+                  value={activeTab.aiPromptDraft}
+                  placeholder="输入问题或明确说“请生成 SOQL”"
+                  rows={3}
+                  wrap="soft"
+                  onChange={(event) => {
+                    patchActiveTab((tab) => ({ ...tab, aiPromptDraft: event.target.value })); // 同步 AI 对话输入草稿。
+                  }}
+                  onKeyDown={(event) => {
+                    // 发送快捷键：macOS 使用 Command+Enter，Windows 使用 Alt+Enter。
+                    if (event.key !== "Enter") return;
+                    const canSend = isMacPlatform ? event.metaKey : event.altKey;
+                    if (!canSend) return;
+                    event.preventDefault(); // 触发发送快捷键时阻止 textarea 默认插入换行。
+                    if (activeTab.aiLoading) return; // 正在请求时忽略回车，避免重复并发发送。
+                    void sendAiPrompt();
+                  }}
+                  disabled={activeTab.aiLoading}
+                />
+                <button className="btn btn-primary btn-sm" disabled={activeTab.aiLoading} onClick={() => void sendAiPrompt()}>
+                  <WandSparkles size={14} />
+                  {activeTab.aiLoading ? "发送中" : "发送"}
                 </button>
-              )}
+                {activeTab.aiLoading && (
+                  <button className="btn btn-outline btn-sm" onClick={() => void stopAiStreaming()}>
+                    停止
+                  </button>
+                )}
+              </div>
+              {/* 快捷键提示：根据当前平台展示对应组合键。 */}
+              <p className="mt-1 text-right text-[11px] text-neutral/60">{aiSendShortcutHint}</p>
             </div>
           </div>
         ) : (
@@ -1021,10 +1079,33 @@ function formatLogTime(timestamp: string): string {
   return date.toLocaleString();
 }
 
-// 生成流式占位文案：避免把原始 JSON 片段直接渲染到聊天气泡。
+// 创建流式等待初始文案：统一从文案池第一项启动。
+function createInitialStreamingPlaceholder(): string {
+  return `${AI_STREAMING_COPY_POOL[0]}.`;
+}
+
+// 推进指定请求的等待文案：仅更新对应 assistant 气泡文本。
+function advanceStreamingPlaceholderForTab(tab: SoqlExecutorTab, requestId: string): SoqlExecutorTab {
+  let changed = false;
+  const nextMessages = tab.aiMessages.map((item) => {
+    if (item.id !== requestId || item.role !== "assistant") return item;
+    changed = true;
+    return { ...item, content: nextStreamingPlaceholder(item.content) };
+  });
+  return changed ? { ...tab, aiMessages: nextMessages } : tab;
+}
+
+// 生成流式占位文案：轮换有趣文案并追加点动画，避免“卡住感”。
 function nextStreamingPlaceholder(current: string): string {
-  const base = "AI 正在生成";
-  const suffix = current.startsWith(base) ? current.slice(base.length) : "";
-  const dotCount = Math.min(3, (suffix.match(/\./g) || []).length + 1);
-  return `${base}${".".repeat(dotCount)}`;
+  const currentIndex = AI_STREAMING_COPY_POOL.findIndex((copy) => current.startsWith(copy));
+  const dotMatch = current.match(/(\.+)$/);
+  const currentDotCount = Math.min(3, dotMatch ? dotMatch[1].length : 0);
+  const nextDotCount = currentDotCount >= 3 ? 1 : Math.max(1, currentDotCount + 1);
+  const nextIndex =
+    currentIndex < 0
+      ? 0
+      : currentDotCount >= 3
+        ? (currentIndex + 1) % AI_STREAMING_COPY_POOL.length
+        : currentIndex;
+  return `${AI_STREAMING_COPY_POOL[nextIndex]}${".".repeat(nextDotCount)}`;
 }
