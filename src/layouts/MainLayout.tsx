@@ -1,30 +1,19 @@
-import { ReactNode } from "react";
-import { Box, CssBaseline, ThemeProvider } from "@mui/material";
-import { theme } from "../theme";
+﻿import { ReactNode } from "react";
 
 type MainLayoutProps = {
   navRail: ReactNode;
   content: ReactNode;
 };
 
-// 主布局：只负责整体两栏布局与主题外壳。
+// 主布局：负责左侧导航与右侧内容区的两栏结构。
 export function MainLayout({ navRail, content }: MainLayoutProps) {
   return (
-    // 主题提供器：提供桌面风格主题。
-    <ThemeProvider theme={theme}>
-      {/* CSS Reset：统一默认样式。 */}
-      <CssBaseline />
-      {/* 页面网格布局：左侧导航条 + 主内容区域。 */}
-      <Box sx={{ height: "100vh", width: "100vw", display: "grid", gridTemplateColumns: "56px 1fr", overflow: "hidden" }}>
-        {/* 左侧导航条容器。 */}
-        <Box sx={{ display: "flex", flexDirection: "column", minHeight: 0, borderRight: "1px solid", borderColor: "divider" }}>
-          {navRail}
-        </Box>
-        {/* 主内容容器。 */}
-        <Box sx={{ minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-          {content}
-        </Box>
-      </Box>
-    </ThemeProvider>
+    // 页面网格：固定导航宽度 + 自适应内容区。
+    <div className="grid h-screen w-screen grid-cols-[56px_1fr] overflow-hidden bg-base-200 text-neutral">
+      {/* 左侧导航栏容器。 */}
+      <div className="flex min-h-0 flex-col border-r border-base-300">{navRail}</div>
+      {/* 右侧主内容容器。 */}
+      <div className="flex min-h-0 min-w-0 flex-col overflow-hidden">{content}</div>
+    </div>
   );
 }

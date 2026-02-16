@@ -1,4 +1,4 @@
-﻿use chrono::Utc;
+use chrono::Utc;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 use std::collections::HashMap;
 
@@ -54,9 +54,44 @@ pub fn init_schema(connection: &Connection) -> Result<(), AppError> {
         );
 
         CREATE INDEX IF NOT EXISTS idx_system_logs_created_at ON system_logs(created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS app_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
         "#,
     )?;
 
+    Ok(())
+}
+
+/// 读取应用配置项，不存在时返回 None。
+pub fn read_app_setting(connection: &Connection, key: &str) -> Result<Option<String>, AppError> {
+    let value: Option<String> = connection
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = ?1",
+            [key],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(value)
+}
+
+/// 写入应用配置项（UPSERT）。
+pub fn write_app_setting(connection: &Connection, key: &str, value: &str) -> Result<(), AppError> {
+    let now = Utc::now().to_rfc3339();
+    connection.execute(
+        "INSERT INTO app_settings (key, value, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+        params![key, value, now],
+    )?;
+    Ok(())
+}
+
+/// 删除应用配置项。
+pub fn delete_app_setting(connection: &Connection, key: &str) -> Result<(), AppError> {
+    connection.execute("DELETE FROM app_settings WHERE key = ?1", [key])?;
     Ok(())
 }
 
@@ -204,8 +239,14 @@ pub fn upsert_source_with_id(
 pub fn prune_cli_sources(connection: &Connection, keep_ids: &[String]) -> Result<(), AppError> {
     if keep_ids.is_empty() {
         // 当 CLI 无任何可用账号时，直接清空全部 cli-* 来源及关联缓存。
-        connection.execute("DELETE FROM object_metadata_cache WHERE source_id LIKE 'cli-%'", [])?;
-        connection.execute("DELETE FROM column_visibility_settings WHERE source_id LIKE 'cli-%'", [])?;
+        connection.execute(
+            "DELETE FROM object_metadata_cache WHERE source_id LIKE 'cli-%'",
+            [],
+        )?;
+        connection.execute(
+            "DELETE FROM column_visibility_settings WHERE source_id LIKE 'cli-%'",
+            [],
+        )?;
         connection.execute("DELETE FROM salesforce_sources WHERE id LIKE 'cli-%'", [])?;
         return Ok(());
     }
@@ -240,8 +281,14 @@ pub fn prune_cli_sources(connection: &Connection, keep_ids: &[String]) -> Result
 /// 删除数据源及其对象缓存、字段可见性配置。
 pub fn delete_source(connection: &Connection, id: &str) -> Result<(), AppError> {
     connection.execute("DELETE FROM salesforce_sources WHERE id = ?1", [id])?;
-    connection.execute("DELETE FROM object_metadata_cache WHERE source_id = ?1", [id])?;
-    connection.execute("DELETE FROM column_visibility_settings WHERE source_id = ?1", [id])?;
+    connection.execute(
+        "DELETE FROM object_metadata_cache WHERE source_id = ?1",
+        [id],
+    )?;
+    connection.execute(
+        "DELETE FROM column_visibility_settings WHERE source_id = ?1",
+        [id],
+    )?;
     Ok(())
 }
 
@@ -289,9 +336,8 @@ pub fn read_object_cache(
     connection: &Connection,
     source_id: &str,
 ) -> Result<Option<Vec<SalesforceObject>>, AppError> {
-    let mut statement = connection.prepare(
-        "SELECT payload, updated_at FROM object_metadata_cache WHERE source_id = ?1",
-    )?;
+    let mut statement = connection
+        .prepare("SELECT payload, updated_at FROM object_metadata_cache WHERE source_id = ?1")?;
 
     let cache = statement
         .query_row([source_id], |row| {
@@ -374,7 +420,8 @@ pub fn list_system_logs(
     let safe_size = page_size.clamp(10, 200);
     let offset = (safe_page - 1) * safe_size;
 
-    let total: i64 = connection.query_row("SELECT COUNT(1) FROM system_logs", [], |row| row.get(0))?;
+    let total: i64 =
+        connection.query_row("SELECT COUNT(1) FROM system_logs", [], |row| row.get(0))?;
 
     let mut statement = connection.prepare(
         "SELECT id, created_at, level, category, action, source_id, target, success, message, detail

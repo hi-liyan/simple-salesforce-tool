@@ -1,25 +1,14 @@
-﻿import { ChangeEvent, useEffect, useRef, useState } from "react";
-import {
-  Alert,
-  Box,
-  Button,
-  CircularProgress,
-  Divider,
-  FormControl,
-  IconButton,
-  InputAdornment,
-  MenuItem,
-  Select,
-  SelectChangeEvent,
-  Stack,
-  TextField,
-  Typography
-} from "@mui/material";
+﻿import { useEffect, useRef, useState } from "react";
 import { PanelRightOpen, Play, Plus, RotateCcw, ScrollText, Search, Trash2, X } from "lucide-react";
 import { DataGrid } from "../../components/DataGrid";
+import { NoticeAlert } from "../../components/NoticeAlert";
+import { SoqlMonacoEditor } from "../../components/SoqlMonacoEditor";
+import { api } from "../../api";
 import { Notice, TabState } from "../../types";
 
 type RightWorkspaceProps = {
+  // 当前选中的数据源 ID：用于打开外部 Salesforce 页面。
+  selectedSourceId: string;
   tabs: TabState[];
   activeTabObjectName: string;
   activeTab: TabState | null;
@@ -27,8 +16,20 @@ type RightWorkspaceProps = {
   visibleColumns: string[];
   fieldMetadataMap: Record<string, Record<string, unknown>>;
   hasPendingChanges: boolean;
+  // 待删除记录 Id 列表：用于在表格中高亮“将要删除”的行。
+  pendingDeleteRecordIds: string[];
   onActivateTab: (objectName: string) => void;
   onCloseTab: (objectName: string) => void;
+  // 关闭当前（右键菜单：关闭当前）。
+  onCloseCurrentTab: (objectName: string) => void;
+  // 关闭左侧（右键菜单：关闭左侧）。
+  onCloseLeftTabs: (objectName: string) => void;
+  // 关闭右侧（右键菜单：关闭右侧）。
+  onCloseRightTabs: (objectName: string) => void;
+  // 关闭其他（右键菜单：关闭其他）。
+  onCloseOtherTabs: (objectName: string) => void;
+  // 全部关闭（右键菜单：全部关闭）。
+  onCloseAllTabs: () => void;
   onCreateRecord: () => void;
   onDeleteCheckedRecords: () => void;
   onApplyPendingChanges: () => void;
@@ -51,9 +52,14 @@ type RightWorkspaceProps = {
   onExecuteCustomSoql: () => void;
   onCloseWorkspaceNotice: () => void;
   onCloseActiveTabNotice: () => void;
+  loadingText: string;
+  // 可补全的对象名集合：来自当前数据源 Objects 列表。
+  objectNames: string[];
 };
 
+// 右侧工作区：包含 Tab、查询工具栏、数据表格、日志面板和字段抽屉。
 export function RightWorkspace({
+  selectedSourceId,
   tabs,
   activeTabObjectName,
   activeTab,
@@ -61,8 +67,14 @@ export function RightWorkspace({
   visibleColumns,
   fieldMetadataMap,
   hasPendingChanges,
+  pendingDeleteRecordIds,
   onActivateTab,
   onCloseTab,
+  onCloseCurrentTab,
+  onCloseLeftTabs,
+  onCloseRightTabs,
+  onCloseOtherTabs,
+  onCloseAllTabs,
   onCreateRecord,
   onDeleteCheckedRecords,
   onApplyPendingChanges,
@@ -84,13 +96,34 @@ export function RightWorkspace({
   onSoqlChange,
   onExecuteCustomSoql,
   onCloseWorkspaceNotice,
-  onCloseActiveTabNotice
+  onCloseActiveTabNotice,
+  loadingText,
+  objectNames
 }: RightWorkspaceProps) {
+  // 日志面板高度状态。
   const [logPanelHeight, setLogPanelHeight] = useState(220);
+  // 是否正在拖拽日志面板分隔条。
   const [draggingLogResize, setDraggingLogResize] = useState(false);
   const dragStartYRef = useRef(0);
   const dragStartHeightRef = useRef(220);
+  // 字段与 SOQL 抽屉宽度状态：支持鼠标拖拽调整。
+  const [drawerWidth, setDrawerWidth] = useState(360);
+  // 是否正在拖拽抽屉宽度分隔条。
+  const [draggingDrawerResize, setDraggingDrawerResize] = useState(false);
+  // 抽屉拖拽起始点 X 坐标。
+  const drawerResizeStartXRef = useRef(0);
+  // 抽屉拖拽起始宽度。
+  const drawerResizeStartWidthRef = useRef(360);
+  // 拖拽前 body 的 user-select 样式，结束拖拽后恢复。
+  const prevBodyUserSelectRef = useRef("");
+  // 拖拽前 body 的 cursor 样式，结束拖拽后恢复。
+  const prevBodyCursorRef = useRef("");
+  // Tab 右键菜单状态：记录显示位置和目标 Tab。
+  const [tabContextMenu, setTabContextMenu] = useState<{ x: number; y: number; objectName: string } | null>(null);
+  // 编辑器对象字段缓存：支持 FROM 任意对象后做字段补全。
+  const [soqlObjectFieldsMap, setSoqlObjectFieldsMap] = useState<Record<string, string[]>>({});
 
+  // 日志面板拖拽调整高度。
   useEffect(() => {
     if (!draggingLogResize) return;
 
@@ -113,407 +146,567 @@ export function RightWorkspace({
     };
   }, [draggingLogResize]);
 
+  // 字段与 SOQL 抽屉拖拽调整宽度：鼠标移动时更新宽度，抬起时结束拖拽。
+  useEffect(() => {
+    if (!draggingDrawerResize) return;
+
+    // 进入拖拽：禁用文本选中并统一鼠标样式，避免误选中与拖拽卡顿。
+    prevBodyUserSelectRef.current = document.body.style.userSelect;
+    prevBodyCursorRef.current = document.body.style.cursor;
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "col-resize";
+
+    const onMouseMove = (event: MouseEvent) => {
+      const deltaX = drawerResizeStartXRef.current - event.clientX; // 抽屉从左边缘拖拽，向左移动时宽度增大。
+      const rawWidth = drawerResizeStartWidthRef.current + deltaX;
+      const maxWidth = Math.min(560, Math.max(420, Math.floor(window.innerWidth * 0.5))); // 双重上限：按窗口比例限制，并设置固定封顶，避免大屏下抽屉过宽。
+      const nextWidth = Math.max(280, Math.min(maxWidth, rawWidth)); // 最小宽度限制：避免抽屉内容不可读。
+      setDrawerWidth(nextWidth);
+    };
+
+    const onMouseUp = () => {
+      setDraggingDrawerResize(false); // 结束拖拽状态，解除全局监听。
+    };
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+      // 退出拖拽：恢复页面原有光标与文本选中样式。
+      document.body.style.userSelect = prevBodyUserSelectRef.current;
+      document.body.style.cursor = prevBodyCursorRef.current;
+    };
+  }, [draggingDrawerResize]);
+
+  // 全局关闭右键菜单：点击空白、滚动、按下 ESC 时关闭菜单。
+  useEffect(() => {
+    if (!tabContextMenu) return;
+
+    const closeMenu = () => {
+      setTabContextMenu(null); // 关闭菜单，避免残留浮层。
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      closeMenu(); // ESC 快捷关闭菜单。
+    };
+
+    window.addEventListener("click", closeMenu);
+    window.addEventListener("scroll", closeMenu, true);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("click", closeMenu);
+      window.removeEventListener("scroll", closeMenu, true);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [tabContextMenu]);
+
+  // 当前对象可排序字段：仅展示字段元数据中 sortable=true 的字段。
+  const sortableFields = (activeTab?.describe?.fields || []).filter((field) => field.metadata?.sortable === true);
+
+  useEffect(() => {
+    setSoqlObjectFieldsMap({}); // 切换数据源后清空缓存，避免跨源字段污染。
+  }, [selectedSourceId]);
+
+  // 抽屉 SOQL 自动格式化：把“单行长 SQL”转换为多行，提升可读性。
+  useEffect(() => {
+    if (!activeTab) return;
+    const formattedSoql = formatSingleLineSoqlForDrawer(activeTab.soqlDraft);
+    if (formattedSoql === activeTab.soqlDraft) return;
+    onSoqlChange(formattedSoql); // 仅在格式化结果变化时写回，避免循环更新。
+  }, [activeTab, onSoqlChange]);
+
+  useEffect(() => {
+    if (!selectedSourceId || !activeTab) return;
+    const fromObjectNames = extractFromObjectNames(activeTab.soqlDraft);
+    if (fromObjectNames.length === 0) return;
+    const queryableObjectNameSet = new Set(objectNames.map((name) => name.toLowerCase()));
+    const loadedObjectNameSet = new Set(Object.keys(soqlObjectFieldsMap).map((name) => name.toLowerCase()));
+    const unloadedObjectNames = fromObjectNames.filter((objectName) => {
+      if (!queryableObjectNameSet.has(objectName.toLowerCase())) return false; // 仅加载当前数据源可查询对象。
+      return !loadedObjectNameSet.has(objectName.toLowerCase());
+    });
+    if (unloadedObjectNames.length === 0) return;
+
+    let cancelled = false;
+    void Promise.all(
+      unloadedObjectNames.map(async (objectName) => {
+        try {
+          const describe = await api.describeObject(selectedSourceId, objectName);
+          return {
+            objectName,
+            fields: describe.fields.map((field) => field.name)
+          };
+        } catch {
+          return null; // describe 失败时忽略，不阻塞其它对象字段加载。
+        }
+      })
+    ).then((describes) => {
+      if (cancelled) return;
+      const loadedEntries = describes.filter((item): item is { objectName: string; fields: string[] } => Boolean(item));
+      if (loadedEntries.length === 0) return;
+      setSoqlObjectFieldsMap((current) => {
+        const next = { ...current };
+        loadedEntries.forEach((item) => {
+          next[item.objectName] = item.fields; // 写入缓存，供编辑器上下文补全读取。
+        });
+        return next;
+      });
+    });
+
+    return () => {
+      cancelled = true; // 避免异步返回后写入已失效状态。
+    };
+  }, [selectedSourceId, activeTab, objectNames, soqlObjectFieldsMap]);
+
   return (
     <>
+      {/* 工作区全局提示。 */}
       {workspaceNotice && (
-        <Alert
-          severity={workspaceNotice.type === "error" ? "error" : "success"}
+        <NoticeAlert
+          tone={workspaceNotice.type === "error" ? "error" : "success"}
+          message={workspaceNotice.message}
           onClose={onCloseWorkspaceNotice}
-          sx={{
-            position: "fixed",
-            top: 16,
-            right: 16,
-            zIndex: 60,
-            maxWidth: 560,
-            boxShadow: 4
-          }}
-        >
-          {workspaceNotice.message}
-        </Alert>
+          className="fixed right-4 top-4 z-[60] max-w-[380px] shadow-lg"
+        />
       )}
 
-      <Box sx={{ display: "flex", overflowX: "auto", borderBottom: "1px solid", borderColor: "divider" }}>
-        {tabs.length === 0 && (
-          <Typography variant="caption" sx={{ px: 2, py: 1.2, color: "text.secondary" }}>
-            请选择左侧 Object 打开标签页
-          </Typography>
-        )}
+      {/* Tab 栏。 */}
+      <div className="flex overflow-x-auto border-b border-base-300">
+        {tabs.length === 0 && <span className="px-2 py-1.5 text-[12px] text-neutral/70">请选择左侧 Object 打开标签页</span>}
         {tabs.map((tab) => {
           const active = tab.objectName === activeTabObjectName;
+          const tabIndex = tabs.findIndex((item) => item.objectName === tab.objectName);
+          const hasLeftTabs = tabIndex > 0;
+          const hasRightTabs = tabIndex >= 0 && tabIndex < tabs.length - 1;
+          const hasOtherTabs = tabs.length > 1;
           return (
-            <Box
+            <div
               key={tab.objectName}
-              sx={{
-                display: "flex",
-                alignItems: "center",
-                borderRight: "1px solid",
-                borderColor: "divider",
-                bgcolor: active ? "background.paper" : "transparent"
+              className={`flex items-center border-r border-base-300 ${active ? "bg-base-100" : ""}`}
+              onContextMenu={(event) => {
+                event.preventDefault(); // 阻止浏览器默认右键菜单。
+                onActivateTab(tab.objectName); // 右键时先切换到目标 Tab，避免操作目标不一致。
+                setTabContextMenu({ x: event.clientX, y: event.clientY, objectName: tab.objectName }); // 打开自定义菜单。
               }}
             >
-              <Button
-                variant="text"
+              <button
+                className={`min-w-0 px-3 py-2 text-[12px] ${active ? "text-primary" : "text-neutral/70"}`}
                 onClick={() => onActivateTab(tab.objectName)}
-                sx={{ px: 1.5, py: 0.8, minWidth: 0, textTransform: "none", color: active ? "primary.main" : "text.secondary" }}
               >
                 {tab.objectName}
-              </Button>
-              <IconButton onClick={() => onCloseTab(tab.objectName)} sx={{ mr: 0.5 }}>
+              </button>
+              <button className="btn btn-circle btn-ghost btn-xs mr-1" onClick={() => onCloseTab(tab.objectName)}>
                 <X size={13} />
-              </IconButton>
-            </Box>
+              </button>
+              {/* Tab 右键菜单：提供常见批量关闭操作。 */}
+              {tabContextMenu?.objectName === tab.objectName && (
+                <div
+                  className="fixed z-[80] min-w-[132px] rounded border border-base-300 bg-base-100 p-1 shadow-xl"
+                  style={{ left: tabContextMenu.x, top: tabContextMenu.y }}
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <button
+                    className="btn btn-ghost btn-xs w-full justify-start"
+                    onClick={() => {
+                      onCloseCurrentTab(tab.objectName); // 关闭当前 Tab。
+                      setTabContextMenu(null); // 执行后关闭菜单。
+                    }}
+                  >
+                    关闭当前
+                  </button>
+                  <button
+                    className="btn btn-ghost btn-xs w-full justify-start"
+                    disabled={!hasLeftTabs}
+                    onClick={() => {
+                      onCloseLeftTabs(tab.objectName); // 关闭目标 Tab 左侧所有 Tab。
+                      setTabContextMenu(null); // 执行后关闭菜单。
+                    }}
+                  >
+                    关闭左侧
+                  </button>
+                  <button
+                    className="btn btn-ghost btn-xs w-full justify-start"
+                    disabled={!hasRightTabs}
+                    onClick={() => {
+                      onCloseRightTabs(tab.objectName); // 关闭目标 Tab 右侧所有 Tab。
+                      setTabContextMenu(null); // 执行后关闭菜单。
+                    }}
+                  >
+                    关闭右侧
+                  </button>
+                  <button
+                    className="btn btn-ghost btn-xs w-full justify-start"
+                    disabled={!hasOtherTabs}
+                    onClick={() => {
+                      onCloseOtherTabs(tab.objectName); // 仅保留目标 Tab，关闭其它 Tab。
+                      setTabContextMenu(null); // 执行后关闭菜单。
+                    }}
+                  >
+                    关闭其他
+                  </button>
+                  <button
+                    className="btn btn-ghost btn-xs w-full justify-start"
+                    disabled={tabs.length === 0}
+                    onClick={() => {
+                      onCloseAllTabs(); // 关闭全部 Tab。
+                      setTabContextMenu(null); // 执行后关闭菜单。
+                    }}
+                  >
+                    全部关闭
+                  </button>
+                </div>
+              )}
+            </div>
           );
         })}
-      </Box>
+      </div>
 
       {activeTab && (
-        <Box sx={{ position: "relative", display: "flex", minHeight: 0, flex: 1, overflow: "hidden" }}>
+        // 主工作区。
+        <div className="relative flex min-h-0 flex-1 overflow-hidden">
+          {/* 当前 Tab 提示。 */}
           {activeTab.notice && (
-            <Alert
-              severity={activeTab.notice.type === "error" ? "error" : "success"}
+            <NoticeAlert
+              tone={activeTab.notice.type === "error" ? "error" : "success"}
+              message={activeTab.notice.message}
               onClose={onCloseActiveTabNotice}
-              sx={{
-                position: "absolute",
-                top: 10,
-                right: 12,
-                zIndex: 40,
-                maxWidth: 560,
-                boxShadow: 3
-              }}
-            >
-              {activeTab.notice.message}
-            </Alert>
+              className="absolute right-3 top-2.5 z-40 max-w-[380px] shadow"
+            />
           )}
 
-          <Box sx={{ minWidth: 0, flex: 1, display: "flex", flexDirection: "column" }}>
-            <Box sx={{ px: 1.5, py: 0.75, borderBottom: "1px solid", borderColor: "divider" }}>
-              <Stack direction="row" spacing={0.5} alignItems="center">
-                <Button variant="outlined" startIcon={<Plus size={14} />} disabled={activeTab.loading} onClick={onCreateRecord} sx={{ height: 40 }}>
+          {/* 左侧主内容区：工具栏 + 查询栏 + 表格 + 日志。 */}
+          <div className="flex min-w-0 flex-1 flex-col">
+            <div className="border-b border-base-300 px-3 py-1.5">
+              <div className="flex flex-row items-center gap-1">
+                <button className="btn btn-outline btn-sm h-10" disabled={activeTab.loading} onClick={onCreateRecord}>
+                  <Plus size={14} />
                   新建记录
-                </Button>
-                <Button
-                  color="error"
-                  variant="outlined"
-                  startIcon={<Trash2 size={14} />}
+                </button>
+                <button
+                  className="btn btn-outline btn-error btn-sm h-10"
                   disabled={activeTab.loading || activeTab.selectedRecordIds.length === 0}
                   onClick={onDeleteCheckedRecords}
-                  sx={{ height: 40 }}
                 >
+                  <Trash2 size={14} />
                   删除勾选({activeTab.selectedRecordIds.length})
-                </Button>
-                <Button
-                  variant="outlined"
-                  startIcon={<Play size={14} />}
-                  disabled={activeTab.loading || !hasPendingChanges}
-                  onClick={onApplyPendingChanges}
-                  sx={{ height: 40 }}
-                >
+                </button>
+                <button className="btn btn-outline btn-sm h-10" disabled={activeTab.loading || !hasPendingChanges} onClick={onApplyPendingChanges}>
+                  <Play size={14} />
                   执行更新
-                </Button>
-                <Button
-                  variant="outlined"
-                  startIcon={<RotateCcw size={14} />}
-                  disabled={activeTab.loading || !hasPendingChanges}
-                  onClick={onDiscardPendingChanges}
-                  sx={{ height: 40 }}
-                >
+                </button>
+                <button className="btn btn-outline btn-sm h-10" disabled={activeTab.loading || !hasPendingChanges} onClick={onDiscardPendingChanges}>
+                  <RotateCcw size={14} />
                   撤回修改
-                </Button>
-                <Button variant="outlined" startIcon={<Search size={14} />} disabled={activeTab.loading} onClick={onToggleQueryBar} sx={{ height: 40 }}>
+                </button>
+                <button className="btn btn-outline btn-sm h-10" disabled={activeTab.loading} onClick={onToggleQueryBar}>
+                  <Search size={14} />
                   {activeTab.showQueryBar ? "隐藏查询栏" : "显示查询栏"}
-                </Button>
-                <Button variant="outlined" startIcon={<PanelRightOpen size={14} />} disabled={activeTab.loading} onClick={onToggleDrawer} sx={{ height: 40 }}>
+                </button>
+                <button className="btn btn-outline btn-sm h-10" disabled={activeTab.loading} onClick={onToggleDrawer}>
+                  <PanelRightOpen size={14} />
                   字段与SOQL
-                </Button>
-                <Button variant="outlined" startIcon={<ScrollText size={14} />} disabled={activeTab.loading} onClick={onToggleLogs} sx={{ height: 40 }}>
+                </button>
+                <button className="btn btn-outline btn-sm h-10" disabled={activeTab.loading} onClick={onToggleLogs}>
+                  <ScrollText size={14} />
                   日志
-                </Button>
-              </Stack>
-            </Box>
+                </button>
+              </div>
+            </div>
 
+            {/* 查询栏。 */}
             {activeTab.showQueryBar && (
-              <Box sx={{ px: 1.5, py: 1, borderBottom: "1px solid", borderColor: "divider" }}>
-                <Stack direction="row" spacing={1} alignItems="center" flexWrap="nowrap">
-                  <TextField
-                    label="WHERE"
-                    value={activeTab.whereClause}
-                    sx={{ width: 320 }}
-                    onChange={(event) => onWhereChange(event.target.value)}
-                    InputProps={{
-                      endAdornment: activeTab.whereClause ? (
-                        <InputAdornment position="end">
-                          <IconButton size="small" aria-label="清空 WHERE 条件" onClick={() => onWhereChange("")} edge="end">
-                            <X size={13} />
-                          </IconButton>
-                        </InputAdornment>
-                      ) : undefined
-                    }}
-                  />
-                  <TextField
-                    label="LIMIT"
-                    type="number"
-                    value={activeTab.limit}
-                    sx={{ width: 90 }}
-                    onChange={(event) => onLimitChange(Number(event.target.value || 200))}
-                  />
-                  <FormControl size="small" sx={{ width: 200 }}>
-                    <Select value={activeTab.sortField} onChange={(event: SelectChangeEvent) => onSortFieldChange(event.target.value)}>
-                      {(activeTab.describe?.fields || []).map((field) => (
-                        <MenuItem key={field.name} value={field.name}>
-                          {field.name}
-                        </MenuItem>
-                      ))}
-                    </Select>
-                  </FormControl>
-                  <FormControl size="small" sx={{ width: 92 }}>
-                    <Select
-                      value={activeTab.sortDirection}
-                      onChange={(event: SelectChangeEvent) => onSortDirectionChange(event.target.value as "ASC" | "DESC")}
+              <div className="border-b border-base-300 px-3 py-2">
+                <div className="flex flex-row items-center gap-2 flex-nowrap">
+                  <div className="w-[320px]">
+                    <label className="mb-1 block text-[12px]">WHERE</label>
+                    <div className="relative">
+                      <input
+                        className="input input-bordered input-sm w-full pr-8"
+                        value={activeTab.whereClause}
+                        onChange={(event) => onWhereChange(event.target.value)}
+                      />
+                      {activeTab.whereClause ? (
+                        <button
+                          className="btn btn-circle btn-ghost btn-xs absolute right-1 top-1/2 -translate-y-1/2"
+                          aria-label="清空 WHERE 条件"
+                          onClick={() => onWhereChange("")}
+                        >
+                          <X size={13} />
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <div className="w-[90px]">
+                    <label className="mb-1 block text-[12px]">LIMIT</label>
+                    <input
+                      className="input input-bordered input-sm w-full"
+                      type="number"
+                      value={activeTab.limit}
+                      onChange={(event) => onLimitChange(Number(event.target.value || 200))}
+                    />
+                  </div>
+
+                  <div className="w-[200px]">
+                    <label className="mb-1 block text-[12px]">排序字段</label>
+                    <select
+                      className="select select-bordered select-sm w-full"
+                      value={activeTab.sortField}
+                      disabled={sortableFields.length === 0}
+                      onChange={(event) => onSortFieldChange(event.target.value)}
                     >
-                      <MenuItem value="ASC">ASC</MenuItem>
-                      <MenuItem value="DESC">DESC</MenuItem>
-                    </Select>
-                  </FormControl>
-                  <Button startIcon={<Search size={14} />} disabled={activeTab.loading} sx={{ height: 35 }} onClick={onQuery}>
+                      {sortableFields.length === 0 && <option value="">无可排序字段</option>}
+                      {sortableFields.map((field) => (
+                        <option key={field.name} value={field.name}>
+                          {field.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="w-[92px]">
+                    <label className="mb-1 block text-[12px]">排序</label>
+                    <select
+                      className="select select-bordered select-sm w-full"
+                      value={activeTab.sortDirection}
+                      disabled={!activeTab.sortField}
+                      onChange={(event) => onSortDirectionChange(event.target.value as "ASC" | "DESC")}
+                    >
+                      <option value="ASC">ASC</option>
+                      <option value="DESC">DESC</option>
+                    </select>
+                  </div>
+
+                  <button className="btn btn-primary btn-sm mt-5 h-[35px]" disabled={activeTab.loading} onClick={onQuery}>
+                    <Search size={14} />
                     查询
-                  </Button>
-                </Stack>
-              </Box>
+                  </button>
+                </div>
+              </div>
             )}
 
-            <Box sx={{ minHeight: 0, flex: 1 }}>
+            {/* 数据网格区。 */}
+            <div className="min-h-0 flex-1">
               <DataGrid
                 result={activeTab.result}
                 visibleColumns={visibleColumns}
                 fieldMetadataMap={fieldMetadataMap}
                 dirtyCellKeys={activeTab.dirtyCellKeys}
                 selectedRecordIds={activeTab.selectedRecordIds}
+                pendingDeleteRecordIds={pendingDeleteRecordIds}
+                sourceId={selectedSourceId}
+                objectName={activeTab.objectName}
                 onToggleRecord={onToggleRecord}
                 onToggleAll={onToggleAllRecords}
                 onEditCell={onEditCell}
                 onShowMessage={onShowMessage}
               />
-            </Box>
+            </div>
 
+            {/* 日志面板。 */}
             {activeTab.showLogs && (
-              <Box
-                sx={{
-                  height: logPanelHeight,
-                  borderTop: "1px solid",
-                  borderColor: "divider",
-                  display: "flex",
-                  flexDirection: "column",
-                  minHeight: 0,
-                  position: "relative"
-                }}
-              >
-                <Box
+              <div className="relative flex min-h-0 flex-col border-t border-base-300" style={{ height: logPanelHeight }}>
+                <div
+                  className="absolute left-0 right-0 top-0 z-[1] h-[6px] cursor-row-resize"
                   onMouseDown={(event) => {
                     event.preventDefault();
                     dragStartYRef.current = event.clientY;
                     dragStartHeightRef.current = logPanelHeight;
                     setDraggingLogResize(true);
                   }}
-                  sx={{
-                    position: "absolute",
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    height: 6,
-                    cursor: "row-resize",
-                    zIndex: 1
-                  }}
                 />
-                <Box sx={{ px: 1.5, py: 0.75, borderBottom: "1px solid", borderColor: "divider" }}>
-                  <Stack direction="row" alignItems="center" justifyContent="space-between">
-                    <Typography variant="caption" color="text.secondary">
-                      操作日志（当前 Tab）
-                    </Typography>
-                    <IconButton size="small" onClick={onToggleLogs} aria-label="关闭日志">
+                <div className="border-b border-base-300 px-3 py-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[12px] text-neutral/70">操作日志（当前 Tab）</span>
+                    <button className="btn btn-circle btn-ghost btn-xs" onClick={onToggleLogs} aria-label="关闭日志">
                       <X size={14} />
-                    </IconButton>
-                  </Stack>
-                </Box>
-                <Box sx={{ minHeight: 0, flex: 1, overflow: "auto", px: 1.5, py: 1 }}>
-                  {activeTab.logs.length === 0 && (
-                    <Typography variant="caption" color="text.secondary">
-                      暂无日志。
-                    </Typography>
-                  )}
+                    </button>
+                  </div>
+                </div>
+                <div className="min-h-0 flex-1 overflow-auto px-3 py-2">
+                  {activeTab.logs.length === 0 && <span className="text-[12px] text-neutral/70">暂无日志。</span>}
                   {activeTab.logs.map((log) => (
-                    <Box key={log.id} sx={{ mb: 1, p: 1, border: "1px solid", borderColor: "divider", bgcolor: "background.paper" }}>
-                      <Typography variant="caption" sx={{ display: "block", mb: 0.5, color: log.success ? "success.main" : "error.main" }}>
+                    <div key={log.id} className="mb-2 border border-base-300 bg-base-100 p-2">
+                      <p className={`mb-1 block text-[12px] ${log.success ? "text-success" : "text-error"}`}>
                         {formatLogTime(log.timestamp)} [{log.action}] {log.success ? "成功" : "失败"}
-                      </Typography>
-                      <Typography variant="caption" sx={{ display: "block" }}>
-                        请求: {log.request}
-                      </Typography>
-                      <Typography variant="caption" sx={{ display: "block" }}>
-                        响应: {log.summary}
-                      </Typography>
-                      {log.errorMessage && (
-                        <Typography variant="caption" sx={{ display: "block", color: "error.main" }}>
-                          错误: {log.errorMessage}
-                        </Typography>
-                      )}
-                    </Box>
+                      </p>
+                      <p className="block text-[12px]">请求: {log.request}</p>
+                      <p className="block text-[12px]">响应: {log.summary}</p>
+                      {log.errorMessage && <p className="block text-[12px] text-error">错误: {log.errorMessage}</p>}
+                    </div>
                   ))}
-                </Box>
-              </Box>
+                </div>
+              </div>
             )}
-          </Box>
+          </div>
 
+          {/* 右侧抽屉：字段列表 + SOQL 编辑器。 */}
           {activeTab.showDrawer && (
-            <Box sx={{ width: 360, minWidth: 360, borderLeft: "1px solid", borderColor: "divider", display: "flex", flexDirection: "column", minHeight: 0 }}>
-              <Box sx={{ flex: "1 1 50%", minHeight: 0, display: "flex", flexDirection: "column", borderBottom: "1px solid", borderColor: "divider" }}>
-                <Box sx={{ px: 1.5, py: 1, borderBottom: "1px solid", borderColor: "divider", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <Typography variant="caption" sx={{ color: "text.secondary" }}>
-                    Field 元数据
-                  </Typography>
-                  <Stack direction="row" spacing={0.5} alignItems="center">
-                    <Button variant="text" size="small" disabled={activeTab.loading || !activeTab.describe} onClick={onToggleAllFields}>
-                      {activeTab.describe?.fields.every((field) => (activeTab.columnVisibility[field.name] ?? true) === true)
-                        ? "取消全选"
-                        : "全选"}
-                    </Button>
-                    <IconButton size="small" onClick={onToggleDrawer} aria-label="关闭字段与SOQL">
+            <div className="relative flex min-h-0 shrink-0 flex-col border-l border-base-300" style={{ width: drawerWidth, minWidth: drawerWidth }}>
+              {/* 抽屉左侧拖拽热区：用于调整“字段与 SOQL”抽屉宽度。 */}
+              <div
+                className="absolute -left-[3px] top-0 z-20 h-full w-[6px] cursor-col-resize"
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="拖拽调整字段与SOQL抽屉宽度"
+                onMouseDown={(event) => {
+                  event.preventDefault(); // 阻止拖拽起点触发文本选中。
+                  drawerResizeStartXRef.current = event.clientX; // 记录本次拖拽起点 X。
+                  drawerResizeStartWidthRef.current = drawerWidth; // 记录本次拖拽起始宽度。
+                  setDraggingDrawerResize(true); // 进入拖拽状态。
+                }}
+              />
+              <div className="flex min-h-0 flex-[1_1_50%] flex-col border-b border-base-300">
+                <div className="flex items-center justify-between border-b border-base-300 px-3 py-2">
+                  <span className="text-[12px] text-neutral/70">Field 元数据</span>
+                  <div className="flex flex-row items-center gap-1">
+                    <button className="btn btn-ghost btn-xs" disabled={activeTab.loading || !activeTab.describe} onClick={onToggleAllFields}>
+                      {activeTab.describe?.fields.every((field) => (activeTab.columnVisibility[field.name] ?? true) === true) ? "取消全选" : "全选"}
+                    </button>
+                    <button className="btn btn-circle btn-ghost btn-xs" onClick={onToggleDrawer} aria-label="关闭字段与SOQL">
                       <X size={14} />
-                    </IconButton>
-                  </Stack>
-                </Box>
+                    </button>
+                  </div>
+                </div>
 
-                <Box sx={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+                <div className="min-h-0 flex-1 overflow-auto">
                   {!activeTab.describe && (
-                    <Box sx={{ px: 1.5, py: 1.2 }}>
-                      <Typography variant="caption" color="text.secondary">
-                        正在加载字段元数据...
-                      </Typography>
-                    </Box>
+                    <div className="px-3 py-2">
+                      <span className="text-[12px] text-neutral/70">正在加载字段元数据...</span>
+                    </div>
                   )}
                   {activeTab.describe && activeTab.describe.fields.length === 0 && (
-                    <Box sx={{ px: 1.5, py: 1.2 }}>
-                      <Typography variant="caption" color="text.secondary">
-                        未获取到字段元数据。
-                      </Typography>
-                    </Box>
+                    <div className="px-3 py-2">
+                      <span className="text-[12px] text-neutral/70">未获取到字段元数据。</span>
+                    </div>
                   )}
+
                   {activeTab.describe?.fields.map((field) => {
                     const checked = activeTab.columnVisibility[field.name] ?? true;
                     return (
-                      <Box key={field.name} sx={{ px: 1.5, py: 0.8 }}>
-                        <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1}>
-                          <Stack direction="row" alignItems="center" spacing={1}>
+                      <div key={field.name} className="px-3 py-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
                             <input
                               type="checkbox"
+                              className="checkbox checkbox-sm"
                               checked={checked}
                               disabled={activeTab.loading}
                               onChange={(event) => onToggleFieldVisibility(field.name, event.target.checked)}
                             />
-                            <Typography variant="body2">{field.name}</Typography>
-                          </Stack>
-                          <Typography variant="caption" color="text.secondary" noWrap>
-                            {field.label} / {field.dataType}
-                          </Typography>
-                        </Stack>
-                        <Divider sx={{ mt: 0.8 }} />
-                      </Box>
+                            <span className="text-[12px]">{field.name}</span>
+                          </div>
+                          <span className="truncate text-[12px] text-neutral/70">{field.label} / {field.dataType}</span>
+                        </div>
+                        <div className="mt-2 border-b border-base-300" />
+                      </div>
                     );
                   })}
-                </Box>
-              </Box>
+                </div>
+              </div>
 
-              <Box sx={{ flex: "1 1 50%", minHeight: 0, display: "flex", flexDirection: "column" }}>
-                <Box
-                  sx={{
-                    px: 1.5,
-                    py: 1,
-                    borderBottom: "1px solid",
-                    borderColor: "divider",
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center"
-                  }}
-                >
-                  <Typography variant="caption" sx={{ color: "text.secondary" }}>
-                    SOQL 执行器
-                  </Typography>
-                  <IconButton size="small" onClick={onToggleDrawer} aria-label="关闭字段与SOQL">
-                    <X size={14} />
-                  </IconButton>
-                </Box>
-                <Box sx={{ flex: 1, minHeight: 0, p: 1.5, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-                  <Box
-                    sx={{
-                      flex: 1,
-                      minHeight: 0,
-                      border: "1px solid",
-                      borderColor: "divider",
-                      bgcolor: "background.paper",
-                      overflow: "hidden"
-                    }}
-                  >
-                    <Box
-                      component="textarea"
+              <div className="flex min-h-0 flex-[1_1_50%] flex-col">
+                <div className="flex items-center justify-between border-b border-base-300 px-3 py-2">
+                  <span className="text-[12px] text-neutral/70">SOQL 执行器</span>
+                </div>
+                <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-3">
+                  {/* 编辑器容器：占满剩余空间，避免挤压底部执行按钮。 */}
+                  <div className="min-h-0 flex-1">
+                    {/* SOQL 编辑器：使用 Monaco 提供语法高亮与自动补全。 */}
+                    <SoqlMonacoEditor
                       value={activeTab.soqlDraft}
-                      onChange={(event: ChangeEvent<HTMLTextAreaElement>) => onSoqlChange(event.target.value)}
-                      sx={{
-                        width: "100%",
-                        height: "100%",
-                        border: "none",
-                        outline: "none",
-                        p: 1,
-                        resize: "none",
-                        overflow: "auto",
-                        fontFamily: "'Cascadia Mono', Consolas, 'Courier New', monospace",
-                        fontSize: 12,
-                        lineHeight: 1.5,
-                        boxSizing: "border-box",
-                        bgcolor: "background.paper",
-                        color: "text.primary"
+                      onChange={(value) => onSoqlChange(value)}
+                      height="100%"
+                      className="h-full"
+                      // 抽屉编辑区较窄：按列宽自动换行，避免长 SOQL 一直横向单行滚动。
+                      wordWrapMode="bounded"
+                      // bounded 模式下的列宽：在当前抽屉宽度下可稳定触发可读换行。
+                      wordWrapColumn={56}
+                      // 当前对象字段名补全（作为回退候选）。
+                      fieldNames={activeTab.describe?.fields.map((field) => field.name) || []}
+                      // 当前数据源对象名补全，便于 FROM 子句输入。
+                      objectNames={objectNames}
+                      // 传入对象字段映射，使 FROM <对象> 后可按对象上下文补全字段。
+                      objectFieldsMap={{
+                        ...soqlObjectFieldsMap,
+                        ...(activeTab.describe
+                          ? { [activeTab.objectName]: activeTab.describe.fields.map((field) => field.name) }
+                          : {})
                       }}
                     />
-                  </Box>
-                  <Button
-                    startIcon={<Play size={14} />}
-                    sx={{ mt: 1, alignSelf: "flex-start" }}
-                    disabled={activeTab.loading || !activeTab.soqlDraft}
-                    onClick={onExecuteCustomSoql}
-                  >
+                  </div>
+                  <button className="btn btn-primary btn-sm mt-2 self-start" disabled={activeTab.loading || !activeTab.soqlDraft} onClick={onExecuteCustomSoql}>
+                    <Play size={14} />
                     执行 SOQL
-                  </Button>
-                </Box>
-              </Box>
-            </Box>
+                  </button>
+                </div>
+              </div>
+            </div>
           )}
 
+          {/* 加载遮罩。 */}
           {activeTab.loading && (
-            <Box
-              sx={{
-                position: "absolute",
-                inset: 0,
-                zIndex: 10,
-                bgcolor: "rgba(255,255,255,0.68)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                flexDirection: "column",
-                gap: 1.5
-              }}
-            >
-              <CircularProgress size={42} thickness={4.5} />
-              <Typography variant="body2" color="text.secondary">
-                Loading...
-              </Typography>
-            </Box>
+            <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-white/70">
+              <span className="loading loading-spinner" style={{ width: 42, height: 42 }} />
+              <span className="text-[12px] text-neutral/70">{loadingText}</span>
+            </div>
           )}
-        </Box>
+        </div>
       )}
     </>
   );
 }
 
+// 日志时间格式化。
 function formatLogTime(timestamp: string): string {
   const date = new Date(timestamp);
   if (Number.isNaN(date.getTime())) return timestamp;
   return date.toLocaleString();
+}
+
+// 从 SOQL 中提取所有 FROM 后对象名（包含子查询），用于按需加载字段元数据。
+function extractFromObjectNames(soql: string): string[] {
+  const fromObjectNames: string[] = [];
+  const regex = /\bfrom\s+([A-Za-z_][\w]*)/gi;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(soql)) !== null) {
+    fromObjectNames.push(match[1]); // 逐个记录 FROM 对象，供后续去重与懒加载。
+  }
+  return Array.from(new Set(fromObjectNames));
+}
+
+// 将抽屉中的单行 SOQL 规整为多行：仅处理常见 SELECT/FROM/WHERE/ORDER BY/LIMIT 模式。
+function formatSingleLineSoqlForDrawer(soql: string): string {
+  if (!soql.trim()) return soql;
+  if (soql.includes("\n")) return soql; // 已是多行时不重复格式化。
+
+  const normalized = soql.replace(/\s+/g, " ").trim();
+  // 复杂语句（聚合/分组/偏移等）不自动改写，避免误改用户手写结构。
+  if (/\b(group\s+by|having|offset|for\s+view|for\s+reference|all\s+rows)\b/i.test(normalized)) {
+    return soql;
+  }
+
+  const fromMatch = normalized.match(/\bfrom\s+([A-Za-z_][\w.]*)\b/i);
+  if (!fromMatch) return soql;
+  const selectMatch = normalized.match(/^select\s+(.+?)\s+from\s+[A-Za-z_][\w.]*\b/i);
+  if (!selectMatch) return soql;
+
+  const fields = selectMatch[1]
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+  if (fields.length === 0) return soql;
+
+  const whereMatch = normalized.match(/\bwhere\s+(.+?)(?=\border\s+by\b|\blimit\b|$)/i);
+  const orderMatch = normalized.match(/\border\s+by\s+(.+?)(?=\blimit\b|$)/i);
+  const limitMatch = normalized.match(/\blimit\s+(\d+)\b/i);
+
+  const selectSegment = fields.map((field, index) => `  ${field}${index < fields.length - 1 ? "," : ""}`).join("\n");
+  const whereSegment = whereMatch?.[1]?.trim() ? `\nWHERE ${whereMatch[1].trim()}` : "";
+  const orderBySegment = orderMatch?.[1]?.trim() ? `\nORDER BY ${orderMatch[1].trim()}` : "";
+  const limitSegment = limitMatch?.[1] ? `\nLIMIT ${limitMatch[1]}` : "";
+
+  return `SELECT\n${selectSegment}\nFROM ${fromMatch[1]}${whereSegment}${orderBySegment}${limitSegment}`;
 }
