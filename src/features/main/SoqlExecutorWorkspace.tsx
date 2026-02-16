@@ -63,6 +63,10 @@ type SoqlExecutorWorkspaceProps = {
   loadingText: string;
   // 当前数据源对象列表：用于对象名补全。
   objects: SalesforceObject[];
+  // 工作区全局提示：用于显示跨 Tab 的页面级通知（如数据源切换结果）。
+  workspaceNotice: Notice | null;
+  // 关闭工作区全局提示回调。
+  onCloseWorkspaceNotice: () => void;
 };
 
 type BottomView = "result" | "logs";
@@ -78,7 +82,13 @@ const AI_STREAMING_COPY_POOL = [
 ];
 
 // SOQL 执行器工作区：支持多 Tab、执行、结果展示与查询日志。
-export function SoqlExecutorWorkspace({ selectedSourceId, loadingText, objects }: SoqlExecutorWorkspaceProps) {
+export function SoqlExecutorWorkspace({
+  selectedSourceId,
+  loadingText,
+  objects,
+  workspaceNotice,
+  onCloseWorkspaceNotice
+}: SoqlExecutorWorkspaceProps) {
   // SOQL 执行器的多标签状态。
   const [tabs, setTabs] = useState<SoqlExecutorTab[]>(() => [createSoqlExecutorTab(1)]);
   // 当前激活标签 ID。
@@ -551,6 +561,16 @@ export function SoqlExecutorWorkspace({ selectedSourceId, loadingText, objects }
   return (
     // 执行器主容器：顶部标签 + 工具栏 + 编辑器 + 底部结果区。
     <div className="relative flex h-full min-h-0 flex-col overflow-hidden">
+      {/* 工作区全局提示：显示数据源切换等跨功能通知。 */}
+      {workspaceNotice && (
+        <NoticeAlert
+          tone={workspaceNotice.type === "error" ? "error" : "success"}
+          message={workspaceNotice.message}
+          onClose={onCloseWorkspaceNotice}
+          className="fixed right-4 top-4 z-[60] max-w-[380px] shadow-lg"
+        />
+      )}
+
       {/* Tab 栏：支持切换、关闭与右侧新增。 */}
       <div className="flex items-center border-b border-base-300">
         <div className="flex min-w-0 flex-1 overflow-x-auto">

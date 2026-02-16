@@ -62,6 +62,8 @@ export function MainPage() {
   const [workspaceNotice, setWorkspaceNotice] = useState<Notice | null>(null);
   // 认证凭证刷新计数器：用于处理并发 API 请求下的开始/结束配对。
   const tokenRefreshingCountRef = useRef(0);
+  // 数据源切换请求序号：用于忽略过期请求结果，避免并发切换互相覆盖。
+  const sourceSwitchSeqRef = useRef(0);
   // 是否正在通过 CLI 重新获取 accessToken。
   const [tokenRefreshing, setTokenRefreshing] = useState(false);
 
@@ -270,20 +272,57 @@ export function MainPage() {
     }
   }
 
-  function handleSourceChange(sourceId: string) {
-    setSelectedSourceId(sourceId);
-
+  async function handleSourceChange(sourceId: string) {
+    // 切回“未选择数据源”属于本地状态切换，不需要远端校验。
     if (!sourceId) {
+      setSelectedSourceId("");
       clearWorkspaceNotice();
       return;
     }
 
+    // 记录切换前数据源，失败时用于回滚。
+    const previousSourceId = selectedSourceId;
+    // 切换前数据源展示名：用于失败回滚提示文案。
+    const previousSourceDisplayName =
+      sources.find((item) => item.id === previousSourceId)?.name || (previousSourceId ? previousSourceId : "未选择数据源");
+    // 生成本次切换请求序号，后续用于识别过期请求。
+    const switchSeq = sourceSwitchSeqRef.current + 1;
+    sourceSwitchSeqRef.current = switchSeq;
     const selectedSource = sources.find((item) => item.id === sourceId);
     const sourceDisplayName = selectedSource?.name || sourceId;
-    showWorkspaceNotice({
-      type: "success",
-      message: `已切换到数据源：${sourceDisplayName}`
-    });
+
+    // UX 优化：先切换到目标数据源，让用户立刻感知选择变化。
+    setSelectedSourceId(sourceId);
+    setLoading(true);
+    try {
+      // 再强制拉取远端 Objects 作为“切换成功”判定，避免命中缓存造成假成功提示。
+      await queryClient.fetchQuery({
+        queryKey: ["objects", sourceId],
+        queryFn: () => api.refreshObjects(sourceId)
+      });
+      // 若当前请求已过期（用户又切换了其他数据源），忽略本次结果。
+      if (sourceSwitchSeqRef.current !== switchSeq) return;
+      showWorkspaceNotice({
+        type: "success",
+        message: `已切换到数据源：${sourceDisplayName}`
+      });
+    } catch (error) {
+      // 若当前请求已过期（用户又切换了其他数据源），忽略本次结果。
+      if (sourceSwitchSeqRef.current !== switchSeq) return;
+      // 切换失败时回滚到切换前状态，并明确给出失败提示。
+      setSelectedSourceId(previousSourceId);
+      showWorkspaceNotice(
+        {
+          type: "error",
+          message: `切换数据源失败，已恢复到原数据源（${previousSourceDisplayName}）：${String(error)}`
+        },
+        5000
+      );
+    } finally {
+      // 仅由最新切换请求结束 loading，避免并发下被过期请求提前关闭。
+      if (sourceSwitchSeqRef.current !== switchSeq) return;
+      setLoading(false);
+    }
   }
 
   // 点击 Object“不可查询”徽标时，在工作区顶部显示提示。
@@ -1095,7 +1134,13 @@ export function MainPage() {
               </div>
               {/* 右侧 SOQL 执行器：多 Tab、执行、结果/层级/日志。 */}
               <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-                <SoqlExecutorWorkspace selectedSourceId={selectedSourceId} loadingText={loadingText} objects={objects} />
+                <SoqlExecutorWorkspace
+                  selectedSourceId={selectedSourceId}
+                  loadingText={loadingText}
+                  objects={objects}
+                  workspaceNotice={workspaceNotice}
+                  onCloseWorkspaceNotice={clearWorkspaceNotice}
+                />
               </div>
             </div>
 
