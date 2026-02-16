@@ -1134,7 +1134,13 @@ export function MainPage() {
               </div>
               {/* 右侧 SOQL 执行器：多 Tab、执行、结果/层级/日志。 */}
               <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-                <SoqlExecutorWorkspace selectedSourceId={selectedSourceId} loadingText={loadingText} objects={objects} />
+                <SoqlExecutorWorkspace
+                  selectedSourceId={selectedSourceId}
+                  loadingText={loadingText}
+                  objects={objects}
+                  workspaceNotice={workspaceNotice}
+                  onCloseWorkspaceNotice={clearWorkspaceNotice}
+                />
               </div>
             </div>
 
