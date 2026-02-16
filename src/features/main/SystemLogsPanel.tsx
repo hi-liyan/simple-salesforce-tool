@@ -1,11 +1,10 @@
-import { Box, Button, CircularProgress, Divider, Stack, Typography } from "@mui/material";
-import { RefreshCw } from "lucide-react";
+﻿import { RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useSystemLogsQuery } from "../../queries/salesforce";
 
-// 系统日志面板：展示后端持久化日志，支持倒序分页浏览。
+// 系统日志面板：展示后端持久化日志并支持分页。
 export function SystemLogsPanel() {
-  // 当前页（从 1 开始）。
+  // 当前页码（从 1 开始）。
   const [page, setPage] = useState(1);
   // 每页条数。
   const pageSize = 30;
@@ -15,10 +14,10 @@ export function SystemLogsPanel() {
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   useEffect(() => {
-    // 进入系统日志视图时先立即刷新一次，避免看到旧缓存。
+    // 进入页面先刷新一次，避免看到旧缓存。
     void refetch();
 
-    // 仅在系统日志页面挂载期间轮询；离开页面会自动清理。
+    // 面板挂载期间轮询刷新。
     const timer = window.setInterval(() => {
       void refetch();
     }, 5000);
@@ -29,89 +28,68 @@ export function SystemLogsPanel() {
   }, [refetch]);
 
   return (
-    <Box sx={{ minHeight: 0, flex: 1, display: "flex", flexDirection: "column" }}>
-      {/* 顶部工具栏：标题 + 刷新 + 分页。 */}
-      <Box
-        sx={{
-          px: 1.5,
-          py: 0.9,
-          borderBottom: "1px solid",
-          borderColor: "divider",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between"
-        }}
-      >
-        <Typography variant="subtitle2">系统日志</Typography>
-        <Stack direction="row" spacing={0.8} alignItems="center">
-          <Button startIcon={<RefreshCw size={14} />} size="small" onClick={() => void refetch()} disabled={isFetching}>
+    // 外层容器：保持原结构为顶部工具栏 + 内容区。
+    <div className="flex min-h-0 flex-1 flex-col">
+      {/* 顶部工具栏。 */}
+      <div className="flex items-center justify-between border-b border-base-300 px-3 py-2">
+        <h2 className="text-[14px] font-semibold">系统日志</h2>
+        <div className="flex items-center gap-2">
+          <button className="btn btn-primary btn-sm" onClick={() => void refetch()} disabled={isFetching}>
+            <RefreshCw size={14} />
             刷新
-          </Button>
-          <Button size="small" disabled={page <= 1 || isFetching} onClick={() => setPage((current) => Math.max(1, current - 1))}>
+          </button>
+          <button className="btn btn-sm" disabled={page <= 1 || isFetching} onClick={() => setPage((current) => Math.max(1, current - 1))}>
             上一页
-          </Button>
-          <Typography variant="caption" color="text.secondary">
+          </button>
+          <span className="text-[12px] text-neutral/70">
             第 {page} / {totalPages} 页（共 {total} 条）
-          </Typography>
-          <Button
-            size="small"
+          </span>
+          <button
+            className="btn btn-sm"
             disabled={page >= totalPages || isFetching}
             onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
           >
             下一页
-          </Button>
-        </Stack>
-      </Box>
+          </button>
+        </div>
+      </div>
 
       {/* 日志内容区。 */}
-      <Box sx={{ minHeight: 0, flex: 1, overflow: "auto", px: 1.5, py: 1.2 }}>
+      <div className="min-h-0 flex-1 overflow-auto px-3 py-2">
         {isLoading && (
-          <Stack direction="row" spacing={1} alignItems="center">
-            <CircularProgress size={16} />
-            <Typography variant="caption" color="text.secondary">
-              正在加载系统日志...
-            </Typography>
-          </Stack>
+          <div className="flex items-center gap-2">
+            <span className="loading loading-spinner" style={{ width: 16, height: 16 }} />
+            <span className="text-[12px] text-neutral/70">正在加载系统日志...</span>
+          </div>
         )}
 
-        {!isLoading && error && (
-          <Typography variant="caption" color="error.main">
-            加载系统日志失败：{String(error)}
-          </Typography>
-        )}
+        {!isLoading && error && <p className="text-[12px] text-error">加载系统日志失败：{String(error)}</p>}
 
-        {!isLoading && !error && (data?.items?.length ?? 0) === 0 && (
-          <Typography variant="caption" color="text.secondary">
-            暂无系统日志。
-          </Typography>
-        )}
+        {!isLoading && !error && (data?.items?.length ?? 0) === 0 && <p className="text-[12px] text-neutral/70">暂无系统日志。</p>}
 
         {!isLoading &&
           !error &&
           data?.items.map((item) => (
-            <Box key={item.id} sx={{ py: 0.8 }}>
-              <Typography variant="caption" sx={{ display: "block", fontWeight: 700 }}>
+            <div key={item.id} className="py-2">
+              <p className="block text-[12px] font-bold">
                 [{formatTime(item.createdAt)}] [{item.category}] [{item.action}] {item.success ? "成功" : "失败"}
-              </Typography>
-              <Typography variant="caption" sx={{ display: "block", color: "text.secondary" }}>
+              </p>
+              <p className="block text-[12px] text-neutral/70">
                 级别: {item.level} {item.sourceId ? `| 数据源: ${item.sourceId}` : ""} {item.target ? `| 目标: ${item.target}` : ""}
-              </Typography>
-              <Typography variant="caption" sx={{ display: "block" }}>
-                信息: {item.message}
-              </Typography>
+              </p>
+              <p className="block text-[12px]">信息: {item.message}</p>
               {item.detail && (
-                <Typography variant="caption" sx={{ display: "block", color: "text.secondary", whiteSpace: "pre-wrap" }}>
-                  详情: {item.detail}
-                </Typography>
+                <p className="block whitespace-pre-wrap text-[12px] text-neutral/70">详情: {item.detail}</p>
               )}
-              <Divider sx={{ mt: 0.8 }} />
-            </Box>
+              <div className="mt-2 border-b border-base-300" />
+            </div>
           ))}
-      </Box>
-    </Box>
+      </div>
+    </div>
   );
 }
 
+// 时间格式化：无效时间回退原值。
 function formatTime(input: string): string {
   const date = new Date(input);
   if (Number.isNaN(date.getTime())) return input;

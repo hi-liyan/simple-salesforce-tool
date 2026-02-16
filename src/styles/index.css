@@ -26,11 +26,14 @@ body,
 }
 
 .tool-rail-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 34px;
   height: 34px;
-  border: 1px solid #9ec9ff;
+  border: 1px solid transparent;
   border-radius: 6px;
-  background: #ffffff;
+  background: transparent;
   color: #1b5297;
   font-size: 11px;
 }
@@ -48,4 +51,11 @@ body,
 button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
+}
+
+/* SOQL 编辑器当前行样式：移除边框线，并将正文与行号区统一为浅蓝背景。 */
+.soql-monaco-editor .monaco-editor .view-overlays .current-line,
+.soql-monaco-editor .monaco-editor .margin-view-overlays .current-line-margin {
+  border: none !important;
+  background-color: #eaf4ff !important;
 }

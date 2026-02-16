@@ -1,11 +1,12 @@
-﻿use reqwest::{Client, Method, StatusCode};
+use reqwest::{Client, Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
 use crate::error::AppError;
 use crate::models::{
-    ObjectDescribe, ObjectField, QueryResult, RecordUpdatePayload, SalesforceObject, SalesforceSource,
+    ObjectChildRelationship, ObjectDescribe, ObjectField, QueryResult, RecordUpdatePayload,
+    SalesforceObject, SalesforceSource,
 };
 
 /// Salesforce API 客户端，负责所有外部 HTTP 通讯。
@@ -25,7 +26,10 @@ impl SalesforceClient {
     }
 
     /// 拉取当前实例下可见对象列表。
-    pub async fn list_objects(&self, source: &SalesforceSource) -> Result<Vec<SalesforceObject>, AppError> {
+    pub async fn list_objects(
+        &self,
+        source: &SalesforceSource,
+    ) -> Result<Vec<SalesforceObject>, AppError> {
         #[derive(Deserialize)]
         struct ObjectsResponse {
             sobjects: Vec<ObjectsItem>,
@@ -69,6 +73,21 @@ impl SalesforceClient {
             name: String,
             label: String,
             fields: Vec<Value>,
+            #[serde(default, rename = "childRelationships")]
+            child_relationships: Vec<DescribeChildRelationship>,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct DescribeChildRelationship {
+            // Salesforce 原始字段名为 childSObject（注意 Object 的 O 大写），这里显式映射避免丢值。
+            #[serde(default, rename = "childSObject")]
+            child_sobject: String,
+            #[serde(default)]
+            field: String,
+            relationship_name: Option<String>,
+            #[serde(default)]
+            deprecated_and_hidden: bool,
         }
 
         let url = build_url(source, &format!("sobjects/{object_name}/describe"));
@@ -126,7 +145,68 @@ impl SalesforceClient {
                     })
                 })
                 .collect::<Result<Vec<_>, AppError>>()?,
+            child_relationships: body
+                .child_relationships
+                .into_iter()
+                .map(|item| ObjectChildRelationship {
+                    child_sobject: item.child_sobject,
+                    field: item.field,
+                    relationship_name: item.relationship_name.unwrap_or_default(),
+                    deprecated_and_hidden: item.deprecated_and_hidden,
+                })
+                .collect(),
         })
+    }
+
+    /// 解析字段配置的 Child Relationship Name（优先对齐 Salesforce Setup 页面）。
+    pub async fn resolve_field_child_relationship_name(
+        &self,
+        source: &SalesforceSource,
+        object_name: &str,
+        field_name: &str,
+    ) -> Result<Option<String>, AppError> {
+        #[derive(Deserialize)]
+        struct ToolingQueryResponse {
+            #[serde(rename = "totalSize")]
+            total_size: usize,
+            #[serde(default)]
+            records: Vec<Value>,
+        }
+
+        let normalized_object_name = object_name.trim();
+        let normalized_field_name = field_name.trim();
+        if normalized_object_name.is_empty() || normalized_field_name.is_empty() {
+            return Ok(None);
+        }
+
+        // Tooling CustomField 的 DeveloperName 不含命名空间与 __c 后缀。
+        let Some(developer_name) = extract_custom_field_developer_name(normalized_field_name)
+        else {
+            return Ok(None);
+        };
+
+        let object_literal = escape_soql_literal(normalized_object_name);
+        let developer_literal = escape_soql_literal(&developer_name);
+        let soql = format!(
+            "SELECT RelationshipName FROM CustomField WHERE TableEnumOrId = '{object_literal}' AND DeveloperName = '{developer_literal}' ORDER BY NamespacePrefix DESC LIMIT 1"
+        );
+        let encoded = urlencoding::encode(&soql);
+        let url = build_url(source, &format!("tooling/query/?q={encoded}"));
+        let body: ToolingQueryResponse = self.request_json(source, Method::GET, &url, None).await?;
+
+        if body.total_size == 0 {
+            return Ok(None);
+        }
+
+        let relationship_name = body.records.into_iter().find_map(|record| {
+            record
+                .as_object()
+                .and_then(|item| item.get("RelationshipName"))
+                .and_then(Value::as_str)
+                .map(|item| item.trim().to_string())
+                .filter(|item| !item.is_empty())
+        });
+        Ok(relationship_name)
     }
 
     /// 执行 SOQL 并返回记录集。
@@ -167,7 +247,12 @@ impl SalesforceClient {
 
         let url = build_url(source, &format!("sobjects/{object_name}"));
         let response: CreateResponse = self
-            .request_json(source, Method::POST, &url, Some(serde_json::to_value(values)?))
+            .request_json(
+                source,
+                Method::POST,
+                &url,
+                Some(serde_json::to_value(values)?),
+            )
             .await?;
 
         if response.success {
@@ -186,8 +271,13 @@ impl SalesforceClient {
         values: HashMap<String, Value>,
     ) -> Result<(), AppError> {
         let url = build_url(source, &format!("sobjects/{object_name}/{record_id}"));
-        self.request_unit(source, Method::PATCH, &url, Some(serde_json::to_value(values)?))
-            .await
+        self.request_unit(
+            source,
+            Method::PATCH,
+            &url,
+            Some(serde_json::to_value(values)?),
+        )
+        .await
     }
 
     /// 删除单条记录（DELETE）。
@@ -250,7 +340,10 @@ impl SalesforceClient {
         for (index, values) in creates.into_iter().enumerate() {
             composite_request.push(CompositeRequestItem {
                 method: "POST".to_string(),
-                url: format!("/services/data/{}/sobjects/{object_name}", source.api_version),
+                url: format!(
+                    "/services/data/{}/sobjects/{object_name}",
+                    source.api_version
+                ),
                 reference_id: format!("create_{index}"),
                 body: serde_json::to_value(values)?,
             });
@@ -281,7 +374,12 @@ impl SalesforceClient {
         };
         let url = build_url(source, "composite");
         let response: CompositeResponseBody = self
-            .request_json(source, Method::POST, &url, Some(serde_json::to_value(payload)?))
+            .request_json(
+                source,
+                Method::POST,
+                &url,
+                Some(serde_json::to_value(payload)?),
+            )
             .await?;
 
         // 任一子请求失败都视为整体失败（与 all_or_none 语义保持一致）。
@@ -319,7 +417,9 @@ impl SalesforceClient {
         if !response.status().is_success() {
             let status = response.status();
             let text = response.text().await.unwrap_or_default();
-            return Err(AppError::Http(format!("Salesforce 调用失败，状态码 {status}: {text}")));
+            return Err(AppError::Http(format!(
+                "Salesforce 调用失败，状态码 {status}: {text}"
+            )));
         }
 
         Ok(response.json::<T>().await?)
@@ -350,8 +450,41 @@ impl SalesforceClient {
 
         let status = response.status();
         let text = response.text().await.unwrap_or_default();
-        Err(AppError::Http(format!("Salesforce 调用失败，状态码 {status}: {text}")))
+        Err(AppError::Http(format!(
+            "Salesforce 调用失败，状态码 {status}: {text}"
+        )))
     }
+}
+
+/// 提取 CustomField.DeveloperName：去掉命名空间前缀与 __c 后缀。
+fn extract_custom_field_developer_name(field_api_name: &str) -> Option<String> {
+    let trimmed = field_api_name.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let without_suffix = trimmed
+        .strip_suffix("__c")
+        .or_else(|| trimmed.strip_suffix("__pc"))
+        .unwrap_or(trimmed);
+    let segments = without_suffix.split("__").collect::<Vec<_>>();
+    if segments.is_empty() {
+        return None;
+    }
+    let developer_name = segments
+        .last()
+        .copied()
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if developer_name.is_empty() {
+        return None;
+    }
+    Some(developer_name)
+}
+
+/// SOQL 字符串字面量转义：单引号替换为 \\'
+fn escape_soql_literal(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('\'', "\\'")
 }
 
 /// 构造 Salesforce REST API 绝对路径。

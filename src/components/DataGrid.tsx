@@ -1,5 +1,5 @@
 ﻿import { useEffect, useMemo, useRef, useState } from "react";
-import { Box, FormControl, Select, Typography } from "@mui/material";
+
 import {
   CellClickedEventArgs,
   DataEditor,
@@ -12,7 +12,14 @@ import {
   TextCell
 } from "@glideapps/glide-data-grid";
 import "@glideapps/glide-data-grid/dist/index.css";
+import { api } from "../api";
 import { QueryResult } from "../types";
+import {
+  buildDisplayMetadataFromRaw,
+  formatFieldMetadataValue,
+  sortFieldMetadataEntries,
+  translateFieldMetadataKey
+} from "../utils/fieldMetadata";
 
 type Props = {
   result: QueryResult;
@@ -20,10 +27,22 @@ type Props = {
   fieldMetadataMap: Record<string, Record<string, unknown>>;
   dirtyCellKeys: string[];
   selectedRecordIds: string[];
+  // 当前选中的数据源 ID：用于打开 Salesforce 记录页（可选）。
+  sourceId?: string;
+  // 当前对象 API 名称：用于打开 Salesforce 记录页（可选）。
+  objectName?: string;
+  // 待删除记录 Id 列表：用于将整行标记为灰色背景。
+  pendingDeleteRecordIds: string[];
   onToggleRecord: (recordId: string, checked: boolean) => void;
   onToggleAll: (checked: boolean, recordIds: string[]) => void;
   onEditCell: (rowIndex: number, columnName: string, value: unknown) => void;
   onShowMessage: (message: string) => void;
+  // 是否展示表头 info icon 与字段元数据悬浮层。
+  showHeaderMetadata?: boolean;
+  // 是否启用双击只读单元格时的提示逻辑。
+  enableReadonlyCellHint?: boolean;
+  // 是否显示勾选列（首列 checkbox）。
+  showSelectionColumn?: boolean;
 };
 
 // 查询结果表：使用 Glide Data Grid 提供更接近数据库客户端的表格体验。
@@ -33,10 +52,16 @@ export function DataGrid({
   fieldMetadataMap,
   dirtyCellKeys,
   selectedRecordIds,
+  sourceId,
+  objectName,
+  pendingDeleteRecordIds,
   onToggleRecord,
   onToggleAll,
   onEditCell,
-  onShowMessage
+  onShowMessage,
+  showHeaderMetadata = true,
+  enableReadonlyCellHint = true,
+  showSelectionColumn = true
 }: Props) {
   const records = result.records;
 
@@ -61,8 +86,11 @@ export function DataGrid({
   const allChecked = selectableIds.length > 0 && selectableIds.every((id) => selectedRecordIds.includes(id));
   const hasAnyChecked = selectedRecordIds.some((id) => selectableIds.includes(id));
   const dirtyCellSet = useMemo(() => new Set(dirtyCellKeys), [dirtyCellKeys]);
+  const pendingDeleteRecordSet = useMemo(() => new Set(pendingDeleteRecordIds), [pendingDeleteRecordIds]);
   const gridBodyRef = useRef<HTMLDivElement | null>(null);
   const closeMetaTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 行右键菜单状态：记录菜单坐标与目标记录 Id。
+  const [rowContextMenu, setRowContextMenu] = useState<{ x: number; y: number; recordId: string } | null>(null);
 
   useEffect(() => {
     return () => {
@@ -71,6 +99,29 @@ export function DataGrid({
       closeMetaTimerRef.current = null;
     };
   }, []);
+
+  // 全局关闭行右键菜单：点击空白、滚动、按下 ESC 时关闭。
+  useEffect(() => {
+    if (!rowContextMenu) return;
+
+    const closeMenu = () => {
+      setRowContextMenu(null); // 统一关闭菜单，避免浮层残留。
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      closeMenu(); // ESC 快捷关闭菜单。
+    };
+
+    window.addEventListener("click", closeMenu);
+    window.addEventListener("scroll", closeMenu, true);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("click", closeMenu);
+      window.removeEventListener("scroll", closeMenu, true);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [rowContextMenu]);
 
   // 列宽状态：支持用户拖拽后即时更新列宽。
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
@@ -94,21 +145,21 @@ export function DataGrid({
     }));
 
     return [
-      { id: "__select", title: "", width: columnWidths.__select ?? 44 },
+      ...(showSelectionColumn ? [{ id: "__select", title: "", width: columnWidths.__select ?? 44 }] : []),
       { id: "__index", title: "#", width: columnWidths.__index ?? 56 },
       ...dataColumns
     ];
-  }, [displayColumns, columnWidths]);
+  }, [displayColumns, columnWidths, showSelectionColumn]);
 
   if (records.length === 0) {
     return (
       // 空状态容器。
-      <Box sx={{ p: 2 }}>
+      <div className="p-2">
         {/* 空状态提示。 */}
-        <Typography variant="caption" color="text.secondary">
+        <span className="text-[12px] text-neutral/70">
           暂无查询结果。
-        </Typography>
-      </Box>
+        </span>
+      </div>
     );
   }
 
@@ -124,13 +175,21 @@ export function DataGrid({
     const record = records[row] || {};
     const recordId = getRecordKey(row);
     const isNewRow = Boolean(record.__isNew);
+    // 待删除行统一灰色高亮，便于用户识别“尚未提交删除”的记录。
+    const isPendingDeleteRow = pendingDeleteRecordSet.has(recordId);
+    // 新建行统一浅绿色高亮，便于用户识别“待提交新增”的记录。
+    const isNewRowHighlight = isNewRow;
+    // 行级样式：用于选择列/序号列等非业务字段单元格。
+    const rowThemeOverride = buildRowThemeOverride(isPendingDeleteRow, isNewRowHighlight);
 
     if (columnId === "__select") {
       return {
         kind: GridCellKind.Boolean,
         data: selectedRecordIds.includes(recordId),
         allowOverlay: false,
-        readonly: recordId.startsWith("row-")
+        readonly: recordId.startsWith("row-"),
+        // 行级高亮：确保选择列与数据列颜色一致。
+        themeOverride: rowThemeOverride
       };
     }
 
@@ -141,7 +200,9 @@ export function DataGrid({
         data: text,
         displayData: text,
         allowOverlay: false,
-        readonly: true
+        readonly: true,
+        // 行级高亮：确保序号列与数据列颜色一致。
+        themeOverride: rowThemeOverride
       };
     }
 
@@ -153,7 +214,7 @@ export function DataGrid({
     const isDirty = dirtyCellSet.has(`${recordId}:${columnId}`);
     const isRequiredEmpty = requiredNewField && isEmptyValue(raw);
 
-    const commonTheme = buildCellThemeOverride(isDirty, isRequiredEmpty);
+    const commonTheme = buildCellThemeOverride(isDirty, isRequiredEmpty, isPendingDeleteRow, isNewRowHighlight);
 
     if (isBooleanType(fieldType)) {
       const text = normalizeBooleanText(raw);
@@ -251,6 +312,7 @@ export function DataGrid({
   };
 
   const handleCellClicked = (cell: Item, event: CellClickedEventArgs) => {
+    if (!enableReadonlyCellHint) return;
     const [col, row] = cell;
     const columnId = String(columns[col]?.id ?? "");
     if (!event.isDoubleClick) return;
@@ -292,29 +354,45 @@ export function DataGrid({
     }, 180);
   };
 
+  // 打开 Salesforce 记录页：调用后端混合模式（CLI 优先，失败回退 frontdoor）。
+  async function openRecordPageFromMenu() {
+    if (!rowContextMenu) return;
+    if (!sourceId || !objectName) {
+      onShowMessage("当前上下文缺少 sourceId/objectName，无法打开 Salesforce 记录页。");
+      setRowContextMenu(null);
+      return;
+    }
+    if (!rowContextMenu.recordId) {
+      onShowMessage("当前行没有可用的记录 Id。");
+      setRowContextMenu(null);
+      return;
+    }
+
+    try {
+      const openUrl = await api.openRecordPage(sourceId, objectName, rowContextMenu.recordId);
+      if (openUrl) {
+        window.open(openUrl, "_blank", "noopener,noreferrer"); // 非 CLI 回退场景：在浏览器打开 frontdoor URL。
+      }
+    } catch (error) {
+      onShowMessage(`打开 Salesforce 记录页失败：${String(error)}`);
+    } finally {
+      setRowContextMenu(null); // 执行后关闭菜单。
+    }
+  }
+
   return (
     // 表格容器：顶部统计栏 + 数据表格。
-    <Box sx={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0, position: "relative" }}>
+    <div className="relative flex h-full min-h-0 flex-col">
       {/* 顶部工具栏：仅显示统计。 */}
-      <Box
-        sx={{
-          px: 1.5,
-          py: 0.5,
-          borderBottom: "1px solid",
-          borderColor: "divider",
-          display: "flex",
-          alignItems: "center",
-          gap: 1.2
-        }}
-      >
+      <div className="flex items-center gap-1.5 border-b border-base-300 px-3 py-1">
         {/* 统计信息。 */}
-        <Typography variant="caption" color="text.secondary">
+        <span className="text-[12px] text-neutral/70">
           Rows: {result.totalSize}
-        </Typography>
-      </Box>
+        </span>
+      </div>
 
       {/* 数据表格主体。 */}
-      <Box ref={gridBodyRef} sx={{ flex: 1, minHeight: 0, position: "relative" }}>
+      <div ref={gridBodyRef} className="relative min-h-0 flex-1">
         {/* Glide Data Grid 组件：承载行列渲染、编辑、选择、列宽调整等核心交互。 */}
         <DataEditor
           // 列定义：包含选择列、序号列和业务字段列。
@@ -329,6 +407,29 @@ export function DataGrid({
           onCellEdited={handleCellEdited}
           // 单元格点击事件：用于双击编辑提示等交互。
           onCellClicked={handleCellClicked}
+          // 单元格右键事件：弹出记录级菜单。
+          onCellContextMenu={(cell, event) => {
+            if (!sourceId || !objectName) return; // 缺少对象上下文时不展示“打开记录页”菜单。
+            const [, row] = cell;
+            const record = records[row] || {};
+            const recordId = String(record.Id ?? "").trim();
+            if (!recordId) return; // 无真实记录 Id（如新建行）时不展示菜单。
+
+            const gridRect = gridBodyRef.current?.getBoundingClientRect();
+            if (!gridRect) return;
+
+            const localClickX = event.bounds.x + event.localEventX;
+            const localClickY = event.bounds.y + event.localEventY;
+            const anchorClientX = resolveViewportAxis(localClickX, gridRect.left, gridRect.right);
+            const anchorClientY = resolveViewportAxis(localClickY, gridRect.top, gridRect.bottom);
+
+            event.preventDefault(); // 阻止默认右键行为，交由自定义菜单处理。
+            setRowContextMenu({
+              x: anchorClientX,
+              y: anchorClientY,
+              recordId
+            });
+          }}
           // 粘贴/批量编辑时的批处理入口。
           onCellsEdited={handleCellsEdited}
           // 使用 Glide 内置 overlay 机制渲染 picklist 编辑器，避免手工定位。
@@ -358,19 +459,17 @@ export function DataGrid({
             return (props) => {
               const textValue = props.value as TextCell;
               return (
-                <FormControl
-                  size="small"
-                  sx={{
-                    position: "absolute",
+                <div
+                  className="absolute"
+                  style={{
                     left: props.target.x,
                     top: props.target.y,
-                    width: Math.max(props.target.width, 180),
-                    bgcolor: "background.paper"
+                    width: Math.max(props.target.width, 180)
                   }}
                 >
-                  <Select
+                  <select
                     autoFocus
-                    native
+                    className="select select-bordered select-sm w-full bg-base-100"
                     value={normalizeSelectValue(textValue.data, options)}
                     onBlur={() => props.onFinishedEditing(undefined, [0, 0])}
                     onChange={(event) => {
@@ -389,18 +488,20 @@ export function DataGrid({
                         {item.label}
                       </option>
                     ))}
-                  </Select>
-                </FormControl>
+                  </select>
+                </div>
               );
             };
           }}
           // 自定义首列表头复选框样式，使其与行内复选框视觉一致。
           drawHeader={(args, drawContent) => {
-            drawContent();
+          drawContent();
             const columnId = String(args.column.id ?? "");
             if (columnId !== "__select") {
               if (columnId.startsWith("__")) return;
-              drawHeaderInfoIcon(args.ctx, args.rect);
+              if (showHeaderMetadata) {
+                drawHeaderInfoIcon(args.ctx, args.rect);
+              }
               return;
             }
 
@@ -452,23 +553,29 @@ export function DataGrid({
           }}
           // 点击首列表头可切换全选状态。
           onHeaderClicked={(col, event) => {
-            if (col === 0) {
+            const columnId = String(columns[col]?.id ?? "");
+            if (columnId === "__select") {
               onToggleAll(!allChecked, selectableIds);
               return;
             }
 
-            const columnId = String(columns[col]?.id ?? "");
             if (!columnId || columnId.startsWith("__")) {
               return;
             }
 
             // 命中 info icon 时阻止默认行为，避免触发整列选中。
-            if (isHeaderInfoIconHit(event.localEventX, event.localEventY, event.bounds)) {
+            if (showHeaderMetadata && isHeaderInfoIconHit(event.localEventX, event.localEventY, event.bounds)) {
               event.preventDefault();
             }
           }}
           // 鼠标经过 info icon 时展示字段元数据，离开时隐藏。
           onMouseMove={(args) => {
+            if (!showHeaderMetadata) {
+              if (!metaPanelHovering) {
+                scheduleMetaClose();
+              }
+              return;
+            }
             if (args.kind !== "header") {
               if (!metaPanelHovering) {
                 scheduleMetaClose();
@@ -511,7 +618,8 @@ export function DataGrid({
 
             setHoveredHeaderMeta({
               fieldName: columnId,
-              metadata,
+              // 元数据展示统一走共享格式化逻辑，确保与 SOQL 执行器字段展开完全一致。
+              metadata: buildDisplayMetadataFromRaw(metadata),
               anchorClientX,
               anchorClientY
             });
@@ -542,11 +650,11 @@ export function DataGrid({
           onPaste
         />
         {/* 表头字段元数据悬浮提示：仅在 hover 到 info icon 时显示。 */}
-        {hoveredHeaderMeta && (
-          <Box
-            sx={{
+        {showHeaderMetadata && hoveredHeaderMeta && (
+          <div
+            className="fixed z-20 max-h-[320px] w-[420px] overflow-auto rounded border p-1.5"
+            style={{
               // 使用 fixed + viewport 坐标，避免父容器偏移导致的错位问题。
-              position: "fixed",
               left: Math.min(
                 Math.max(8, hoveredHeaderMeta.anchorClientX - 210),
                 Math.max(8, window.innerWidth - 420 - 8)
@@ -555,15 +663,9 @@ export function DataGrid({
                 Math.max(8, hoveredHeaderMeta.anchorClientY + 8),
                 Math.max(8, window.innerHeight - 320 - 8)
               ),
-              width: 420,
-              maxHeight: 320,
-              overflow: "auto",
-              p: 1.2,
-              bgcolor: "#223047",
-              border: "1px solid #3a557f",
-              borderRadius: 1,
+              backgroundColor: "#223047",
+              borderColor: "#3a557f",
               boxShadow: "0 10px 28px rgba(15, 23, 42, 0.35)",
-              zIndex: 20,
               pointerEvents: "auto"
             }}
             onMouseEnter={() => {
@@ -576,30 +678,43 @@ export function DataGrid({
             }}
           >
             {/* 元数据标题：展示当前字段名。 */}
-            <Typography variant="caption" sx={{ display: "block", mb: 0.75, color: "white", fontWeight: 700 }}>
+            <p className="mb-1 block text-[12px] font-bold text-white">
               {hoveredHeaderMeta.fieldName} 字段元数据
-            </Typography>
+            </p>
             {/* 元数据明细：逐条输出字段属性键值，便于核对权限与类型。 */}
-            <Box sx={{ pr: 0.5 }}>
-              {Object.entries(hoveredHeaderMeta.metadata).map(([key, value]) => (
-                <Typography
+            <div className="pr-0.5">
+              {sortFieldMetadataEntries(hoveredHeaderMeta.metadata).map(([key, value]) => (
+                <p
                   key={key}
-                  variant="caption"
-                  sx={{
-                    display: "block",
-                    lineHeight: 1.5,
-                    color: "#dbe7ff",
-                    fontFamily: "'Cascadia Mono', Consolas, 'Courier New', monospace"
-                  }}
+                  className="block text-[12px] leading-[1.5]"
+                  style={{ color: "#dbe7ff", fontFamily: "'Cascadia Mono', Consolas, 'Courier New', monospace" }}
                 >
-                  {translateFieldMetaKey(key)}: {formatFieldMetaValue(value)}
-                </Typography>
+                  {translateFieldMetadataKey(key)}: {formatFieldMetadataValue(value)}
+                </p>
               ))}
-            </Box>
-          </Box>
+            </div>
+          </div>
         )}
-      </Box>
-    </Box>
+
+        {/* 行右键菜单：提供“打开 Salesforce 记录页”操作。 */}
+        {rowContextMenu && (
+          <div
+            className="fixed z-[80] min-w-[164px] rounded border border-base-300 bg-base-100 p-1 shadow-xl"
+            style={{ left: rowContextMenu.x, top: rowContextMenu.y }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button
+              className="btn btn-ghost btn-xs w-full justify-start"
+              onClick={() => {
+                void openRecordPageFromMenu(); // 触发菜单动作并关闭菜单。
+              }}
+            >
+              打开 Salesforce 记录页
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -650,17 +765,54 @@ function resolveViewportAxis(value: number, containerStart: number, containerEnd
 }
 
 // 根据元数据计算单元格样式（脏数据高亮 + 必填缺失红色提示）。
-function buildCellThemeOverride(isDirty: boolean, requiredMissing: boolean): GridCell["themeOverride"] | undefined {
+function buildCellThemeOverride(
+  isDirty: boolean,
+  requiredMissing: boolean,
+  pendingDelete: boolean,
+  isNewRow: boolean
+): GridCell["themeOverride"] | undefined {
+  if (pendingDelete) {
+    return {
+      bgCell: "#eceff3",
+      bgCellMedium: "#dfe4ea"
+    };
+  }
   if (requiredMissing) {
     return {
       bgCell: "#ffeaea",
       bgCellMedium: "#ffd3d3"
     };
   }
+  if (isNewRow) {
+    return {
+      bgCell: "#ebfaef",
+      bgCellMedium: "#d5f3dc"
+    };
+  }
   if (isDirty) {
     return {
       bgCell: "#fff6d9",
       bgCellMedium: "#ffe9a8"
+    };
+  }
+  return undefined;
+}
+
+// 行级样式：用于选择列与序号列的统一高亮。
+function buildRowThemeOverride(
+  pendingDelete: boolean,
+  isNewRow: boolean
+): GridCell["themeOverride"] | undefined {
+  if (pendingDelete) {
+    return {
+      bgCell: "#eceff3",
+      bgCellMedium: "#dfe4ea"
+    };
+  }
+  if (isNewRow) {
+    return {
+      bgCell: "#ebfaef",
+      bgCellMedium: "#d5f3dc"
     };
   }
   return undefined;
@@ -701,6 +853,8 @@ function isCellEditableByMeta(metadata: Record<string, unknown>, isNewRow: boole
 function isRequiredOnCreate(metadata: Record<string, unknown>, isNewRow: boolean): boolean {
   if (!isNewRow) return false;
   if (metadata.createable === false) return false;
+  // 创建时后端会自动填默认值的字段，不应再按“必填缺失”标红。
+  if (metadata.defaultedOnCreate === true) return false;
   return metadata.nillable === false;
 }
 
@@ -736,54 +890,6 @@ function normalizeBooleanText(value: unknown): string {
 function normalizeSelectValue(raw: string, options: { label: string; value: string }[]): string {
   if (options.some((item) => item.value === raw)) return raw;
   return options[0]?.value ?? "";
-}
-
-// 字段元数据键名中文映射。
-function translateFieldMetaKey(key: string): string {
-  const map: Record<string, string> = {
-    name: "API 名称",
-    label: "标签",
-    type: "字段类型",
-    nillable: "可为空",
-    createable: "可创建",
-    updateable: "可更新",
-    defaultedOnCreate: "创建时默认值",
-    calculated: "是否公式字段",
-    calculatedFormula: "公式表达式",
-    length: "长度",
-    precision: "精度",
-    scale: "小数位",
-    unique: "是否唯一",
-    externalId: "外部 ID",
-    filterable: "可筛选",
-    sortable: "可排序",
-    groupable: "可分组",
-    referenceTo: "引用对象",
-    relationshipName: "关系名称",
-    byteLength: "字节长度",
-    inlineHelpText: "帮助文本",
-    defaultValue: "默认值",
-    defaultValueFormula: "默认值公式",
-    picklistValues: "选项列表"
-  };
-  return map[key] || key;
-}
-
-// 字段元数据值格式化。
-function formatFieldMetaValue(value: unknown): string {
-  if (typeof value === "boolean") {
-    return value ? "是" : "否";
-  }
-  if (Array.isArray(value)) {
-    return value.length === 0 ? "[]" : JSON.stringify(value);
-  }
-  if (value && typeof value === "object") {
-    return JSON.stringify(value);
-  }
-  if (value === null || value === undefined || value === "") {
-    return "-";
-  }
-  return String(value);
 }
 
 // 将值转换为数字。

@@ -30,11 +30,20 @@ export type ObjectField = {
   metadata: Record<string, unknown>;
 };
 
+// 子关系元数据：用于子查询 relationshipName 推导。
+export type ObjectChildRelationship = {
+  childSobject: string;
+  field: string;
+  relationshipName: string;
+  deprecatedAndHidden: boolean;
+};
+
 // 对象描述信息（字段列表等）。
 export type ObjectDescribe = {
   name: string;
   label: string;
   fields: ObjectField[];
+  childRelationships: ObjectChildRelationship[];
 };
 
 // SOQL 查询结果。
@@ -82,7 +91,7 @@ export type Notice = {
 export type TabLog = {
   id: string;
   timestamp: string;
-  action: "QUERY" | "SOQL" | "DELETE" | "UPSERT";
+  action: "QUERY" | "SOQL" | "DELETE" | "UPSERT" | "DISCARD";
   success: boolean;
   request: string;
   summary: string;
@@ -100,6 +109,8 @@ export type TabState = {
   sortField: string;
   sortDirection: "ASC" | "DESC";
   selectedRecordIds: string[];
+  // 待删除记录 Id 列表：点击“删除勾选”后仅做标记，执行更新时才真正提交删除。
+  pendingDeleteRecordIds: string[];
   currentSoql: string;
   soqlDraft: string;
   showQueryBar: boolean;
@@ -133,4 +144,96 @@ export type SystemLogPage = {
   page: number;
   pageSize: number;
   total: number;
+};
+
+// CLI 路径候选探测结果。
+export type CliPathProbe = {
+  path: string;
+  ok: boolean;
+  version: string | null;
+  detail: string;
+};
+
+// CLI 路径设置与自动探测信息。
+export type CliPathSettings = {
+  customCliPath: string | null;
+  resolvedCliPath: string | null;
+  resolvedCliVersion: string | null;
+  probes: CliPathProbe[];
+};
+
+// CLI 路径检测状态：用于展示可用性、版本与更新信息。
+export type CliPathStatus = {
+  path: string | null;
+  ok: boolean;
+  version: string | null;
+  hasUpdate: boolean | null;
+  latestVersion: string | null;
+  detail: string;
+};
+
+// LLM 设置视图（apiKey 仅返回掩码信息）。
+export type LlmSettings = {
+  provider: string;
+  baseUrl: string;
+  model: string;
+  apiKeyConfigured: boolean;
+  apiKeyMasked: string;
+  timeoutMs: number;
+};
+
+// 保存 LLM 设置负载（apiKey 可选覆盖）。
+export type LlmSettingsSavePayload = {
+  baseUrl: string;
+  model: string;
+  apiKey?: string;
+  timeoutMs?: number;
+};
+
+// AI 对话上下文：用于给后端提供当前 Tab 辅助信息。
+export type AiUiContext = {
+  currentTabSoql?: string;
+  contextObjectHint?: string;
+  selectedFields?: string[];
+};
+
+// AI v2 对话请求参数。
+export type AiChatTurnV2Request = {
+  sourceId: string;
+  conversationId?: string;
+  message: string;
+  streamRequestId?: string;
+  uiContext?: AiUiContext;
+};
+
+// AI 可执行动作项。
+export type AiActionItem = {
+  actionType: "APPLY_CURRENT_TAB" | "APPLY_NEW_TAB" | "ASK_MORE";
+  label: string;
+};
+
+// AI 诊断信息。
+export type AiDiagnostics = {
+  toolsUsed: string[];
+  riskLevel: "low" | "medium" | "high";
+  warnings: string[];
+};
+
+// AI v2 对话响应结构。
+export type AiChatTurnV2Response = {
+  conversationId: string;
+  state: "answer" | "clarify" | "ready";
+  assistantMessage: string;
+  questions: string[];
+  proposedSoql?: string;
+  actions: AiActionItem[];
+  diagnostics: AiDiagnostics;
+};
+
+// AI 能力清单：用于前端按能力自适应渲染。
+export type AiCapabilities = {
+  version: string;
+  provider: string;
+  model: string;
+  tools: string[];
 };
