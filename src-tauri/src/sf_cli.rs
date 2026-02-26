@@ -4,7 +4,7 @@ use std::cmp::Ordering as CmpOrdering;
 use std::collections::HashSet;
 use std::env;
 use std::path::Path;
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -321,6 +321,9 @@ fn run_sf_login_web_json(
     cancel_token: &Arc<AtomicBool>,
     preferred_cli_path: Option<&str>,
 ) -> Result<Vec<u8>, AppError> {
+    // Windows 下先清理一次残留 CLI 进程，避免上次中断登录后进程树残留影响本次登录。
+    cleanup_stale_cli_processes();
+
     let candidates = build_cli_candidates(preferred_cli_path);
     let mut errors = Vec::new();
     let timeout = cli_login_timeout();
@@ -330,13 +333,8 @@ fn run_sf_login_web_json(
         match run_command_with_cancel_and_timeout(cli, &args, cancel_token, timeout) {
             Ok(output) if output.status.success() => return Ok(output.stdout),
             Ok(output) => {
-                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                let status = output
-                    .status
-                    .code()
-                    .map(|code| code.to_string())
-                    .unwrap_or_else(|| "unknown".to_string());
-                errors.push(format!("{cli}: exit={status}, stderr={stderr}"));
+                // 同时记录 stdout/stderr，便于定位 sf 将错误写入 stdout 的场景。
+                errors.push(format!("{cli}: {}", format_cli_failure(&output)));
             }
             Err(error) => {
                 let message = error.to_string();
@@ -747,6 +745,22 @@ fn cli_login_timeout() -> Duration {
     Duration::from_secs(seconds)
 }
 
+/// 终止 CLI 子进程：Windows 下优先结束整个进程树，避免 cmd/node 派生进程残留。
+fn terminate_cli_child(child: &mut Child) {
+    #[cfg(target_os = "windows")]
+    {
+        let pid = child.id().to_string();
+        let _ = build_hidden_command("taskkill")
+            .args(["/F", "/T", "/PID", pid.as_str()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 fn run_command_with_cancel_and_timeout(
     cli: &str,
     args: &[String],
@@ -763,14 +777,12 @@ fn run_command_with_cancel_and_timeout(
     let started_at = Instant::now();
     loop {
         if cancel_token.load(Ordering::Relaxed) {
-            let _ = child.kill();
-            let _ = child.wait();
+            terminate_cli_child(&mut child);
             return Err(AppError::Biz("登录已取消。".to_string()));
         }
 
         if started_at.elapsed() >= timeout {
-            let _ = child.kill();
-            let _ = child.wait();
+            terminate_cli_child(&mut child);
             return Err(AppError::Biz(format!(
                 "登录超时（{} 秒）。",
                 timeout.as_secs()
@@ -785,8 +797,7 @@ fn run_command_with_cancel_and_timeout(
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(180)),
             Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                terminate_cli_child(&mut child);
                 return Err(AppError::Biz(format!("等待 CLI 进程失败: {error}")));
             }
         }
