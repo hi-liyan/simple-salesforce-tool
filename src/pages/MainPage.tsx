@@ -42,6 +42,9 @@ export function MainPage() {
   const prevBodyUserSelectRef = useRef("");
   // 拖拽前 body 的 cursor 样式，结束拖拽后恢复。
   const prevBodyCursorRef = useRef("");
+  // 启动完成标记：整个启动流程（rehydrate + refreshSources）完成前为 false，
+  // 期间 selectedSourceId useEffect 跳过 resetTabs，避免清空 hydration 恢复的 Tab。
+  const startupCompleteRef = useRef(false);
   // Store：读取全局状态。
   const selectedSourceId = useAppStore((state) => state.selectedSourceId);
   const tabs = useAppStore((state) => state.tabs);
@@ -126,17 +129,21 @@ export function MainPage() {
         useAppStore.persist.rehydrate(),
         useSoqlExecutorStore.persist.rehydrate()
       ]);
-      // rehydrate 完成后开启写入门控，此前所有 setItem 调用被静默忽略，
-      // 防止组件渲染产生的默认空值覆盖 SQLite 中的持久化数据。
-      enableStorageWrite();
       if (!active) return;
+      // rehydrate 完成且确认组件仍存活后，才开启写入门控。
+      // 必须在 active 检查之后，否则 StrictMode 下被卸载的 setup 会提前打开门控，
+      // 导致后续 rehydrate 的 set() 触发 subscriber 时写入空数据覆盖 SQLite。
+      enableStorageWrite();
       // hydration 完成后从 store 读取持久化的数据源 ID。
       const persistedSourceId = useAppStore.getState().selectedSourceId;
       // 触发 CLI 同步刷新数据源。
       await refreshSources(true, undefined, persistedSourceId);
       if (!active) return;
-      // 首次初始化结束后关闭启动遮罩。
+      // 首次初始化结束后关闭启动遮罩，并标记启动完成。
       setStartupLoading(false);
+      startupCompleteRef.current = true;
+      // 异步重新拉取恢复的 Tab 数据（describe + query），不阻塞主界面。
+      void reloadRestoredTabs(persistedSourceId);
       if (!startupVersionCheckTriggered) {
         startupVersionCheckTriggered = true; // 严格模式下可能重复挂载，这里只触发一次版本检查。
         void checkLatestVersionOnStartup(showVersionUpdateModal);
@@ -226,13 +233,9 @@ export function MainPage() {
   }, []);
 
   // 数据源切换时：重置 Tab 状态，避免跨数据源混淆。
+  // 启动阶段完全跳过，避免 hydration / refreshSources 引起的 selectedSourceId 变化清空恢复的 Tab。
   useEffect(() => {
-    // 未选择数据源时清空 Tab。
-    if (!selectedSourceId) {
-      resetTabs();
-      return;
-    }
-    // 已选择数据源也重置 Tab，确保数据一致。
+    if (!startupCompleteRef.current) return;
     resetTabs();
   }, [selectedSourceId, resetTabs]);
 
@@ -604,6 +607,98 @@ export function MainPage() {
         summary: "查询失败。",
         errorMessage: String(error)
       });
+    }
+  }
+
+  // 启动后异步重新拉取恢复的 Tab 数据（describe + query），逐个串行避免并发竞态。
+  // 注意：此函数从 startup useEffect 中 fire-and-forget 调用，组件闭包变量（selectedSourceId、tabs）
+  // 此时仍为初始空值，因此全部从参数或 useAppStore.getState() 实时读取，避免闭包陷阱。
+  async function reloadRestoredTabs(sourceId: string) {
+    const restoredTabs = useAppStore.getState().tabs;
+    const activeObjectName = useAppStore.getState().activeTabObjectName;
+    if (restoredTabs.length === 0 || !sourceId) return;
+
+    // 优先加载当前激活的 Tab，让用户第一时间看到数据；其余 Tab 按原顺序串行加载。
+    const sortedTabs = [...restoredTabs].sort((a, b) => {
+      if (a.objectName === activeObjectName) return -1;
+      if (b.objectName === activeObjectName) return 1;
+      return 0;
+    });
+
+    const { patchTab: storePatchTab } = useAppStore.getState();
+
+    for (const tab of sortedTabs) {
+      try {
+        storePatchTab(tab.objectName, (t) => ({ ...t, loading: true }));
+
+        // 1. 拉取 describe（对象元数据）。
+        const describe = await api.describeObject(sourceId, tab.objectName);
+
+        // 2. 加载列可见性（合并持久化配置与最新字段）。
+        const defaults = buildDefaultVisibility(describe);
+        let visibility: Record<string, boolean>;
+        try {
+          const stored = await api.getColumnVisibility(sourceId, tab.objectName);
+          visibility = { ...defaults, ...stored };
+        } catch {
+          visibility = defaults;
+        }
+
+        // 3. 更新 describe + columnVisibility 到 store。
+        storePatchTab(tab.objectName, (t) => ({ ...t, describe, columnVisibility: visibility }));
+
+        // 4. 从 store 读取最新的 tab 状态来构建查询。
+        const freshTab = useAppStore.getState().tabs.find((t) => t.objectName === tab.objectName);
+        if (!freshTab) continue;
+
+        const whereClause = (freshTab.whereClause ?? "").trim();
+        const limit = Math.max(1, Math.min(2000, freshTab.limit ?? 200));
+        const sortableFieldSet = new Set(getSortableFieldNames(describe));
+        const sortField = sortableFieldSet.has(freshTab.sortField) ? freshTab.sortField : "";
+        const sortDirection = freshTab.sortDirection ?? "DESC";
+        const selectedFields = describe.fields
+          .map((field) => field.name)
+          .filter((name) => (visibility[name] ?? true) === true);
+
+        if (selectedFields.length === 0) {
+          storePatchTab(tab.objectName, (t) => ({
+            ...t,
+            loading: false,
+            notice: { type: "error", message: `${tab.objectName} 至少要勾选一个字段。` }
+          }));
+          continue;
+        }
+
+        // 5. 构建并执行 SOQL 查询。
+        const soql = buildQuerySoql(tab.objectName, selectedFields, whereClause, sortField, sortDirection, limit);
+        const rawResult = await api.queryRecords(sourceId, soql);
+        const result = normalizeQueryResult(rawResult);
+
+        storePatchTab(tab.objectName, (t) => ({
+          ...t,
+          result,
+          loading: false,
+          selectedRecordIds: [],
+          pendingDeleteRecordIds: [],
+          currentSoql: soql,
+          soqlDraft: soql,
+          dirtyCellKeys: [],
+          baselineRecords: buildBaselineRecords(result.records),
+          notice: { type: "success", message: `${tab.objectName} 查询成功，共 ${result.totalSize} 条。` }
+        }));
+        appendTabLog(tab.objectName, {
+          action: "QUERY",
+          success: true,
+          request: soql,
+          summary: `恢复查询成功，返回 ${result.totalSize} 条。`
+        });
+      } catch (error) {
+        storePatchTab(tab.objectName, (t) => ({
+          ...t,
+          loading: false,
+          notice: { type: "error", message: `恢复 ${tab.objectName} 数据失败：${String(error)}` }
+        }));
+      }
     }
   }
 
