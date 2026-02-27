@@ -14,20 +14,29 @@ import { useObjectsQuery, useSourcesQuery, useSyncSourcesMutation } from "../que
 import { useAppStore } from "../store/useAppStore";
 import { Notice, ObjectDescribe, ObjectField, QueryResult, SalesforceObject, TabLog, TabState } from "../types";
 
+// 主页面视图模式：用于左侧工具栏的页面切换。
+type MainViewMode = "query" | "soqlExecutor" | "systemLogs" | "settings";
+
 // GitHub Releases 固定地址：用于更新提示中的展示与跳转。
 const GITHUB_RELEASE_PAGE_URL = "https://github.com/hi-liyan/simple-salesforce-tool/releases";
 // GitHub Latest Release API：用于读取最新版本号并做对比。
 const GITHUB_LATEST_RELEASE_API_URL = "https://api.github.com/repos/hi-liyan/simple-salesforce-tool/releases/latest";
+// 本地存储键：保存主页面视图模式，便于重启后恢复。
+const MAIN_VIEW_MODE_STORAGE_KEY = "sf-tool.main.viewMode";
+// 本地存储键：保存最近一次选中的数据源 ID。
+const MAIN_SELECTED_SOURCE_ID_STORAGE_KEY = "sf-tool.main.selectedSourceId";
+// 本地存储键：保存 SOQL 执行器侧栏宽度。
+const MAIN_SOQL_SIDEBAR_WIDTH_STORAGE_KEY = "sf-tool.main.soqlSidebarWidth";
 // 启动版本检查标志：避免 React StrictMode 在开发环境重复触发弹窗。
 let startupVersionCheckTriggered = false;
 
 // 主页面：对象列表 + 结果面板 + SOQL 抽屉。
 export function MainPage() {
-  const [viewMode, setViewMode] = useState<"query" | "soqlExecutor" | "systemLogs" | "settings">("query");
+  const [viewMode, setViewMode] = useState<MainViewMode>(() => readPersistedMainViewMode());
   // 启动画面状态：首次初始化完成前显示全屏遮罩，避免用户误以为卡死。
   const [startupLoading, setStartupLoading] = useState(true);
   // SOQL 执行器左侧栏宽度：支持拖拽调整。
-  const [soqlSidebarWidth, setSoqlSidebarWidth] = useState(320);
+  const [soqlSidebarWidth, setSoqlSidebarWidth] = useState(() => readPersistedSoqlSidebarWidth());
   // 是否正在拖拽 SOQL 侧栏分隔条。
   const [soqlSidebarResizing, setSoqlSidebarResizing] = useState(false);
   // 拖拽起始点 X 坐标。
@@ -111,13 +120,30 @@ export function MainPage() {
     };
   }, [soqlSidebarResizing]);
 
+  // 视图模式持久化：切换页面后写入本地，供下次启动恢复。
+  useEffect(() => {
+    persistMainViewMode(viewMode);
+  }, [viewMode]);
+
+  // 侧栏宽度持久化：拖拽结束后保存最终宽度，避免高频写入。
+  useEffect(() => {
+    if (soqlSidebarResizing) return;
+    persistSoqlSidebarWidth(soqlSidebarWidth); // 仅在结束拖拽后写入最终值。
+  }, [soqlSidebarResizing, soqlSidebarWidth]);
+
+  // 当前数据源持久化：每次切换后保存，供下次启动优先恢复。
+  useEffect(() => {
+    persistSelectedSourceId(selectedSourceId);
+  }, [selectedSourceId]);
+
   // 初始化加载：进入页面时同步一次数据源列表。
   useEffect(() => {
     // 标记组件生命周期，避免卸载后 setState。
     let active = true;
     const setup = async () => {
+      const persistedSourceId = readPersistedSelectedSourceId();
       // 触发 CLI 同步刷新数据源。
-      await refreshSources(true);
+      await refreshSources(true, undefined, persistedSourceId);
       if (!active) return;
       // 首次初始化结束后关闭启动遮罩。
       setStartupLoading(false);
@@ -247,7 +273,7 @@ export function MainPage() {
     }
   }, [sources, selectedSourceId, setSelectedSourceId]);
 
-  async function refreshSources(syncCli: boolean, preferredOrgId?: string) {
+  async function refreshSources(syncCli: boolean, preferredOrgId?: string, preferredSourceId?: string) {
     setLoading(true);
     try {
       let list = sources;
@@ -265,6 +291,8 @@ export function MainPage() {
       let nextSelectedSourceId = "";
       if (preferredId && list.some((item) => item.id === preferredId)) {
         nextSelectedSourceId = preferredId;
+      } else if (preferredSourceId && list.some((item) => item.id === preferredSourceId)) {
+        nextSelectedSourceId = preferredSourceId; // 启动恢复：命中历史数据源时优先沿用。
       } else if (!list.some((item) => item.id === selectedSourceId)) {
         nextSelectedSourceId = "";
       } else {
@@ -1483,4 +1511,80 @@ function parseSemanticVersion(rawVersion: string): ParsedSemanticVersion | null 
     coreParts: coreSegment.split(".").map((part) => Number.parseInt(part, 10)),
     preRelease: preReleaseSegment.trim() || null
   };
+}
+
+// 读取持久化视图模式：仅接受合法枚举值，异常时回退到默认 Query 页面。
+function readPersistedMainViewMode(): MainViewMode {
+  if (typeof window === "undefined") return "query";
+  try {
+    const stored = window.localStorage.getItem(MAIN_VIEW_MODE_STORAGE_KEY);
+    if (stored === "query" || stored === "soqlExecutor" || stored === "systemLogs" || stored === "settings") {
+      return stored;
+    }
+  } catch {
+    // 忽略本地存储读取失败，避免影响主流程。
+  }
+  return "query";
+}
+
+// 持久化视图模式：用于重启应用后恢复到上次停留页面。
+function persistMainViewMode(viewMode: MainViewMode): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(MAIN_VIEW_MODE_STORAGE_KEY, viewMode);
+  } catch {
+    // 忽略本地存储写入失败，避免中断业务。
+  }
+}
+
+// 读取持久化数据源：启动时用于优先恢复上次选中的连接。
+function readPersistedSelectedSourceId(): string {
+  if (typeof window === "undefined") return "";
+  try {
+    return (window.localStorage.getItem(MAIN_SELECTED_SOURCE_ID_STORAGE_KEY) || "").trim();
+  } catch {
+    // 忽略本地存储读取失败，避免影响启动流程。
+    return "";
+  }
+}
+
+// 持久化数据源：空值时主动移除，避免残留脏状态。
+function persistSelectedSourceId(sourceId: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    const normalized = sourceId.trim();
+    if (!normalized) {
+      window.localStorage.removeItem(MAIN_SELECTED_SOURCE_ID_STORAGE_KEY);
+      return;
+    }
+    window.localStorage.setItem(MAIN_SELECTED_SOURCE_ID_STORAGE_KEY, normalized);
+  } catch {
+    // 忽略本地存储写入失败，避免中断业务。
+  }
+}
+
+// 读取持久化 SOQL 侧栏宽度：提供基础边界保护，防止异常值破坏布局。
+function readPersistedSoqlSidebarWidth(): number {
+  if (typeof window === "undefined") return 320;
+  try {
+    const stored = window.localStorage.getItem(MAIN_SOQL_SIDEBAR_WIDTH_STORAGE_KEY);
+    if (!stored) return 320;
+    const parsed = Number.parseInt(stored, 10);
+    if (!Number.isFinite(parsed)) return 320;
+    return Math.max(240, Math.min(1200, parsed));
+  } catch {
+    // 忽略本地存储读取失败，避免影响启动流程。
+    return 320;
+  }
+}
+
+// 持久化 SOQL 侧栏宽度：用于下次打开时保持用户偏好的工作区比例。
+function persistSoqlSidebarWidth(width: number): void {
+  if (typeof window === "undefined") return;
+  try {
+    const normalized = Math.max(240, Math.min(1200, Math.round(width)));
+    window.localStorage.setItem(MAIN_SOQL_SIDEBAR_WIDTH_STORAGE_KEY, String(normalized));
+  } catch {
+    // 忽略本地存储写入失败，避免中断业务。
+  }
 }
