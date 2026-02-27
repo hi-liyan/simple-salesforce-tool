@@ -2093,6 +2093,30 @@ const TOOL_GET_FIELD_METADATA: &str = "get_salesforce_field_metadata";
 /// LLM 工具:获取对象关系图。
 const TOOL_GET_OBJECT_RELATIONSHIP_GRAPH: &str = "get_salesforce_object_relationship_graph";
 
+/// 读取 UI 持久化状态（通用键值）。
+#[tauri::command]
+pub fn get_ui_state(state: State<'_, AppState>, key: String) -> Result<Option<String>, String> {
+    let connection = state
+        .db
+        .lock()
+        .map_err(|error| format!("Database lock failed: {error}"))?;
+    db::read_app_setting(&connection, &key).map_err(AppError::to_string_error)
+}
+
+/// 写入 UI 持久化状态（通用键值）。
+#[tauri::command]
+pub fn save_ui_state(
+    state: State<'_, AppState>,
+    key: String,
+    value: String,
+) -> Result<(), String> {
+    let connection = state
+        .db
+        .lock()
+        .map_err(|error| format!("Database lock failed: {error}"))?;
+    db::write_app_setting(&connection, &key, &value).map_err(AppError::to_string_error)
+}
+
 /// 校验数据源写入参数,避免保存明显非法值。
 fn validate_payload(payload: &SourceUpsertPayload) -> Result<(), String> {
     if payload.name.trim().is_empty() {
