@@ -68,6 +68,8 @@ export function MainPage() {
   const sourceNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 工作区全局浮动提示（与 Tab 无关）。
   const [workspaceNotice, setWorkspaceNotice] = useState<Notice | null>(null);
+  // 新版本提示模态框状态：有值时显示升级弹窗。
+  const [versionUpdateModal, setVersionUpdateModal] = useState<VersionUpdateModalState | null>(null);
   // 认证凭证刷新计数器：用于处理并发 API 请求下的开始/结束配对。
   const tokenRefreshingCountRef = useRef(0);
   // 数据源切换请求序号：用于忽略过期请求结果，避免并发切换互相覆盖。
@@ -121,7 +123,7 @@ export function MainPage() {
       setStartupLoading(false);
       if (!startupVersionCheckTriggered) {
         startupVersionCheckTriggered = true; // 严格模式下可能重复挂载，这里只触发一次版本检查。
-        void checkLatestVersionOnStartup(showWorkspaceNotice);
+        void checkLatestVersionOnStartup(showVersionUpdateModal);
       }
     };
     void setup();
@@ -365,6 +367,33 @@ export function MainPage() {
       sourceNoticeTimerRef.current = null;
     }
     setWorkspaceNotice(null);
+  }
+
+  // 版本检查命中时展示升级模态框。
+  function showVersionUpdateModal(payload: VersionUpdateModalState) {
+    setVersionUpdateModal(payload);
+  }
+
+  // 关闭升级模态框。
+  function closeVersionUpdateModal() {
+    setVersionUpdateModal(null);
+  }
+
+  // 点击“前往更新”：由后端调用系统浏览器打开发布页，避免 window.open。
+  async function handleConfirmVersionUpdateModal() {
+    if (!versionUpdateModal) return;
+    try {
+      await api.openExternalUrl(versionUpdateModal.releasePageUrl); // 通过 Tauri 命令打开外链，避免浏览器弹窗拦截。
+      setVersionUpdateModal(null);
+    } catch (error) {
+      showWorkspaceNotice(
+        {
+          type: "error",
+          message: `打开发布页失败：${String(error)}`
+        },
+        5000
+      );
+    }
   }
 
   function openAuthWindow() {
@@ -1161,6 +1190,42 @@ export function MainPage() {
           </>
         }
       />
+      {versionUpdateModal && (
+        // 新版本提示模态框：统一替代 confirm + 通知的双提示流程。
+        <div className="fixed inset-0 z-[130] flex items-center justify-center bg-base-300/45 p-4 backdrop-blur-[2px]">
+          {/* 模态框卡片：展示版本信息与更新入口。 */}
+          <div className="w-full max-w-xl rounded-xl border border-base-300 bg-base-100 p-6 shadow-2xl">
+            {/* 标题区：强调发现新版本。 */}
+            <div className="mb-3">
+              <h3 className="text-lg font-semibold">检测到新版本</h3>
+              <p className="mt-1 text-sm text-neutral/70">
+                发现可用更新，是否现在前往 GitHub Releases 页面查看并下载？
+              </p>
+            </div>
+            {/* 版本信息：便于快速确认升级差异。 */}
+            <div className="rounded-lg border border-base-300 bg-base-200/60 p-3 text-sm">
+              <p>
+                <span className="text-neutral/70">当前版本：</span>
+                <span className="font-medium">{versionUpdateModal.currentVersion}</span>
+              </p>
+              <p className="mt-1">
+                <span className="text-neutral/70">最新版本：</span>
+                <span className="font-medium text-primary">{versionUpdateModal.latestVersion}</span>
+              </p>
+              <p className="mt-1 break-all text-xs text-neutral/70">{versionUpdateModal.releasePageUrl}</p>
+            </div>
+            {/* 操作区：支持暂不更新或立即前往发布页。 */}
+            <div className="mt-5 flex justify-end gap-2">
+              <button className="btn btn-ghost" onClick={closeVersionUpdateModal}>
+                稍后再说
+              </button>
+              <button className="btn btn-primary" onClick={() => void handleConfirmVersionUpdateModal()}>
+                前往更新
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {startupLoading && (
         // 启动遮罩：初始化期间覆盖全屏并拦截鼠标事件。
         <div className="fixed inset-0 z-[120] flex items-center justify-center bg-base-200/95 backdrop-blur-sm">
@@ -1325,14 +1390,21 @@ type GithubLatestReleasePayload = {
   tag_name?: string;
 };
 
+// 新版本提示模态框载荷：包含版本差异与发布页地址。
+type VersionUpdateModalState = {
+  currentVersion: string;
+  latestVersion: string;
+  releasePageUrl: string;
+};
+
 // 语义版本结构：拆分主版本段与预发布标签，便于稳定比较。
 type ParsedSemanticVersion = {
   coreParts: number[];
   preRelease: string | null;
 };
 
-// 启动时检查 GitHub 最新版本；若有更新则提示并提供发布页链接。
-async function checkLatestVersionOnStartup(showNotice: (notice: Notice, durationMs?: number) => void): Promise<void> {
+// 启动时检查 GitHub 最新版本；若有更新则触发升级模态框。
+async function checkLatestVersionOnStartup(onFoundNewVersion: (payload: VersionUpdateModalState) => void): Promise<void> {
   try {
     const currentVersion = (await getVersion()).trim();
     if (!currentVersion) return;
@@ -1340,27 +1412,11 @@ async function checkLatestVersionOnStartup(showNotice: (notice: Notice, duration
     const latestVersion = await fetchLatestGithubReleaseVersion();
     if (!latestVersion) return;
     if (!isGithubVersionNewer(currentVersion, latestVersion)) return;
-
-    const confirmMessage = [
-      `检测到新版本：${latestVersion}`,
-      `当前版本：${currentVersion}`,
-      `发布地址：${GITHUB_RELEASE_PAGE_URL}`,
-      "是否立即打开发布页？"
-    ].join("\n");
-
-    const shouldOpenReleasePage = window.confirm(confirmMessage);
-    if (shouldOpenReleasePage) {
-      window.open(GITHUB_RELEASE_PAGE_URL, "_blank", "noopener,noreferrer"); // 使用系统浏览器打开发布页。
-      return;
-    }
-
-    showNotice(
-      {
-        type: "success",
-        message: `检测到新版本 ${latestVersion}，发布地址：${GITHUB_RELEASE_PAGE_URL}`
-      },
-      8000
-    );
+    onFoundNewVersion({
+      currentVersion,
+      latestVersion,
+      releasePageUrl: GITHUB_RELEASE_PAGE_URL
+    });
   } catch (error) {
     // 版本检查失败不影响业务启动，只打印调试日志。
     console.warn("启动版本检查失败：", error);

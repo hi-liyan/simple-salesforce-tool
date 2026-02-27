@@ -1,5 +1,6 @@
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::Emitter;
@@ -421,6 +422,81 @@ pub fn close_auth_window(app: tauri::AppHandle) -> Result<(), String> {
         window.close().map_err(|error| error.to_string())?;
     }
     set_main_window_enabled(&app, true);
+    Ok(())
+}
+
+/// 构建“打开外部链接”的系统命令: 按平台使用默认浏览器。
+fn build_external_open_command(url: &str) -> Command {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let mut command = Command::new("rundll32");
+        // Windows 下避免弹出额外控制台窗口。
+        command.creation_flags(CREATE_NO_WINDOW);
+        command.arg("url.dll,FileProtocolHandler");
+        command.arg(url);
+        return command;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let mut command = Command::new("open");
+        command.arg(url);
+        return command;
+    }
+
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    {
+        let mut command = Command::new("xdg-open");
+        command.arg(url);
+        return command;
+    }
+}
+
+/// 打开外部 URL(系统默认浏览器)。
+#[tauri::command]
+pub fn open_external_url(state: State<'_, AppState>, url: String) -> Result<(), String> {
+    let normalized_url = url.trim().to_string();
+    if normalized_url.is_empty() {
+        return Err("URL 不能为空".to_string());
+    }
+
+    let parsed_url =
+        reqwest::Url::parse(&normalized_url).map_err(|error| format!("URL 格式不正确: {error}"))?;
+    // 仅允许网页协议，避免误执行本地协议。
+    if !matches!(parsed_url.scheme(), "http" | "https") {
+        return Err("仅支持 http/https 链接".to_string());
+    }
+
+    let mut command = build_external_open_command(parsed_url.as_str());
+    if let Err(error) = command.spawn() {
+        let detail = error.to_string();
+        write_system_log(
+            &state,
+            "ERROR",
+            "SYSTEM",
+            "open_external_url",
+            None,
+            Some(parsed_url.as_str()),
+            false,
+            "调用系统浏览器打开外部链接失败。",
+            Some(&detail),
+        );
+        return Err(format!("打开外部链接失败: {detail}"));
+    }
+
+    write_system_log(
+        &state,
+        "INFO",
+        "SYSTEM",
+        "open_external_url",
+        None,
+        Some(parsed_url.as_str()),
+        true,
+        "已调用系统默认浏览器打开外部链接。",
+        None,
+    );
     Ok(())
 }
 
