@@ -1,10 +1,10 @@
-﻿import { RefreshCw, Save, Search, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+﻿import { ExternalLink, RefreshCw, Save, Search, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { api } from "../../api";
 import { CliPathProbe, CliPathSettings, CliPathStatus, LlmSettings, SalesforceSource } from "../../types";
 
-// 设置面板：通过顶部 Tab 切换 CLI 设置、LLM 设置、数据源信息和关于页面。
+// 设置面板：通过顶部 Tab 切换 CLI 设置、LLM 设置、数据源信息和关于与反馈页面。
 export function SettingsPanel() {
   // 顶部 Tab 状态：控制当前展示的设置分区。
   const [activeTab, setActiveTab] = useState<"cli" | "llm" | "sources" | "about">("cli");
@@ -41,14 +41,28 @@ export function SettingsPanel() {
   // 数据源加载状态：用于刷新按钮与加载提示。
   const [sourcesLoading, setSourcesLoading] = useState(false);
 
-  // 初始化加载：进入设置页时并行读取各项配置。
+  // 记录各 Tab 是否已完成首次数据加载，避免切换 Tab 时重复请求。
+  const loadedTabs = useRef<Record<string, boolean>>({});
+
+  // 初始化加载：仅加载轻量级全局数据（CLI 配置 + 版本号），不阻塞 UI。
   useEffect(() => {
-    void loadSettings(); // 加载 CLI 配置。
-    void loadCurrentCliStatus(null); // 加载当前生效 CLI 状态。
-    void loadLlmSettings(); // 加载 LLM 配置。
-    void loadAppVersion(); // 加载应用版本号。
-    void loadSources(); // 加载数据源列表。
+    void loadSettings(); // 加载 CLI 配置（轻量读取）。
+    void loadAppVersion(); // 加载应用版本号（本地 API，极快）。
   }, []);
+
+  // 按需懒加载：仅在首次切换到目标 Tab 时加载对应数据。
+  useEffect(() => {
+    if (activeTab === "cli" && !loadedTabs.current.cli) {
+      loadedTabs.current.cli = true;
+      void loadCurrentCliStatus(null);
+    } else if (activeTab === "llm" && !loadedTabs.current.llm) {
+      loadedTabs.current.llm = true;
+      void loadLlmSettings();
+    } else if (activeTab === "sources" && !loadedTabs.current.sources) {
+      loadedTabs.current.sources = true;
+      void loadSources();
+    }
+  }, [activeTab]);
 
   // 加载数据源列表：用于数据源 Tab 展示。
   async function loadSources() {
@@ -195,7 +209,7 @@ export function SettingsPanel() {
   return (
     // 面板外层：保持与主页面一致的滚动和留白风格。
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      {/* 顶部 Tab 区：切换 CLI / LLM / 数据源 / 关于。 */}
+      {/* 顶部 Tab 区：切换 CLI / LLM / 数据源 / 关于与反馈。 */}
       <div className="border-b border-base-300 px-4 pt-3">
         {/* Tab 组：使用 DaisyUI tab 样式。 */}
         <div className="tabs tabs-boxed inline-flex bg-base-200/60">
@@ -211,9 +225,9 @@ export function SettingsPanel() {
           <button className={`tab ${activeTab === "sources" ? "tab-active" : ""}`} type="button" onClick={() => setActiveTab("sources")}>
             数据源
           </button>
-          {/* 关于 Tab 按钮。 */}
+          {/* 关于与反馈 Tab 按钮。 */}
           <button className={`tab ${activeTab === "about" ? "tab-active" : ""}`} type="button" onClick={() => setActiveTab("about")}>
-            关于
+            关于与反馈
           </button>
         </div>
       </div>
@@ -419,15 +433,32 @@ export function SettingsPanel() {
             </div>
           </>
         ) : (
-          // 关于页：展示版本和版权信息。
-          <div className="rounded border border-base-300 bg-base-100 p-4">
-            <h2 className="text-[14px] font-semibold">关于</h2>
-            <p className="mt-2 text-[12px]">
-              软件版本:
-              <span className="ml-1 font-semibold">{appVersion}</span>
-            </p>
-            <p className="mt-1 text-[12px] text-neutral/80">© 2026 李炎</p>
-          </div>
+          // 关于与反馈页：展示版本、版权信息和反馈引导。
+          <>
+            <div className="rounded border border-base-300 bg-base-100 p-4">
+              <h2 className="text-[14px] font-semibold">关于</h2>
+              <p className="mt-2 text-[12px]">
+                软件版本:
+                <span className="ml-1 font-semibold">{appVersion}</span>
+              </p>
+              <p className="mt-1 text-[12px] text-neutral/80">© 2026 李炎</p>
+            </div>
+
+            <div className="mt-3 rounded border border-base-300 bg-base-100 p-4">
+              <h2 className="text-[14px] font-semibold">反馈与建议</h2>
+              <p className="mt-2 text-[12px] leading-relaxed text-neutral/80">
+                如果你在使用过程中遇到问题，或者有任何功能建议和改进想法，欢迎通过 GitHub Issues 告诉我们。你的每一条反馈都会帮助我们做得更好！
+              </p>
+              <button
+                className="btn btn-outline btn-sm mt-3"
+                type="button"
+                onClick={() => void api.openExternalUrl("https://github.com/hi-liyan/simple-salesforce-tool/issues/new")}
+              >
+                <ExternalLink size={14} />
+                提交反馈
+              </button>
+            </div>
+          </>
         )}
 
         {/* 错误提示：统一展示本页的加载/保存异常。 */}
