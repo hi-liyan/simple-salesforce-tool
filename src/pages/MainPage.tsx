@@ -2,13 +2,12 @@
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { useQueryClient } from "@tanstack/react-query";
-import { Braces, ScrollText, Settings, Table2 } from "lucide-react";
+import { Braces, Settings, Table2 } from "lucide-react";
 import { api } from "../api";
 import { LeftSidebar } from "../features/main/LeftSidebar";
 import { RightWorkspace } from "../features/main/RightWorkspace";
 import { SoqlExecutorWorkspace } from "../features/main/SoqlExecutorWorkspace";
 import { SettingsPanel } from "../features/main/SettingsPanel";
-import { SystemLogsPanel } from "../features/main/SystemLogsPanel";
 import { MainLayout } from "../layouts/MainLayout";
 import { useObjectsQuery, useSourcesQuery, useSyncSourcesMutation } from "../queries/salesforce";
 import { useAppStore } from "../store/useAppStore";
@@ -1073,13 +1072,6 @@ export function MainPage() {
                 <Braces size={16} />
             </button>
             <button
-              className={`tool-rail-btn ${viewMode === "systemLogs" ? "tool-rail-btn--active" : ""}`}
-              title="系统日志"
-              onClick={() => setViewMode("systemLogs")}
-            >
-                <ScrollText size={16} />
-            </button>
-            <button
               className={`tool-rail-btn ${viewMode === "settings" ? "tool-rail-btn--active" : ""}`}
               title="设置"
               onClick={() => setViewMode("settings")}
@@ -1303,7 +1295,6 @@ export function MainPage() {
               </div>
             </div>
 
-            {viewMode === "systemLogs" && <SystemLogsPanel />}
             {viewMode === "settings" && <SettingsPanel />}
           </>
         }
