@@ -3,11 +3,12 @@ import { useEffect, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { api } from "../../api";
 import { CliPathProbe, CliPathSettings, CliPathStatus, LlmSettings, SalesforceSource } from "../../types";
+import { SystemLogsPanel } from "./SystemLogsPanel";
 
-// 设置面板：通过顶部 Tab 切换 CLI 设置、LLM 设置、数据源信息和关于与反馈页面。
+// 设置面板：通过顶部 Tab 切换 CLI 设置、LLM 设置、数据源信息、系统日志和关于与反馈页面。
 export function SettingsPanel() {
   // 顶部 Tab 状态：控制当前展示的设置分区。
-  const [activeTab, setActiveTab] = useState<"cli" | "llm" | "sources" | "about">("cli");
+  const [activeTab, setActiveTab] = useState<"cli" | "llm" | "sources" | "systemLogs" | "about">("cli");
   // CLI 路径设置：包含自定义路径、生效路径和探测信息。
   const [settings, setSettings] = useState<CliPathSettings | null>(null);
   // CLI 自定义路径输入值：支持手动输入和候选回填。
@@ -225,6 +226,10 @@ export function SettingsPanel() {
           <button className={`tab ${activeTab === "sources" ? "tab-active" : ""}`} type="button" onClick={() => setActiveTab("sources")}>
             数据源
           </button>
+          {/* 系统日志 Tab 按钮。 */}
+          <button className={`tab ${activeTab === "systemLogs" ? "tab-active" : ""}`} type="button" onClick={() => setActiveTab("systemLogs")}>
+            系统日志
+          </button>
           {/* 关于与反馈 Tab 按钮。 */}
           <button className={`tab ${activeTab === "about" ? "tab-active" : ""}`} type="button" onClick={() => setActiveTab("about")}>
             关于与反馈
@@ -432,6 +437,9 @@ export function SettingsPanel() {
                 ))}
             </div>
           </>
+        ) : activeTab === "systemLogs" ? (
+          // 系统日志页：复用独立的 SystemLogsPanel 组件。
+          <SystemLogsPanel />
         ) : (
           // 关于与反馈页：展示版本、版权信息和反馈引导。
           <>

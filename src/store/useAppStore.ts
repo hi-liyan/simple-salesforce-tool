@@ -4,7 +4,7 @@ import { TabState } from "../types";
 import { tauriSqliteStorage } from "./tauriStorage";
 
 // 主页面视图模式：用于左侧工具栏的页面切换。
-export type MainViewMode = "query" | "soqlExecutor" | "systemLogs" | "settings";
+export type MainViewMode = "query" | "soqlExecutor" | "settings";
 
 // Tab 持久化时保留的字段子集：排除运行时/瞬态状态，减小存储体积。
 type PersistedTabState = Pick<
@@ -136,9 +136,12 @@ export const useAppStore = create<AppState>()(
       // 从持久化快照恢复时，补全每个 Tab 被排除的运行时字段。
       merge: (persisted, current) => {
         const state = persisted as Partial<AppState>;
+        // 兼容旧版持久化数据：systemLogs 已移入设置面板，回退到 settings。
+        const viewMode = state.viewMode === ("systemLogs" as string) ? "settings" : state.viewMode;
         return {
           ...current,
           ...state,
+          viewMode: viewMode ?? current.viewMode,
           // 恢复 tabs 时补全运行时字段。
           tabs: Array.isArray(state.tabs)
             ? state.tabs.map((tab) => hydrateTab(tab as unknown as PersistedTabState))
