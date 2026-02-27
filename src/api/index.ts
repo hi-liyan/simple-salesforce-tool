@@ -41,6 +41,8 @@ export const api = {
   aiStopTurn: (requestId: string) => invokeApi<void>("ai_stop_turn", { requestId }),
   aiGetCapabilities: () => invokeApi<AiCapabilities>("ai_get_capabilities"),
   stopLlmStreamGeneration: (requestId: string) => invokeApi<void>("stop_llm_stream_generation", { requestId }),
+  // 打开外部链接：交由后端使用系统默认浏览器处理，避免前端 window.open。
+  openExternalUrl: (url: string) => invokeApi<void>("open_external_url", { url }),
   syncCliSources: () => invokeApi<SalesforceSource[]>("sync_cli_sources"),
   loginCliOrg: (instanceUrl: string) => invokeApi<string>("login_cli_org", { instanceUrl }),
   openAuthWindow: () => invokeApi<void>("open_auth_window"),
