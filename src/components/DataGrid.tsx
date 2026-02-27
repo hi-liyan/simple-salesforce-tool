@@ -354,29 +354,23 @@ export function DataGrid({
     }, 180);
   };
 
-  // 打开 Salesforce 记录页：调用后端混合模式（CLI 优先，失败回退 frontdoor）。
+  // 打开 Salesforce 记录页：后端校验 token 后直接打开系统浏览器。
   async function openRecordPageFromMenu() {
     if (!rowContextMenu) return;
+    const { recordId } = rowContextMenu;
+    setRowContextMenu(null); // 立即关闭菜单，避免等待后端响应期间 UI 无反馈。
     if (!sourceId || !objectName) {
       onShowMessage("当前上下文缺少 sourceId/objectName，无法打开 Salesforce 记录页。");
-      setRowContextMenu(null);
       return;
     }
-    if (!rowContextMenu.recordId) {
+    if (!recordId) {
       onShowMessage("当前行没有可用的记录 Id。");
-      setRowContextMenu(null);
       return;
     }
-
     try {
-      const openUrl = await api.openRecordPage(sourceId, objectName, rowContextMenu.recordId);
-      if (openUrl) {
-        window.open(openUrl, "_blank", "noopener,noreferrer"); // 非 CLI 回退场景：在浏览器打开 frontdoor URL。
-      }
+      await api.openRecordPage(sourceId, objectName, recordId);
     } catch (error) {
       onShowMessage(`打开 Salesforce 记录页失败：${String(error)}`);
-    } finally {
-      setRowContextMenu(null); // 执行后关闭菜单。
     }
   }
 

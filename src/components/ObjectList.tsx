@@ -126,23 +126,16 @@ export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, 
   async function openSalesforceListPageFromMenu() {
     if (!objectContextMenu) return;
     const { objectItem } = objectContextMenu;
-    if (!sourceId) {
-      setObjectContextMenu(null);
-      return;
-    }
+    setObjectContextMenu(null); // 立即关闭菜单，避免等待后端响应期间 UI 无反馈。
+    if (!sourceId) return;
     if (!objectItem.queryable) {
-      onNotQueryableClick?.(objectItem); // 不可查询对象保持原有提示行为。
-      setObjectContextMenu(null);
+      onNotQueryableClick?.(objectItem);
       return;
     }
     try {
-      // 混合策略：CLI 数据源由后端直接打开；非 CLI 返回 frontdoor URL 由前端打开。
-      const openUrl = await api.openObjectListPage(sourceId, objectItem.name);
-      if (openUrl) {
-        window.open(openUrl, "_blank", "noopener,noreferrer"); // 在系统浏览器打开目标列表页。
-      }
-    } finally {
-      setObjectContextMenu(null); // 执行后关闭菜单。
+      await api.openObjectListPage(sourceId, objectItem.name);
+    } catch (error) {
+      console.error("[ObjectList] 打开 Salesforce 列表页失败:", error);
     }
   }
 
@@ -150,18 +143,12 @@ export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, 
   async function openSalesforceObjectEditPageFromMenu() {
     if (!objectContextMenu) return;
     const { objectItem } = objectContextMenu;
-    if (!sourceId) {
-      setObjectContextMenu(null);
-      return;
-    }
+    setObjectContextMenu(null); // 立即关闭菜单，避免等待后端响应期间 UI 无反馈。
+    if (!sourceId) return;
     try {
-      // 混合策略：CLI 数据源由后端直接打开；非 CLI 返回 frontdoor URL 由前端打开。
-      const openUrl = await api.openObjectEditPage(sourceId, objectItem.name);
-      if (openUrl) {
-        window.open(openUrl, "_blank", "noopener,noreferrer"); // 在系统浏览器打开目标页面。
-      }
-    } finally {
-      setObjectContextMenu(null); // 执行后关闭菜单。
+      await api.openObjectEditPage(sourceId, objectItem.name);
+    } catch (error) {
+      console.error("[ObjectList] 打开 Object 编辑页失败:", error);
     }
   }
 

@@ -395,6 +395,28 @@ impl SalesforceClient {
         Ok(())
     }
 
+    /// 轻量级 token 校验：向需要认证的 `/services/data/{version}/limits` 发 GET 请求。
+    /// 返回 `true` 表示 token 有效，`false` 表示 401 无效。
+    /// 网络超时或其他错误视为"可能有效"，避免因网络抖动触发不必要的刷新。
+    pub async fn validate_token(&self, source: &SalesforceSource) -> bool {
+        let url = format!(
+            "{}/services/data/{}/limits",
+            source.instance_url.trim_end_matches('/'),
+            source.api_version
+        );
+        let result = self
+            .http
+            .get(&url)
+            .bearer_auth(&source.access_token)
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+            .await;
+        match result {
+            Ok(resp) if resp.status() == StatusCode::UNAUTHORIZED => false,
+            _ => true,
+        }
+    }
+
     /// 发起并解析 JSON 请求（用于有返回体的接口）。
     async fn request_json<T: for<'de> serde::Deserialize<'de>>(
         &self,
