@@ -75,7 +75,9 @@ fn main() {
             commands::ai_get_capabilities,
             commands::ai_chat_turn_v2,
             commands::ai_stop_turn,
-            commands::stop_llm_stream_generation
+            commands::stop_llm_stream_generation,
+            commands::get_ui_state,
+            commands::save_ui_state
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

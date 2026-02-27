@@ -62,11 +62,11 @@ export const api = {
   listObjects: (sourceId: string) => invokeApi<SalesforceObject[]>("list_objects", { sourceId }),
   refreshObjects: (sourceId: string) => invokeApi<SalesforceObject[]>("refresh_objects", { sourceId }),
   openObjectListPage: (sourceId: string, objectName: string) =>
-    invokeApi<string | null>("open_object_list_page", { sourceId, objectName }),
+    invokeApi<void>("open_object_list_page", { sourceId, objectName }),
   openObjectEditPage: (sourceId: string, objectName: string) =>
-    invokeApi<string | null>("open_object_edit_page", { sourceId, objectName }),
+    invokeApi<void>("open_object_edit_page", { sourceId, objectName }),
   openRecordPage: (sourceId: string, objectName: string, recordId: string) =>
-    invokeApi<string | null>("open_record_page", { sourceId, objectName, recordId }),
+    invokeApi<void>("open_record_page", { sourceId, objectName, recordId }),
   describeObject: (sourceId: string, objectName: string) =>
     invokeApi<ObjectDescribe>("describe_object", { sourceId, objectName }),
   resolveFieldChildRelationshipName: (sourceId: string, objectName: string, fieldName: string) =>
@@ -78,5 +78,8 @@ export const api = {
   updateRecord: (sourceId: string, objectName: string, recordId: string, values: Record<string, unknown>) =>
     invokeApi<void>("update_record", { sourceId, objectName, recordId, values }),
   deleteRecord: (sourceId: string, objectName: string, recordId: string) =>
-    invokeApi<void>("delete_record", { sourceId, objectName, recordId })
+    invokeApi<void>("delete_record", { sourceId, objectName, recordId }),
+  // UI 状态持久化：通用键值读写，供 Zustand persist adapter 使用。
+  getUiState: (key: string) => invokeApi<string | null>("get_ui_state", { key }),
+  saveUiState: (key: string, value: string) => invokeApi<void>("save_ui_state", { key, value })
 };

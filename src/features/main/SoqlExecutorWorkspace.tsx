@@ -5,55 +5,14 @@ import { DataGrid } from "../../components/DataGrid";
 import { NoticeAlert } from "../../components/NoticeAlert";
 import { SoqlMonacoEditor } from "../../components/SoqlMonacoEditor";
 import { api } from "../../api";
+import { useSoqlExecutorStore, createSoqlExecutorTab, type SoqlExecutorTab, type AiConversationItem } from "../../store/useSoqlExecutorStore";
 import { AiChatTurnV2Response, Notice, QueryResult, SalesforceObject, TabLog } from "../../types";
-
-type AiConversationItem = {
-  // 消息唯一标识，用于流式更新定位。
-  id: string;
-  // 消息发送方：user=用户输入，assistant=AI 回复。
-  role: "user" | "assistant";
-  // 消息正文。
-  content: string;
-  // AI 回复状态：clarify=继续澄清，ready=可应用 SOQL。
-  status?: "clarify" | "ready";
-  // AI 引导问题列表（仅 clarify 时展示）。
-  questions?: string[];
-  // AI 产出的 SOQL（仅 ready 时展示）。
-  soql?: string;
-};
 
 type AiStreamChunkPayload = {
   // 流式请求 ID。
   requestId: string;
   // 增量文本片段。
   chunk: string;
-};
-
-type SoqlExecutorTab = {
-  id: string;
-  name: string;
-  soqlDraft: string;
-  // 当前编辑器选中文本：用于“仅执行选中内容”。
-  selectedSoqlText: string;
-  result: QueryResult;
-  loading: boolean;
-  notice: Notice | null;
-  logs: TabLog[];
-  selectedRecordIds: string[];
-  // 是否显示底部结果/日志区域：默认新建 Tab 隐藏，查询成功后展示。
-  showBottomPanel: boolean;
-  // AI 多轮会话 ID：为空时由后端创建。
-  aiConversationId: string;
-  // AI 对话输入草稿。
-  aiPromptDraft: string;
-  // AI 会话消息列表（用户与助手交替展示）。
-  aiMessages: AiConversationItem[];
-  // AI 请求加载状态。
-  aiLoading: boolean;
-  // AI 模式开关：开启后用聊天界面替代 SOQL 编辑器。
-  aiMode: boolean;
-  // 当前流式请求 ID：用于把 chunk 路由到当前 Tab 对话。
-  aiStreamRequestId: string;
 };
 
 type SoqlExecutorWorkspaceProps = {
@@ -89,10 +48,11 @@ export function SoqlExecutorWorkspace({
   workspaceNotice,
   onCloseWorkspaceNotice
 }: SoqlExecutorWorkspaceProps) {
-  // SOQL 执行器的多标签状态。
-  const [tabs, setTabs] = useState<SoqlExecutorTab[]>(() => [createSoqlExecutorTab(1)]);
-  // 当前激活标签 ID。
-  const [activeTabId, setActiveTabId] = useState<string>(() => tabs[0]?.id || "");
+  // SOQL 执行器的多标签状态（通过 Zustand persist 自动持久化到 SQLite）。
+  const tabs = useSoqlExecutorStore((state) => state.tabs);
+  const setTabs = useSoqlExecutorStore((state) => state.setTabs);
+  const activeTabId = useSoqlExecutorStore((state) => state.activeTabId);
+  const setActiveTabId = useSoqlExecutorStore((state) => state.setActiveTabId);
   // 底部展示模式：结果 / 日志。
   const [bottomView, setBottomView] = useState<BottomView>("result");
   // 底部结果日志区高度：支持鼠标拖拽调整。
@@ -316,63 +276,40 @@ export function SoqlExecutorWorkspace({
     }, {} as Record<string, Record<string, unknown>>);
   }, [visibleColumns]);
 
-  // 新建一个 SOQL 标签。
-  function createTab() {
-    const nextIndex = tabs.length + 1;
-    const nextTab = createSoqlExecutorTab(nextIndex);
-    setTabs((current) => [...current, nextTab]);
-    setActiveTabId(nextTab.id);
-  }
-
-  // 批量关闭 Tab：统一处理激活项收敛，保持菜单动作行为一致。
-  function closeTabsByIds(tabIds: string[]) {
-    if (tabIds.length === 0) return;
-    const closeSet = new Set(tabIds);
-    setTabs((current) => {
-      const nextTabs = current.filter((item) => !closeSet.has(item.id));
-      if (nextTabs.length === 0) {
-        const fallback = createSoqlExecutorTab(1);
-        setActiveTabId(fallback.id); // 关闭到最后一个时，自动创建并激活一个全新 Tab。
-        return [fallback];
-      }
-      setActiveTabId((currentActiveId) => (closeSet.has(currentActiveId) ? nextTabs[0].id : currentActiveId)); // 当前激活项被关闭时切到第一个剩余 Tab。
-      return nextTabs;
-    });
-  }
-
-  // 关闭指定标签，并收敛激活项到可用标签。
-  function closeTab(tabId: string) {
-    closeTabsByIds([tabId]); // 单个关闭复用批量逻辑，避免分支行为不一致。
-  }
+  // Store actions：Tab 管理操作委托给 Zustand store。
+  const storeCreateTab = useSoqlExecutorStore((state) => state.createTab);
+  const storeCloseTab = useSoqlExecutorStore((state) => state.closeTab);
+  const storeCloseTabsByIds = useSoqlExecutorStore((state) => state.closeTabsByIds);
+  const storePatchTab = useSoqlExecutorStore((state) => state.patchTab);
 
   // 右键动作：关闭目标 Tab 左侧全部。
   function closeLeftTabs(tabId: string) {
     const index = tabs.findIndex((tab) => tab.id === tabId);
     if (index <= 0) return;
-    closeTabsByIds(tabs.slice(0, index).map((tab) => tab.id));
+    storeCloseTabsByIds(tabs.slice(0, index).map((tab) => tab.id));
   }
 
   // 右键动作：关闭目标 Tab 右侧全部。
   function closeRightTabs(tabId: string) {
     const index = tabs.findIndex((tab) => tab.id === tabId);
     if (index < 0 || index >= tabs.length - 1) return;
-    closeTabsByIds(tabs.slice(index + 1).map((tab) => tab.id));
+    storeCloseTabsByIds(tabs.slice(index + 1).map((tab) => tab.id));
   }
 
   // 右键动作：关闭除目标 Tab 外的其它 Tab。
   function closeOtherTabs(tabId: string) {
-    closeTabsByIds(tabs.filter((tab) => tab.id !== tabId).map((tab) => tab.id));
+    storeCloseTabsByIds(tabs.filter((tab) => tab.id !== tabId).map((tab) => tab.id));
   }
 
   // 右键动作：关闭全部 Tab。
   function closeAllTabs() {
-    closeTabsByIds(tabs.map((tab) => tab.id));
+    storeCloseTabsByIds(tabs.map((tab) => tab.id));
   }
 
   // 更新当前激活标签（复用函数式更新，避免并发状态覆盖）。
   function patchActiveTab(updater: (tab: SoqlExecutorTab) => SoqlExecutorTab) {
     if (!activeTab) return;
-    setTabs((current) => current.map((tab) => (tab.id === activeTab.id ? updater(tab) : tab)));
+    storePatchTab(activeTab.id, updater);
   }
 
   // 执行当前标签中的 SOQL 并写入结果与日志。
@@ -550,7 +487,7 @@ export function SoqlExecutorWorkspace({
     return (
       // 防御分支：理论上不会触发，兜底给出可操作入口。
       <div className="flex h-full items-center justify-center">
-        <button className="btn btn-primary btn-sm" onClick={createTab}>
+        <button className="btn btn-primary btn-sm" onClick={storeCreateTab}>
           <Plus size={14} />
           新建 SOQL Tab
         </button>
@@ -596,7 +533,7 @@ export function SoqlExecutorWorkspace({
                 >
                   {tab.name}
                 </button>
-                <button className="btn btn-circle btn-ghost btn-xs mr-1" onClick={() => closeTab(tab.id)} aria-label={`关闭 ${tab.name}`}>
+                <button className="btn btn-circle btn-ghost btn-xs mr-1" onClick={() => storeCloseTab(tab.id)} aria-label={`关闭 ${tab.name}`}>
                   <X size={13} />
                 </button>
                 {/* Tab 右键菜单：提供常见批量关闭操作。 */}
@@ -609,7 +546,7 @@ export function SoqlExecutorWorkspace({
                     <button
                       className="btn btn-ghost btn-xs w-full justify-start"
                       onClick={() => {
-                        closeTab(tab.id); // 关闭当前 Tab。
+                        storeCloseTab(tab.id); // 关闭当前 Tab。
                         setTabContextMenu(null); // 执行后关闭菜单。
                       }}
                     >
@@ -661,7 +598,7 @@ export function SoqlExecutorWorkspace({
             );
           })}
         </div>
-        <button className="btn btn-ghost btn-sm mx-1" onClick={createTab} aria-label="新建 SOQL Tab">
+        <button className="btn btn-ghost btn-sm mx-1" onClick={storeCreateTab} aria-label="新建 SOQL Tab">
           <Plus size={14} />
         </button>
       </div>
@@ -1014,28 +951,6 @@ function buildAiErrorQuestions(errorText: string): string[] {
     ];
   }
   return ["请补充你的查询目标对象和字段，我会继续协助生成 SOQL。"];
-}
-
-// 创建新的 SOQL 执行器标签默认值。
-function createSoqlExecutorTab(index: number): SoqlExecutorTab {
-  return {
-    id: `soql-tab-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    name: `SOQL ${index}`,
-    soqlDraft: "",
-    selectedSoqlText: "",
-    result: { totalSize: 0, records: [] },
-    loading: false,
-    notice: null,
-    logs: [],
-    selectedRecordIds: [],
-    showBottomPanel: false,
-    aiConversationId: "",
-    aiPromptDraft: "",
-    aiMessages: [],
-    aiLoading: false,
-    aiMode: false,
-    aiStreamRequestId: ""
-  };
 }
 
 // 构建 SOQL 执行日志条目。
