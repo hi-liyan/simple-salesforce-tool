@@ -7,6 +7,8 @@ import { SystemLogsPanel } from "./SystemLogsPanel";
 
 // 设置面板：通过顶部 Tab 切换 CLI 设置、LLM 设置、数据源信息、系统日志和关于与反馈页面。
 export function SettingsPanel() {
+  // 反馈入口 URL：统一集中管理，便于后续替换反馈地址。
+  const feedbackIssueUrl = "https://github.com/hi-liyan/simple-salesforce-tool/issues/new";
   // 顶部 Tab 状态：控制当前展示的设置分区。
   const [activeTab, setActiveTab] = useState<"cli" | "llm" | "sources" | "systemLogs" | "about">("cli");
   // CLI 路径设置：包含自定义路径、生效路径和探测信息。
@@ -41,6 +43,8 @@ export function SettingsPanel() {
   const [sources, setSources] = useState<SalesforceSource[]>([]);
   // 数据源加载状态：用于刷新按钮与加载提示。
   const [sourcesLoading, setSourcesLoading] = useState(false);
+  // 反馈提交中状态：用于避免重复点击并反馈按钮处理中。
+  const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
 
   // 记录各 Tab 是否已完成首次数据加载，避免切换 Tab 时重复请求。
   const loadedTabs = useRef<Record<string, boolean>>({});
@@ -204,6 +208,19 @@ export function SettingsPanel() {
       setError(String(detectError));
     } finally {
       setDetectingOptions(false);
+    }
+  }
+
+  // 提交反馈：通过后端命令调用系统默认浏览器打开 Issues 页面。
+  async function submitFeedback() {
+    setFeedbackSubmitting(true);
+    setError("");
+    try {
+      await api.openExternalUrl(feedbackIssueUrl); // 统一走后端命令，避免前端直接 window.open。
+    } catch (submitError) {
+      setError(`打开反馈页面失败：${String(submitError)}`);
+    } finally {
+      setFeedbackSubmitting(false);
     }
   }
 
@@ -457,13 +474,10 @@ export function SettingsPanel() {
               <p className="mt-2 text-[12px] leading-relaxed text-neutral/80">
                 如果你在使用过程中遇到问题，或者有任何功能建议和改进想法，欢迎通过 GitHub Issues 告诉我们。你的每一条反馈都会帮助我们做得更好！
               </p>
-              <button
-                className="btn btn-outline btn-sm mt-3"
-                type="button"
-                onClick={() => void api.openExternalUrl("https://github.com/hi-liyan/simple-salesforce-tool/issues/new")}
-              >
+              {/* 提交反馈按钮：点击后通过后端打开系统默认浏览器。 */}
+              <button className="btn btn-outline btn-sm mt-3" type="button" disabled={feedbackSubmitting} onClick={() => void submitFeedback()}>
                 <ExternalLink size={14} />
-                提交反馈
+                {feedbackSubmitting ? "正在打开..." : "提交反馈"}
               </button>
             </div>
           </>
