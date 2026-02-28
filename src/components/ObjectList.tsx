@@ -1,4 +1,4 @@
-﻿import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { ObjectDescribe, SalesforceObject } from "../types";

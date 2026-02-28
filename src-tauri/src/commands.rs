@@ -1,11 +1,11 @@
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
-use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::Emitter;
 use tauri::Manager;
 use tauri::State;
+use tauri_plugin_opener::OpenerExt;
 
 use crate::ai::orchestrator::AiOrchestrator;
 use crate::app_state::AppState;
@@ -69,6 +69,15 @@ fn set_main_window_enabled(app: &tauri::AppHandle, enabled: bool) {
     if let Some(main_window) = app.get_webview_window("main") {
         let _ = main_window.set_enabled(enabled);
     }
+}
+
+/// 生成跨平台窗口标题：Linux 缺少中文系统字体时回退英文，避免标题栏出现方框。
+fn resolve_window_title(zh_title: &str, en_title: &str) -> String {
+    // Linux 标题栏由系统窗口管理器绘制，不使用 WebView 内嵌字体。
+    if cfg!(target_os = "linux") {
+        return en_title.to_string();
+    }
+    zh_title.to_string()
 }
 
 fn create_cli_login_cancel_token(state: &State<'_, AppState>) -> Arc<AtomicBool> {
@@ -358,7 +367,8 @@ pub async fn open_auth_window(app: tauri::AppHandle) -> Result<(), String> {
         "sf-auth",
         tauri::WebviewUrl::App("index.html".into()),
     )
-    .title("Salesforce 登录")
+    // 认证窗口标题：Linux 使用英文避免系统标题栏缺字导致方框。
+    .title(resolve_window_title("Salesforce 登录", "Salesforce Login"))
     .inner_size(480.0, 360.0)
     .resizable(false)
     .focused(true)
@@ -425,38 +435,20 @@ pub fn close_auth_window(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// 构建“打开外部链接”的系统命令: 按平台使用默认浏览器。
-fn build_external_open_command(url: &str) -> Command {
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        let mut command = Command::new("rundll32");
-        // Windows 下避免弹出额外控制台窗口。
-        command.creation_flags(CREATE_NO_WINDOW);
-        command.arg("url.dll,FileProtocolHandler");
-        command.arg(url);
-        return command;
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        let mut command = Command::new("open");
-        command.arg(url);
-        return command;
-    }
-
-    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
-    {
-        let mut command = Command::new("xdg-open");
-        command.arg(url);
-        return command;
-    }
+/// 调用 tauri-plugin-opener 打开 URL（跨平台：Windows/macOS/Linux）。
+fn open_url_with_system_browser(app: &tauri::AppHandle, url: &str) -> Result<(), String> {
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|error| error.to_string())
 }
 
 /// 打开外部 URL(系统默认浏览器)。
 #[tauri::command]
-pub fn open_external_url(state: State<'_, AppState>, url: String) -> Result<(), String> {
+pub fn open_external_url(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    url: String,
+) -> Result<(), String> {
     let normalized_url = url.trim().to_string();
     if normalized_url.is_empty() {
         return Err("URL 不能为空".to_string());
@@ -469,9 +461,7 @@ pub fn open_external_url(state: State<'_, AppState>, url: String) -> Result<(), 
         return Err("仅支持 http/https 链接".to_string());
     }
 
-    let mut command = build_external_open_command(parsed_url.as_str());
-    if let Err(error) = command.spawn() {
-        let detail = error.to_string();
+    if let Err(detail) = open_url_with_system_browser(&app, parsed_url.as_str()) {
         write_system_log(
             &state,
             "ERROR",
@@ -533,7 +523,12 @@ pub async fn open_field_meta_window(
         "sf-field-meta",
         tauri::WebviewUrl::App("index.html".into()),
     )
-    .title(format!("{field_name} 字段元数据"))
+    // 字段元数据窗口标题：Linux 下改用英文后缀，避免系统标题栏中文方框。
+    .title(if cfg!(target_os = "linux") {
+        format!("Field Metadata - {field_name}")
+    } else {
+        format!("{field_name} 字段元数据")
+    })
     .inner_size(860.0, 620.0)
     .resizable(true)
     .build()
@@ -1014,9 +1009,7 @@ async fn open_salesforce_page(
 
     let final_url = build_frontdoor_url(&effective_source, path);
 
-    let mut command = build_external_open_command(&final_url);
-    if let Err(error) = command.spawn() {
-        let detail = error.to_string();
+    if let Err(detail) = open_url_with_system_browser(app, &final_url) {
         write_system_log(
             state,
             "ERROR",
@@ -1899,11 +1892,7 @@ pub fn get_ui_state(state: State<'_, AppState>, key: String) -> Result<Option<St
 
 /// 写入 UI 持久化状态（通用键值）。
 #[tauri::command]
-pub fn save_ui_state(
-    state: State<'_, AppState>,
-    key: String,
-    value: String,
-) -> Result<(), String> {
+pub fn save_ui_state(state: State<'_, AppState>, key: String, value: String) -> Result<(), String> {
     let connection = state
         .db
         .lock()
