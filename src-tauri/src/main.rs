@@ -20,6 +20,13 @@ use tauri::Manager;
 
 fn main() {
     tauri::Builder::default()
+        // 注册 opener 插件：统一使用官方跨平台打开 URL/文件能力。
+        // 关闭链接点击注入脚本，避免对现有前端点击行为产生额外影响。
+        .plugin(
+            tauri_plugin_opener::Builder::new()
+                .open_js_links_on_click(false)
+                .build(),
+        )
         .setup(|app| {
             // 启动阶段初始化数据库和共享客户端，避免运行时重复构建。
             let data_dir = ensure_data_dir(&app.handle())

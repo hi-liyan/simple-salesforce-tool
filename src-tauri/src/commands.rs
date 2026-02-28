@@ -1,11 +1,11 @@
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
-use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::Emitter;
 use tauri::Manager;
 use tauri::State;
+use tauri_plugin_opener::OpenerExt;
 
 use crate::ai::orchestrator::AiOrchestrator;
 use crate::app_state::AppState;
@@ -435,71 +435,20 @@ pub fn close_auth_window(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// 按平台调用系统默认浏览器打开 URL。
-fn open_url_with_system_browser(url: &str) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        let mut command = Command::new("rundll32");
-        // Windows 下避免弹出额外控制台窗口。
-        command.creation_flags(CREATE_NO_WINDOW);
-        command.arg("url.dll,FileProtocolHandler");
-        command.arg(url);
-        return command
-            .spawn()
-            .map(|_| ())
-            .map_err(|error| format!("rundll32 启动失败: {error}"));
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        let mut command = Command::new("open");
-        command.arg(url);
-        return command
-            .spawn()
-            .map(|_| ())
-            .map_err(|error| format!("open 启动失败: {error}"));
-    }
-
-    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
-    {
-        // Linux/Unix 环境依次尝试常见命令，避免依赖单一 xdg-open。
-        let open_candidates = [
-            "xdg-open",
-            "gio",
-            "gnome-open",
-            "kde-open5",
-            "kde-open",
-            "sensible-browser",
-            "x-www-browser",
-            "wslview",
-        ];
-        let mut attempt_errors: Vec<String> = Vec::new();
-
-        for candidate in open_candidates {
-            let mut command = Command::new(candidate);
-            // gio 需要使用子命令 open。
-            if candidate == "gio" {
-                command.arg("open");
-            }
-            command.arg(url);
-            match command.spawn() {
-                Ok(_) => return Ok(()), // 任一命令成功启动即可。
-                Err(error) => attempt_errors.push(format!("{candidate}: {error}")),
-            }
-        }
-
-        return Err(format!(
-            "未找到可用的浏览器启动命令，请安装 xdg-utils 或桌面启动器。尝试结果: {}",
-            attempt_errors.join(" | ")
-        ));
-    }
+/// 调用 tauri-plugin-opener 打开 URL（跨平台：Windows/macOS/Linux）。
+fn open_url_with_system_browser(app: &tauri::AppHandle, url: &str) -> Result<(), String> {
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|error| error.to_string())
 }
 
 /// 打开外部 URL(系统默认浏览器)。
 #[tauri::command]
-pub fn open_external_url(state: State<'_, AppState>, url: String) -> Result<(), String> {
+pub fn open_external_url(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    url: String,
+) -> Result<(), String> {
     let normalized_url = url.trim().to_string();
     if normalized_url.is_empty() {
         return Err("URL 不能为空".to_string());
@@ -512,7 +461,7 @@ pub fn open_external_url(state: State<'_, AppState>, url: String) -> Result<(), 
         return Err("仅支持 http/https 链接".to_string());
     }
 
-    if let Err(detail) = open_url_with_system_browser(parsed_url.as_str()) {
+    if let Err(detail) = open_url_with_system_browser(&app, parsed_url.as_str()) {
         write_system_log(
             &state,
             "ERROR",
@@ -1060,7 +1009,7 @@ async fn open_salesforce_page(
 
     let final_url = build_frontdoor_url(&effective_source, path);
 
-    if let Err(detail) = open_url_with_system_browser(&final_url) {
+    if let Err(detail) = open_url_with_system_browser(app, &final_url) {
         write_system_log(
             state,
             "ERROR",
