@@ -435,8 +435,8 @@ pub fn close_auth_window(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// 构建“打开外部链接”的系统命令: 按平台使用默认浏览器。
-fn build_external_open_command(url: &str) -> Command {
+/// 按平台调用系统默认浏览器打开 URL。
+fn open_url_with_system_browser(url: &str) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
@@ -446,21 +446,54 @@ fn build_external_open_command(url: &str) -> Command {
         command.creation_flags(CREATE_NO_WINDOW);
         command.arg("url.dll,FileProtocolHandler");
         command.arg(url);
-        return command;
+        return command
+            .spawn()
+            .map(|_| ())
+            .map_err(|error| format!("rundll32 启动失败: {error}"));
     }
 
     #[cfg(target_os = "macos")]
     {
         let mut command = Command::new("open");
         command.arg(url);
-        return command;
+        return command
+            .spawn()
+            .map(|_| ())
+            .map_err(|error| format!("open 启动失败: {error}"));
     }
 
     #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
     {
-        let mut command = Command::new("xdg-open");
-        command.arg(url);
-        return command;
+        // Linux/Unix 环境依次尝试常见命令，避免依赖单一 xdg-open。
+        let open_candidates = [
+            "xdg-open",
+            "gio",
+            "gnome-open",
+            "kde-open5",
+            "kde-open",
+            "sensible-browser",
+            "x-www-browser",
+            "wslview",
+        ];
+        let mut attempt_errors: Vec<String> = Vec::new();
+
+        for candidate in open_candidates {
+            let mut command = Command::new(candidate);
+            // gio 需要使用子命令 open。
+            if candidate == "gio" {
+                command.arg("open");
+            }
+            command.arg(url);
+            match command.spawn() {
+                Ok(_) => return Ok(()), // 任一命令成功启动即可。
+                Err(error) => attempt_errors.push(format!("{candidate}: {error}")),
+            }
+        }
+
+        return Err(format!(
+            "未找到可用的浏览器启动命令，请安装 xdg-utils 或桌面启动器。尝试结果: {}",
+            attempt_errors.join(" | ")
+        ));
     }
 }
 
@@ -479,9 +512,7 @@ pub fn open_external_url(state: State<'_, AppState>, url: String) -> Result<(), 
         return Err("仅支持 http/https 链接".to_string());
     }
 
-    let mut command = build_external_open_command(parsed_url.as_str());
-    if let Err(error) = command.spawn() {
-        let detail = error.to_string();
+    if let Err(detail) = open_url_with_system_browser(parsed_url.as_str()) {
         write_system_log(
             &state,
             "ERROR",
@@ -1029,9 +1060,7 @@ async fn open_salesforce_page(
 
     let final_url = build_frontdoor_url(&effective_source, path);
 
-    let mut command = build_external_open_command(&final_url);
-    if let Err(error) = command.spawn() {
-        let detail = error.to_string();
+    if let Err(detail) = open_url_with_system_browser(&final_url) {
         write_system_log(
             state,
             "ERROR",
@@ -1914,11 +1943,7 @@ pub fn get_ui_state(state: State<'_, AppState>, key: String) -> Result<Option<St
 
 /// 写入 UI 持久化状态（通用键值）。
 #[tauri::command]
-pub fn save_ui_state(
-    state: State<'_, AppState>,
-    key: String,
-    value: String,
-) -> Result<(), String> {
+pub fn save_ui_state(state: State<'_, AppState>, key: String, value: String) -> Result<(), String> {
     let connection = state
         .db
         .lock()
