@@ -1,4 +1,4 @@
-﻿// Salesforce 数据源信息。
+// Salesforce 数据源信息。
 export type SalesforceSource = {
   id: string;
   name: string;

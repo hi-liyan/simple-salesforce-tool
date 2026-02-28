@@ -1,4 +1,4 @@
-﻿import { AlertTriangle, CheckCircle2, Info, X, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Info, X, XCircle } from "lucide-react";
 import { useMemo } from "react";
 
 // 通知级别：对齐 daisyUI 的 alert 语义类型。

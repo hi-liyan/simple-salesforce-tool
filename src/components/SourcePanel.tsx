@@ -1,4 +1,4 @@
-﻿import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useMemo, useState } from "react";
 import { api } from "../api";
 import { SalesforceSource } from "../types";
 
