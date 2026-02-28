@@ -1,4 +1,4 @@
-﻿import { RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useSystemLogsQuery } from "../../queries/salesforce";
 

@@ -1,4 +1,4 @@
-﻿import { ExternalLink, RefreshCw, Save, Search, Trash2 } from "lucide-react";
+import { ExternalLink, RefreshCw, Save, Search, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { api } from "../../api";

@@ -1,4 +1,4 @@
-﻿import { Plus, RefreshCw } from "lucide-react";
+import { Plus, RefreshCw } from "lucide-react";
 import { ObjectList } from "../../components/ObjectList";
 import { SalesforceObject, SalesforceSource } from "../../types";
 
