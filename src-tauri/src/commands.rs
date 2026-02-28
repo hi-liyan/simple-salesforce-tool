@@ -71,6 +71,15 @@ fn set_main_window_enabled(app: &tauri::AppHandle, enabled: bool) {
     }
 }
 
+/// 生成跨平台窗口标题：Linux 缺少中文系统字体时回退英文，避免标题栏出现方框。
+fn resolve_window_title(zh_title: &str, en_title: &str) -> String {
+    // Linux 标题栏由系统窗口管理器绘制，不使用 WebView 内嵌字体。
+    if cfg!(target_os = "linux") {
+        return en_title.to_string();
+    }
+    zh_title.to_string()
+}
+
 fn create_cli_login_cancel_token(state: &State<'_, AppState>) -> Arc<AtomicBool> {
     let token = Arc::new(AtomicBool::new(false));
     if let Ok(mut slot) = state.cli_login_cancel.lock() {
@@ -358,7 +367,8 @@ pub async fn open_auth_window(app: tauri::AppHandle) -> Result<(), String> {
         "sf-auth",
         tauri::WebviewUrl::App("index.html".into()),
     )
-    .title("Salesforce 登录")
+    // 认证窗口标题：Linux 使用英文避免系统标题栏缺字导致方框。
+    .title(resolve_window_title("Salesforce 登录", "Salesforce Login"))
     .inner_size(480.0, 360.0)
     .resizable(false)
     .focused(true)
@@ -533,7 +543,12 @@ pub async fn open_field_meta_window(
         "sf-field-meta",
         tauri::WebviewUrl::App("index.html".into()),
     )
-    .title(format!("{field_name} 字段元数据"))
+    // 字段元数据窗口标题：Linux 下改用英文后缀，避免系统标题栏中文方框。
+    .title(if cfg!(target_os = "linux") {
+        format!("Field Metadata - {field_name}")
+    } else {
+        format!("{field_name} 字段元数据")
+    })
     .inner_size(860.0, 620.0)
     .resizable(true)
     .build()
