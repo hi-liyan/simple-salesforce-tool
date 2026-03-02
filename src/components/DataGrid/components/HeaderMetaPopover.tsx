@@ -22,7 +22,7 @@ export function HeaderMetaPopover({
 }: HeaderMetaPopoverProps) {
   return (
     <div
-      className="fixed z-20 max-h-[320px] w-[420px] overflow-auto rounded border p-1.5"
+      className="fixed z-[120] max-h-[320px] w-[420px] overflow-auto rounded border p-1.5"
       style={{
         // 使用 fixed + viewport 坐标，避免父容器偏移导致的错位问题。
         left: Math.min(
