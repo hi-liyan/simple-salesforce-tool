@@ -1588,11 +1588,14 @@ function isGithubVersionNewer(currentVersion: string, latestVersion: string): bo
 
 // 比较两个语义版本：返回 1 表示 left 更新，-1 表示 right 更新，0 表示相等。
 function compareSemanticVersion(leftVersion: string, rightVersion: string): number {
-  const left = parseSemanticVersion(leftVersion);
-  const right = parseSemanticVersion(rightVersion);
+  // 比较前统一忽略版本号前缀 `v/V`，避免 `v1.2.3` 与 `1.2.3` 被误判为不相等。
+  const normalizedLeftVersion = leftVersion.trim().replace(/^[vV]/, "");
+  const normalizedRightVersion = rightVersion.trim().replace(/^[vV]/, "");
+  const left = parseSemanticVersion(normalizedLeftVersion);
+  const right = parseSemanticVersion(normalizedRightVersion);
   if (!left || !right) {
     // 兜底比较：非标准版本格式时使用带数字感知的字符串比较。
-    return leftVersion.localeCompare(rightVersion, undefined, { numeric: true, sensitivity: "base" });
+    return normalizedLeftVersion.localeCompare(normalizedRightVersion, undefined, { numeric: true, sensitivity: "base" });
   }
 
   const compareLength = Math.max(left.coreParts.length, right.coreParts.length);
