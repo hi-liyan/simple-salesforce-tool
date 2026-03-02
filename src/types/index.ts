@@ -1,7 +1,14 @@
 // Salesforce 数据源信息。
+export type DataSourceType = "salesforce" | "mysql";
+
+// 通用数据源信息（M1 阶段以 Salesforce 字段兼容为主）。
 export type SalesforceSource = {
   id: string;
   name: string;
+  // 数据源类型：用于后续按类型路由不同 provider。
+  sourceType: DataSourceType | string;
+  // 通用配置 JSON：为未来关系型数据库扩展预留。
+  configJson: Record<string, unknown>;
   instanceUrl: string;
   accessToken: string;
   apiVersion: string;
@@ -61,6 +68,10 @@ export type QueryResult = {
 // 数据源新增/更新负载。
 export type SourceUpsertPayload = {
   name: string;
+  // 数据源类型：M1 默认 salesforce。
+  sourceType?: DataSourceType | string;
+  // 通用配置 JSON：M1 阶段默认空对象。
+  configJson?: Record<string, unknown>;
   instanceUrl: string;
   accessToken: string;
   apiVersion: string;
@@ -114,6 +125,8 @@ export type TabState = {
   limit: number;
   sortField: string;
   sortDirection: "ASC" | "DESC";
+  // MySQL 排序表达式：支持用户手动输入（如 `created_at DESC`）。
+  sortClause: string;
   selectedRecordIds: string[];
   // 待删除记录 Id 列表：点击“删除勾选”后仅做标记，执行更新时才真正提交删除。
   pendingDeleteRecordIds: string[];

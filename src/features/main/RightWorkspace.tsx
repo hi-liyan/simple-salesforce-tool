@@ -9,6 +9,8 @@ import { Notice, TabState } from "../../types";
 type RightWorkspaceProps = {
   // 当前选中的数据源 ID：用于打开外部 Salesforce 页面。
   selectedSourceId: string;
+  // 当前选中的数据源类型：用于切换 SQL/SOQL 查询栏形态。
+  selectedSourceType: string;
   // Salesforce 当前用户时区（IANA），用于 datetime 与 Salesforce Web 一致显示。
   salesforceTimezone?: string | null;
   tabs: TabState[];
@@ -43,6 +45,7 @@ type RightWorkspaceProps = {
   onLimitChange: (value: number) => void;
   onSortFieldChange: (value: string) => void;
   onSortDirectionChange: (value: "ASC" | "DESC") => void;
+  onSortClauseChange: (value: string) => void;
   onQuery: () => void;
   onToggleRecord: (recordId: string, checked: boolean) => void;
   onToggleAllRecords: (checked: boolean, recordIds: string[]) => void;
@@ -62,6 +65,7 @@ type RightWorkspaceProps = {
 // 右侧工作区：包含 Tab、查询工具栏、数据表格、日志面板和字段抽屉。
 export function RightWorkspace({
   selectedSourceId,
+  selectedSourceType,
   salesforceTimezone,
   tabs,
   activeTabObjectName,
@@ -89,6 +93,7 @@ export function RightWorkspace({
   onLimitChange,
   onSortFieldChange,
   onSortDirectionChange,
+  onSortClauseChange,
   onQuery,
   onToggleRecord,
   onToggleAllRecords,
@@ -103,6 +108,8 @@ export function RightWorkspace({
   loadingText,
   objectNames
 }: RightWorkspaceProps) {
+  // 根据数据源类型切换查询栏布局（MySQL 使用 SQL 手工排序表达式）。
+  const isMysqlSource = (selectedSourceType || "salesforce").toLowerCase() === "mysql";
   // 日志面板高度状态。
   const [logPanelHeight, setLogPanelHeight] = useState(220);
   // 是否正在拖拽日志面板分隔条。
@@ -446,45 +453,74 @@ export function RightWorkspace({
                     </div>
                   </div>
 
-                  <div className="w-[90px]">
-                    <label className="mb-1 block text-[12px]">LIMIT</label>
-                    <input
-                      className="input input-bordered input-sm w-full"
-                      type="number"
-                      value={activeTab.limit}
-                      onChange={(event) => onLimitChange(Number(event.target.value || 200))}
-                    />
-                  </div>
+                  {isMysqlSource ? (
+                    <>
+                      <div className="w-[260px]">
+                        <label className="mb-1 block text-[12px]">排序</label>
+                        <input
+                          className="input input-bordered input-sm w-full"
+                          value={activeTab.sortClause || ""}
+                          placeholder="例如：created_at DESC"
+                          autoCorrect="off"
+                          autoCapitalize="off"
+                          spellCheck={false}
+                          onChange={(event) => onSortClauseChange(event.target.value)}
+                        />
+                      </div>
 
-                  <div className="w-[200px]">
-                    <label className="mb-1 block text-[12px]">排序字段</label>
-                    <select
-                      className="select select-bordered select-sm w-full"
-                      value={activeTab.sortField}
-                      disabled={sortableFields.length === 0}
-                      onChange={(event) => onSortFieldChange(event.target.value)}
-                    >
-                      {sortableFields.length === 0 && <option value="">无可排序字段</option>}
-                      {sortableFields.map((field) => (
-                        <option key={field.name} value={field.name}>
-                          {field.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                      <div className="w-[90px]">
+                        <label className="mb-1 block text-[12px]">LIMIT</label>
+                        <input
+                          className="input input-bordered input-sm w-full"
+                          type="number"
+                          value={activeTab.limit}
+                          onChange={(event) => onLimitChange(Number(event.target.value || 200))}
+                        />
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="w-[90px]">
+                        <label className="mb-1 block text-[12px]">LIMIT</label>
+                        <input
+                          className="input input-bordered input-sm w-full"
+                          type="number"
+                          value={activeTab.limit}
+                          onChange={(event) => onLimitChange(Number(event.target.value || 200))}
+                        />
+                      </div>
 
-                  <div className="w-[92px]">
-                    <label className="mb-1 block text-[12px]">排序</label>
-                    <select
-                      className="select select-bordered select-sm w-full"
-                      value={activeTab.sortDirection}
-                      disabled={!activeTab.sortField}
-                      onChange={(event) => onSortDirectionChange(event.target.value as "ASC" | "DESC")}
-                    >
-                      <option value="ASC">ASC</option>
-                      <option value="DESC">DESC</option>
-                    </select>
-                  </div>
+                      <div className="w-[200px]">
+                        <label className="mb-1 block text-[12px]">排序字段</label>
+                        <select
+                          className="select select-bordered select-sm w-full"
+                          value={activeTab.sortField}
+                          disabled={sortableFields.length === 0}
+                          onChange={(event) => onSortFieldChange(event.target.value)}
+                        >
+                          {sortableFields.length === 0 && <option value="">无可排序字段</option>}
+                          {sortableFields.map((field) => (
+                            <option key={field.name} value={field.name}>
+                              {field.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="w-[92px]">
+                        <label className="mb-1 block text-[12px]">排序</label>
+                        <select
+                          className="select select-bordered select-sm w-full"
+                          value={activeTab.sortDirection}
+                          disabled={!activeTab.sortField}
+                          onChange={(event) => onSortDirectionChange(event.target.value as "ASC" | "DESC")}
+                        >
+                          <option value="ASC">ASC</option>
+                          <option value="DESC">DESC</option>
+                        </select>
+                      </div>
+                    </>
+                  )}
 
                   <button className="btn btn-primary btn-sm mt-5 h-[35px]" disabled={activeTab.loading} onClick={onQuery}>
                     <Search size={14} />

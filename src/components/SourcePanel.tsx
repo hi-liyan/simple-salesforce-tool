@@ -1,6 +1,6 @@
 import { FormEvent, useMemo, useState } from "react";
 import { api } from "../api";
-import { SalesforceSource } from "../types";
+import { DataSourceType, SalesforceSource } from "../types";
 
 // 数据源管理面板：使用紧凑风格支持数据源维护。
 type Props = {
@@ -13,6 +13,17 @@ type Props = {
 
 type FormState = {
   name: string;
+  // 数据源类型：用于切换不同连接表单。
+  sourceType: DataSourceType;
+  // 通用配置：按 sourceType 填充不同字段。
+  configJson: {
+    host?: string;
+    port?: number;
+    database?: string;
+    username?: string;
+    password?: string;
+    primaryKey?: string;
+  };
   instanceUrl: string;
   accessToken: string;
   apiVersion: string;
@@ -20,6 +31,8 @@ type FormState = {
 
 const initialForm: FormState = {
   name: "",
+  sourceType: "salesforce",
+  configJson: {},
   instanceUrl: "",
   accessToken: "",
   apiVersion: "v61.0"
@@ -46,22 +59,70 @@ export function SourcePanel({
     setForm(initialForm);
   }
 
+  // 将当前表单状态转换为后端 SourceUpsertPayload。
+  function buildPayloadFromForm(state: FormState) {
+    if (state.sourceType === "mysql") {
+      const host = (state.configJson.host || "").trim();
+      const port = Number(state.configJson.port || 3306);
+      const database = (state.configJson.database || "").trim();
+      const username = (state.configJson.username || "").trim();
+      const password = state.configJson.password || "";
+      const primaryKey = (state.configJson.primaryKey || "").trim();
+      return {
+        name: state.name.trim(),
+        sourceType: "mysql" as const,
+        configJson: {
+          host,
+          port,
+          database,
+          username,
+          password,
+          ...(primaryKey ? { primaryKey } : {})
+        },
+        // 兼容当前后端通用字段（M2 仍保留）。
+        instanceUrl: `mysql://${host}:${port}/${database}`,
+        accessToken: "",
+        apiVersion: "mysql"
+      };
+    }
+    return {
+      name: state.name.trim(),
+      sourceType: "salesforce" as const,
+      configJson: state.configJson || {},
+      instanceUrl: state.instanceUrl.trim(),
+      accessToken: state.accessToken.trim(),
+      apiVersion: state.apiVersion.trim()
+    };
+  }
+
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setMessage("");
+    const payload = buildPayloadFromForm(form);
 
     try {
       if (editingId) {
-        await api.updateSource(editingId, form);
+        await api.updateSource(editingId, payload);
         setMessage("数据源更新成功");
       } else {
-        await api.createSource(form);
+        await api.createSource(payload);
         setMessage("数据源创建成功");
       }
       await onSourcesChanged(false);
       resetForm();
     } catch (error) {
       setMessage(`提交失败：${String(error)}`);
+    }
+  }
+
+  // 主动测试连接：不落库，只验证配置可用性。
+  async function onTestConnection() {
+    setMessage("");
+    try {
+      await api.testSourceConnection(buildPayloadFromForm(form));
+      setMessage("连接测试成功");
+    } catch (error) {
+      setMessage(`连接测试失败：${String(error)}`);
     }
   }
 
@@ -130,6 +191,25 @@ export function SourcePanel({
 
       {/* 数据源表单。 */}
       <form className="space-y-1" onSubmit={onSubmit}>
+        {/* 数据源类型选择。 */}
+        <select
+          className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-100"
+          value={form.sourceType}
+          onChange={(event) =>
+            setForm((state) => ({
+              ...state,
+              sourceType: event.target.value as DataSourceType,
+              configJson: event.target.value === "mysql" ? { port: 3306 } : {},
+              instanceUrl: event.target.value === "mysql" ? "" : state.instanceUrl,
+              accessToken: event.target.value === "mysql" ? "" : state.accessToken,
+              apiVersion: event.target.value === "mysql" ? "mysql" : "v61.0"
+            }))
+          }
+          disabled={loading}
+        >
+          <option value="salesforce">Salesforce</option>
+          <option value="mysql">MySQL</option>
+        </select>
         {/* 名称输入。 */}
         <input
           className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-100"
@@ -138,32 +218,129 @@ export function SourcePanel({
           onChange={(event) => setForm((state) => ({ ...state, name: event.target.value }))}
           required
         />
-        {/* Instance URL 输入。 */}
-        <input
-          className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-100"
-          placeholder="Instance URL"
-          value={form.instanceUrl}
-          onChange={(event) => setForm((state) => ({ ...state, instanceUrl: event.target.value }))}
-          required
-        />
-        {/* Access Token 输入。 */}
-        <input
-          className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-100"
-          placeholder="Access Token"
-          value={form.accessToken}
-          onChange={(event) => setForm((state) => ({ ...state, accessToken: event.target.value }))}
-          required
-        />
-        {/* API Version 输入。 */}
-        <input
-          className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-100"
-          placeholder="API Version"
-          value={form.apiVersion}
-          onChange={(event) => setForm((state) => ({ ...state, apiVersion: event.target.value }))}
-          required
-        />
+        {/* Salesforce 表单项。 */}
+        {form.sourceType === "salesforce" && (
+          <>
+            {/* Instance URL 输入。 */}
+            <input
+              className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-100"
+              placeholder="Instance URL"
+              value={form.instanceUrl}
+              onChange={(event) => setForm((state) => ({ ...state, instanceUrl: event.target.value }))}
+              required
+            />
+            {/* Access Token 输入。 */}
+            <input
+              className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-100"
+              placeholder="Access Token"
+              value={form.accessToken}
+              onChange={(event) => setForm((state) => ({ ...state, accessToken: event.target.value }))}
+              required
+            />
+            {/* API Version 输入。 */}
+            <input
+              className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-100"
+              placeholder="API Version"
+              value={form.apiVersion}
+              onChange={(event) => setForm((state) => ({ ...state, apiVersion: event.target.value }))}
+              required
+            />
+          </>
+        )}
+        {/* MySQL 表单项。 */}
+        {form.sourceType === "mysql" && (
+          <>
+            {/* Host 输入。 */}
+            <input
+              className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-100"
+              placeholder="Host"
+              value={form.configJson.host || ""}
+              onChange={(event) =>
+                setForm((state) => ({
+                  ...state,
+                  configJson: { ...state.configJson, host: event.target.value }
+                }))
+              }
+              required
+            />
+            {/* Port 输入。 */}
+            <input
+              className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-100"
+              placeholder="Port"
+              type="number"
+              value={String(form.configJson.port ?? 3306)}
+              onChange={(event) =>
+                setForm((state) => ({
+                  ...state,
+                  configJson: { ...state.configJson, port: Number(event.target.value || 3306) }
+                }))
+              }
+              required
+            />
+            {/* Database 输入。 */}
+            <input
+              className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-100"
+              placeholder="Database"
+              value={form.configJson.database || ""}
+              onChange={(event) =>
+                setForm((state) => ({
+                  ...state,
+                  configJson: { ...state.configJson, database: event.target.value }
+                }))
+              }
+              required
+            />
+            {/* Username 输入。 */}
+            <input
+              className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-100"
+              placeholder="Username"
+              value={form.configJson.username || ""}
+              onChange={(event) =>
+                setForm((state) => ({
+                  ...state,
+                  configJson: { ...state.configJson, username: event.target.value }
+                }))
+              }
+              required
+            />
+            {/* Password 输入。 */}
+            <input
+              className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-100"
+              placeholder="Password"
+              type="password"
+              value={form.configJson.password || ""}
+              onChange={(event) =>
+                setForm((state) => ({
+                  ...state,
+                  configJson: { ...state.configJson, password: event.target.value }
+                }))
+              }
+            />
+            {/* 主键字段输入（可选）。 */}
+            <input
+              className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-100"
+              placeholder="Primary Key（可选，默认自动检测）"
+              value={form.configJson.primaryKey || ""}
+              onChange={(event) =>
+                setForm((state) => ({
+                  ...state,
+                  configJson: { ...state.configJson, primaryKey: event.target.value }
+                }))
+              }
+            />
+          </>
+        )}
         {/* 表单操作按钮行。 */}
         <div className="flex gap-1">
+          {/* 测试连接按钮。 */}
+          <button
+            type="button"
+            className="rounded border border-emerald-700 bg-emerald-700 px-2 py-1 text-white"
+            disabled={loading}
+            onClick={() => void onTestConnection()}
+          >
+            测试连接
+          </button>
           {/* 保存/更新按钮。 */}
           <button className="rounded border border-sky-700 bg-sky-700 px-2 py-1 text-white" disabled={loading}>
             {editingId ? "更新" : "保存"}
@@ -190,8 +367,11 @@ export function SourcePanel({
               className="rounded border border-slate-600 px-2 py-0.5"
               onClick={() => {
                 setEditingId(selectedSource.id);
+                const sourceType = ((selectedSource.sourceType || "salesforce") as DataSourceType) || "salesforce";
                 setForm({
                   name: selectedSource.name,
+                  sourceType,
+                  configJson: selectedSource.configJson || {},
                   instanceUrl: selectedSource.instanceUrl,
                   accessToken: selectedSource.accessToken,
                   apiVersion: selectedSource.apiVersion

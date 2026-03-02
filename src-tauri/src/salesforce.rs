@@ -5,8 +5,8 @@ use std::collections::HashMap;
 
 use crate::error::AppError;
 use crate::models::{
-    CurrentUserContext, ObjectChildRelationship, ObjectDescribe, ObjectField, QueryResult, RecordUpdatePayload,
-    SalesforceObject, SalesforceSource,
+    CurrentUserContext, ObjectChildRelationship, ObjectDescribe, ObjectField, QueryResult,
+    RecordUpdatePayload, SalesforceObject, SalesforceSource,
 };
 
 /// Salesforce API 客户端，负责所有外部 HTTP 通讯。

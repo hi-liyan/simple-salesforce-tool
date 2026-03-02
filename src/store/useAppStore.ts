@@ -15,6 +15,7 @@ type PersistedTabState = Pick<
   | "limit"
   | "sortField"
   | "sortDirection"
+  | "sortClause"
   | "soqlDraft"
   | "currentSoql"
   | "showQueryBar"
@@ -28,6 +29,7 @@ type PersistedTabState = Pick<
 function hydrateTab(persisted: PersistedTabState): TabState {
   return {
     ...persisted,
+    sortClause: persisted.sortClause || "",
     describe: null,
     result: { totalSize: 0, records: [] },
     selectedRecordIds: [],
@@ -124,6 +126,7 @@ export const useAppStore = create<AppState>()(
           limit: tab.limit,
           sortField: tab.sortField,
           sortDirection: tab.sortDirection,
+          sortClause: tab.sortClause,
           soqlDraft: tab.soqlDraft,
           currentSoql: tab.currentSoql,
           showQueryBar: tab.showQueryBar,
