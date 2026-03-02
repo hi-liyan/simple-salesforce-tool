@@ -215,8 +215,10 @@ export function LeftSidebar({
         {/* 数据源下拉与刷新按钮。 */}
         <div className="mt-[6px] flex flex-row gap-2">
           {/* 自定义数据源选择器：支持前置类型徽标与更灵活展示。 */}
-          <DataSourceSelector sources={sources} selectedSourceId={selectedSourceId} onChange={onChangeSource} disabled={pageLoading} />
-          <button className="btn btn-primary btn-sm" onClick={onRefreshSources} disabled={pageLoading}>
+          <div className="min-w-0 flex-1">
+            <DataSourceSelector sources={sources} selectedSourceId={selectedSourceId} onChange={onChangeSource} disabled={pageLoading} />
+          </div>
+          <button className="btn btn-primary btn-sm shrink-0" onClick={onRefreshSources} disabled={pageLoading}>
             <RefreshCw size={14} />
             刷新
           </button>
