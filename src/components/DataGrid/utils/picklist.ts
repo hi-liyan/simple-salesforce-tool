@@ -41,6 +41,8 @@ export function normalizePicklistValue(value: unknown): string {
 
 // 按 value 找到可读 label；若未匹配则回退显示原值。
 export function resolvePicklistDisplayText(raw: string, options: PicklistOption[]): string {
+  // 单元格展示规则：空值不显示 None 文案，保持为空字符串。
+  if (raw === PICKLIST_NONE_VALUE) return "";
   const matched = options.find((item) => item.value === raw);
   if (matched) return matched.label;
   return raw;
