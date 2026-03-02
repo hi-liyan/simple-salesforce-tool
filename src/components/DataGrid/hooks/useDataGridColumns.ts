@@ -49,9 +49,7 @@ export function useDataGridColumns({
 
   const selectableIds = useMemo(
     () =>
-      records
-        .map((item, index) => String(item.Id || `row-${index}`))
-        .filter((id) => !id.startsWith("row-")),
+      records.map((item, index) => String(item.Id || `row-${index}`)),
     [records]
   );
 

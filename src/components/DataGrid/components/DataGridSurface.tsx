@@ -1,5 +1,5 @@
 import React from "react";
-import { DataEditor, EditableGridCell, EditListItem, GridCell, GridColumn, Item } from "@glideapps/glide-data-grid";
+import { CompactSelection, DataEditor, EditableGridCell, EditListItem, GridCell, GridColumn, GridSelection, Item } from "@glideapps/glide-data-grid";
 import { HeaderMetaPopover } from "./HeaderMetaPopover";
 import { RowContextMenu } from "./RowContextMenu";
 import { isCellEditableByMeta } from "../utils/field";
@@ -17,6 +17,8 @@ type DataGridSurfaceProps = {
   columns: GridColumn[];
   // 字段元数据映射。
   fieldMetadataMap: Record<string, Record<string, unknown>>;
+  // 当前数据源类型：用于元数据展示适配（如 MySQL 类型显示）。
+  selectedSourceType?: string;
   // 已选中记录 Id。
   selectedRecordIds: string[];
   // 是否展示表头元数据 icon。
@@ -83,6 +85,7 @@ export function DataGridSurface({
   records,
   columns,
   fieldMetadataMap,
+  selectedSourceType,
   selectedRecordIds,
   showHeaderMetadata,
   allChecked,
@@ -113,6 +116,43 @@ export function DataGridSurface({
   provideEditor,
   drawHeader
 }: DataGridSurfaceProps) {
+  // 受控选区状态：用于实现“点击 # 选整行”。
+  const [gridSelection, setGridSelection] = React.useState<GridSelection | undefined>(undefined);
+  // 统一处理选区变更：命中 # 序号列时，将默认单元格选区改写为整行选区。
+  const handleGridSelectionChange = React.useCallback(
+    (nextSelection: GridSelection) => {
+      const current = nextSelection.current;
+      if (!current) {
+        setGridSelection(nextSelection);
+        return;
+      }
+      const [col, row] = current.cell;
+      const columnId = String(columns[col]?.id ?? "");
+      if (columnId !== "__index") {
+        setGridSelection(nextSelection);
+        return;
+      }
+      const startCol = columns.findIndex((item) => String(item.id ?? "") === "__index");
+      const safeStartCol = startCol >= 0 ? startCol : 0;
+      const rowRange = {
+        x: safeStartCol,
+        y: row,
+        width: Math.max(1, columns.length - safeStartCol),
+        height: 1
+      };
+      setGridSelection({
+        current: {
+          cell: [safeStartCol, row],
+          range: rowRange,
+          rangeStack: []
+        },
+        columns: CompactSelection.empty(),
+        rows: CompactSelection.empty()
+      });
+    },
+    [columns]
+  );
+
   return (
     // 表格容器：顶部统计栏 + 数据表格。
     <div className="relative flex h-full min-h-0 flex-col">
@@ -130,6 +170,9 @@ export function DataGridSurface({
         <DataEditor
           // 列定义：包含选择列、序号列和业务字段列。
           columns={columns}
+          // 受控选区：用于支持自定义的整行选中行为。
+          gridSelection={gridSelection}
+          onGridSelectionChange={handleGridSelectionChange}
           // 行总数：与当前查询结果 records 对齐。
           rows={records.length}
           // 单元格数据读取函数：按坐标返回对应的 GridCell。
@@ -144,14 +187,28 @@ export function DataGridSurface({
             onCellEdited(location, value);
           }}
           // 单元格点击事件：用于双击编辑提示等交互。
-          onCellClicked={onCellClicked}
+          onCellClicked={(cell, event) => {
+            const [col] = cell;
+            const columnId = String(columns[col]?.id ?? "");
+            // # 序号列的整行选区由 onGridSelectionChange 统一改写，这里不做额外处理。
+            if (columnId === "__index") return;
+            onCellClicked?.(cell, event);
+          }}
           // 单元格右键事件：弹出记录级菜单。
           onCellContextMenu={(cell, event) => {
             const [col, row] = cell;
-            const record = records[row] || {};
-            const recordId = String(record.Id ?? "").trim();
             const columnId = String(columns[col]?.id ?? "");
             if (!columnId) return;
+            // 复制行为优先使用“当前选中单元格”，若不存在则回退到右键命中的单元格。
+            const selectedCell = gridSelection?.current?.cell;
+            const copyCol = selectedCell ? selectedCell[0] : col;
+            const copyRow = selectedCell ? selectedCell[1] : row;
+            const copyColumnId = String(columns[copyCol]?.id ?? "");
+            if (!copyColumnId) return;
+            const record = records[row] || {};
+            const copyRecord = records[copyRow] || {};
+            const copyRecordId = String(copyRecord.Id ?? "").trim();
+            const recordId = String(record.Id ?? "").trim();
             const isDataColumn = !columnId.startsWith("__");
             const metadata = isDataColumn ? (fieldMetadataMap[columnId] || {}) : {};
             const isNewRow = Boolean(record.__isNew);
@@ -159,13 +216,19 @@ export function DataGridSurface({
               isDataColumn &&
               metadata.nillable === true &&
               isCellEditableByMeta(metadata, isNewRow);
-            // 右键命中单元格文本：用于“复制”菜单项。
-            const cellText =
-              columnId === "__select"
-                ? String(selectedRecordIds.includes(recordId))
-                : columnId === "__index"
-                  ? String(row + 1)
-                  : stringifyCellValue(record[columnId]);
+            // 复制文本：优先复制当前选区（支持多格/整行/多行），无选区时回退单元格。
+            const cellText = buildCopyTextBySelection(
+              gridSelection,
+              columns,
+              records,
+              selectedRecordIds,
+              getCellContent,
+              copyCol,
+              copyRow,
+              copyColumnId,
+              copyRecord,
+              copyRecordId
+            );
 
             const gridRect = gridBodyRef.current?.getBoundingClientRect();
             if (!gridRect) return;
@@ -260,7 +323,7 @@ export function DataGridSurface({
             setHoveredHeaderMeta({
               fieldName: columnId,
               // 元数据展示统一走共享格式化逻辑，确保与 SOQL 执行器字段展开完全一致。
-              metadata: buildDisplayMetadataFromRaw(metadata),
+              metadata: buildDisplayMetadataFromRaw(metadata, selectedSourceType),
               anchorClientX,
               anchorClientY
             });
@@ -328,4 +391,102 @@ function resolveViewportAxis(value: number, containerStart: number, containerEnd
     return value;
   }
   return containerStart + value;
+}
+
+// 复制文本构建：优先按当前选区导出 TSV（支持多格/整行/多行），否则回退单元格文本。
+function buildCopyTextBySelection(
+  gridSelection: GridSelection | undefined,
+  columns: GridColumn[],
+  records: Record<string, unknown>[],
+  selectedRecordIds: string[],
+  getCellContent: (cell: Item) => GridCell,
+  fallbackCol: number,
+  fallbackRow: number,
+  fallbackColumnId: string,
+  fallbackRecord: Record<string, unknown>,
+  fallbackRecordId: string
+): string {
+  const currentSelection = gridSelection?.current;
+  if (currentSelection) {
+    // 支持多选区：Glide 会把历史选区放在 rangeStack，当前选区在 range。
+    const selectionRanges = [...currentSelection.rangeStack, currentSelection.range];
+    const blocks = selectionRanges
+      .map((range) => buildTsvByRange(range, columns, records, getCellContent))
+      .filter((text) => text !== "");
+    if (blocks.length > 0) {
+      return blocks.join("\n");
+    }
+  }
+
+  const selectedRows = gridSelection?.rows;
+  if (selectedRows && selectedRows.length > 0) {
+    // 仅存在行选区时，按整行导出所有可见列（同样输出 TSV）。
+    const lines: string[] = [];
+    const sortedRows = [...selectedRows].sort((left, right) => left - right);
+    for (const row of sortedRows) {
+      if (row < 0 || row >= records.length) continue;
+      const cells: string[] = [];
+      for (let col = 0; col < columns.length; col += 1) {
+        const cell = getCellContent([col, row]);
+        cells.push(gridCellToText(cell));
+      }
+      lines.push(cells.join("\t"));
+    }
+    if (lines.length > 0) {
+      return lines.join("\n");
+    }
+  }
+
+  const fallbackCell = getCellContent([fallbackCol, fallbackRow]);
+  const fallbackByGrid = gridCellToText(fallbackCell);
+  if (fallbackByGrid !== "") return fallbackByGrid;
+  if (fallbackColumnId === "__select") return String(selectedRecordIds.includes(fallbackRecordId));
+  if (fallbackColumnId === "__index") return String(fallbackRow + 1);
+  return stringifyCellValue(fallbackRecord[fallbackColumnId]);
+}
+
+// 将矩形选区导出为 TSV 文本。
+function buildTsvByRange(
+  range: { x: number; y: number; width: number; height: number },
+  columns: GridColumn[],
+  records: Record<string, unknown>[],
+  getCellContent: (cell: Item) => GridCell
+): string {
+  if (range.width <= 0 || range.height <= 0 || columns.length === 0 || records.length === 0) {
+    return "";
+  }
+  const startCol = Math.max(0, range.x);
+  const endCol = Math.min(columns.length - 1, range.x + range.width - 1);
+  const startRow = Math.max(0, range.y);
+  const endRow = Math.min(records.length - 1, range.y + range.height - 1);
+  if (startCol > endCol || startRow > endRow) {
+    return "";
+  }
+
+  const lines: string[] = [];
+  for (let row = startRow; row <= endRow; row += 1) {
+    const cells: string[] = [];
+    for (let col = startCol; col <= endCol; col += 1) {
+      const cell = getCellContent([col, row]);
+      cells.push(gridCellToText(cell));
+    }
+    lines.push(cells.join("\t"));
+  }
+  return lines.join("\n");
+}
+
+// GridCell 转文本：优先 displayData，回退 data，统一用于复制输出。
+function gridCellToText(cell: GridCell): string {
+  const displayData = (cell as { displayData?: unknown }).displayData;
+  if (typeof displayData === "string") return displayData;
+  const data = (cell as { data?: unknown }).data;
+  if (data === null || data === undefined) return "";
+  if (typeof data === "string" || typeof data === "number" || typeof data === "boolean") {
+    return String(data);
+  }
+  try {
+    return JSON.stringify(data);
+  } catch {
+    return String(data);
+  }
 }

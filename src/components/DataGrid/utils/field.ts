@@ -11,7 +11,23 @@ export function isBooleanType(fieldType: string): boolean {
 
 // 判断数字字段类型。
 export function isNumberType(fieldType: string): boolean {
-  return ["int", "double", "currency", "percent", "long"].includes(fieldType);
+  // 兼容 Salesforce 与 MySQL 常见数值类型。
+  return [
+    "int",
+    "integer",
+    "tinyint",
+    "smallint",
+    "mediumint",
+    "bigint",
+    "float",
+    "double",
+    "decimal",
+    "numeric",
+    "real",
+    "currency",
+    "percent",
+    "long"
+  ].includes(fieldType);
 }
 
 // 判断 picklist 字段类型。

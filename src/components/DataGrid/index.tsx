@@ -228,6 +228,7 @@ export function DataGrid({
       records={records}
       columns={columns}
       fieldMetadataMap={fieldMetadataMap}
+      selectedSourceType={selectedSourceType}
       selectedRecordIds={selectedRecordIds}
       showHeaderMetadata={showHeaderMetadata}
       allChecked={allChecked}
