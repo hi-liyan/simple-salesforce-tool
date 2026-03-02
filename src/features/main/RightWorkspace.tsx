@@ -381,8 +381,8 @@ export function RightWorkspace({
 
           {/* 左侧主内容区：工具栏 + 查询栏 + 表格 + 日志。 */}
           <div className="flex min-w-0 flex-1 flex-col">
-            <div className="border-b border-base-300 px-3 py-1.5">
-              <div className="flex flex-row items-center gap-1">
+            <div className="border-b border-base-300 px-3 py-1.5 overflow-x-auto">
+              <div className="flex flex-row items-center gap-1 min-w-max">
                 <button className="btn btn-outline btn-sm h-10" disabled={activeTab.loading} onClick={onCreateRecord}>
                   <Plus size={14} />
                   新建记录
@@ -548,7 +548,10 @@ export function RightWorkspace({
 
           {/* 右侧抽屉：字段列表 + SOQL 编辑器。 */}
           {activeTab.showDrawer && (
-            <div className="relative flex min-h-0 shrink-0 flex-col border-l border-base-300" style={{ width: drawerWidth, minWidth: drawerWidth }}>
+            <div
+              className="relative z-30 flex min-h-0 shrink-0 flex-col border-l border-base-300 bg-base-100"
+              style={{ width: drawerWidth, minWidth: drawerWidth }}
+            >
               {/* 抽屉左侧拖拽热区：用于调整“字段与 SOQL”抽屉宽度。 */}
               <div
                 className="absolute -left-[3px] top-0 z-20 h-full w-[6px] cursor-col-resize"
@@ -562,7 +565,7 @@ export function RightWorkspace({
                   setDraggingDrawerResize(true); // 进入拖拽状态。
                 }}
               />
-              <div className="flex min-h-0 flex-[1_1_50%] flex-col border-b border-base-300">
+              <div className="flex min-h-0 flex-[1_1_50%] flex-col border-b border-base-300 bg-base-100">
                 <div className="flex items-center justify-between border-b border-base-300 px-3 py-2">
                   <span className="text-[12px] text-neutral/70">Field 元数据</span>
                   <div className="flex flex-row items-center gap-1">
@@ -611,7 +614,7 @@ export function RightWorkspace({
                 </div>
               </div>
 
-              <div className="flex min-h-0 flex-[1_1_50%] flex-col">
+              <div className="flex min-h-0 flex-[1_1_50%] flex-col bg-base-100">
                 <div className="flex items-center justify-between border-b border-base-300 px-3 py-2">
                   <span className="text-[12px] text-neutral/70">SOQL 执行器</span>
                 </div>
