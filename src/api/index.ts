@@ -53,6 +53,7 @@ export const api = {
   listSystemLogs: (page: number, pageSize: number) =>
     invokeApi<SystemLogPage>("list_system_logs", { page, pageSize }),
   createSource: (payload: SourceUpsertPayload) => invokeApi<SalesforceSource>("create_source", { payload }),
+  testSourceConnection: (payload: SourceUpsertPayload) => invokeApi<void>("test_source_connection", { payload }),
   updateSource: (id: string, payload: SourceUpsertPayload) =>
     invokeApi<SalesforceSource>("update_source", { id, payload }),
   deleteSource: (id: string) => invokeApi<void>("delete_source", { id }),

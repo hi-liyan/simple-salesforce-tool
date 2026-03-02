@@ -101,6 +101,8 @@ pub fn load_cli_sources(preferred_cli_path: Option<&str>) -> Result<Vec<CliSourc
             id: format!("cli-{}", org.org_id),
             payload: SourceUpsertPayload {
                 name: display_name,
+                source_type: "salesforce".to_string(),
+                config_json: serde_json::json!({}),
                 instance_url: org.instance_url,
                 access_token: org.access_token,
                 // CLI 输出不稳定包含 API 版本，因此使用稳定默认值。
@@ -205,6 +207,8 @@ pub fn refresh_cli_source_by_id(
         id: format!("cli-{next_org_id}"),
         payload: SourceUpsertPayload {
             name: display_name,
+            source_type: "salesforce".to_string(),
+            config_json: serde_json::json!({}),
             instance_url,
             access_token,
             api_version,
@@ -496,9 +500,7 @@ fn cleanup_oauth_redirect_port_windows() {
         if !local_addr.ends_with(&target_suffix) {
             continue;
         }
-        if pid.chars().all(|item| item.is_ascii_digit())
-            && !pids.iter().any(|item| item == pid)
-        {
+        if pid.chars().all(|item| item.is_ascii_digit()) && !pids.iter().any(|item| item == pid) {
             pids.push(pid.to_string());
         }
     }

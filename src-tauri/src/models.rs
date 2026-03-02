@@ -9,6 +9,12 @@ pub struct SalesforceSource {
     pub id: String,
     /// 数据源显示名称（用于前端下拉与提示）。
     pub name: String,
+    /// 数据源类型（如 salesforce/mysql）。
+    #[serde(default = "default_source_type")]
+    pub source_type: String,
+    /// 通用配置 JSON（为后续多类型数据源扩展预留）。
+    #[serde(default = "default_source_config")]
+    pub config_json: Value,
     /// Salesforce 实例地址（如 https://xxx.my.salesforce.com）。
     pub instance_url: String,
     /// OAuth 访问令牌（当前版本直接持久化存储）。
@@ -21,11 +27,34 @@ pub struct SalesforceSource {
     pub updated_at: String,
 }
 
+impl SalesforceSource {
+    /// 当前数据源是否为 Salesforce 类型。
+    pub fn is_salesforce(&self) -> bool {
+        self.source_type.eq_ignore_ascii_case("salesforce")
+    }
+}
+
+/// 默认数据源类型：保持历史版本行为不变，未显式指定时按 Salesforce 处理。
+fn default_source_type() -> String {
+    "salesforce".to_string()
+}
+
+/// 默认配置对象：保证新字段在旧数据读取时也有稳定结构。
+fn default_source_config() -> Value {
+    Value::Object(serde_json::Map::new())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceUpsertPayload {
     /// 数据源名称。
     pub name: String,
+    /// 数据源类型（M1 阶段默认 salesforce）。
+    #[serde(default = "default_source_type")]
+    pub source_type: String,
+    /// 通用配置 JSON（M1 阶段可为空对象）。
+    #[serde(default = "default_source_config")]
+    pub config_json: Value,
     /// 实例地址。
     pub instance_url: String,
     /// 访问令牌。

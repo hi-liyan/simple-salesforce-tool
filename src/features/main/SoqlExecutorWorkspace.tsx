@@ -18,6 +18,8 @@ type AiStreamChunkPayload = {
 type SoqlExecutorWorkspaceProps = {
   // 当前选中的数据源 ID。
   selectedSourceId: string;
+  // 当前选中数据源类型（salesforce/mysql）。
+  selectedSourceType?: string;
   // Salesforce 当前用户时区（IANA），用于 datetime 与 Salesforce Web 一致显示。
   salesforceTimezone?: string | null;
   // 加载遮罩文案。
@@ -45,12 +47,15 @@ const AI_STREAMING_COPY_POOL = [
 // SOQL 执行器工作区：支持多 Tab、执行、结果展示与查询日志。
 export function SoqlExecutorWorkspace({
   selectedSourceId,
+  selectedSourceType,
   salesforceTimezone,
   loadingText,
   objects,
   workspaceNotice,
   onCloseWorkspaceNotice
 }: SoqlExecutorWorkspaceProps) {
+  // 查询语言标签：按数据源类型显示 SQL/SOQL 文案。
+  const queryLanguageLabel = (selectedSourceType || "salesforce").toLowerCase() === "mysql" ? "SQL" : "SOQL";
   // SOQL 执行器的多标签状态（通过 Zustand persist 自动持久化到 SQLite）。
   const tabs = useSoqlExecutorStore((state) => state.tabs);
   const setTabs = useSoqlExecutorStore((state) => state.setTabs);
@@ -350,7 +355,7 @@ export function SoqlExecutorWorkspace({
     if (!executeSoql) {
       patchActiveTab((tab) => ({
         ...tab,
-        notice: { type: "error", message: "SOQL 不能为空。" }
+        notice: { type: "error", message: `${queryLanguageLabel} 不能为空。` }
       }));
       return;
     }
@@ -382,7 +387,7 @@ export function SoqlExecutorWorkspace({
         loading: false,
         notice: { type: "error", message: `执行失败：${String(error)}` },
         logs: [
-          buildSoqlLog(false, executeSoql, "执行 SOQL 失败。", String(error)),
+          buildSoqlLog(false, executeSoql, `执行 ${queryLanguageLabel} 失败。`, String(error)),
           ...tab.logs
         ].slice(0, 200)
       }));
@@ -488,7 +493,7 @@ export function SoqlExecutorWorkspace({
     patchActiveTab((tab) => ({
       ...tab,
       soqlDraft: soql,
-      notice: { type: "success", message: "已将 AI 生成的 SOQL 回填到编辑器。" }
+      notice: { type: "success", message: `已将 AI 生成的${queryLanguageLabel}回填到编辑器。` }
     }));
   }
 
@@ -510,7 +515,7 @@ export function SoqlExecutorWorkspace({
       <div className="flex h-full items-center justify-center">
         <button className="btn btn-primary btn-sm" onClick={storeCreateTab}>
           <Plus size={14} />
-          新建 SOQL Tab
+          {`新建 ${queryLanguageLabel} Tab`}
         </button>
       </div>
     );
@@ -619,7 +624,7 @@ export function SoqlExecutorWorkspace({
             );
           })}
         </div>
-        <button className="btn btn-ghost btn-sm mx-1" onClick={storeCreateTab} aria-label="新建 SOQL Tab">
+        <button className="btn btn-ghost btn-sm mx-1" onClick={storeCreateTab} aria-label={`新建 ${queryLanguageLabel} Tab`}>
           <Plus size={14} />
         </button>
       </div>
@@ -654,7 +659,9 @@ export function SoqlExecutorWorkspace({
           </button>
           {/* 中间说明文本。 */}
           <span className="text-[12px] text-neutral/70">
-            {activeTab.aiMode ? "AI 模式：通过对话生成 SOQL，可一键新建 Tab 应用。" : "支持复杂 SOQL（含子查询），结果展示在底部。"}
+            {activeTab.aiMode
+              ? `AI 模式：通过对话生成 ${queryLanguageLabel}，可一键新建 Tab 应用。`
+              : `支持复杂 ${queryLanguageLabel}（含子查询），结果展示在底部。`}
           </span>
           {/* 占位弹性空间，将 AI 模式按钮推到右侧。 */}
           <div className="flex-1" />
@@ -680,7 +687,7 @@ export function SoqlExecutorWorkspace({
             <div className="min-h-0 flex-1 overflow-auto rounded border border-base-300 bg-base-100 p-3">
               {activeTab.aiMessages.length === 0 ? (
                 <div className="flex h-full items-center justify-center text-[12px] text-neutral/60">
-                  请输入你的问题，AI 会先对话，明确后再生成 SOQL。
+                  {`请输入你的问题，AI 会先对话，明确后再生成${queryLanguageLabel}。`}
                 </div>
               ) : (
                 activeTab.aiMessages.map((item, index) => {
@@ -742,7 +749,7 @@ export function SoqlExecutorWorkspace({
                 <textarea
                   className="textarea textarea-bordered textarea-sm w-full min-h-[84px] max-h-40 resize-y leading-5"
                   value={activeTab.aiPromptDraft}
-                  placeholder="输入问题或明确说“请生成 SOQL”"
+                  placeholder={`输入问题或明确说“请生成 ${queryLanguageLabel}”`}
                   rows={3}
                   wrap="soft"
                   onChange={(event) => {
@@ -790,6 +797,7 @@ export function SoqlExecutorWorkspace({
                 fieldNames={fallbackFieldNames}
                 objectNames={objectNames}
                 objectFieldsMap={objectFieldsMap}
+                placeholder={`输入 ${queryLanguageLabel}，支持多行与选区执行`}
                 height="100%"
                 className="h-full"
               />
