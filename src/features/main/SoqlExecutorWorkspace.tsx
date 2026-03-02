@@ -1036,7 +1036,7 @@ function extractPrimaryObjectName(soql: string): string {
   return objectNames[0] || "";
 }
 
-// 执行器字段 metadata 解析：优先 describe，其次按结果样本推断类型。
+// 执行器字段 metadata 解析：优先复用 describe 原始 metadata（与 Query 页面同源），其次按结果样本推断类型。
 function resolveFieldMetadataForExecutor(
   fieldName: string,
   primaryObjectName: string,
@@ -1045,10 +1045,7 @@ function resolveFieldMetadataForExecutor(
 ): Record<string, unknown> | null {
   const exactField = resolveObjectFieldMetadataByName(fieldName, primaryObjectName, objectDescribeMap);
   if (exactField) {
-    return {
-      label: exactField.label,
-      type: exactField.dataType
-    };
+    return exactField.metadata;
   }
 
   // 对点路径列（如 Owner.Name）回退取末段字段名做弱匹配。
@@ -1056,10 +1053,7 @@ function resolveFieldMetadataForExecutor(
     const suffixFieldName = fieldName.split(".").pop() || "";
     const suffixField = resolveObjectFieldMetadataByName(suffixFieldName, primaryObjectName, objectDescribeMap);
     if (suffixField) {
-      return {
-        label: suffixField.label,
-        type: suffixField.dataType
-      };
+      return suffixField.metadata;
     }
   }
 
