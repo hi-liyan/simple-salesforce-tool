@@ -70,6 +70,14 @@ export function DataGrid({
     () => resolveSalesforceTimezone(salesforceTimezone),
     [salesforceTimezone]
   );
+  // MySQL 主键列名：当查询结果无 Id 时，用主键值作为记录键与勾选键。
+  const mysqlPrimaryKeyField = useMemo(() => {
+    if ((selectedSourceType || "salesforce").toLowerCase() !== "mysql") return "";
+    const field = Object.entries(fieldMetadataMap).find(
+      ([, metadata]) => String(metadata?.columnKey || "").toUpperCase() === "PRI"
+    )?.[0];
+    return field || "";
+  }, [fieldMetadataMap, selectedSourceType]);
 
   const {
     columns,
@@ -81,7 +89,9 @@ export function DataGrid({
     visibleColumns,
     showSelectionColumn,
     records,
-    selectedRecordIds
+    selectedRecordIds,
+    fieldMetadataMap,
+    selectedSourceType
   });
 
   const dirtyCellSet = useMemo(() => new Set(dirtyCellKeys), [dirtyCellKeys]);
@@ -113,8 +123,14 @@ export function DataGrid({
     const record = records[rowIndex] || {};
     if (record.__localId) return String(record.__localId);
     if (record.Id) return String(record.Id);
+    if (mysqlPrimaryKeyField) {
+      const value = record[mysqlPrimaryKeyField];
+      if (value !== null && value !== undefined && String(value).trim() !== "") {
+        return String(value);
+      }
+    }
     return `row-${rowIndex}`;
-  }, [records]);
+  }, [records, mysqlPrimaryKeyField]);
 
   const getCellContent = useMemo(
     () =>

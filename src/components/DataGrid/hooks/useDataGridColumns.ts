@@ -10,6 +10,10 @@ type UseDataGridColumnsParams = {
   records: Record<string, unknown>[];
   // 当前已选记录 Id。
   selectedRecordIds: string[];
+  // 字段元数据映射：MySQL 下用于识别主键列（columnKey=PRI）。
+  fieldMetadataMap: Record<string, Record<string, unknown>>;
+  // 当前数据源类型：用于按源类型切换记录 Id 提取策略。
+  selectedSourceType?: string;
 };
 
 // DataGrid 列与勾选状态 Hook：统一管理列顺序、列宽和全选态。
@@ -17,7 +21,9 @@ export function useDataGridColumns({
   visibleColumns,
   showSelectionColumn,
   records,
-  selectedRecordIds
+  selectedRecordIds,
+  fieldMetadataMap,
+  selectedSourceType
 }: UseDataGridColumnsParams) {
   // 列宽状态：支持用户拖拽后即时更新列宽。
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
@@ -47,10 +53,31 @@ export function useDataGridColumns({
     ];
   }, [displayColumns, columnWidths, showSelectionColumn]);
 
+  // MySQL 主键列：用于缺失 Id 时的勾选回退键。
+  const mysqlPrimaryKeyField = useMemo(() => {
+    if ((selectedSourceType || "salesforce").toLowerCase() !== "mysql") return "";
+    const field = Object.entries(fieldMetadataMap).find(
+      ([, metadata]) => String(metadata?.columnKey || "").toUpperCase() === "PRI"
+    )?.[0];
+    return field || "";
+  }, [fieldMetadataMap, selectedSourceType]);
+
   const selectableIds = useMemo(
     () =>
-      records.map((item, index) => String(item.Id || `row-${index}`)),
-    [records]
+      records.map((item, index) => {
+        const fromId = item.Id;
+        if (fromId !== null && fromId !== undefined && String(fromId).trim() !== "") {
+          return String(fromId);
+        }
+        if (mysqlPrimaryKeyField) {
+          const fromPrimary = item[mysqlPrimaryKeyField];
+          if (fromPrimary !== null && fromPrimary !== undefined && String(fromPrimary).trim() !== "") {
+            return String(fromPrimary);
+          }
+        }
+        return `row-${index}`;
+      }),
+    [records, mysqlPrimaryKeyField]
   );
 
   const allChecked = selectableIds.length > 0 && selectableIds.every((id) => selectedRecordIds.includes(id));
