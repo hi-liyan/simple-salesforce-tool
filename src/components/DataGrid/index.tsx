@@ -26,6 +26,8 @@ export type DataGridProps = {
   salesforceTimezone?: string | null;
   // 当前选中的数据源 ID：用于打开 Salesforce 记录页（可选）。
   sourceId?: string;
+  // 当前数据源类型：用于控制 Salesforce 专属菜单项显隐。
+  selectedSourceType?: string;
   // 当前对象 API 名称：用于打开 Salesforce 记录页（可选）。
   objectName?: string;
   // 待删除记录 Id 列表：用于将整行标记为灰色背景。
@@ -51,6 +53,7 @@ export function DataGrid({
   selectedRecordIds,
   salesforceTimezone,
   sourceId,
+  selectedSourceType,
   objectName,
   pendingDeleteRecordIds,
   onToggleRecord,
@@ -243,6 +246,7 @@ export function DataGrid({
       activeEditorCellRef={activeEditorCellRef}
       setActiveEditorCell={setActiveEditorCell}
       canOpenRecordPage={Boolean(sourceId && objectName && rowContextMenu?.recordId)}
+      showOpenRecordPage={(selectedSourceType || "salesforce").toLowerCase() === "salesforce"}
       onToggleAll={onToggleAll}
       onCopyCell={() => {
         void copyCellValueFromMenu();

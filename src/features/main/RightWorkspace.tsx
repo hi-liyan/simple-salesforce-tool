@@ -541,6 +541,7 @@ export function RightWorkspace({
                 salesforceTimezone={salesforceTimezone}
                 pendingDeleteRecordIds={pendingDeleteRecordIds}
                 sourceId={selectedSourceId}
+                selectedSourceType={selectedSourceType}
                 objectName={activeTab.objectName}
                 onToggleRecord={onToggleRecord}
                 onToggleAll={onToggleAllRecords}

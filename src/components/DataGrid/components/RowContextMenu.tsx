@@ -11,6 +11,8 @@ type RowContextMenuProps = {
   onOpenRecordPage: () => void;
   // 当前上下文是否允许打开 Salesforce 记录页。
   canOpenRecordPage: boolean;
+  // 是否显示“打开 Salesforce 记录页”菜单项。
+  showOpenRecordPage: boolean;
 };
 
 // 行右键菜单：统一封装复制、置空、打开记录页动作。
@@ -19,7 +21,8 @@ export function RowContextMenu({
   onCopyCell,
   onSetNone,
   onOpenRecordPage,
-  canOpenRecordPage
+  canOpenRecordPage,
+  showOpenRecordPage
 }: RowContextMenuProps) {
   return (
     <div
@@ -45,15 +48,17 @@ export function RowContextMenu({
           设置为 None
         </button>
       )}
-      <button
-        className="btn btn-ghost btn-xs w-full justify-start"
-        disabled={!canOpenRecordPage}
-        onClick={() => {
-          onOpenRecordPage(); // 触发菜单动作并关闭菜单。
-        }}
-      >
-        打开 Salesforce 记录页
-      </button>
+      {showOpenRecordPage && (
+        <button
+          className="btn btn-ghost btn-xs w-full justify-start"
+          disabled={!canOpenRecordPage}
+          onClick={() => {
+            onOpenRecordPage(); // 触发菜单动作并关闭菜单。
+          }}
+        >
+          打开 Salesforce 记录页
+        </button>
+      )}
     </div>
   );
 }

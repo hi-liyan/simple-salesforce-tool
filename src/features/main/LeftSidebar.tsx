@@ -47,6 +47,9 @@ export function LeftSidebar({
   onNotQueryableObjectClick,
   objectListMode = "list"
 }: LeftSidebarProps) {
+  // 当前选中数据源类型：用于对象右键菜单按类型展示能力项。
+  const selectedSourceType =
+    sources.find((source) => source.id === selectedSourceId)?.sourceType || "salesforce";
   // 数据源类型选择弹窗开关。
   const [showSourceTypeModal, setShowSourceTypeModal] = useState(false);
   // Salesforce 配置弹窗开关。
@@ -241,6 +244,7 @@ export function LeftSidebar({
           <ObjectList
             objects={objects}
             sourceId={selectedSourceId}
+            sourceType={selectedSourceType}
             activeObjectName={activeTabObjectName}
             onOpenObject={onOpenObject}
             onNotQueryableClick={onNotQueryableObjectClick}

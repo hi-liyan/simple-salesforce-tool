@@ -14,6 +14,8 @@ type Props = {
   objects: SalesforceObject[];
   // 当前选中的数据源 ID：用于拉取对象字段描述。
   sourceId: string;
+  // 当前数据源类型：用于控制右键菜单能力项展示。
+  sourceType?: string;
   // 当前激活对象名称。
   activeObjectName: string;
   // 打开对象回调。
@@ -25,7 +27,9 @@ type Props = {
 };
 
 // 对象列表：树形模式（对象 -> 字段 -> 字段元数据）。
-export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, onNotQueryableClick, treeMode = false }: Props) {
+export function ObjectList({ objects, sourceId, sourceType, activeObjectName, onOpenObject, onNotQueryableClick, treeMode = false }: Props) {
+  // 仅 Salesforce 数据源显示 Salesforce 专属菜单。
+  const isSalesforceSource = (sourceType || "salesforce").toLowerCase() === "salesforce";
   // 关键字：用于对象过滤。
   const [keyword, setKeyword] = useState("");
   // 已展开对象集合。
@@ -356,27 +360,31 @@ export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, 
               void copyObjectNameFromMenu(); // 复制对象名称并关闭菜单。
             }}
           >
-            复制 Object 名称
+            复制表名
           </button>
-          <div className="my-1 border-t border-base-300" />
-          <button
-            className="btn btn-ghost btn-xs w-full justify-start whitespace-nowrap px-2"
-            disabled={!sourceId || !objectContextMenu.objectItem.queryable}
-            onClick={() => {
-              void openSalesforceListPageFromMenu(); // 触发菜单动作并关闭菜单。
-            }}
-          >
-            打开 Salesforce 列表页
-          </button>
-          <button
-            className="btn btn-ghost btn-xs w-full justify-start whitespace-nowrap px-2"
-            disabled={!sourceId}
-            onClick={() => {
-              void openSalesforceObjectEditPageFromMenu(); // 触发菜单动作并关闭菜单。
-            }}
-          >
-            编辑 Object 页面
-          </button>
+          {isSalesforceSource && (
+            <>
+              <div className="my-1 border-t border-base-300" />
+              <button
+                className="btn btn-ghost btn-xs w-full justify-start whitespace-nowrap px-2"
+                disabled={!sourceId || !objectContextMenu.objectItem.queryable}
+                onClick={() => {
+                  void openSalesforceListPageFromMenu(); // 触发菜单动作并关闭菜单。
+                }}
+              >
+                打开 Salesforce 列表页
+              </button>
+              <button
+                className="btn btn-ghost btn-xs w-full justify-start whitespace-nowrap px-2"
+                disabled={!sourceId}
+                onClick={() => {
+                  void openSalesforceObjectEditPageFromMenu(); // 触发菜单动作并关闭菜单。
+                }}
+              >
+                编辑 Object 页面
+              </button>
+            </>
+          )}
         </div>
       )}
     </div>
