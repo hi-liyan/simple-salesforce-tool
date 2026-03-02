@@ -89,8 +89,8 @@ export function DataGrid({
   const pendingDeleteRecordSet = useMemo(() => new Set(pendingDeleteRecordIds), [pendingDeleteRecordIds]);
   const gridBodyRef = useRef<HTMLDivElement | null>(null);
   const closeMetaTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // 行右键菜单状态：记录菜单坐标与目标记录 Id。
-  const [rowContextMenu, setRowContextMenu] = useState<{ x: number; y: number; recordId: string } | null>(null);
+  // 行右键菜单状态：记录菜单坐标、目标记录 Id 与当前单元格文本。
+  const [rowContextMenu, setRowContextMenu] = useState<{ x: number; y: number; recordId: string; cellText: string } | null>(null);
 
   useEffect(() => {
     return () => {
@@ -374,6 +374,28 @@ export function DataGrid({
     }
   }
 
+  // 复制当前右键单元格数据：优先使用现代剪贴板 API，失败时回退 execCommand。
+  async function copyCellValueFromMenu() {
+    if (!rowContextMenu) return;
+    const text = rowContextMenu.cellText;
+    try {
+      await navigator.clipboard.writeText(text); // 优先使用现代剪贴板 API。
+    } catch {
+      // 回退方案：兼容剪贴板权限受限场景。
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textarea);
+    } finally {
+      setRowContextMenu(null); // 执行后关闭菜单。
+    }
+  }
+
   return (
     // 表格容器：顶部统计栏 + 数据表格。
     <div className="relative flex h-full min-h-0 flex-col">
@@ -404,10 +426,18 @@ export function DataGrid({
           // 单元格右键事件：弹出记录级菜单。
           onCellContextMenu={(cell, event) => {
             if (!sourceId || !objectName) return; // 缺少对象上下文时不展示“打开记录页”菜单。
-            const [, row] = cell;
+            const [col, row] = cell;
             const record = records[row] || {};
             const recordId = String(record.Id ?? "").trim();
             if (!recordId) return; // 无真实记录 Id（如新建行）时不展示菜单。
+            const columnId = String(columns[col]?.id ?? "");
+            // 右键命中单元格文本：用于“复制”菜单项。
+            const cellText =
+              columnId === "__select"
+                ? String(selectedRecordIds.includes(recordId))
+                : columnId === "__index"
+                  ? String(row + 1)
+                  : stringifyCellValue(record[columnId]);
 
             const gridRect = gridBodyRef.current?.getBoundingClientRect();
             if (!gridRect) return;
@@ -421,7 +451,8 @@ export function DataGrid({
             setRowContextMenu({
               x: anchorClientX,
               y: anchorClientY,
-              recordId
+              recordId,
+              cellText
             });
           }}
           // 粘贴/批量编辑时的批处理入口。
@@ -697,6 +728,14 @@ export function DataGrid({
             style={{ left: rowContextMenu.x, top: rowContextMenu.y }}
             onClick={(event) => event.stopPropagation()}
           >
+            <button
+              className="btn btn-ghost btn-xs w-full justify-start"
+              onClick={() => {
+                void copyCellValueFromMenu(); // 复制当前单元格数据并关闭菜单。
+              }}
+            >
+              复制
+            </button>
             <button
               className="btn btn-ghost btn-xs w-full justify-start"
               onClick={() => {
