@@ -1054,7 +1054,11 @@ function resolveFieldMetadataForExecutor(
 ): Record<string, unknown> | null {
   const exactField = resolveObjectFieldMetadataByName(fieldName, primaryObjectName, objectDescribeMap);
   if (exactField) {
-    return exactField.metadata;
+    return {
+      ...(exactField.metadata || {}),
+      // 补齐统一 type，确保执行器结果表对 MySQL 类型也能走正确渲染策略。
+      type: exactField.dataType || (exactField.metadata?.type as string) || ""
+    };
   }
 
   // 对点路径列（如 Owner.Name）回退取末段字段名做弱匹配。
@@ -1062,7 +1066,11 @@ function resolveFieldMetadataForExecutor(
     const suffixFieldName = fieldName.split(".").pop() || "";
     const suffixField = resolveObjectFieldMetadataByName(suffixFieldName, primaryObjectName, objectDescribeMap);
     if (suffixField) {
-      return suffixField.metadata;
+      return {
+        ...(suffixField.metadata || {}),
+        // 点路径字段回退时同样补齐统一 type。
+        type: suffixField.dataType || (suffixField.metadata?.type as string) || ""
+      };
     }
   }
 

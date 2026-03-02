@@ -648,9 +648,7 @@ fn row_to_json_record(row: &MySqlRow) -> HashMap<String, Value> {
 
 /// 读取列值并做类型映射（尽量保留基础标量语义）。
 fn row_try_get_json_value(row: &MySqlRow, column_name: &str) -> Value {
-    if let Ok(value) = row.try_get::<Option<bool>, _>(column_name) {
-        return value.map(Value::Bool).unwrap_or(Value::Null);
-    }
+    // 先按数值读取：避免将 MySQL int/tinyint/bigint 等列误判成 bool（true/false）。
     if let Ok(value) = row.try_get::<Option<i64>, _>(column_name) {
         return value
             .map(|item| Value::Number(item.into()))
@@ -666,6 +664,10 @@ fn row_try_get_json_value(row: &MySqlRow, column_name: &str) -> Value {
             .and_then(serde_json::Number::from_f64)
             .map(Value::Number)
             .unwrap_or(Value::Null);
+    }
+    // 最后再尝试布尔：仅在数值解码失败时作为兜底。
+    if let Ok(value) = row.try_get::<Option<bool>, _>(column_name) {
+        return value.map(Value::Bool).unwrap_or(Value::Null);
     }
     if let Ok(value) = row.try_get::<Option<String>, _>(column_name) {
         return value.map(Value::String).unwrap_or(Value::Null);

@@ -58,9 +58,7 @@ export function createCellEditedHandler({
 
     if (columnId === "__select" && newValue.kind === GridCellKind.Boolean) {
       const recordId = getRecordKey(row);
-      if (!recordId.startsWith("row-")) {
-        onToggleRecord(recordId, Boolean(newValue.data));
-      }
+      onToggleRecord(recordId, Boolean(newValue.data));
       return;
     }
 
@@ -182,9 +180,9 @@ export function createCellClickedHandler({
   onShowMessage
 }: CreateCellClickedHandlerParams): (cell: Item, event: CellClickedEventArgs) => void {
   return (cell, event) => {
-    if (!enableReadonlyCellHint) return;
     const [col, row] = cell;
     const columnId = String(columns[col]?.id ?? "");
+    if (!enableReadonlyCellHint) return;
     if (!event.isDoubleClick) return;
     if (!columnId || columnId.startsWith("__")) return;
 

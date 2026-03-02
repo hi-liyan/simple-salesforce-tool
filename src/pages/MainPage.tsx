@@ -1118,7 +1118,14 @@ export function MainPage() {
   const loadingText = tokenRefreshing ? "重新获取认证凭证中..." : "Loading...";
   const fieldMetadataMap = activeTab
     ? activeTab.describe?.fields.reduce(
-        (acc, field) => ({ ...acc, [field.name]: field.metadata || {} }),
+        (acc, field) => ({
+          ...acc,
+          [field.name]: {
+            ...(field.metadata || {}),
+            // 补齐统一 type：让 DataGrid 类型策略可识别 MySQL/Salesforce 字段类型。
+            type: field.dataType || (field.metadata?.type as string) || ""
+          }
+        }),
         {} as Record<string, Record<string, unknown>>
       ) || {}
     : {};
