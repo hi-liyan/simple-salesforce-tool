@@ -18,6 +18,8 @@ type AiStreamChunkPayload = {
 type SoqlExecutorWorkspaceProps = {
   // 当前选中的数据源 ID。
   selectedSourceId: string;
+  // Salesforce 当前用户时区（IANA），用于 datetime 与 Salesforce Web 一致显示。
+  salesforceTimezone?: string | null;
   // 加载遮罩文案。
   loadingText: string;
   // 当前数据源对象列表：用于对象名补全。
@@ -43,6 +45,7 @@ const AI_STREAMING_COPY_POOL = [
 // SOQL 执行器工作区：支持多 Tab、执行、结果展示与查询日志。
 export function SoqlExecutorWorkspace({
   selectedSourceId,
+  salesforceTimezone,
   loadingText,
   objects,
   workspaceNotice,
@@ -823,6 +826,7 @@ export function SoqlExecutorWorkspace({
                     fieldMetadataMap={fieldMetadataMap}
                     dirtyCellKeys={[]}
                     selectedRecordIds={activeTab.selectedRecordIds}
+                    salesforceTimezone={salesforceTimezone}
                     pendingDeleteRecordIds={[]}
                     showHeaderMetadata={false}
                     enableReadonlyCellHint={false}
