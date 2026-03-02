@@ -349,12 +349,18 @@ export function LeftSidebar({
                 className="input input-bordered input-sm w-full"
                 placeholder="数据源名称"
                 value={mySqlForm.name}
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
                 onChange={(event) => setMySqlForm((state) => ({ ...state, name: event.target.value }))}
               />
               <input
                 className="input input-bordered input-sm w-full"
                 placeholder="Host"
                 value={mySqlForm.host}
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
                 onChange={(event) => setMySqlForm((state) => ({ ...state, host: event.target.value }))}
               />
               <input
@@ -362,18 +368,27 @@ export function LeftSidebar({
                 placeholder="Port"
                 type="number"
                 value={String(mySqlForm.port)}
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
                 onChange={(event) => setMySqlForm((state) => ({ ...state, port: Number(event.target.value || 3306) }))}
               />
               <input
                 className="input input-bordered input-sm w-full"
                 placeholder="Database"
                 value={mySqlForm.database}
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
                 onChange={(event) => setMySqlForm((state) => ({ ...state, database: event.target.value }))}
               />
               <input
                 className="input input-bordered input-sm w-full"
                 placeholder="Username"
                 value={mySqlForm.username}
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
                 onChange={(event) => setMySqlForm((state) => ({ ...state, username: event.target.value }))}
               />
               <input
@@ -381,12 +396,18 @@ export function LeftSidebar({
                 placeholder="Password"
                 type="password"
                 value={mySqlForm.password}
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
                 onChange={(event) => setMySqlForm((state) => ({ ...state, password: event.target.value }))}
               />
               <input
                 className="input input-bordered input-sm w-full"
                 placeholder="Primary Key（可选，默认自动检测）"
                 value={mySqlForm.primaryKey}
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
                 onChange={(event) => setMySqlForm((state) => ({ ...state, primaryKey: event.target.value }))}
               />
             </div>
