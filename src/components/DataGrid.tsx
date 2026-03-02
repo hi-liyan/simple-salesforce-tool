@@ -97,8 +97,16 @@ export function DataGrid({
   const pendingDeleteRecordSet = useMemo(() => new Set(pendingDeleteRecordIds), [pendingDeleteRecordIds]);
   const gridBodyRef = useRef<HTMLDivElement | null>(null);
   const closeMetaTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // 行右键菜单状态：记录菜单坐标、目标记录 Id 与当前单元格文本。
-  const [rowContextMenu, setRowContextMenu] = useState<{ x: number; y: number; recordId: string; cellText: string } | null>(null);
+  // 行右键菜单状态：记录菜单坐标、目标记录信息与可执行动作能力。
+  const [rowContextMenu, setRowContextMenu] = useState<{
+    x: number;
+    y: number;
+    recordId: string;
+    cellText: string;
+    rowIndex: number;
+    columnId: string;
+    canSetNone: boolean;
+  } | null>(null);
 
   useEffect(() => {
     return () => {
@@ -149,7 +157,8 @@ export function DataGrid({
   const columns = useMemo<GridColumn[]>(() => {
     const dataColumns: GridColumn[] = displayColumns.map((column) => ({
       id: column,
-      title: column,
+      // 数据列标题由 drawHeader 自定义双行绘制，这里留空避免默认文案覆盖。
+      title: "",
       width: columnWidths[column] ?? (column === "Id" ? 280 : 180)
     }));
 
@@ -158,7 +167,7 @@ export function DataGrid({
       { id: "__index", title: "#", width: columnWidths.__index ?? 56 },
       ...dataColumns
     ];
-  }, [displayColumns, columnWidths, showSelectionColumn]);
+  }, [displayColumns, fieldMetadataMap, columnWidths, showSelectionColumn]);
 
   if (records.length === 0) {
     return (
@@ -493,6 +502,14 @@ export function DataGrid({
     }
   }
 
+  // 右键菜单动作：将可空字段设置为 null（UI 文案显示为 None）。
+  function setCellNoneFromMenu() {
+    if (!rowContextMenu) return;
+    if (!rowContextMenu.canSetNone) return;
+    onEditCell(rowContextMenu.rowIndex, rowContextMenu.columnId, null);
+    setRowContextMenu(null); // 执行后关闭菜单，避免重复点击。
+  }
+
   return (
     // 表格容器：顶部统计栏 + 数据表格。
     <div className="relative flex h-full min-h-0 flex-col">
@@ -525,12 +542,18 @@ export function DataGrid({
           onCellClicked={handleCellClicked}
           // 单元格右键事件：弹出记录级菜单。
           onCellContextMenu={(cell, event) => {
-            if (!sourceId || !objectName) return; // 缺少对象上下文时不展示“打开记录页”菜单。
             const [col, row] = cell;
             const record = records[row] || {};
             const recordId = String(record.Id ?? "").trim();
-            if (!recordId) return; // 无真实记录 Id（如新建行）时不展示菜单。
             const columnId = String(columns[col]?.id ?? "");
+            if (!columnId) return;
+            const isDataColumn = !columnId.startsWith("__");
+            const metadata = isDataColumn ? (fieldMetadataMap[columnId] || {}) : {};
+            const isNewRow = Boolean(record.__isNew);
+            const canSetNone =
+              isDataColumn &&
+              metadata.nillable === true &&
+              isCellEditableByMeta(metadata, isNewRow);
             // 右键命中单元格文本：用于“复制”菜单项。
             const cellText =
               columnId === "__select"
@@ -552,7 +575,10 @@ export function DataGrid({
               x: anchorClientX,
               y: anchorClientY,
               recordId,
-              cellText
+              cellText,
+              rowIndex: row,
+              columnId,
+              canSetNone
             });
           }}
           // 粘贴/批量编辑时的批处理入口。
@@ -831,6 +857,8 @@ export function DataGrid({
             const columnId = String(args.column.id ?? "");
             if (columnId !== "__select") {
               if (columnId.startsWith("__")) return;
+              // 业务字段表头：第一行显示 Field Name，第二行显示 Label（小字浅色）。
+              drawFieldHeaderText(args.ctx, args.rect, columnId, fieldMetadataMap[columnId] || {}, showHeaderMetadata);
               if (showHeaderMetadata) {
                 drawHeaderInfoIcon(args.ctx, args.rect);
               }
@@ -967,9 +995,9 @@ export function DataGrid({
           // 列宽边界：约束最小/最大宽度，避免布局极端变形。
           minColumnWidth={44}
           maxColumnWidth={900}
-          // 行高与表头高度：统一网格密度，贴近数据库工具风格。
+          // 行高与表头高度：表头提高到双行，支持 Field Name/Label 分行显示。
           rowHeight={30}
-          headerHeight={30}
+          headerHeight={42}
           // 平滑滚动：提升大数据量横向/纵向浏览体验。
           smoothScrollX
           smoothScrollY
@@ -1043,8 +1071,19 @@ export function DataGrid({
             >
               复制
             </button>
+            {rowContextMenu.canSetNone && (
+              <button
+                className="btn btn-ghost btn-xs w-full justify-start"
+                onClick={() => {
+                  setCellNoneFromMenu(); // 可空字段支持“一键置空”。
+                }}
+              >
+                设置为 None
+              </button>
+            )}
             <button
               className="btn btn-ghost btn-xs w-full justify-start"
+              disabled={!sourceId || !objectName || !rowContextMenu.recordId}
               onClick={() => {
                 void openRecordPageFromMenu(); // 触发菜单动作并关闭菜单。
               }}
@@ -1811,6 +1850,47 @@ function stringifyCellValue(value: unknown): string {
     }
   }
   return String(value);
+}
+
+// 绘制字段表头双行文案：第一行 Field Name，第二行 Label（小字浅色）。
+function drawFieldHeaderText(
+  ctx: CanvasRenderingContext2D,
+  rect: { x: number; y: number; width: number; height: number },
+  fieldName: string,
+  metadata: Record<string, unknown>,
+  showHeaderMetadata: boolean
+) {
+  const labelRaw = metadata.label;
+  const label = typeof labelRaw === "string" ? labelRaw.trim() : "";
+  const hasSecondLine = Boolean(label) && label !== fieldName;
+  const textLeft = rect.x + 8;
+  const textRightPadding = showHeaderMetadata ? 24 : 8; // 预留 info icon 空间，避免文本重叠。
+  const maxWidth = Math.max(16, rect.width - textRightPadding - 8);
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(rect.x + 1, rect.y + 1, Math.max(1, rect.width - 2), Math.max(1, rect.height - 2));
+  ctx.clip();
+
+  if (hasSecondLine) {
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = "#2f3a4a";
+    ctx.font = "600 12px sans-serif";
+    ctx.fillText(fieldName, textLeft, rect.y + 14, maxWidth);
+
+    ctx.fillStyle = "#8b97a6";
+    ctx.font = "500 11px sans-serif";
+    ctx.fillText(label, textLeft, rect.y + 30, maxWidth);
+  } else {
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = "#2f3a4a";
+    ctx.font = "600 12px sans-serif";
+    ctx.fillText(fieldName, textLeft, rect.y + rect.height / 2, maxWidth);
+  }
+
+  ctx.restore();
 }
 
 // 抽取文本编辑值。
