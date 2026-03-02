@@ -9,6 +9,8 @@ import { Notice, TabState } from "../../types";
 type RightWorkspaceProps = {
   // 当前选中的数据源 ID：用于打开外部 Salesforce 页面。
   selectedSourceId: string;
+  // Salesforce 当前用户时区（IANA），用于 datetime 与 Salesforce Web 一致显示。
+  salesforceTimezone?: string | null;
   tabs: TabState[];
   activeTabObjectName: string;
   activeTab: TabState | null;
@@ -60,6 +62,7 @@ type RightWorkspaceProps = {
 // 右侧工作区：包含 Tab、查询工具栏、数据表格、日志面板和字段抽屉。
 export function RightWorkspace({
   selectedSourceId,
+  salesforceTimezone,
   tabs,
   activeTabObjectName,
   activeTab,
@@ -495,6 +498,7 @@ export function RightWorkspace({
                 fieldMetadataMap={fieldMetadataMap}
                 dirtyCellKeys={activeTab.dirtyCellKeys}
                 selectedRecordIds={activeTab.selectedRecordIds}
+                salesforceTimezone={salesforceTimezone}
                 pendingDeleteRecordIds={pendingDeleteRecordIds}
                 sourceId={selectedSourceId}
                 objectName={activeTab.objectName}

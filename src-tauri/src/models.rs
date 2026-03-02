@@ -98,6 +98,15 @@ pub struct ObjectChildRelationship {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CurrentUserContext {
+    /// Salesforce 当前用户时区（如 America/Los_Angeles）。
+    pub timezone_sid_key: Option<String>,
+    /// Salesforce 当前用户地区设置（如 zh_CN）。
+    pub locale_sid_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct QueryResult {
     /// 查询返回总条数（Salesforce totalSize）。
     pub total_size: usize,
