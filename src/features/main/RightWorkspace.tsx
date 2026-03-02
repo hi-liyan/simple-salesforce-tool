@@ -428,6 +428,10 @@ export function RightWorkspace({
                       <input
                         className="input input-bordered input-sm w-full pr-8"
                         value={activeTab.whereClause}
+                        // 关闭系统文本替换，避免 macOS 下英文单引号被自动转换为弯引号/中文引号。
+                        autoCorrect="off"
+                        autoCapitalize="off"
+                        spellCheck={false}
                         onChange={(event) => onWhereChange(event.target.value)}
                       />
                       {activeTab.whereClause ? (
