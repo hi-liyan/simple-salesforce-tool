@@ -27,6 +27,8 @@ type Props = {
   fieldMetadataMap: Record<string, Record<string, unknown>>;
   dirtyCellKeys: string[];
   selectedRecordIds: string[];
+  // Salesforce 当前用户时区（IANA），用于 datetime 与 Salesforce Web 行为对齐。
+  salesforceTimezone?: string | null;
   // 当前选中的数据源 ID：用于打开 Salesforce 记录页（可选）。
   sourceId?: string;
   // 当前对象 API 名称：用于打开 Salesforce 记录页（可选）。
@@ -52,6 +54,7 @@ export function DataGrid({
   fieldMetadataMap,
   dirtyCellKeys,
   selectedRecordIds,
+  salesforceTimezone,
   sourceId,
   objectName,
   pendingDeleteRecordIds,
@@ -64,6 +67,11 @@ export function DataGrid({
   showSelectionColumn = true
 }: Props) {
   const records = result.records;
+  // 仅在时区字符串合法时启用 Salesforce 用户时区；非法值自动回退浏览器本地时区。
+  const effectiveSalesforceTimezone = useMemo(
+    () => resolveSalesforceTimezone(salesforceTimezone),
+    [salesforceTimezone]
+  );
 
   const displayColumns = useMemo(
     () => {
@@ -89,8 +97,16 @@ export function DataGrid({
   const pendingDeleteRecordSet = useMemo(() => new Set(pendingDeleteRecordIds), [pendingDeleteRecordIds]);
   const gridBodyRef = useRef<HTMLDivElement | null>(null);
   const closeMetaTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // 行右键菜单状态：记录菜单坐标、目标记录 Id 与当前单元格文本。
-  const [rowContextMenu, setRowContextMenu] = useState<{ x: number; y: number; recordId: string; cellText: string } | null>(null);
+  // 行右键菜单状态：记录菜单坐标、目标记录信息与可执行动作能力。
+  const [rowContextMenu, setRowContextMenu] = useState<{
+    x: number;
+    y: number;
+    recordId: string;
+    cellText: string;
+    rowIndex: number;
+    columnId: string;
+    canSetNone: boolean;
+  } | null>(null);
 
   useEffect(() => {
     return () => {
@@ -136,11 +152,13 @@ export function DataGrid({
   const [metaPanelHovering, setMetaPanelHovering] = useState(false);
   // 当前激活单元格：用于 provideEditor 判断是否为 picklist 编辑。
   const [activeEditorCell, setActiveEditorCell] = useState<Item | null>(null);
+  const activeEditorCellRef = useRef<Item | null>(null);
 
   const columns = useMemo<GridColumn[]>(() => {
     const dataColumns: GridColumn[] = displayColumns.map((column) => ({
       id: column,
-      title: column,
+      // 数据列标题由 drawHeader 自定义双行绘制，这里留空避免默认文案覆盖。
+      title: "",
       width: columnWidths[column] ?? (column === "Id" ? 280 : 180)
     }));
 
@@ -149,7 +167,7 @@ export function DataGrid({
       { id: "__index", title: "#", width: columnWidths.__index ?? 56 },
       ...dataColumns
     ];
-  }, [displayColumns, columnWidths, showSelectionColumn]);
+  }, [displayColumns, fieldMetadataMap, columnWidths, showSelectionColumn]);
 
   if (records.length === 0) {
     return (
@@ -240,6 +258,48 @@ export function DataGrid({
       };
     }
 
+    if (isDateType(fieldType)) {
+      const text = normalizeDateDisplayValue(raw);
+      return {
+        kind: GridCellKind.Text,
+        // date 单元格展示与提交统一为 Salesforce 日期格式（YYYY-MM-DD）。
+        data: text,
+        displayData: text,
+        allowOverlay: editable,
+        readonly: !editable,
+        themeOverride: commonTheme
+      };
+    }
+
+    if (isDateTimeType(fieldType)) {
+      const text = normalizeDatetimeDisplayValue(raw, effectiveSalesforceTimezone);
+      return {
+        kind: GridCellKind.Text,
+        // datetime 单元格展示为 Salesforce 日期时间格式（YYYY-MM-DDTHH:mm:ss.SSS+0000）。
+        data: text,
+        displayData: text,
+        allowOverlay: editable,
+        readonly: !editable,
+        themeOverride: commonTheme
+      };
+    }
+
+    if (isPicklistType(fieldType)) {
+      const options = getPicklistEditorOptions(metadata);
+      const value = normalizePicklistValue(raw);
+      const displayText = resolvePicklistDisplayText(value, options);
+      return {
+        kind: GridCellKind.Text,
+        // picklist 单元格保留 value 作为真实值，提交时按 value/null 写回后端。
+        data: value,
+        // 单元格显示统一改为 label，满足数据库工具预期阅读体验。
+        displayData: displayText,
+        allowOverlay: editable,
+        readonly: !editable,
+        themeOverride: commonTheme
+      };
+    }
+
     const text = stringifyCellValue(raw);
     return {
       kind: GridCellKind.Text,
@@ -278,13 +338,59 @@ export function DataGrid({
     }
 
     if (isPicklistType(fieldType)) {
-      const options = getPicklistOptions(metadata);
+      const options = getPicklistEditorOptions(metadata);
       const nextText = extractEditableString(newValue);
       if (!options.some((item) => item.value === nextText)) {
         onShowMessage(`${columnId} 字段只能选择预设选项。`);
         return;
       }
+      if (nextText === PICKLIST_NONE_VALUE && isPicklistNullable(metadata)) {
+        onEditCell(row, columnId, null);
+        return;
+      }
       onEditCell(row, columnId, nextText);
+      return;
+    }
+
+    if (isDateType(fieldType)) {
+      const nextText = extractEditableString(newValue).trim();
+      if (!nextText) {
+        if (metadata.nillable === true) {
+          onEditCell(row, columnId, null);
+          return;
+        }
+        onShowMessage(`${columnId} 字段不允许为空。`);
+        return;
+      }
+
+      const normalizedDate = normalizeDateValueForSave(nextText);
+      if (!normalizedDate) {
+        onShowMessage(`${columnId} 字段仅支持日期格式（YYYY-MM-DD）。`);
+        return;
+      }
+
+      onEditCell(row, columnId, normalizedDate);
+      return;
+    }
+
+    if (isDateTimeType(fieldType)) {
+      const nextText = extractEditableString(newValue).trim();
+      if (!nextText) {
+        if (metadata.nillable === true) {
+          onEditCell(row, columnId, null);
+          return;
+        }
+        onShowMessage(`${columnId} 字段不允许为空。`);
+        return;
+      }
+
+      const normalizedDatetime = normalizeDatetimeValueForSave(nextText, effectiveSalesforceTimezone);
+      if (!normalizedDatetime) {
+        onShowMessage(`${columnId} 字段仅支持日期时间格式。`);
+        return;
+      }
+
+      onEditCell(row, columnId, normalizedDatetime);
       return;
     }
 
@@ -330,7 +436,7 @@ export function DataGrid({
     }
 
     if (isPicklistType(fieldType)) {
-      const options = getPicklistOptions(metadata);
+      const options = getPicklistEditorOptions(metadata);
       if (options.length === 0) {
         onShowMessage(`${columnId} 字段未配置可选值。`);
       }
@@ -396,6 +502,14 @@ export function DataGrid({
     }
   }
 
+  // 右键菜单动作：将可空字段设置为 null（UI 文案显示为 None）。
+  function setCellNoneFromMenu() {
+    if (!rowContextMenu) return;
+    if (!rowContextMenu.canSetNone) return;
+    onEditCell(rowContextMenu.rowIndex, rowContextMenu.columnId, null);
+    setRowContextMenu(null); // 执行后关闭菜单，避免重复点击。
+  }
+
   return (
     // 表格容器：顶部统计栏 + 数据表格。
     <div className="relative flex h-full min-h-0 flex-col">
@@ -418,19 +532,28 @@ export function DataGrid({
           // 单元格数据读取函数：按坐标返回对应的 GridCell。
           getCellContent={getCellContent}
           // 单元格激活时记录位置，供自定义编辑器判断当前列类型。
-          onCellActivated={(cell) => setActiveEditorCell(cell)}
+          onCellActivated={(cell) => {
+            activeEditorCellRef.current = cell; // ref 同步写入，避免 setState 异步导致 provideEditor 读到旧值。
+            setActiveEditorCell(cell);
+          }}
           // 单元格提交编辑时的单点更新处理。
           onCellEdited={handleCellEdited}
           // 单元格点击事件：用于双击编辑提示等交互。
           onCellClicked={handleCellClicked}
           // 单元格右键事件：弹出记录级菜单。
           onCellContextMenu={(cell, event) => {
-            if (!sourceId || !objectName) return; // 缺少对象上下文时不展示“打开记录页”菜单。
             const [col, row] = cell;
             const record = records[row] || {};
             const recordId = String(record.Id ?? "").trim();
-            if (!recordId) return; // 无真实记录 Id（如新建行）时不展示菜单。
             const columnId = String(columns[col]?.id ?? "");
+            if (!columnId) return;
+            const isDataColumn = !columnId.startsWith("__");
+            const metadata = isDataColumn ? (fieldMetadataMap[columnId] || {}) : {};
+            const isNewRow = Boolean(record.__isNew);
+            const canSetNone =
+              isDataColumn &&
+              metadata.nillable === true &&
+              isCellEditableByMeta(metadata, isNewRow);
             // 右键命中单元格文本：用于“复制”菜单项。
             const cellText =
               columnId === "__select"
@@ -452,68 +575,278 @@ export function DataGrid({
               x: anchorClientX,
               y: anchorClientY,
               recordId,
-              cellText
+              cellText,
+              rowIndex: row,
+              columnId,
+              canSetNone
             });
           }}
           // 粘贴/批量编辑时的批处理入口。
           onCellsEdited={handleCellsEdited}
           // 使用 Glide 内置 overlay 机制渲染 picklist 编辑器，避免手工定位。
           provideEditor={(cell) => {
-            if (!activeEditorCell) return undefined;
+            const editorCell = activeEditorCellRef.current || activeEditorCell;
+            if (!editorCell) return undefined;
             if (cell.kind !== GridCellKind.Text) return undefined;
 
-            const [col] = activeEditorCell;
+            const [col] = editorCell;
             const columnId = String(columns[col]?.id ?? "");
             if (!columnId || columnId.startsWith("__")) return undefined;
 
             const metadata = fieldMetadataMap[columnId] || {};
             const fieldType = getFieldType(metadata);
+
+            // picklist/boolean 使用下拉；date/datetime 使用 Salesforce 风格日历面板。
+            let editorKind: "select" | "date" | "datetime-local" | null = null;
             let options: { label: string; value: string }[] = [];
             if (isPicklistType(fieldType)) {
-              options = getPicklistOptions(metadata);
+              editorKind = "select";
+              options = getPicklistEditorOptions(metadata);
             } else if (isBooleanType(fieldType)) {
+              editorKind = "select";
               options = [
                 { label: "true", value: "true" },
                 { label: "false", value: "false" }
               ];
+            } else if (isDateType(fieldType)) {
+              editorKind = "date";
+            } else if (isDateTimeType(fieldType)) {
+              editorKind = "datetime-local";
             } else {
               return undefined;
             }
-            if (options.length === 0) return undefined;
 
             return (props) => {
               const textValue = props.value as TextCell;
-              return (
-                <div
-                  className="absolute"
-                  style={{
-                    left: props.target.x,
-                    top: props.target.y,
-                    width: Math.max(props.target.width, 180)
+              const currentText = String(textValue.data ?? "");
+              const nillable = metadata.nillable === true;
+              const initialDatetimeLocal = normalizeDatetimeLocalInputValue(currentText, effectiveSalesforceTimezone);
+              const initialDate = editorKind === "date"
+                ? normalizeDateInputValue(currentText)
+                : extractDatePartFromDatetimeLocal(initialDatetimeLocal);
+              const [draftDate, setDraftDate] = useState(initialDate);
+              const [draftTime, setDraftTime] = useState(extractTimePartFromDatetimeLocal(initialDatetimeLocal));
+              const [viewMonthStart, setViewMonthStart] = useState(() => {
+                const selected = buildUtcDateFromDateLiteral(initialDate);
+                return startOfUtcMonth(selected || getTodayUtcDate(effectiveSalesforceTimezone));
+              });
+              const viewMonthYear = viewMonthStart.getUTCFullYear();
+              const viewMonth = viewMonthStart.getUTCMonth();
+              const yearOptions = useMemo(() => buildYearOptions(viewMonthYear, 8), [viewMonthYear]);
+              const calendarCells = useMemo(
+                () => buildSalesforceCalendarCells(viewMonthStart, draftDate, getTodayDateLiteral(effectiveSalesforceTimezone)),
+                [viewMonthStart, draftDate, effectiveSalesforceTimezone]
+              );
+
+              const commitEditorValue = (next: string) => {
+                const nextCell: TextCell = {
+                  ...textValue,
+                  data: next,
+                  displayData: next
+                };
+                props.onChange(nextCell);
+                props.onFinishedEditing(nextCell, [0, 0]);
+              };
+
+              const confirmDateEditor = () => {
+                if (!draftDate && !nillable) {
+                  onShowMessage(`${columnId} 字段不允许为空。`);
+                  return;
+                }
+                if (!draftDate && nillable) {
+                  commitEditorValue("");
+                  return;
+                }
+                if (editorKind === "date") {
+                  commitEditorValue(draftDate);
+                  return;
+                }
+                const normalizedTime = normalizeTimeHm(draftTime);
+                commitEditorValue(`${draftDate}T${normalizedTime}`);
+              };
+
+              const handlePickDate = (dateLiteral: string) => {
+                setDraftDate(dateLiteral); // 点击日期仅更新草稿，不立即提交。
+                const selectedDate = buildUtcDateFromDateLiteral(dateLiteral);
+                if (!selectedDate) return;
+                if (selectedDate.getUTCMonth() !== viewMonth || selectedDate.getUTCFullYear() !== viewMonthYear) {
+                  setViewMonthStart(startOfUtcMonth(selectedDate)); // 跨月点击时同步翻页，保持视觉连续。
+                }
+              };
+
+              const handlePickToday = () => {
+                const todayLiteral = getTodayDateLiteral(effectiveSalesforceTimezone);
+                handlePickDate(todayLiteral);
+                if (editorKind === "datetime-local" && !draftTime) {
+                  setDraftTime(getCurrentTimeHm(effectiveSalesforceTimezone)); // datetime 默认补齐当前时分，减少手动输入。
+                }
+              };
+
+              const handleClearDraft = () => {
+                setDraftDate("");
+                if (editorKind === "datetime-local") {
+                  setDraftTime("00:00");
+                }
+              };
+
+              return editorKind === "select" ? (
+                <select
+                  autoFocus
+                  className="select select-bordered select-sm w-full bg-base-100"
+                  style={{ minWidth: Math.max(props.target.width, 180) }}
+                  value={normalizeSelectValue(currentText, options)}
+                  onBlur={() => props.onFinishedEditing(undefined, [0, 0])}
+                  onChange={(event) => {
+                    const next = String(event.target.value);
+                    const displayText = resolvePicklistDisplayText(next, options);
+                    const nextCell: TextCell = {
+                      ...textValue,
+                      data: next,
+                      displayData: displayText
+                    };
+                    props.onChange(nextCell);
+                    props.onFinishedEditing(nextCell, [0, 0]);
                   }}
                 >
-                  <select
-                    autoFocus
-                    className="select select-bordered select-sm w-full bg-base-100"
-                    value={normalizeSelectValue(textValue.data, options)}
-                    onBlur={() => props.onFinishedEditing(undefined, [0, 0])}
-                    onChange={(event) => {
-                      const next = String(event.target.value);
-                      const nextCell: TextCell = {
-                        ...textValue,
-                        data: next,
-                        displayData: next
-                      };
-                      props.onChange(nextCell);
-                      props.onFinishedEditing(nextCell, [0, 0]);
-                    }}
-                  >
-                    {options.map((item) => (
-                      <option key={item.value} value={item.value}>
-                        {item.label}
-                      </option>
-                    ))}
-                  </select>
+                  {options.map((item) => (
+                    <option key={item.value} value={item.value}>
+                      {item.label}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <div
+                  className="rounded-[6px] border border-base-300 bg-base-100 p-2 shadow-xl"
+                  style={{ width: Math.max(props.target.width, 280) }}
+                  onMouseDown={(event) => event.stopPropagation()}
+                >
+                      {/* 头部月份导航：仿 Salesforce DatePicker 的前后切换与年月选择。 */}
+                      <div className="mb-2 flex items-center justify-between gap-1">
+                        <button
+                          className="btn btn-ghost btn-xs h-7 min-h-7 w-7 p-0 text-[16px] leading-none"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => setViewMonthStart((current) => addUtcMonths(current, -1))}
+                          aria-label="上个月"
+                        >
+                          &lsaquo;
+                        </button>
+                        <div className="flex items-center gap-1">
+                          <select
+                            className="select select-bordered select-xs h-7 min-h-7 w-[78px]"
+                            value={String(viewMonthYear)}
+                            onChange={(event) => {
+                              const nextYear = Number(event.target.value);
+                              if (!Number.isInteger(nextYear)) return;
+                              setViewMonthStart(buildUtcDate(nextYear, viewMonth, 1));
+                            }}
+                          >
+                            {yearOptions.map((year) => (
+                              <option key={year} value={year}>
+                                {year}
+                              </option>
+                            ))}
+                          </select>
+                          <select
+                            className="select select-bordered select-xs h-7 min-h-7"
+                            value={String(viewMonth)}
+                            onChange={(event) => {
+                              const nextMonth = Number(event.target.value);
+                              if (!Number.isInteger(nextMonth)) return;
+                              setViewMonthStart(buildUtcDate(viewMonthYear, nextMonth, 1));
+                            }}
+                          >
+                            {SALESFORCE_MONTH_OPTIONS.map((item) => (
+                              <option key={item.value} value={item.value}>
+                                {item.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <button
+                          className="btn btn-ghost btn-xs h-7 min-h-7 w-7 p-0 text-[16px] leading-none"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => setViewMonthStart((current) => addUtcMonths(current, 1))}
+                          aria-label="下个月"
+                        >
+                          &rsaquo;
+                        </button>
+                      </div>
+
+                      {/* 星期标题行：保持 Salesforce 常见紧凑排布。 */}
+                      <div className="mb-1 grid grid-cols-7 gap-y-0.5 px-1">
+                        {SALESFORCE_WEEKDAY_LABELS.map((label) => (
+                          <div key={label} className="text-center text-[11px] font-semibold text-neutral/60">
+                            {label}
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* 日期网格：点击仅选择日期，不会立即提交。 */}
+                      <div className="grid grid-cols-7 gap-y-0.5 px-1">
+                        {calendarCells.map((cellItem) => (
+                          <button
+                            key={cellItem.key}
+                            className={buildSalesforceDayButtonClassName(cellItem)}
+                            onMouseDown={(event) => event.preventDefault()}
+                            onClick={() => handlePickDate(cellItem.dateLiteral)}
+                          >
+                            {cellItem.day}
+                          </button>
+                        ))}
+                      </div>
+
+                      {/* datetime 模式补充时间输入，贴近 Salesforce 的“先选日期再选时间”行为。 */}
+                      {editorKind === "datetime-local" && (
+                        <div className="mt-2">
+                          <label className="mb-1 block text-[11px] font-semibold text-neutral/70">Time</label>
+                          <input
+                            autoFocus
+                            type="time"
+                            step={60}
+                            className="input input-bordered input-sm h-8 min-h-8 w-full bg-base-100"
+                            value={normalizeTimeHm(draftTime)}
+                            onChange={(event) => {
+                              setDraftTime(String(event.target.value ?? ""));
+                            }}
+                          />
+                        </div>
+                      )}
+
+                      {/* 底部动作区：显式确认/取消，避免“点一天即提交”。 */}
+                      <div className="mt-2 flex items-center justify-between gap-1.5 border-t border-base-300 pt-2">
+                        <button
+                          className="btn btn-link btn-xs px-1 text-primary"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={handlePickToday}
+                        >
+                          Today
+                        </button>
+                        {nillable && (
+                          <button
+                            className="btn btn-ghost btn-xs"
+                            onMouseDown={(event) => event.preventDefault()}
+                            onClick={handleClearDraft}
+                          >
+                            清空
+                          </button>
+                        )}
+                        <div className="ml-auto flex items-center gap-1.5">
+                          <button
+                            className="btn btn-ghost btn-xs"
+                            onMouseDown={(event) => event.preventDefault()}
+                            onClick={() => props.onFinishedEditing(undefined, [0, 0])}
+                          >
+                            取消
+                          </button>
+                          <button
+                            className="btn btn-primary btn-xs"
+                            onMouseDown={(event) => event.preventDefault()}
+                            onClick={confirmDateEditor}
+                          >
+                            确认
+                          </button>
+                        </div>
+                      </div>
                 </div>
               );
             };
@@ -524,6 +857,8 @@ export function DataGrid({
             const columnId = String(args.column.id ?? "");
             if (columnId !== "__select") {
               if (columnId.startsWith("__")) return;
+              // 业务字段表头：第一行显示 Field Name，第二行显示 Label（小字浅色）。
+              drawFieldHeaderText(args.ctx, args.rect, columnId, fieldMetadataMap[columnId] || {}, showHeaderMetadata);
               if (showHeaderMetadata) {
                 drawHeaderInfoIcon(args.ctx, args.rect);
               }
@@ -660,9 +995,9 @@ export function DataGrid({
           // 列宽边界：约束最小/最大宽度，避免布局极端变形。
           minColumnWidth={44}
           maxColumnWidth={900}
-          // 行高与表头高度：统一网格密度，贴近数据库工具风格。
+          // 行高与表头高度：表头提高到双行，支持 Field Name/Label 分行显示。
           rowHeight={30}
-          headerHeight={30}
+          headerHeight={42}
           // 平滑滚动：提升大数据量横向/纵向浏览体验。
           smoothScrollX
           smoothScrollY
@@ -736,8 +1071,19 @@ export function DataGrid({
             >
               复制
             </button>
+            {rowContextMenu.canSetNone && (
+              <button
+                className="btn btn-ghost btn-xs w-full justify-start"
+                onClick={() => {
+                  setCellNoneFromMenu(); // 可空字段支持“一键置空”。
+                }}
+              >
+                设置为 None
+              </button>
+            )}
             <button
               className="btn btn-ghost btn-xs w-full justify-start"
+              disabled={!sourceId || !objectName || !rowContextMenu.recordId}
               onClick={() => {
                 void openRecordPageFromMenu(); // 触发菜单动作并关闭菜单。
               }}
@@ -872,6 +1218,16 @@ function isPicklistType(fieldType: string): boolean {
   return fieldType === "picklist";
 }
 
+// 判断 date 字段类型。
+function isDateType(fieldType: string): boolean {
+  return fieldType === "date";
+}
+
+// 判断 datetime 字段类型。
+function isDateTimeType(fieldType: string): boolean {
+  return fieldType === "datetime";
+}
+
 // 判断字段是否可编辑。
 function isCellEditableByMeta(metadata: Record<string, unknown>, isNewRow: boolean): boolean {
   const createable = metadata.createable;
@@ -907,6 +1263,547 @@ function getPicklistOptions(metadata: Record<string, unknown>): { label: string;
       return { label, value };
     })
     .filter((item): item is { label: string; value: string } => Boolean(item));
+}
+
+const PICKLIST_NONE_VALUE = "";
+const PICKLIST_NONE_LABEL = "-- None --";
+
+// 判断 picklist 字段是否允许为空。
+function isPicklistNullable(metadata: Record<string, unknown>): boolean {
+  return metadata.nillable === true;
+}
+
+// picklist 编辑器选项：可空字段在首位注入“-- None --”。
+function getPicklistEditorOptions(metadata: Record<string, unknown>): { label: string; value: string }[] {
+  const options = getPicklistOptions(metadata);
+  if (!isPicklistNullable(metadata)) return options;
+  return [{ label: PICKLIST_NONE_LABEL, value: PICKLIST_NONE_VALUE }, ...options];
+}
+
+// 统一 picklist 单元格值为字符串，null/undefined 视为空值。
+function normalizePicklistValue(value: unknown): string {
+  if (value === null || value === undefined) return PICKLIST_NONE_VALUE;
+  return String(value);
+}
+
+// 按 value 找到可读 label；若未匹配则回退显示原值。
+function resolvePicklistDisplayText(raw: string, options: { label: string; value: string }[]): string {
+  const matched = options.find((item) => item.value === raw);
+  if (matched) return matched.label;
+  return raw;
+}
+
+const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const DATETIME_LOCAL_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?$/;
+const SALESFORCE_TIMEZONE_PATTERN = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})(\.\d{1,3})?([+-]\d{4})$/;
+const SALESFORCE_DATETIME_OUTPUT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{4}$/;
+const SALESFORCE_WEEKDAY_LABELS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+const SALESFORCE_MONTH_OPTIONS = [
+  { value: 0, label: "1月" },
+  { value: 1, label: "2月" },
+  { value: 2, label: "3月" },
+  { value: 3, label: "4月" },
+  { value: 4, label: "5月" },
+  { value: 5, label: "6月" },
+  { value: 6, label: "7月" },
+  { value: 7, label: "8月" },
+  { value: 8, label: "9月" },
+  { value: 9, label: "10月" },
+  { value: 10, label: "11月" },
+  { value: 11, label: "12月" }
+];
+
+// 解析并校验 Salesforce 时区（IANA），无效时返回 null。
+function resolveSalesforceTimezone(value?: string | null): string | null {
+  if (!value) return null;
+  const timezone = value.trim();
+  if (!timezone) return null;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: timezone }).format(new Date());
+    return timezone;
+  } catch {
+    return null;
+  }
+}
+
+// Salesforce 风格日历单元格结构。
+type SalesforceCalendarCell = {
+  key: string;
+  day: number;
+  dateLiteral: string;
+  inCurrentMonth: boolean;
+  isToday: boolean;
+  isSelected: boolean;
+};
+
+// date 编辑值规范化：统一输出 YYYY-MM-DD。
+function normalizeDateValueForSave(raw: string): string | null {
+  if (DATE_ONLY_PATTERN.test(raw)) return raw;
+  const dateLiteral = extractDateLiteral(raw);
+  if (dateLiteral) return dateLiteral;
+  const parsed = parseDateForInput(raw);
+  if (!parsed) return null;
+  return formatDateAsUtcYmd(parsed);
+}
+
+// datetime 编辑值规范化：统一输出 Salesforce 日期时间格式（YYYY-MM-DDTHH:mm:ss.SSS+0000）。
+function normalizeDatetimeValueForSave(raw: string, salesforceTimezone?: string | null): string | null {
+  if (SALESFORCE_DATETIME_OUTPUT_PATTERN.test(raw)) return raw;
+  const parsed = parseDatetimeForInput(raw, salesforceTimezone);
+  if (!parsed) return null;
+  return formatDateAsSalesforceDatetime(parsed);
+}
+
+// date 输入框值规范化：无法识别时回退空字符串，避免浏览器控件报错。
+function normalizeDateInputValue(raw: string): string {
+  if (DATE_ONLY_PATTERN.test(raw)) return raw;
+  const dateLiteral = extractDateLiteral(raw);
+  if (dateLiteral) return dateLiteral;
+  const parsed = parseDateForInput(raw);
+  if (!parsed) return "";
+  return formatDateAsUtcYmd(parsed);
+}
+
+// date 单元格显示值规范化：优先固定为 Salesforce 日期格式（YYYY-MM-DD）。
+function normalizeDateDisplayValue(raw: unknown): string {
+  if (raw === null || raw === undefined) return "";
+  const text = String(raw).trim();
+  if (!text) return "";
+  const normalized = normalizeDateInputValue(text);
+  return normalized || text;
+}
+
+// datetime 单元格显示值规范化：按 Salesforce 用户时区输出。
+function normalizeDatetimeDisplayValue(raw: unknown, salesforceTimezone?: string | null): string {
+  if (raw === null || raw === undefined) return "";
+  const text = String(raw).trim();
+  if (!text) return "";
+  const parsed = parseDatetimeForInput(text, salesforceTimezone);
+  if (!parsed) return text;
+  const timezone = resolveSalesforceTimezone(salesforceTimezone);
+  // 展示层优先按 Salesforce 用户时区输出；不可用时回退浏览器本地时区。
+  if (timezone) {
+    return formatDateAsTimeZoneOffsetDatetime(parsed, timezone);
+  }
+  return formatDateAsLocalOffsetDatetime(parsed);
+}
+
+// datetime-local 输入框值规范化：统一为 YYYY-MM-DDTHH:mm。
+function normalizeDatetimeLocalInputValue(raw: string, salesforceTimezone?: string | null): string {
+  const parsed = parseDatetimeForInput(raw, salesforceTimezone);
+  if (!parsed) return "";
+  const timezone = resolveSalesforceTimezone(salesforceTimezone);
+  if (timezone) {
+    return formatDateAsTimeZoneDatetimeMinute(parsed, timezone);
+  }
+  return formatDateAsLocalDatetimeMinute(parsed);
+}
+
+// 从 datetime-local 文本中提取日期部分（YYYY-MM-DD）。
+function extractDatePartFromDatetimeLocal(raw: string): string {
+  const splitIndex = raw.indexOf("T");
+  if (splitIndex <= 0) return "";
+  return raw.slice(0, splitIndex);
+}
+
+// 从 datetime-local 文本中提取时间部分（HH:mm），默认回退 00:00。
+function extractTimePartFromDatetimeLocal(raw: string): string {
+  const splitIndex = raw.indexOf("T");
+  if (splitIndex < 0) return "00:00";
+  const rawTime = raw.slice(splitIndex + 1).trim();
+  if (!rawTime) return "00:00";
+  return normalizeTimeHm(rawTime);
+}
+
+// 解析 date 文本：优先原生 Date，失败时尝试从 datetime 字符串提取日期。
+function parseDateForInput(raw: string): Date | null {
+  if (!raw) return null;
+  const dateLiteral = extractDateLiteral(raw);
+  if (dateLiteral) {
+    return buildUtcDateFromDateLiteral(dateLiteral);
+  }
+  const direct = new Date(raw);
+  if (Number.isFinite(direct.getTime())) return direct;
+  const parsedDatetime = parseDatetimeForInput(raw);
+  return parsedDatetime;
+}
+
+// 解析 datetime 文本：兼容 datetime-local 与 Salesforce 返回格式（+0800 时区）。
+function parseDatetimeForInput(raw: string, salesforceTimezone?: string | null): Date | null {
+  if (!raw) return null;
+  const timezone = resolveSalesforceTimezone(salesforceTimezone);
+
+  if (DATETIME_LOCAL_PATTERN.test(raw)) {
+    if (timezone) {
+      const localDatetime = splitDatetimeLocal(raw);
+      if (localDatetime) {
+        const timezoneDate = buildDateFromTimeZoneLocal(localDatetime.dateLiteral, localDatetime.timeHm, timezone);
+        if (timezoneDate) return timezoneDate;
+      }
+    }
+    const browserLocalDate = new Date(raw);
+    if (Number.isFinite(browserLocalDate.getTime())) return browserLocalDate;
+  }
+
+  const nativeParsed = new Date(raw);
+  if (Number.isFinite(nativeParsed.getTime())) return nativeParsed;
+
+  const sfMatch = raw.match(SALESFORCE_TIMEZONE_PATTERN);
+  if (!sfMatch) return null;
+  const [, datePart, timePart, msPart = "", timezonePart] = sfMatch;
+  const timezoneWithColon = `${timezonePart.slice(0, 3)}:${timezonePart.slice(3)}`;
+  const normalized = `${datePart}T${timePart}${msPart}${timezoneWithColon}`;
+  const parsed = new Date(normalized);
+  if (!Number.isFinite(parsed.getTime())) return null;
+  return parsed;
+}
+
+// 从输入字符串中提取日期字面量（YYYY-MM-DD）。
+function extractDateLiteral(raw: string): string | null {
+  const match = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (!match) return null;
+  const dateLiteral = match[1];
+  return DATE_ONLY_PATTERN.test(dateLiteral) ? dateLiteral : null;
+}
+
+// 使用日期字面量构建 UTC Date，避免时区换日导致的日期漂移。
+function buildUtcDateFromDateLiteral(dateLiteral: string): Date | null {
+  if (!DATE_ONLY_PATTERN.test(dateLiteral)) return null;
+  const [yearText, monthText, dayText] = dateLiteral.split("-");
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return null;
+  const parsed = new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
+  if (!Number.isFinite(parsed.getTime())) return null;
+  return parsed;
+}
+
+// UTC 日期格式化（YYYY-MM-DD）。
+function formatDateAsUtcYmd(value: Date): string {
+  const year = value.getUTCFullYear();
+  const month = String(value.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(value.getUTCDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+// 本地日期时间格式化（YYYY-MM-DDTHH:mm）。
+function formatDateAsLocalDatetimeMinute(value: Date): string {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  const hour = String(value.getHours()).padStart(2, "0");
+  const minute = String(value.getMinutes()).padStart(2, "0");
+  return `${year}-${month}-${day}T${hour}:${minute}`;
+}
+
+// Salesforce 日期时间格式化（YYYY-MM-DDTHH:mm:ss.SSS+0000）。
+function formatDateAsSalesforceDatetime(value: Date): string {
+  const year = value.getUTCFullYear();
+  const month = String(value.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(value.getUTCDate()).padStart(2, "0");
+  const hour = String(value.getUTCHours()).padStart(2, "0");
+  const minute = String(value.getUTCMinutes()).padStart(2, "0");
+  const second = String(value.getUTCSeconds()).padStart(2, "0");
+  const millisecond = String(value.getUTCMilliseconds()).padStart(3, "0");
+  return `${year}-${month}-${day}T${hour}:${minute}:${second}.${millisecond}+0000`;
+}
+
+// 本地时区日期时间格式化（YYYY-MM-DDTHH:mm:ss.SSS+0800），用于单元格展示。
+function formatDateAsLocalOffsetDatetime(value: Date): string {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  const hour = String(value.getHours()).padStart(2, "0");
+  const minute = String(value.getMinutes()).padStart(2, "0");
+  const second = String(value.getSeconds()).padStart(2, "0");
+  const millisecond = String(value.getMilliseconds()).padStart(3, "0");
+  const timezoneOffsetMinutes = -value.getTimezoneOffset();
+  const sign = timezoneOffsetMinutes >= 0 ? "+" : "-";
+  const absoluteMinutes = Math.abs(timezoneOffsetMinutes);
+  const offsetHour = String(Math.floor(absoluteMinutes / 60)).padStart(2, "0");
+  const offsetMinute = String(absoluteMinutes % 60).padStart(2, "0");
+  return `${year}-${month}-${day}T${hour}:${minute}:${second}.${millisecond}${sign}${offsetHour}${offsetMinute}`;
+}
+
+// 指定时区日期时间格式化（YYYY-MM-DDTHH:mm:ss.SSS+0800），用于模拟 Salesforce Web 展示。
+function formatDateAsTimeZoneOffsetDatetime(value: Date, timeZone: string): string {
+  const parts = getDateTimePartsInTimeZone(value, timeZone);
+  if (!parts) return formatDateAsLocalOffsetDatetime(value);
+  const millisecond = String(value.getUTCMilliseconds()).padStart(3, "0");
+  const offsetText = getTimeZoneOffsetText(value, timeZone);
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}.${millisecond}${offsetText}`;
+}
+
+// 指定时区日期时间格式化（YYYY-MM-DDTHH:mm），用于编辑器初始值。
+function formatDateAsTimeZoneDatetimeMinute(value: Date, timeZone: string): string {
+  const parts = getDateTimePartsInTimeZone(value, timeZone);
+  if (!parts) return formatDateAsLocalDatetimeMinute(value);
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
+}
+
+// 拆分 datetime-local 字符串（YYYY-MM-DDTHH:mm）。
+function splitDatetimeLocal(raw: string): { dateLiteral: string; timeHm: string } | null {
+  const splitIndex = raw.indexOf("T");
+  if (splitIndex <= 0) return null;
+  const dateLiteral = raw.slice(0, splitIndex);
+  const timeHm = normalizeTimeHm(raw.slice(splitIndex + 1));
+  if (!DATE_ONLY_PATTERN.test(dateLiteral)) return null;
+  return { dateLiteral, timeHm };
+}
+
+// 解析指定时区下的“本地日期时间”并转换为 UTC Date。
+function buildDateFromTimeZoneLocal(dateLiteral: string, timeHm: string, timeZone: string): Date | null {
+  if (!DATE_ONLY_PATTERN.test(dateLiteral)) return null;
+  const [yearText, monthText, dayText] = dateLiteral.split("-");
+  const [hourText, minuteText] = normalizeTimeHm(timeHm).split(":");
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  if (
+    !Number.isInteger(year) ||
+    !Number.isInteger(month) ||
+    !Number.isInteger(day) ||
+    !Number.isInteger(hour) ||
+    !Number.isInteger(minute)
+  ) {
+    return null;
+  }
+
+  // 使用迭代法将“目标时区下的本地时间”映射到唯一 UTC 时刻（覆盖夏令时场景）。
+  let utcMs = Date.UTC(year, month - 1, day, hour, minute, 0, 0);
+  const targetUtcMs = utcMs;
+  for (let index = 0; index < 4; index += 1) {
+    const parts = getDateTimePartsInTimeZone(new Date(utcMs), timeZone);
+    if (!parts) break;
+    const projectedUtcMs = Date.UTC(
+      Number(parts.year),
+      Number(parts.month) - 1,
+      Number(parts.day),
+      Number(parts.hour),
+      Number(parts.minute),
+      0,
+      0
+    );
+    const delta = targetUtcMs - projectedUtcMs;
+    if (delta === 0) break;
+    utcMs += delta;
+  }
+  const resolved = new Date(utcMs);
+  if (!Number.isFinite(resolved.getTime())) return null;
+  return resolved;
+}
+
+// 获取指定时区下的日期时间分量（全部补零字符串）。
+function getDateTimePartsInTimeZone(
+  value: Date,
+  timeZone: string
+): { year: string; month: string; day: string; hour: string; minute: string; second: string } | null {
+  try {
+    const formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false
+    });
+    const parts = formatter.formatToParts(value);
+    const year = parts.find((item) => item.type === "year")?.value ?? "";
+    const month = parts.find((item) => item.type === "month")?.value ?? "";
+    const day = parts.find((item) => item.type === "day")?.value ?? "";
+    const hour = parts.find((item) => item.type === "hour")?.value ?? "";
+    const minute = parts.find((item) => item.type === "minute")?.value ?? "";
+    const second = parts.find((item) => item.type === "second")?.value ?? "";
+    if (!year || !month || !day || !hour || !minute || !second) return null;
+    return {
+      year: year.padStart(4, "0"),
+      month: month.padStart(2, "0"),
+      day: day.padStart(2, "0"),
+      hour: hour.padStart(2, "0"),
+      minute: minute.padStart(2, "0"),
+      second: second.padStart(2, "0")
+    };
+  } catch {
+    return null;
+  }
+}
+
+// 获取指定时区相对于 UTC 的偏移文本（+0800 / -0700）。
+function getTimeZoneOffsetText(value: Date, timeZone: string): string {
+  try {
+    const formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+      timeZoneName: "shortOffset"
+    });
+    const offsetPart = formatter
+      .formatToParts(value)
+      .find((item) => item.type === "timeZoneName")
+      ?.value;
+    if (offsetPart) {
+      const matched = offsetPart.match(/^GMT([+-])(\d{1,2})(?::?(\d{2}))?$/i);
+      if (matched) {
+        const sign = matched[1];
+        const hour = String(Number(matched[2] || "0")).padStart(2, "0");
+        const minute = String(Number(matched[3] || "0")).padStart(2, "0");
+        return `${sign}${hour}${minute}`;
+      }
+      if (/^GMT|^UTC$/i.test(offsetPart)) {
+        return "+0000";
+      }
+    }
+  } catch {
+    // ignored
+  }
+
+  // 兜底：使用时区分量反推偏移分钟数。
+  const parts = getDateTimePartsInTimeZone(value, timeZone);
+  if (!parts) {
+    const timezoneOffsetMinutes = -value.getTimezoneOffset();
+    return formatOffsetFromMinutes(timezoneOffsetMinutes);
+  }
+  const projectedUtcMs = Date.UTC(
+    Number(parts.year),
+    Number(parts.month) - 1,
+    Number(parts.day),
+    Number(parts.hour),
+    Number(parts.minute),
+    Number(parts.second),
+    value.getUTCMilliseconds()
+  );
+  const offsetMinutes = Math.round((projectedUtcMs - value.getTime()) / 60000);
+  return formatOffsetFromMinutes(offsetMinutes);
+}
+
+// 偏移分钟转 Salesforce 偏移文本。
+function formatOffsetFromMinutes(offsetMinutes: number): string {
+  const sign = offsetMinutes >= 0 ? "+" : "-";
+  const absoluteMinutes = Math.abs(offsetMinutes);
+  const hour = String(Math.floor(absoluteMinutes / 60)).padStart(2, "0");
+  const minute = String(absoluteMinutes % 60).padStart(2, "0");
+  return `${sign}${hour}${minute}`;
+}
+
+// 构建 UTC 日期对象（month 为 0-11），用于稳定计算日历视图。
+function buildUtcDate(year: number, month: number, day: number): Date {
+  return new Date(Date.UTC(year, month, day, 0, 0, 0, 0));
+}
+
+// 获取给定日期所在月份的 UTC 月初。
+function startOfUtcMonth(value: Date): Date {
+  return buildUtcDate(value.getUTCFullYear(), value.getUTCMonth(), 1);
+}
+
+// UTC 月份偏移计算（例如 -1 上个月，+1 下个月）。
+function addUtcMonths(value: Date, months: number): Date {
+  return buildUtcDate(value.getUTCFullYear(), value.getUTCMonth() + months, 1);
+}
+
+// UTC 天数偏移计算。
+function addUtcDays(value: Date, days: number): Date {
+  return buildUtcDate(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate() + days);
+}
+
+// 生成年份选项（中心年左右各 spread 年）。
+function buildYearOptions(centerYear: number, spread: number): number[] {
+  return Array.from({ length: spread * 2 + 1 }, (_, index) => centerYear - spread + index);
+}
+
+// 构建 Salesforce 风格月视图网格（6 周 x 7 天）。
+function buildSalesforceCalendarCells(
+  monthStart: Date,
+  selectedDateLiteral: string,
+  todayDateLiteral: string
+): SalesforceCalendarCell[] {
+  const month = monthStart.getUTCMonth();
+  const firstWeekday = monthStart.getUTCDay();
+  const gridStart = addUtcDays(monthStart, -firstWeekday);
+  return Array.from({ length: 42 }, (_, index) => {
+    const date = addUtcDays(gridStart, index);
+    const dateLiteral = formatDateAsUtcYmd(date);
+    return {
+      key: `${dateLiteral}:${index}`,
+      day: date.getUTCDate(),
+      dateLiteral,
+      inCurrentMonth: date.getUTCMonth() === month,
+      isToday: dateLiteral === todayDateLiteral,
+      isSelected: dateLiteral === selectedDateLiteral
+    };
+  });
+}
+
+// 日历日期按钮样式：贴近 Salesforce 轻量化视觉（当前月、今天、选中态）。
+function buildSalesforceDayButtonClassName(cellItem: SalesforceCalendarCell): string {
+  const base = "mx-auto flex h-8 w-8 items-center justify-center rounded-full text-[12px] leading-none transition-colors";
+  if (cellItem.isSelected) {
+    return `${base} bg-primary text-primary-content shadow-sm`;
+  }
+  if (cellItem.isToday) {
+    return `${base} border border-primary/70 text-primary`;
+  }
+  if (!cellItem.inCurrentMonth) {
+    return `${base} text-neutral/30 hover:bg-base-200`;
+  }
+  return `${base} text-neutral hover:bg-base-200`;
+}
+
+// 获取今天日期字面量（优先按 Salesforce 用户时区）。
+function getTodayDateLiteral(salesforceTimezone?: string | null): string {
+  const timezone = resolveSalesforceTimezone(salesforceTimezone);
+  const now = new Date();
+  if (timezone) {
+    const parts = getDateTimePartsInTimeZone(now, timezone);
+    if (parts) {
+      return `${parts.year}-${parts.month}-${parts.day}`;
+    }
+  }
+  return formatDateAsLocalYmd(now);
+}
+
+// 获取今天 UTC 日期对象（便于作为日历初始化兜底值）。
+function getTodayUtcDate(salesforceTimezone?: string | null): Date {
+  const localToday = getTodayDateLiteral(salesforceTimezone);
+  return buildUtcDateFromDateLiteral(localToday) || new Date();
+}
+
+// 本地日期格式化（YYYY-MM-DD），用于界面“今天”语义。
+function formatDateAsLocalYmd(value: Date): string {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+// 标准化时分文本（HH:mm），不合法时回退 00:00。
+function normalizeTimeHm(raw: string): string {
+  const value = raw.trim();
+  const matched = value.match(/^(\d{1,2}):(\d{1,2})/);
+  if (!matched) return "00:00";
+  const hour = Number(matched[1]);
+  const minute = Number(matched[2]);
+  if (!Number.isInteger(hour) || !Number.isInteger(minute)) return "00:00";
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return "00:00";
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+// 获取当前时分（HH:mm），优先按 Salesforce 用户时区。
+function getCurrentTimeHm(salesforceTimezone?: string | null): string {
+  const now = new Date();
+  const timezone = resolveSalesforceTimezone(salesforceTimezone);
+  if (timezone) {
+    const parts = getDateTimePartsInTimeZone(now, timezone);
+    if (parts) {
+      return `${parts.hour}:${parts.minute}`;
+    }
+  }
+  return `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
 }
 
 // 布尔值统一转换为编辑器可识别文本。
@@ -953,6 +1850,47 @@ function stringifyCellValue(value: unknown): string {
     }
   }
   return String(value);
+}
+
+// 绘制字段表头双行文案：第一行 Field Name，第二行 Label（小字浅色）。
+function drawFieldHeaderText(
+  ctx: CanvasRenderingContext2D,
+  rect: { x: number; y: number; width: number; height: number },
+  fieldName: string,
+  metadata: Record<string, unknown>,
+  showHeaderMetadata: boolean
+) {
+  const labelRaw = metadata.label;
+  const label = typeof labelRaw === "string" ? labelRaw.trim() : "";
+  const hasSecondLine = Boolean(label) && label !== fieldName;
+  const textLeft = rect.x + 8;
+  const textRightPadding = showHeaderMetadata ? 24 : 8; // 预留 info icon 空间，避免文本重叠。
+  const maxWidth = Math.max(16, rect.width - textRightPadding - 8);
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(rect.x + 1, rect.y + 1, Math.max(1, rect.width - 2), Math.max(1, rect.height - 2));
+  ctx.clip();
+
+  if (hasSecondLine) {
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = "#2f3a4a";
+    ctx.font = "600 12px sans-serif";
+    ctx.fillText(fieldName, textLeft, rect.y + 14, maxWidth);
+
+    ctx.fillStyle = "#8b97a6";
+    ctx.font = "500 11px sans-serif";
+    ctx.fillText(label, textLeft, rect.y + 30, maxWidth);
+  } else {
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = "#2f3a4a";
+    ctx.font = "600 12px sans-serif";
+    ctx.fillText(fieldName, textLeft, rect.y + rect.height / 2, maxWidth);
+  }
+
+  ctx.restore();
 }
 
 // 抽取文本编辑值。

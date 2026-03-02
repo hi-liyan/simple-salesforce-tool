@@ -13,7 +13,7 @@ use crate::db;
 use crate::error::AppError;
 use crate::models::{
     AiCapabilities, AiChatTurnV2Request, AiChatTurnV2Response, CliPathProbe, CliPathSettings,
-    CliPathStatus, LlmSettings, LlmSettingsView, ObjectDescribe, QueryResult,
+    CliPathStatus, CurrentUserContext, LlmSettings, LlmSettingsView, ObjectDescribe, QueryResult,
     RecordMutationPayload, RecordSavePayload, SalesforceObject, SalesforceSource,
     SaveLlmSettingsPayload, SourceUpsertPayload, SystemLogPage,
 };
@@ -1488,6 +1488,73 @@ pub async fn query_records(
                 None,
                 false,
                 "执行查询失败。",
+                Some(&message),
+            );
+            Err(message)
+        }
+    }
+}
+
+/// 获取当前登录用户上下文（时区/地区），用于前端按 Salesforce 用户时区展示 datetime。
+#[tauri::command]
+pub async fn get_current_user_context(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    source_id: String,
+) -> Result<CurrentUserContext, String> {
+    let source = {
+        let connection = state
+            .db
+            .lock()
+            .map_err(|error| format!("Database lock failed: {error}"))?;
+        db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
+    };
+
+    let context_result = match state.sf_client.get_current_user_context(&source).await {
+        Ok(context) => Ok(context),
+        Err(error) if is_unauthorized_error(&error) && source_id.starts_with("cli-") => {
+            let refreshed_source =
+                refresh_cli_source_token(&app, &state, &source_id, "get_current_user_context", None)
+                    .await
+                    .map_err(AppError::to_string_error)?;
+            state
+                .sf_client
+                .get_current_user_context(&refreshed_source)
+                .await
+        }
+        Err(error) => Err(error),
+    };
+
+    match context_result {
+        Ok(context) => {
+            write_system_log(
+                &state,
+                "INFO",
+                "SALESFORCE_API",
+                "get_current_user_context",
+                Some(&source_id),
+                None,
+                true,
+                "获取当前用户上下文成功。",
+                Some(&format!(
+                    "timezoneSidKey={} localeSidKey={}",
+                    context.timezone_sid_key.clone().unwrap_or_default(),
+                    context.locale_sid_key.clone().unwrap_or_default()
+                )),
+            );
+            Ok(context)
+        }
+        Err(error) => {
+            let message = AppError::to_string_error(error);
+            write_system_log(
+                &state,
+                "ERROR",
+                "SALESFORCE_API",
+                "get_current_user_context",
+                Some(&source_id),
+                None,
+                false,
+                "获取当前用户上下文失败。",
                 Some(&message),
             );
             Err(message)

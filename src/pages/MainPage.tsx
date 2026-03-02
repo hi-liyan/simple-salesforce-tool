@@ -82,6 +82,10 @@ export function MainPage() {
   const sourceSwitchSeqRef = useRef(0);
   // 是否正在通过 CLI 重新获取 accessToken。
   const [tokenRefreshing, setTokenRefreshing] = useState(false);
+  // Salesforce 当前用户时区（IANA），用于 datetime 与 Salesforce Web 一致展示。
+  const [salesforceTimezone, setSalesforceTimezone] = useState<string | null>(null);
+  // 用户上下文请求序号：用于忽略过期响应，避免并发切换数据源造成时区回写错乱。
+  const userContextSeqRef = useRef(0);
 
   // SOQL 执行器侧栏拖拽：鼠标移动时更新宽度，抬起时结束拖拽。
   useEffect(() => {
@@ -264,6 +268,34 @@ export function MainPage() {
       setSelectedSourceId("");
     }
   }, [sources, selectedSourceId, setSelectedSourceId]);
+
+  // 数据源切换后拉取当前用户上下文（时区/地区），用于 datetime 与 Salesforce Web 行为对齐。
+  useEffect(() => {
+    if (!selectedSourceId) {
+      setSalesforceTimezone(null); // 未选择数据源时重置时区，回退前端默认行为。
+      return;
+    }
+
+    const seq = userContextSeqRef.current + 1;
+    userContextSeqRef.current = seq;
+    let cancelled = false;
+
+    void api.getCurrentUserContext(selectedSourceId)
+      .then((context) => {
+        if (cancelled) return;
+        if (userContextSeqRef.current !== seq) return;
+        setSalesforceTimezone(context.timezoneSidKey || null); // 仅使用有效时区；空值时走前端兜底。
+      })
+      .catch(() => {
+        if (cancelled) return;
+        if (userContextSeqRef.current !== seq) return;
+        setSalesforceTimezone(null); // 获取失败时降级，不阻塞主流程。
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedSourceId]);
 
   async function refreshSources(syncCli: boolean, preferredOrgId?: string, preferredSourceId?: string) {
     setLoading(true);
@@ -1103,6 +1135,7 @@ export function MainPage() {
                 <div className="flex min-h-0 min-w-0 flex-col overflow-hidden">
                   <RightWorkspace
                     selectedSourceId={selectedSourceId}
+                    salesforceTimezone={salesforceTimezone}
                     tabs={tabs}
                     activeTabObjectName={activeTabObjectName}
                     activeTab={activeTab}
@@ -1287,6 +1320,7 @@ export function MainPage() {
               <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
                 <SoqlExecutorWorkspace
                   selectedSourceId={selectedSourceId}
+                  salesforceTimezone={salesforceTimezone}
                   loadingText={loadingText}
                   objects={objects}
                   workspaceNotice={workspaceNotice}

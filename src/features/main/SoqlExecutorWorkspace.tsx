@@ -6,7 +6,7 @@ import { NoticeAlert } from "../../components/NoticeAlert";
 import { SoqlMonacoEditor } from "../../components/SoqlMonacoEditor";
 import { api } from "../../api";
 import { useSoqlExecutorStore, createSoqlExecutorTab, type SoqlExecutorTab, type AiConversationItem } from "../../store/useSoqlExecutorStore";
-import { AiChatTurnV2Response, Notice, QueryResult, SalesforceObject, TabLog } from "../../types";
+import { AiChatTurnV2Response, Notice, ObjectDescribe, QueryResult, SalesforceObject, TabLog } from "../../types";
 
 type AiStreamChunkPayload = {
   // 流式请求 ID。
@@ -18,6 +18,8 @@ type AiStreamChunkPayload = {
 type SoqlExecutorWorkspaceProps = {
   // 当前选中的数据源 ID。
   selectedSourceId: string;
+  // Salesforce 当前用户时区（IANA），用于 datetime 与 Salesforce Web 一致显示。
+  salesforceTimezone?: string | null;
   // 加载遮罩文案。
   loadingText: string;
   // 当前数据源对象列表：用于对象名补全。
@@ -43,6 +45,7 @@ const AI_STREAMING_COPY_POOL = [
 // SOQL 执行器工作区：支持多 Tab、执行、结果展示与查询日志。
 export function SoqlExecutorWorkspace({
   selectedSourceId,
+  salesforceTimezone,
   loadingText,
   objects,
   workspaceNotice,
@@ -69,6 +72,8 @@ export function SoqlExecutorWorkspace({
   const selectedSoqlTextRef = useRef("");
   // 对象字段缓存：按需 describe 后用于上下文补全，避免重复请求。
   const [objectFieldsMap, setObjectFieldsMap] = useState<Record<string, string[]>>({});
+  // 对象 describe 缓存：用于结果表字段 label/type 映射，保证显示与 Query 页面一致。
+  const [objectDescribeMap, setObjectDescribeMap] = useState<Record<string, ObjectDescribe>>({});
   // 当前数据源可查询对象名集合：用于 FROM 子句对象补全。
   const objectNames = useMemo(() => objects.filter((item) => item.queryable).map((item) => item.name), [objects]);
   // 缓存中的字段总集合：作为 FROM 未确定时的回退补全候选。
@@ -181,6 +186,7 @@ export function SoqlExecutorWorkspace({
 
   useEffect(() => {
     setObjectFieldsMap({}); // 切换数据源后清空旧缓存，避免跨源字段污染。
+    setObjectDescribeMap({}); // 同步清理 describe 缓存，避免跨源元数据污染。
   }, [selectedSourceId]);
 
   useEffect(() => {
@@ -210,7 +216,7 @@ export function SoqlExecutorWorkspace({
     const fromObjectNames = extractFromObjectNames(activeTab.soqlDraft);
     if (fromObjectNames.length === 0) return;
     const queryableObjectNameSet = new Set(objectNames.map((name) => name.toLowerCase()));
-    const loadedObjectNameSet = new Set(Object.keys(objectFieldsMap).map((name) => name.toLowerCase()));
+    const loadedObjectNameSet = new Set(Object.keys(objectDescribeMap).map((name) => name.toLowerCase()));
     const unloadedObjectNames = fromObjectNames.filter((objectName) => {
       if (!queryableObjectNameSet.has(objectName.toLowerCase())) return false; // 仅加载当前数据源可查询对象。
       return !loadedObjectNameSet.has(objectName.toLowerCase());
@@ -224,7 +230,7 @@ export function SoqlExecutorWorkspace({
           const describe = await api.describeObject(selectedSourceId, objectName);
           return {
             objectName,
-            fields: describe.fields.map((field) => field.name)
+            describe
           };
         } catch {
           return null; // describe 失败时忽略，不阻塞其它对象字段加载。
@@ -232,12 +238,19 @@ export function SoqlExecutorWorkspace({
       })
     ).then((describes) => {
       if (cancelled) return;
-      const loadedEntries = describes.filter((item): item is { objectName: string; fields: string[] } => Boolean(item));
+      const loadedEntries = describes.filter((item): item is { objectName: string; describe: ObjectDescribe } => Boolean(item));
       if (loadedEntries.length === 0) return;
       setObjectFieldsMap((current) => {
         const next = { ...current };
         loadedEntries.forEach((item) => {
-          next[item.objectName] = item.fields; // 写入缓存，供编辑器上下文补全读取。
+          next[item.objectName] = item.describe.fields.map((field) => field.name); // 写入缓存，供编辑器上下文补全读取。
+        });
+        return next;
+      });
+      setObjectDescribeMap((current) => {
+        const next = { ...current };
+        loadedEntries.forEach((item) => {
+          next[item.objectName] = item.describe; // 写入完整 describe，供结果表字段 label/type 映射。
         });
         return next;
       });
@@ -246,7 +259,7 @@ export function SoqlExecutorWorkspace({
     return () => {
       cancelled = true; // 避免异步返回后写入已失效状态。
     };
-  }, [selectedSourceId, activeTab, objectNames, objectFieldsMap]);
+  }, [selectedSourceId, activeTab, objectNames, objectDescribeMap]);
 
   // 结果表专用数据：关系字段扁平化 + 子查询展开为多行。
   const gridResult = useMemo<QueryResult>(() => {
@@ -263,10 +276,18 @@ export function SoqlExecutorWorkspace({
     return extractVisibleColumns(gridResult.records);
   }, [activeTab, gridResult.records]);
 
-  // 当前标签字段元数据映射：执行器模式统一只读，避免误编辑。
+  // 当前标签字段元数据映射：优先使用 describe 的 label/type，再降级到值推断；执行器模式统一只读。
   const fieldMetadataMap = useMemo(() => {
+    const primaryObjectName = extractPrimaryObjectName(activeTab?.soqlDraft || "");
     return visibleColumns.reduce((acc, fieldName) => {
+      const resolvedMetadata = resolveFieldMetadataForExecutor(
+        fieldName,
+        primaryObjectName,
+        objectDescribeMap,
+        gridResult.records
+      );
       acc[fieldName] = {
+        ...(resolvedMetadata || {}),
         // 禁止更新：DataGrid 将据此禁用编辑。
         updateable: false,
         // 禁止创建：DataGrid 将据此禁用新建场景编辑。
@@ -274,7 +295,7 @@ export function SoqlExecutorWorkspace({
       };
       return acc;
     }, {} as Record<string, Record<string, unknown>>);
-  }, [visibleColumns]);
+  }, [activeTab?.soqlDraft, visibleColumns, objectDescribeMap, gridResult.records]);
 
   // Store actions：Tab 管理操作委托给 Zustand store。
   const storeCreateTab = useSoqlExecutorStore((state) => state.createTab);
@@ -823,8 +844,8 @@ export function SoqlExecutorWorkspace({
                     fieldMetadataMap={fieldMetadataMap}
                     dirtyCellKeys={[]}
                     selectedRecordIds={activeTab.selectedRecordIds}
+                    salesforceTimezone={salesforceTimezone}
                     pendingDeleteRecordIds={[]}
-                    showHeaderMetadata={false}
                     enableReadonlyCellHint={false}
                     showSelectionColumn={false}
                     onToggleRecord={(recordId, checked) => {
@@ -1007,6 +1028,102 @@ function applyAiResponseToTab(
         ? { type: "success", message: "AI 已生成 SOQL，请确认后应用。" }
         : { type: "success", message: "AI 需要继续澄清，请补充回答。" }
   };
+}
+
+// 提取主查询对象：用于优先匹配字段 label/type。
+function extractPrimaryObjectName(soql: string): string {
+  const objectNames = extractFromObjectNames(soql);
+  return objectNames[0] || "";
+}
+
+// 执行器字段 metadata 解析：优先 describe，其次按结果样本推断类型。
+function resolveFieldMetadataForExecutor(
+  fieldName: string,
+  primaryObjectName: string,
+  objectDescribeMap: Record<string, ObjectDescribe>,
+  records: Record<string, unknown>[]
+): Record<string, unknown> | null {
+  const exactField = resolveObjectFieldMetadataByName(fieldName, primaryObjectName, objectDescribeMap);
+  if (exactField) {
+    return {
+      label: exactField.label,
+      type: exactField.dataType
+    };
+  }
+
+  // 对点路径列（如 Owner.Name）回退取末段字段名做弱匹配。
+  if (fieldName.includes(".")) {
+    const suffixFieldName = fieldName.split(".").pop() || "";
+    const suffixField = resolveObjectFieldMetadataByName(suffixFieldName, primaryObjectName, objectDescribeMap);
+    if (suffixField) {
+      return {
+        label: suffixField.label,
+        type: suffixField.dataType
+      };
+    }
+  }
+
+  // describe 未命中时回退为值推断，确保 datetime/date 在结果表仍可按规则展示。
+  const inferredType = inferFieldTypeFromRecords(fieldName, records);
+  if (!inferredType) return null;
+  return { type: inferredType };
+}
+
+// 按字段名从 describe 缓存中解析字段定义（先主对象，再全量兜底）。
+function resolveObjectFieldMetadataByName(
+  fieldName: string,
+  primaryObjectName: string,
+  objectDescribeMap: Record<string, ObjectDescribe>
+): ObjectDescribe["fields"][number] | null {
+  const normalizedFieldName = fieldName.trim().toLowerCase();
+  if (!normalizedFieldName) return null;
+
+  const primaryDescribe = primaryObjectName ? objectDescribeMap[primaryObjectName] : undefined;
+  if (primaryDescribe) {
+    const matched = primaryDescribe.fields.find((field) => field.name.toLowerCase() === normalizedFieldName);
+    if (matched) return matched;
+  }
+
+  // 主对象未命中时在已缓存对象中找唯一字段，避免错误映射同名字段。
+  let uniqueMatched: ObjectDescribe["fields"][number] | null = null;
+  let matchedCount = 0;
+  Object.values(objectDescribeMap).forEach((describe) => {
+    const matched = describe.fields.find((field) => field.name.toLowerCase() === normalizedFieldName);
+    if (!matched) return;
+    matchedCount += 1;
+    uniqueMatched = matched;
+  });
+  if (matchedCount > 1) return null; // 多对象同名字段时放弃自动映射，避免误导。
+  return uniqueMatched;
+}
+
+// 基于结果样本推断字段类型：用于 describe 缺失时的展示兜底。
+function inferFieldTypeFromRecords(fieldName: string, records: Record<string, unknown>[]): string | null {
+  const samples = records
+    .map((record) => record[fieldName])
+    .filter((value) => value !== null && value !== undefined)
+    .slice(0, 20);
+  if (samples.length === 0) return null;
+
+  const allBoolean = samples.every((value) => typeof value === "boolean");
+  if (allBoolean) return "boolean";
+
+  const allNumber = samples.every((value) => typeof value === "number");
+  if (allNumber) return "double";
+
+  const allDate = samples.every((value) => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value.trim()));
+  if (allDate) return "date";
+
+  const allDatetime = samples.every((value) => {
+    if (typeof value !== "string") return false;
+    const text = value.trim();
+    if (!text) return false;
+    // Salesforce 常见 datetime：2026-03-02T18:30:00.000+0000 / ISO 8601。
+    return /^(\d{4}-\d{2}-\d{2})T/.test(text);
+  });
+  if (allDatetime) return "datetime";
+
+  return null;
 }
 
 // 从 SOQL 中提取所有 FROM 后对象名（包含子查询），用于按需加载字段元数据。

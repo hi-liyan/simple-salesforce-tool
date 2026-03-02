@@ -73,6 +73,7 @@ fn main() {
             commands::describe_object,
             commands::resolve_field_child_relationship_name,
             commands::query_records,
+            commands::get_current_user_context,
             commands::create_record,
             commands::save_records,
             commands::update_record,

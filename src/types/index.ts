@@ -46,6 +46,12 @@ export type ObjectDescribe = {
   childRelationships: ObjectChildRelationship[];
 };
 
+// 当前登录用户上下文（用于按 Salesforce 用户时区处理 datetime）。
+export type CurrentUserContext = {
+  timezoneSidKey: string | null;
+  localeSidKey: string | null;
+};
+
 // SOQL 查询结果。
 export type QueryResult = {
   totalSize: number;

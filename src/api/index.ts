@@ -6,6 +6,7 @@ import {
   CliPathProbe,
   CliPathSettings,
   CliPathStatus,
+  CurrentUserContext,
   LlmSettings,
   LlmSettingsSavePayload,
   ObjectDescribe,
@@ -73,6 +74,8 @@ export const api = {
     invokeApi<string | null>("resolve_field_child_relationship_name", { sourceId, objectName, fieldName }),
   queryRecords: (sourceId: string, soql: string) =>
     invokeApi<QueryResult>("query_records", { sourceId, soql }),
+  getCurrentUserContext: (sourceId: string) =>
+    invokeApi<CurrentUserContext>("get_current_user_context", { sourceId }),
   createRecord: (payload: RecordMutationPayload) => invokeApi<string>("create_record", { payload }),
   saveRecords: (payload: RecordSavePayload) => invokeApi<void>("save_records", { payload }),
   updateRecord: (sourceId: string, objectName: string, recordId: string, values: Record<string, unknown>) =>
