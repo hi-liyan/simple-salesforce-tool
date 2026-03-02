@@ -919,12 +919,21 @@ export function MainPage() {
     if (!selectedSourceId || !activeTab || !activeTab.describe) return;
     if (!hasPendingChanges(activeTab)) return;
 
+    // 数据源类型分支：MySQL 使用同一 saveRecords 事务提交新增+更新，但需额外校验主键可用性。
+    const isMysqlSource = (selectedSource?.sourceType || "salesforce").toLowerCase() === "mysql";
     const editableFields = new Set(activeTab.describe.fields.map((field) => field.name));
+    // MySQL 主键字段名：用于查询结果未回填 Id 时的兜底定位。
+    const mysqlPrimaryKeyField = isMysqlSource
+      ? activeTab.describe.fields.find(
+          (field) => String(field.metadata?.columnKey || "").toUpperCase() === "PRI"
+        )?.name || ""
+      : "";
     const dirtyCellSet = new Set(activeTab.dirtyCellKeys);
     const pendingDeleteSet = new Set(activeTab.pendingDeleteRecordIds);
     const creates: Record<string, unknown>[] = [];
     const updates: { recordId: string; values: Record<string, unknown> }[] = [];
     const deletes: string[] = [];
+    const missingRecordIdRows: number[] = [];
 
     patchTab(activeTab.objectName, (item) => ({ ...item, loading: true }));
     try {
@@ -940,15 +949,10 @@ export function MainPage() {
             if (raw === null || raw === undefined || String(raw).trim() === "") return;
             values[field] = raw;
           });
-          creates.push(values);
-          continue;
-        }
-
-        const recordId = String(record.Id ?? "");
-        if (!recordId) continue;
-        if (pendingDeleteSet.has(recordId)) {
-          // 已标记待删除的记录不再参与更新，只在删除阶段提交。
-          deletes.push(recordId);
+          // 空新增行不提交，避免后端报“新增记录字段不能为空”导致整批事务失败。
+          if (Object.keys(values).length > 0) {
+            creates.push(values);
+          }
           continue;
         }
 
@@ -962,12 +966,36 @@ export function MainPage() {
           values[field] = record[field];
         });
 
+        // 更新目标记录 ID：优先使用统一 Id，MySQL 下兜底使用主键列值。
+        const recordIdRaw =
+          record.Id ?? (isMysqlSource && mysqlPrimaryKeyField ? record[mysqlPrimaryKeyField] : undefined);
+        const recordId = recordIdRaw === null || recordIdRaw === undefined ? "" : String(recordIdRaw).trim();
+        if (!recordId) {
+          // MySQL 更新必须依赖主键 Id，若编辑了数据但没有 Id，直接阻断并提示。
+          if (isMysqlSource && Object.keys(values).length > 0) {
+            missingRecordIdRows.push(rowIndex + 1);
+          }
+          continue;
+        }
+        if (pendingDeleteSet.has(recordId)) {
+          // 已标记待删除的记录不再参与更新，只在删除阶段提交。
+          deletes.push(recordId);
+          continue;
+        }
+
         if (Object.keys(values).length > 0) {
           updates.push({ recordId, values });
         }
       }
 
+      if (missingRecordIdRows.length > 0) {
+        throw new Error(
+          `MySQL 更新失败：存在已编辑但缺少 Id 的行（第 ${missingRecordIdRows.join("、")} 行）。请确保查询结果包含主键列。`
+        );
+      }
+
       if (creates.length > 0 || updates.length > 0) {
+        // 批量保存入口：MySQL Provider 内部会在一个事务中执行 INSERT + UPDATE。
         await api.saveRecords({
           sourceId: selectedSourceId,
           objectName: activeTab.objectName,
