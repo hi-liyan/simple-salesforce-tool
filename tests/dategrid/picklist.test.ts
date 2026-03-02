@@ -28,9 +28,11 @@ test("normalizePicklistValue: null/undefined 应归一化为空值", () => {
 
 test("resolvePicklistDisplayText: 应优先返回匹配项 label", () => {
   const options = [
+    { label: "-- None --", value: "" },
     { label: "Alpha", value: "A" },
     { label: "Beta", value: "B" }
   ];
+  assert.equal(resolvePicklistDisplayText("", options), "");
   assert.equal(resolvePicklistDisplayText("A", options), "Alpha");
   assert.equal(resolvePicklistDisplayText("Z", options), "Z");
 });
