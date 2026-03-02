@@ -1,5 +1,6 @@
 use chrono::Utc;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
+use serde_json::{json, Value};
 use std::collections::HashMap;
 
 use crate::error::AppError;
@@ -14,6 +15,18 @@ const OBJECT_CACHE_TTL_SECONDS: i64 = 3600;
 pub fn init_schema(connection: &Connection) -> Result<(), AppError> {
     connection.execute_batch(
         r#"
+        CREATE TABLE IF NOT EXISTS data_sources (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            source_type TEXT NOT NULL,
+            config_json TEXT NOT NULL,
+            instance_url TEXT NOT NULL,
+            access_token TEXT NOT NULL,
+            api_version TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS salesforce_sources (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
@@ -63,6 +76,101 @@ pub fn init_schema(connection: &Connection) -> Result<(), AppError> {
         "#,
     )?;
 
+    // 启动时将历史 Salesforce 表数据迁移到通用 data_sources，保证旧版本无缝升级。
+    migrate_salesforce_sources_to_data_sources(connection)?;
+    // 兼容旧外键：将 data_sources 回填到 legacy salesforce_sources，避免缓存表外键失败。
+    backfill_data_sources_to_legacy_salesforce_sources(connection)?;
+
+    Ok(())
+}
+
+/// 将旧版 salesforce_sources 的数据补录到 data_sources（幂等执行）。
+fn migrate_salesforce_sources_to_data_sources(connection: &Connection) -> Result<(), AppError> {
+    connection.execute_batch(
+        r#"
+        INSERT OR IGNORE INTO data_sources (
+            id,
+            name,
+            source_type,
+            config_json,
+            instance_url,
+            access_token,
+            api_version,
+            created_at,
+            updated_at
+        )
+        SELECT
+            id,
+            name,
+            'salesforce',
+            json_object(
+                'instanceUrl', instance_url,
+                'accessToken', access_token,
+                'apiVersion', api_version
+            ),
+            instance_url,
+            access_token,
+            api_version,
+            created_at,
+            updated_at
+        FROM salesforce_sources;
+        "#,
+    )?;
+    Ok(())
+}
+
+/// 将通用数据源回填到旧版 salesforce_sources（幂等执行）。
+/// 说明：object_metadata_cache/column_visibility_settings 目前仍引用该旧表。
+fn backfill_data_sources_to_legacy_salesforce_sources(connection: &Connection) -> Result<(), AppError> {
+    connection.execute_batch(
+        r#"
+        INSERT OR IGNORE INTO salesforce_sources (
+            id,
+            name,
+            instance_url,
+            access_token,
+            api_version,
+            created_at,
+            updated_at
+        )
+        SELECT
+            id,
+            name,
+            instance_url,
+            access_token,
+            api_version,
+            created_at,
+            updated_at
+        FROM data_sources;
+        "#,
+    )?;
+    Ok(())
+}
+
+/// 将单条通用数据源镜像写入 legacy salesforce_sources，兼容旧外键约束。
+fn upsert_legacy_salesforce_source(
+    connection: &Connection,
+    source: &SalesforceSource,
+) -> Result<(), AppError> {
+    connection.execute(
+        "INSERT INTO salesforce_sources (id, name, instance_url, access_token, api_version, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT(id) DO UPDATE SET
+           name = excluded.name,
+           instance_url = excluded.instance_url,
+           access_token = excluded.access_token,
+           api_version = excluded.api_version,
+           updated_at = excluded.updated_at",
+        params![
+            source.id,
+            source.name,
+            source.instance_url,
+            source.access_token,
+            source.api_version,
+            source.created_at,
+            source.updated_at
+        ],
+    )?;
     Ok(())
 }
 
@@ -98,18 +206,30 @@ pub fn delete_app_setting(connection: &Connection, key: &str) -> Result<(), AppE
 /// 查询所有数据源，按更新时间倒序返回。
 pub fn list_sources(connection: &Connection) -> Result<Vec<SalesforceSource>, AppError> {
     let mut statement = connection.prepare(
-        "SELECT id, name, instance_url, access_token, api_version, created_at, updated_at FROM salesforce_sources ORDER BY updated_at DESC",
+        "SELECT id, name, source_type, config_json, instance_url, access_token, api_version, created_at, updated_at FROM data_sources ORDER BY updated_at DESC",
     )?;
 
     let rows = statement.query_map([], |row| {
+        let source_type: Option<String> = row.get(2)?;
+        let config_json_raw: Option<String> = row.get(3)?;
+        let instance_url: String = row.get(4)?;
+        let access_token: String = row.get(5)?;
+        let api_version: String = row.get(6)?;
         Ok(SalesforceSource {
             id: row.get(0)?,
             name: row.get(1)?,
-            instance_url: row.get(2)?,
-            access_token: row.get(3)?,
-            api_version: row.get(4)?,
-            created_at: row.get(5)?,
-            updated_at: row.get(6)?,
+            source_type: source_type.unwrap_or_else(|| "salesforce".to_string()),
+            config_json: parse_or_build_source_config(
+                config_json_raw.as_deref(),
+                &instance_url,
+                &access_token,
+                &api_version,
+            ),
+            instance_url,
+            access_token,
+            api_version,
+            created_at: row.get(7)?,
+            updated_at: row.get(8)?,
         })
     })?;
 
@@ -123,19 +243,31 @@ pub fn list_sources(connection: &Connection) -> Result<Vec<SalesforceSource>, Ap
 /// 按 ID 查询单个数据源，不存在时返回业务错误。
 pub fn get_source(connection: &Connection, id: &str) -> Result<SalesforceSource, AppError> {
     let mut statement = connection.prepare(
-        "SELECT id, name, instance_url, access_token, api_version, created_at, updated_at FROM salesforce_sources WHERE id = ?1",
+        "SELECT id, name, source_type, config_json, instance_url, access_token, api_version, created_at, updated_at FROM data_sources WHERE id = ?1",
     )?;
 
     let item = statement
         .query_row([id], |row| {
+            let source_type: Option<String> = row.get(2)?;
+            let config_json_raw: Option<String> = row.get(3)?;
+            let instance_url: String = row.get(4)?;
+            let access_token: String = row.get(5)?;
+            let api_version: String = row.get(6)?;
             Ok(SalesforceSource {
                 id: row.get(0)?,
                 name: row.get(1)?,
-                instance_url: row.get(2)?,
-                access_token: row.get(3)?,
-                api_version: row.get(4)?,
-                created_at: row.get(5)?,
-                updated_at: row.get(6)?,
+                source_type: source_type.unwrap_or_else(|| "salesforce".to_string()),
+                config_json: parse_or_build_source_config(
+                    config_json_raw.as_deref(),
+                    &instance_url,
+                    &access_token,
+                    &api_version,
+                ),
+                instance_url,
+                access_token,
+                api_version,
+                created_at: row.get(7)?,
+                updated_at: row.get(8)?,
             })
         })
         .optional()?;
@@ -149,9 +281,19 @@ pub fn create_source(
     payload: SourceUpsertPayload,
 ) -> Result<SalesforceSource, AppError> {
     let now = Utc::now().to_rfc3339();
+    let source_type = normalize_source_type(Some(&payload.source_type));
+    let config_json = build_source_config_json(
+        &source_type,
+        &payload.config_json,
+        &payload.instance_url,
+        &payload.access_token,
+        &payload.api_version,
+    );
     let item = SalesforceSource {
         id: uuid::Uuid::new_v4().to_string(),
         name: payload.name,
+        source_type,
+        config_json,
         instance_url: payload.instance_url.trim_end_matches('/').to_string(),
         access_token: payload.access_token,
         api_version: payload.api_version,
@@ -160,10 +302,12 @@ pub fn create_source(
     };
 
     connection.execute(
-        "INSERT INTO salesforce_sources (id, name, instance_url, access_token, api_version, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        "INSERT INTO data_sources (id, name, source_type, config_json, instance_url, access_token, api_version, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![
             item.id,
             item.name,
+            item.source_type,
+            item.config_json.to_string(),
             item.instance_url,
             item.access_token,
             item.api_version,
@@ -171,6 +315,9 @@ pub fn create_source(
             item.updated_at
         ],
     )?;
+
+    // 为兼容旧缓存表外键，写入/更新 legacy salesforce_sources 镜像记录。
+    upsert_legacy_salesforce_source(connection, &item)?;
 
     Ok(item)
 }
@@ -182,19 +329,33 @@ pub fn update_source(
     payload: SourceUpsertPayload,
 ) -> Result<SalesforceSource, AppError> {
     let now = Utc::now().to_rfc3339();
+    let source_type = normalize_source_type(Some(&payload.source_type));
+    let normalized_instance_url = payload.instance_url.trim_end_matches('/').to_string();
+    let config_json = build_source_config_json(
+        &source_type,
+        &payload.config_json,
+        &normalized_instance_url,
+        &payload.access_token,
+        &payload.api_version,
+    );
     connection.execute(
-        "UPDATE salesforce_sources SET name = ?2, instance_url = ?3, access_token = ?4, api_version = ?5, updated_at = ?6 WHERE id = ?1",
+        "UPDATE data_sources SET name = ?2, source_type = ?3, config_json = ?4, instance_url = ?5, access_token = ?6, api_version = ?7, updated_at = ?8 WHERE id = ?1",
         params![
             id,
             payload.name,
-            payload.instance_url.trim_end_matches('/').to_string(),
+            source_type,
+            config_json.to_string(),
+            normalized_instance_url,
             payload.access_token,
             payload.api_version,
             now
         ],
     )?;
 
-    get_source(connection, id)
+    let item = get_source(connection, id)?;
+    // 更新后同步 legacy 镜像，避免缓存表写入触发外键失败。
+    upsert_legacy_salesforce_source(connection, &item)?;
+    Ok(item)
 }
 
 /// 按固定 ID 进行写入，适用于 CLI 同步场景（重复同步只更新不新增）。
@@ -204,19 +365,30 @@ pub fn upsert_source_with_id(
     payload: SourceUpsertPayload,
 ) -> Result<SalesforceSource, AppError> {
     let now = Utc::now().to_rfc3339();
+    let source_type = normalize_source_type(Some(&payload.source_type));
+    let normalized_instance_url = payload.instance_url.trim_end_matches('/').to_string();
+    let config_json = build_source_config_json(
+        &source_type,
+        &payload.config_json,
+        &normalized_instance_url,
+        &payload.access_token,
+        &payload.api_version,
+    );
     let created_at: Option<String> = connection
         .query_row(
-            "SELECT created_at FROM salesforce_sources WHERE id = ?1",
+            "SELECT created_at FROM data_sources WHERE id = ?1",
             [id],
             |row| row.get(0),
         )
         .optional()?;
 
     connection.execute(
-        "INSERT INTO salesforce_sources (id, name, instance_url, access_token, api_version, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+        "INSERT INTO data_sources (id, name, source_type, config_json, instance_url, access_token, api_version, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
          ON CONFLICT(id) DO UPDATE SET
            name = excluded.name,
+           source_type = excluded.source_type,
+           config_json = excluded.config_json,
            instance_url = excluded.instance_url,
            access_token = excluded.access_token,
            api_version = excluded.api_version,
@@ -224,7 +396,9 @@ pub fn upsert_source_with_id(
         params![
             id,
             payload.name,
-            payload.instance_url.trim_end_matches('/').to_string(),
+            source_type,
+            config_json.to_string(),
+            normalized_instance_url,
             payload.access_token,
             payload.api_version,
             created_at.unwrap_or_else(|| now.clone()),
@@ -232,13 +406,18 @@ pub fn upsert_source_with_id(
         ],
     )?;
 
-    get_source(connection, id)
+    let item = get_source(connection, id)?;
+    // UPSERT 后同步 legacy 镜像，保证旧外键链路始终可用。
+    upsert_legacy_salesforce_source(connection, &item)?;
+    Ok(item)
 }
 
 /// 清理本次 CLI 同步中不存在的旧 CLI 数据源，避免脏数据堆积。
 pub fn prune_cli_sources(connection: &Connection, keep_ids: &[String]) -> Result<(), AppError> {
     if keep_ids.is_empty() {
         // 当 CLI 无任何可用账号时，直接清空全部 cli-* 来源及关联缓存。
+        // 先删 legacy，利用外键级联自动清理缓存。
+        connection.execute("DELETE FROM salesforce_sources WHERE id LIKE 'cli-%'", [])?;
         connection.execute(
             "DELETE FROM object_metadata_cache WHERE source_id LIKE 'cli-%'",
             [],
@@ -247,7 +426,7 @@ pub fn prune_cli_sources(connection: &Connection, keep_ids: &[String]) -> Result
             "DELETE FROM column_visibility_settings WHERE source_id LIKE 'cli-%'",
             [],
         )?;
-        connection.execute("DELETE FROM salesforce_sources WHERE id LIKE 'cli-%'", [])?;
+        connection.execute("DELETE FROM data_sources WHERE id LIKE 'cli-%'", [])?;
         return Ok(());
     }
 
@@ -270,17 +449,25 @@ pub fn prune_cli_sources(connection: &Connection, keep_ids: &[String]) -> Result
     connection.execute(&visibility_sql, params_from_iter(keep_ids.iter()))?;
 
     let source_sql = format!(
-        "DELETE FROM salesforce_sources WHERE id LIKE 'cli-%' AND id NOT IN ({})",
+        "DELETE FROM data_sources WHERE id LIKE 'cli-%' AND id NOT IN ({})",
         placeholders
     );
     connection.execute(&source_sql, params_from_iter(keep_ids.iter()))?;
+
+    let legacy_source_sql = format!(
+        "DELETE FROM salesforce_sources WHERE id LIKE 'cli-%' AND id NOT IN ({})",
+        placeholders
+    );
+    connection.execute(&legacy_source_sql, params_from_iter(keep_ids.iter()))?;
 
     Ok(())
 }
 
 /// 删除数据源及其对象缓存、字段可见性配置。
 pub fn delete_source(connection: &Connection, id: &str) -> Result<(), AppError> {
+    // 先删除 legacy，利用外键级联删除缓存，避免残留孤儿数据。
     connection.execute("DELETE FROM salesforce_sources WHERE id = ?1", [id])?;
+    connection.execute("DELETE FROM data_sources WHERE id = ?1", [id])?;
     connection.execute(
         "DELETE FROM object_metadata_cache WHERE source_id = ?1",
         [id],
@@ -290,6 +477,61 @@ pub fn delete_source(connection: &Connection, id: &str) -> Result<(), AppError> 
         [id],
     )?;
     Ok(())
+}
+
+/// 归一化数据源类型：空值/未知值在 M1 阶段统一回退为 salesforce。
+fn normalize_source_type(source_type: Option<&str>) -> String {
+    let normalized = source_type
+        .map(|item| item.trim().to_lowercase())
+        .unwrap_or_else(|| "salesforce".to_string());
+    if normalized.is_empty() {
+        "salesforce".to_string()
+    } else {
+        normalized
+    }
+}
+
+/// 构建最终入库配置：优先使用外部传入 config_json，并对 Salesforce 自动补齐关键字段。
+fn build_source_config_json(
+    source_type: &str,
+    incoming_config: &Value,
+    instance_url: &str,
+    access_token: &str,
+    api_version: &str,
+) -> Value {
+    let mut config = if incoming_config.is_object() {
+        incoming_config.clone()
+    } else {
+        json!({})
+    };
+    if source_type.eq_ignore_ascii_case("salesforce") {
+        // Salesforce 配置在 M1 阶段仍以旧字段为主，写入 config_json 仅作为兼容过渡。
+        config["instanceUrl"] = Value::String(instance_url.to_string());
+        config["accessToken"] = Value::String(access_token.to_string());
+        config["apiVersion"] = Value::String(api_version.to_string());
+    }
+    config
+}
+
+/// 从数据库恢复配置：若 config_json 缺失或无效，则使用旧字段构造兼容配置。
+fn parse_or_build_source_config(
+    raw_config: Option<&str>,
+    instance_url: &str,
+    access_token: &str,
+    api_version: &str,
+) -> Value {
+    if let Some(raw) = raw_config {
+        if let Ok(parsed) = serde_json::from_str::<Value>(raw) {
+            if parsed.is_object() {
+                return parsed;
+            }
+        }
+    }
+    json!({
+        "instanceUrl": instance_url,
+        "accessToken": access_token,
+        "apiVersion": api_version
+    })
 }
 
 /// 读取某个数据源 + 对象的字段勾选配置。

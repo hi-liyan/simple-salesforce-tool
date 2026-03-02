@@ -17,6 +17,7 @@ use crate::models::{
     RecordMutationPayload, RecordSavePayload, SalesforceObject, SalesforceSource,
     SaveLlmSettingsPayload, SourceUpsertPayload, SystemLogPage,
 };
+use crate::providers::provider_for_source;
 use crate::sf_cli;
 
 /// 写系统日志的统一入口。
@@ -575,6 +576,32 @@ pub fn create_source(
     db::create_source(&connection, payload).map_err(AppError::to_string_error)
 }
 
+/// 测试数据源连接可用性（不写库）。
+#[tauri::command]
+pub async fn test_source_connection(
+    state: State<'_, AppState>,
+    payload: SourceUpsertPayload,
+) -> Result<(), String> {
+    validate_payload(&payload)?;
+    let probe_source = SalesforceSource {
+        id: "probe".to_string(),
+        name: payload.name.clone(),
+        source_type: payload.source_type.clone(),
+        config_json: payload.config_json.clone(),
+        instance_url: payload.instance_url.clone(),
+        access_token: payload.access_token.clone(),
+        api_version: payload.api_version.clone(),
+        created_at: "".to_string(),
+        updated_at: "".to_string(),
+    };
+    let provider =
+        provider_for_source(state.inner(), &probe_source).map_err(AppError::to_string_error)?;
+    provider
+        .test_connection(&probe_source)
+        .await
+        .map_err(AppError::to_string_error)
+}
+
 /// 更新数据源。
 #[tauri::command]
 pub fn update_source(
@@ -669,15 +696,19 @@ pub async fn list_objects(
             .map_err(|error| format!("Database lock failed: {error}"))?;
         db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
     };
+    let provider =
+        provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
 
-    let objects_result = match state.sf_client.list_objects(&source).await {
+    let objects_result = match provider.list_objects(&source).await {
         Ok(items) => Ok(items),
         Err(error) if is_unauthorized_error(&error) && source_id.starts_with("cli-") => {
             let refreshed_source =
                 refresh_cli_source_token(&app, &state, &source_id, "list_objects", None)
                     .await
                     .map_err(AppError::to_string_error)?;
-            state.sf_client.list_objects(&refreshed_source).await
+            let refreshed_provider = provider_for_source(state.inner(), &refreshed_source)
+                .map_err(AppError::to_string_error)?;
+            refreshed_provider.list_objects(&refreshed_source).await
         }
         Err(error) => Err(error),
     };
@@ -890,15 +921,19 @@ pub async fn refresh_objects(
             .map_err(|error| format!("Database lock failed: {error}"))?;
         db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
     };
+    let provider =
+        provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
 
-    let objects_result = match state.sf_client.list_objects(&source).await {
+    let objects_result = match provider.list_objects(&source).await {
         Ok(items) => Ok(items),
         Err(error) if is_unauthorized_error(&error) && source_id.starts_with("cli-") => {
             let refreshed_source =
                 refresh_cli_source_token(&app, &state, &source_id, "refresh_objects", None)
                     .await
                     .map_err(AppError::to_string_error)?;
-            state.sf_client.list_objects(&refreshed_source).await
+            let refreshed_provider = provider_for_source(state.inner(), &refreshed_source)
+                .map_err(AppError::to_string_error)?;
+            refreshed_provider.list_objects(&refreshed_source).await
         }
         Err(error) => Err(error),
     };
@@ -966,8 +1001,12 @@ async fn open_salesforce_page(
     action: &str,
     target: Option<&str>,
 ) -> Result<(), String> {
+    if !source.is_salesforce() {
+        return Err("当前数据源不支持打开 Salesforce 页面。".to_string());
+    }
+    let provider = provider_for_source(state.inner(), source).map_err(AppError::to_string_error)?;
     // 快速校验:通过轻量级 API 请求检测 token 是否仍然有效。
-    let token_valid = state.sf_client.validate_token(source).await;
+    let token_valid = provider.validate_token(source).await;
 
     let effective_source = if token_valid {
         source.clone()
@@ -1163,15 +1202,16 @@ async fn load_object_describe_with_auto_refresh(
     object_name: &str,
     action: &str,
 ) -> Result<ObjectDescribe, AppError> {
-    match state.sf_client.describe_object(source, object_name).await {
+    let provider = provider_for_source(state.inner(), source)?;
+    match provider.describe_object(source, object_name).await {
         Ok(describe) => Ok(describe),
         Err(error) if is_unauthorized_error(&error) && source_id.starts_with("cli-") => {
             let refreshed_source =
                 refresh_cli_source_token(app, state, source_id, action, Some(object_name)).await?;
             // 刷新成功后覆盖当前 source,确保后续父对象 describe 复用最新 token。
             *source = refreshed_source.clone();
-            state
-                .sf_client
+            let refreshed_provider = provider_for_source(state.inner(), &refreshed_source)?;
+            refreshed_provider
                 .describe_object(&refreshed_source, object_name)
                 .await
         }
@@ -1357,9 +1397,10 @@ pub async fn resolve_field_child_relationship_name(
             .map_err(|error| format!("Database lock failed: {error}"))?;
         db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
     };
+    let provider =
+        provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
 
-    let resolve_result = match state
-        .sf_client
+    let resolve_result = match provider
         .resolve_field_child_relationship_name(
             &source,
             &normalized_object_name,
@@ -1378,8 +1419,9 @@ pub async fn resolve_field_child_relationship_name(
             )
             .await
             .map_err(AppError::to_string_error)?;
-            state
-                .sf_client
+            let refreshed_provider = provider_for_source(state.inner(), &refreshed_source)
+                .map_err(AppError::to_string_error)?;
+            refreshed_provider
                 .resolve_field_child_relationship_name(
                     &refreshed_source,
                     &normalized_object_name,
@@ -1436,7 +1478,7 @@ pub async fn query_records(
     soql: String,
 ) -> Result<QueryResult, String> {
     if soql.trim().is_empty() {
-        return Err("SOQL cannot be empty".to_string());
+        return Err("查询语句不能为空".to_string());
     }
 
     let source = {
@@ -1446,16 +1488,19 @@ pub async fn query_records(
             .map_err(|error| format!("Database lock failed: {error}"))?;
         db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
     };
+    let provider =
+        provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
 
-    let query_result = match state.sf_client.query_records(&source, &soql).await {
+    let query_result = match provider.query_records(&source, &soql).await {
         Ok(result) => Ok(result),
         Err(error) if is_unauthorized_error(&error) && source_id.starts_with("cli-") => {
             let refreshed_source =
                 refresh_cli_source_token(&app, &state, &source_id, "query_records", None)
                     .await
                     .map_err(AppError::to_string_error)?;
-            state
-                .sf_client
+            let refreshed_provider = provider_for_source(state.inner(), &refreshed_source)
+                .map_err(AppError::to_string_error)?;
+            refreshed_provider
                 .query_records(&refreshed_source, &soql)
                 .await
         }
@@ -1509,16 +1554,24 @@ pub async fn get_current_user_context(
             .map_err(|error| format!("Database lock failed: {error}"))?;
         db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
     };
+    let provider =
+        provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
 
-    let context_result = match state.sf_client.get_current_user_context(&source).await {
+    let context_result = match provider.get_current_user_context(&source).await {
         Ok(context) => Ok(context),
         Err(error) if is_unauthorized_error(&error) && source_id.starts_with("cli-") => {
-            let refreshed_source =
-                refresh_cli_source_token(&app, &state, &source_id, "get_current_user_context", None)
-                    .await
-                    .map_err(AppError::to_string_error)?;
-            state
-                .sf_client
+            let refreshed_source = refresh_cli_source_token(
+                &app,
+                &state,
+                &source_id,
+                "get_current_user_context",
+                None,
+            )
+            .await
+            .map_err(AppError::to_string_error)?;
+            let refreshed_provider = provider_for_source(state.inner(), &refreshed_source)
+                .map_err(AppError::to_string_error)?;
+            refreshed_provider
                 .get_current_user_context(&refreshed_source)
                 .await
         }
@@ -1576,11 +1629,12 @@ pub async fn create_record(
             .map_err(|error| format!("Database lock failed: {error}"))?;
         db::get_source(&connection, &payload.source_id).map_err(AppError::to_string_error)?
     };
+    let provider =
+        provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
 
     let object_name = payload.object_name.clone();
     let values = payload.values.clone();
-    let create_result = match state
-        .sf_client
+    let create_result = match provider
         .create_record(&source, &object_name, values.clone())
         .await
     {
@@ -1595,8 +1649,9 @@ pub async fn create_record(
             )
             .await
             .map_err(AppError::to_string_error)?;
-            state
-                .sf_client
+            let refreshed_provider = provider_for_source(state.inner(), &refreshed_source)
+                .map_err(AppError::to_string_error)?;
+            refreshed_provider
                 .create_record(&refreshed_source, &object_name, values.clone())
                 .await
         }
@@ -1654,14 +1709,15 @@ pub async fn save_records(
             .map_err(|error| format!("Database lock failed: {error}"))?;
         db::get_source(&connection, &payload.source_id).map_err(AppError::to_string_error)?
     };
+    let provider =
+        provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
 
     let create_count = payload.creates.len();
     let update_count = payload.updates.len();
     let object_name = payload.object_name.clone();
     let creates = payload.creates.clone();
     let updates = payload.updates.clone();
-    let save_result = match state
-        .sf_client
+    let save_result = match provider
         .save_records(&source, &object_name, creates.clone(), updates.clone())
         .await
     {
@@ -1676,8 +1732,9 @@ pub async fn save_records(
             )
             .await
             .map_err(AppError::to_string_error)?;
-            state
-                .sf_client
+            let refreshed_provider = provider_for_source(state.inner(), &refreshed_source)
+                .map_err(AppError::to_string_error)?;
+            refreshed_provider
                 .save_records(
                     &refreshed_source,
                     &object_name,
@@ -1742,9 +1799,10 @@ pub async fn update_record(
             .map_err(|error| format!("Database lock failed: {error}"))?;
         db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
     };
+    let provider =
+        provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
 
-    let update_result = match state
-        .sf_client
+    let update_result = match provider
         .update_record(&source, &object_name, &record_id, values.clone())
         .await
     {
@@ -1759,8 +1817,9 @@ pub async fn update_record(
             )
             .await
             .map_err(AppError::to_string_error)?;
-            state
-                .sf_client
+            let refreshed_provider = provider_for_source(state.inner(), &refreshed_source)
+                .map_err(AppError::to_string_error)?;
+            refreshed_provider
                 .update_record(&refreshed_source, &object_name, &record_id, values.clone())
                 .await
         }
@@ -1816,9 +1875,10 @@ pub async fn delete_record(
             .map_err(|error| format!("Database lock failed: {error}"))?;
         db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
     };
+    let provider =
+        provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
 
-    let delete_result = match state
-        .sf_client
+    let delete_result = match provider
         .delete_record(&source, &object_name, &record_id)
         .await
     {
@@ -1833,8 +1893,9 @@ pub async fn delete_record(
             )
             .await
             .map_err(AppError::to_string_error)?;
-            state
-                .sf_client
+            let refreshed_provider = provider_for_source(state.inner(), &refreshed_source)
+                .map_err(AppError::to_string_error)?;
+            refreshed_provider
                 .delete_record(&refreshed_source, &object_name, &record_id)
                 .await
         }
@@ -1969,17 +2030,45 @@ pub fn save_ui_state(state: State<'_, AppState>, key: String, value: String) -> 
 
 /// 校验数据源写入参数,避免保存明显非法值。
 fn validate_payload(payload: &SourceUpsertPayload) -> Result<(), String> {
+    let source_type = payload.source_type.trim().to_lowercase();
     if payload.name.trim().is_empty() {
         return Err("Source name cannot be empty".to_string());
     }
-    if payload.instance_url.trim().is_empty() {
-        return Err("Instance URL cannot be empty".to_string());
+    if source_type == "salesforce" {
+        if payload.instance_url.trim().is_empty() {
+            return Err("Instance URL cannot be empty".to_string());
+        }
+        if payload.access_token.trim().is_empty() {
+            return Err("Access token cannot be empty".to_string());
+        }
+        if !payload.api_version.starts_with('v') {
+            return Err("API version must start with v, e.g. v61.0".to_string());
+        }
+        return Ok(());
     }
-    if payload.access_token.trim().is_empty() {
-        return Err("Access token cannot be empty".to_string());
+    if source_type == "mysql" {
+        let host = payload
+            .config_json
+            .get("host")
+            .and_then(|item| item.as_str())
+            .unwrap_or("")
+            .trim();
+        let database = payload
+            .config_json
+            .get("database")
+            .and_then(|item| item.as_str())
+            .unwrap_or("")
+            .trim();
+        let username = payload
+            .config_json
+            .get("username")
+            .and_then(|item| item.as_str())
+            .unwrap_or("")
+            .trim();
+        if host.is_empty() || database.is_empty() || username.is_empty() {
+            return Err("MySQL config 缺少必填项：host/database/username".to_string());
+        }
+        return Ok(());
     }
-    if !payload.api_version.starts_with('v') {
-        return Err("API version must start with v, e.g. v61.0".to_string());
-    }
-    Ok(())
+    return Err(format!("当前版本不支持该数据源类型: {source_type}"));
 }

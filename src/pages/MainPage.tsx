@@ -61,6 +61,13 @@ export function MainPage() {
   const { data: sources = [], isFetching: sourcesFetching } = useSourcesQuery();
   const { data: objects = [], isFetching: objectsFetching, error: objectsError } = useObjectsQuery(selectedSourceId);
   const syncSourcesMutation = useSyncSourcesMutation();
+  // 当前选中数据源：用于按 sourceType 切换 SQL/SOQL 行为。
+  const selectedSource = useMemo(
+    () => sources.find((source) => source.id === selectedSourceId) || null,
+    [sources, selectedSourceId]
+  );
+  // 查询语言标签：MySQL 显示 SQL，其它默认 SOQL。
+  const queryLanguageLabel = (selectedSource?.sourceType || "salesforce").toLowerCase() === "mysql" ? "SQL" : "SOQL";
 
   // 当前激活的 Tab。
   const activeTab = useMemo(
@@ -522,6 +529,7 @@ export function MainPage() {
       limit: 200,
       sortField: "",
       sortDirection: "DESC",
+      sortClause: "",
       selectedRecordIds: [],
       // 待删除记录：仅做前端标记，执行更新时统一提交。
       pendingDeleteRecordIds: [],
@@ -570,7 +578,8 @@ export function MainPage() {
     whereOverride?: string,
     sortFieldOverride?: string,
     limitOverride?: number,
-    directionOverride?: "ASC" | "DESC"
+    directionOverride?: "ASC" | "DESC",
+    sortClauseOverride?: string
   ) {
     if (!selectedSourceId) return;
     const tab = tabs.find((item) => item.objectName === objectName);
@@ -581,11 +590,13 @@ export function MainPage() {
 
     const whereClause = (whereOverride ?? tab?.whereClause ?? "").trim();
     const limit = Math.max(1, Math.min(2000, limitOverride ?? tab?.limit ?? 200));
+    const normalizedType = (selectedSource?.sourceType || "salesforce").toLowerCase();
     const sortableFieldSet = new Set(getSortableFieldNames(describe));
     const rawSortField = (sortFieldOverride ?? tab?.sortField ?? "").trim();
     // 排序字段兜底：仅允许使用字段元数据中 sortable=true 的字段，否则视为“不排序”。
     const sortField = sortableFieldSet.has(rawSortField) ? rawSortField : "";
     const sortDirection = directionOverride ?? tab?.sortDirection ?? "DESC";
+    const sortClause = (sortClauseOverride ?? tab?.sortClause ?? "").trim();
     const visibility = tab?.columnVisibility ?? {};
     const selectedFields = describe.fields
       .map((field) => field.name)
@@ -600,10 +611,27 @@ export function MainPage() {
       return;
     }
 
-    patchTab(objectName, (item) => ({ ...item, loading: true, whereClause, limit, sortField, sortDirection }));
+    patchTab(objectName, (item) => ({
+      ...item,
+      loading: true,
+      whereClause,
+      limit,
+      sortField,
+      sortDirection,
+      sortClause
+    }));
 
     try {
-      const soql = buildQuerySoql(objectName, selectedFields, whereClause, sortField, sortDirection, limit);
+      const soql = buildQueryStatement(
+        normalizedType,
+        objectName,
+        selectedFields,
+        whereClause,
+        sortField,
+        sortDirection,
+        limit,
+        sortClause
+      );
       const rawResult = await api.queryRecords(selectedSourceId, soql);
       const result = normalizeQueryResult(rawResult);
 
@@ -634,7 +662,9 @@ export function MainPage() {
       appendTabLog(objectName, {
         action: "QUERY",
         success: false,
-        request: `object=${objectName}, where=${whereClause}, sort=${sortField ? `${sortField} ${sortDirection}` : "无排序"}, limit=${limit}`,
+        request: `object=${objectName}, where=${whereClause}, sort=${
+          normalizedType === "mysql" ? (sortClause || "无排序") : sortField ? `${sortField} ${sortDirection}` : "无排序"
+        }, limit=${limit}`,
         summary: "查询失败。",
         errorMessage: String(error)
       });
@@ -669,9 +699,11 @@ export function MainPage() {
 
       const whereClause = (freshTab.whereClause ?? "").trim();
       const limit = Math.max(1, Math.min(2000, freshTab.limit ?? 200));
+      const normalizedType = (selectedSource?.sourceType || "salesforce").toLowerCase();
       const sortableFieldSet = new Set(getSortableFieldNames(describe));
       const sortField = sortableFieldSet.has(freshTab.sortField) ? freshTab.sortField : "";
       const sortDirection = freshTab.sortDirection ?? "DESC";
+      const sortClause = (freshTab.sortClause ?? "").trim();
       const selectedFields = describe.fields
         .map((field) => field.name)
         .filter((name) => (visibility[name] ?? true) === true);
@@ -685,8 +717,17 @@ export function MainPage() {
         return;
       }
 
-      // 5. 构建并执行 SOQL 查询。
-      const soql = buildQuerySoql(tab.objectName, selectedFields, whereClause, sortField, sortDirection, limit);
+      // 5. 构建并执行查询语句（按 sourceType 选择 SQL/SOQL）。
+      const soql = buildQueryStatement(
+        normalizedType,
+        tab.objectName,
+        selectedFields,
+        whereClause,
+        sortField,
+        sortDirection,
+        limit,
+        sortClause
+      );
       const rawResult = await api.queryRecords(sourceId, soql);
       const result = normalizeQueryResult(rawResult);
 
@@ -780,7 +821,7 @@ export function MainPage() {
   async function executeCustomSoql() {
     if (!selectedSourceId || !activeTab) return;
     if (!activeTab.soqlDraft.trim()) {
-      patchTab(activeTab.objectName, (item) => ({ ...item, notice: { type: "error", message: "SOQL 不能为空。" } }));
+      patchTab(activeTab.objectName, (item) => ({ ...item, notice: { type: "error", message: `${queryLanguageLabel} 不能为空。` } }));
       return;
     }
 
@@ -801,26 +842,26 @@ export function MainPage() {
         dirtyCellKeys: [],
         baselineRecords: buildBaselineRecords(result.records),
         whereClause: extractWhereClause(activeTab.soqlDraft, activeTab.objectName) ?? item.whereClause,
-        notice: { type: "success", message: `${activeTab.objectName} 执行 SOQL 成功，共 ${result.totalSize} 条。` }
+        notice: { type: "success", message: `${activeTab.objectName} 执行${queryLanguageLabel}成功，共 ${result.totalSize} 条。` }
       }));
       appendTabLog(activeTab.objectName, {
         action: "SOQL",
         success: true,
         request: activeTab.soqlDraft,
-        summary: `执行成功，返回 ${result.totalSize} 条。`
+        summary: `执行${queryLanguageLabel}成功，返回 ${result.totalSize} 条。`
       });
       await persistColumnVisibility(selectedSourceId, activeTab.objectName, nextVisibility);
     } catch (error) {
       patchTab(activeTab.objectName, (item) => ({
         ...item,
         loading: false,
-        notice: { type: "error", message: `执行 SOQL 失败：${String(error)}` }
+        notice: { type: "error", message: `执行${queryLanguageLabel}失败：${String(error)}` }
       }));
       appendTabLog(activeTab.objectName, {
         action: "SOQL",
         success: false,
         request: activeTab.soqlDraft,
-        summary: "执行 SOQL 失败。",
+        summary: `执行${queryLanguageLabel}失败。`,
         errorMessage: String(error)
       });
     }
@@ -878,12 +919,21 @@ export function MainPage() {
     if (!selectedSourceId || !activeTab || !activeTab.describe) return;
     if (!hasPendingChanges(activeTab)) return;
 
+    // 数据源类型分支：MySQL 使用同一 saveRecords 事务提交新增+更新，但需额外校验主键可用性。
+    const isMysqlSource = (selectedSource?.sourceType || "salesforce").toLowerCase() === "mysql";
     const editableFields = new Set(activeTab.describe.fields.map((field) => field.name));
+    // MySQL 主键字段名：用于查询结果未回填 Id 时的兜底定位。
+    const mysqlPrimaryKeyField = isMysqlSource
+      ? activeTab.describe.fields.find(
+          (field) => String(field.metadata?.columnKey || "").toUpperCase() === "PRI"
+        )?.name || ""
+      : "";
     const dirtyCellSet = new Set(activeTab.dirtyCellKeys);
     const pendingDeleteSet = new Set(activeTab.pendingDeleteRecordIds);
     const creates: Record<string, unknown>[] = [];
     const updates: { recordId: string; values: Record<string, unknown> }[] = [];
     const deletes: string[] = [];
+    const missingRecordIdRows: number[] = [];
 
     patchTab(activeTab.objectName, (item) => ({ ...item, loading: true }));
     try {
@@ -899,15 +949,10 @@ export function MainPage() {
             if (raw === null || raw === undefined || String(raw).trim() === "") return;
             values[field] = raw;
           });
-          creates.push(values);
-          continue;
-        }
-
-        const recordId = String(record.Id ?? "");
-        if (!recordId) continue;
-        if (pendingDeleteSet.has(recordId)) {
-          // 已标记待删除的记录不再参与更新，只在删除阶段提交。
-          deletes.push(recordId);
+          // 空新增行不提交，避免后端报“新增记录字段不能为空”导致整批事务失败。
+          if (Object.keys(values).length > 0) {
+            creates.push(values);
+          }
           continue;
         }
 
@@ -921,12 +966,36 @@ export function MainPage() {
           values[field] = record[field];
         });
 
+        // 更新目标记录 ID：优先使用统一 Id，MySQL 下兜底使用主键列值。
+        const recordIdRaw =
+          record.Id ?? (isMysqlSource && mysqlPrimaryKeyField ? record[mysqlPrimaryKeyField] : undefined);
+        const recordId = recordIdRaw === null || recordIdRaw === undefined ? "" : String(recordIdRaw).trim();
+        if (!recordId) {
+          // MySQL 更新必须依赖主键 Id，若编辑了数据但没有 Id，直接阻断并提示。
+          if (isMysqlSource && Object.keys(values).length > 0) {
+            missingRecordIdRows.push(rowIndex + 1);
+          }
+          continue;
+        }
+        if (pendingDeleteSet.has(recordId)) {
+          // 已标记待删除的记录不再参与更新，只在删除阶段提交。
+          deletes.push(recordId);
+          continue;
+        }
+
         if (Object.keys(values).length > 0) {
           updates.push({ recordId, values });
         }
       }
 
+      if (missingRecordIdRows.length > 0) {
+        throw new Error(
+          `MySQL 更新失败：存在已编辑但缺少 Id 的行（第 ${missingRecordIdRows.join("、")} 行）。请确保查询结果包含主键列。`
+        );
+      }
+
       if (creates.length > 0 || updates.length > 0) {
+        // 批量保存入口：MySQL Provider 内部会在一个事务中执行 INSERT + UPDATE。
         await api.saveRecords({
           sourceId: selectedSourceId,
           objectName: activeTab.objectName,
@@ -1077,7 +1146,14 @@ export function MainPage() {
   const loadingText = tokenRefreshing ? "重新获取认证凭证中..." : "Loading...";
   const fieldMetadataMap = activeTab
     ? activeTab.describe?.fields.reduce(
-        (acc, field) => ({ ...acc, [field.name]: field.metadata || {} }),
+        (acc, field) => ({
+          ...acc,
+          [field.name]: {
+            ...(field.metadata || {}),
+            // 补齐统一 type：让 DataGrid 类型策略可识别 MySQL/Salesforce 字段类型。
+            type: field.dataType || (field.metadata?.type as string) || ""
+          }
+        }),
         {} as Record<string, Record<string, unknown>>
       ) || {}
     : {};
@@ -1135,6 +1211,7 @@ export function MainPage() {
                 <div className="flex min-h-0 min-w-0 flex-col overflow-hidden">
                   <RightWorkspace
                     selectedSourceId={selectedSourceId}
+                    selectedSourceType={selectedSource?.sourceType || "salesforce"}
                     salesforceTimezone={salesforceTimezone}
                     tabs={tabs}
                     activeTabObjectName={activeTabObjectName}
@@ -1180,6 +1257,10 @@ export function MainPage() {
                       if (!activeTab) return;
                       patchTab(activeTab.objectName, (item) => ({ ...item, sortDirection: value }));
                     }}
+                    onSortClauseChange={(value) => {
+                      if (!activeTab) return;
+                      patchTab(activeTab.objectName, (item) => ({ ...item, sortClause: value }));
+                    }}
                     onQuery={() => {
                       if (!activeTab) return;
                       void queryTabData(
@@ -1188,7 +1269,8 @@ export function MainPage() {
                         activeTab.whereClause,
                         activeTab.sortField,
                         activeTab.limit,
-                        activeTab.sortDirection
+                        activeTab.sortDirection,
+                        activeTab.sortClause
                       );
                     }}
                     onToggleRecord={(recordId, checked) => {
@@ -1320,6 +1402,7 @@ export function MainPage() {
               <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
                 <SoqlExecutorWorkspace
                   selectedSourceId={selectedSourceId}
+                  selectedSourceType={selectedSource?.sourceType || "salesforce"}
                   salesforceTimezone={salesforceTimezone}
                   loadingText={loadingText}
                   objects={objects}
@@ -1452,6 +1535,24 @@ function extractWhereClause(soql: string, objectName: string): string | null {
   return whereMatch[1].trim();
 }
 
+// 构建标准查询语句：按 sourceType 生成 SQL 或 SOQL。
+function buildQueryStatement(
+  sourceType: string,
+  objectName: string,
+  selectedFields: string[],
+  whereClause: string,
+  sortField: string,
+  sortDirection: "ASC" | "DESC",
+  limit: number,
+  sortClause: string
+): string {
+  const normalizedType = (sourceType || "salesforce").toLowerCase();
+  if (normalizedType === "mysql") {
+    return buildQuerySql(objectName, selectedFields, whereClause, sortClause, limit);
+  }
+  return buildQuerySoql(objectName, selectedFields, whereClause, sortField, sortDirection, limit);
+}
+
 // 构建标准 SOQL 查询语句。
 function buildQuerySoql(
   objectName: string,
@@ -1467,6 +1568,24 @@ function buildQuerySoql(
   const whereSegment = whereClause.trim() ? `\nWHERE ${whereClause.trim()}` : "";
   // 当排序字段为空时，明确不拼接 ORDER BY，避免生成无效 SOQL。
   const orderBySegment = sortField.trim() ? `\nORDER BY ${sortField} ${sortDirection}` : "";
+  return `SELECT\n${selectFieldsSegment}\nFROM ${objectName}${whereSegment}${orderBySegment}\nLIMIT ${limit}`;
+}
+
+// 构建标准 SQL 查询语句（MySQL）。
+function buildQuerySql(
+  objectName: string,
+  selectedFields: string[],
+  whereClause: string,
+  sortClause: string,
+  limit: number
+): string {
+  const fields = selectedFields.length > 0 ? selectedFields : ["Id"];
+  // SELECT 字段逐行展开：统一多行风格，便于用户快速审阅。
+  const selectFieldsSegment = fields.map((field, index) => `  ${field}${index < fields.length - 1 ? "," : ""}`).join("\n");
+  const whereSegment = whereClause.trim() ? `\nWHERE ${whereClause.trim()}` : "";
+  // MySQL 排序支持手动表达式输入，允许多字段/函数排序。
+  const normalizedSortClause = sortClause.trim().replace(/^order\s+by\s+/i, "");
+  const orderBySegment = normalizedSortClause ? `\nORDER BY ${normalizedSortClause}` : "";
   return `SELECT\n${selectFieldsSegment}\nFROM ${objectName}${whereSegment}${orderBySegment}\nLIMIT ${limit}`;
 }
 
@@ -1588,11 +1707,14 @@ function isGithubVersionNewer(currentVersion: string, latestVersion: string): bo
 
 // 比较两个语义版本：返回 1 表示 left 更新，-1 表示 right 更新，0 表示相等。
 function compareSemanticVersion(leftVersion: string, rightVersion: string): number {
-  const left = parseSemanticVersion(leftVersion);
-  const right = parseSemanticVersion(rightVersion);
+  // 比较前统一忽略版本号前缀 `v/V`，避免 `v1.2.3` 与 `1.2.3` 被误判为不相等。
+  const normalizedLeftVersion = leftVersion.trim().replace(/^[vV]/, "");
+  const normalizedRightVersion = rightVersion.trim().replace(/^[vV]/, "");
+  const left = parseSemanticVersion(normalizedLeftVersion);
+  const right = parseSemanticVersion(normalizedRightVersion);
   if (!left || !right) {
     // 兜底比较：非标准版本格式时使用带数字感知的字符串比较。
-    return leftVersion.localeCompare(rightVersion, undefined, { numeric: true, sensitivity: "base" });
+    return normalizedLeftVersion.localeCompare(normalizedRightVersion, undefined, { numeric: true, sensitivity: "base" });
   }
 
   const compareLength = Math.max(left.coreParts.length, right.coreParts.length);

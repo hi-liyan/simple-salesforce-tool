@@ -12,6 +12,9 @@ use std::time::{Duration, Instant};
 use crate::error::AppError;
 use crate::models::{CliPathProbe, CliPathSettings, CliPathStatus, SourceUpsertPayload};
 
+/// Salesforce CLI 默认 OAuth 本地回调端口。
+const SF_OAUTH_LOCAL_PORT: u16 = 1717;
+
 /// 创建子进程命令：Windows 下统一隐藏控制台窗口，避免安装版弹出终端。
 fn build_hidden_command(program: &str) -> Command {
     let mut command = Command::new(program);
@@ -98,6 +101,8 @@ pub fn load_cli_sources(preferred_cli_path: Option<&str>) -> Result<Vec<CliSourc
             id: format!("cli-{}", org.org_id),
             payload: SourceUpsertPayload {
                 name: display_name,
+                source_type: "salesforce".to_string(),
+                config_json: serde_json::json!({}),
                 instance_url: org.instance_url,
                 access_token: org.access_token,
                 // CLI 输出不稳定包含 API 版本，因此使用稳定默认值。
@@ -202,6 +207,8 @@ pub fn refresh_cli_source_by_id(
         id: format!("cli-{next_org_id}"),
         payload: SourceUpsertPayload {
             name: display_name,
+            source_type: "salesforce".to_string(),
+            config_json: serde_json::json!({}),
             instance_url,
             access_token,
             api_version,
@@ -321,6 +328,8 @@ fn run_sf_login_web_json(
     cancel_token: &Arc<AtomicBool>,
     preferred_cli_path: Option<&str>,
 ) -> Result<Vec<u8>, AppError> {
+    // 跨平台尝试清理 OAuth 回调端口占用，减少中断登录后端口残留导致的重试失败。
+    cleanup_oauth_redirect_port();
     // Windows 下先清理一次残留 CLI 进程，避免上次中断登录后进程树残留影响本次登录。
     cleanup_stale_cli_processes();
 
@@ -346,10 +355,17 @@ fn run_sf_login_web_json(
         }
     }
 
+    let detail = errors.join(" | ");
+    if is_oauth_port_in_use_error(&detail) {
+        return Err(AppError::Biz(
+            "1717 被占用，请关闭占用进程后重试".to_string(),
+        ));
+    }
+
     Err(AppError::Biz(format!(
         "调用 Salesforce CLI 登录失败。已尝试: {}。可设置环境变量 SF_CLI_PATH 指向 sf/sfdx 可执行文件。详情: {}",
         candidates.join(", "),
-        errors.join(" | ")
+        detail
     )))
 }
 
@@ -450,6 +466,83 @@ fn cleanup_stale_cli_processes() {
             .stderr(Stdio::null())
             .status();
     }
+}
+
+/// 清理 OAuth 本地回调端口占用（best-effort，不影响主流程）。
+fn cleanup_oauth_redirect_port() {
+    if cfg!(target_os = "windows") {
+        cleanup_oauth_redirect_port_windows();
+    } else {
+        cleanup_oauth_redirect_port_unix();
+    }
+}
+
+/// Windows：通过 netstat 找到占用 1717 端口的 PID 后执行 taskkill。
+fn cleanup_oauth_redirect_port_windows() {
+    let output = match build_hidden_command("netstat")
+        .args(["-ano", "-p", "tcp"])
+        .output()
+    {
+        Ok(item) => item,
+        Err(_) => return,
+    };
+    let text = String::from_utf8_lossy(&output.stdout);
+    let target_suffix = format!(":{SF_OAUTH_LOCAL_PORT}");
+    let mut pids = Vec::new();
+
+    for line in text.lines() {
+        let columns = line.split_whitespace().collect::<Vec<_>>();
+        if columns.len() < 5 {
+            continue;
+        }
+        let local_addr = columns[1];
+        let pid = columns[columns.len() - 1];
+        if !local_addr.ends_with(&target_suffix) {
+            continue;
+        }
+        if pid.chars().all(|item| item.is_ascii_digit()) && !pids.iter().any(|item| item == pid) {
+            pids.push(pid.to_string());
+        }
+    }
+
+    for pid in pids {
+        let _ = build_hidden_command("taskkill")
+            .args(["/F", "/T", "/PID", pid.as_str()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+}
+
+/// Unix：通过 lsof 找到占用 1717 监听端口的 PID 后执行 kill -9。
+fn cleanup_oauth_redirect_port_unix() {
+    let port = SF_OAUTH_LOCAL_PORT.to_string();
+    let output = match build_hidden_command("lsof")
+        .args(["-t", "-iTCP", port.as_str(), "-sTCP:LISTEN"])
+        .output()
+    {
+        Ok(item) => item,
+        Err(_) => return,
+    };
+    let text = String::from_utf8_lossy(&output.stdout);
+    for pid in text.lines().map(str::trim).filter(|item| !item.is_empty()) {
+        if !pid.chars().all(|item| item.is_ascii_digit()) {
+            continue;
+        }
+        let _ = build_hidden_command("kill")
+            .args(["-9", pid])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+}
+
+/// 判断是否为 OAuth 回调端口被占用导致的登录失败。
+fn is_oauth_port_in_use_error(detail: &str) -> bool {
+    let text = detail.to_ascii_lowercase();
+    text.contains("cannot start the oauth redirect server on port 1717")
+        || text.contains("portinuseerror")
+        || (text.contains("port 1717") && text.contains("oauth"))
 }
 
 fn login_args_for(cli: &str, instance_url: &str) -> Vec<String> {
