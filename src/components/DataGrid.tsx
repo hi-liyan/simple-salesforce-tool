@@ -240,6 +240,22 @@ export function DataGrid({
       };
     }
 
+    if (isPicklistType(fieldType)) {
+      const options = getPicklistEditorOptions(metadata);
+      const value = normalizePicklistValue(raw);
+      const displayText = resolvePicklistDisplayText(value, options);
+      return {
+        kind: GridCellKind.Text,
+        // picklist 单元格保留 value 作为真实值，提交时按 value/null 写回后端。
+        data: value,
+        // 单元格显示统一改为 label，满足数据库工具预期阅读体验。
+        displayData: displayText,
+        allowOverlay: editable,
+        readonly: !editable,
+        themeOverride: commonTheme
+      };
+    }
+
     const text = stringifyCellValue(raw);
     return {
       kind: GridCellKind.Text,
@@ -278,10 +294,14 @@ export function DataGrid({
     }
 
     if (isPicklistType(fieldType)) {
-      const options = getPicklistOptions(metadata);
+      const options = getPicklistEditorOptions(metadata);
       const nextText = extractEditableString(newValue);
       if (!options.some((item) => item.value === nextText)) {
         onShowMessage(`${columnId} 字段只能选择预设选项。`);
+        return;
+      }
+      if (nextText === PICKLIST_NONE_VALUE && isPicklistNullable(metadata)) {
+        onEditCell(row, columnId, null);
         return;
       }
       onEditCell(row, columnId, nextText);
@@ -330,7 +350,7 @@ export function DataGrid({
     }
 
     if (isPicklistType(fieldType)) {
-      const options = getPicklistOptions(metadata);
+      const options = getPicklistEditorOptions(metadata);
       if (options.length === 0) {
         onShowMessage(`${columnId} 字段未配置可选值。`);
       }
@@ -470,7 +490,7 @@ export function DataGrid({
             const fieldType = getFieldType(metadata);
             let options: { label: string; value: string }[] = [];
             if (isPicklistType(fieldType)) {
-              options = getPicklistOptions(metadata);
+              options = getPicklistEditorOptions(metadata);
             } else if (isBooleanType(fieldType)) {
               options = [
                 { label: "true", value: "true" },
@@ -499,10 +519,11 @@ export function DataGrid({
                     onBlur={() => props.onFinishedEditing(undefined, [0, 0])}
                     onChange={(event) => {
                       const next = String(event.target.value);
+                      const displayText = resolvePicklistDisplayText(next, options);
                       const nextCell: TextCell = {
                         ...textValue,
                         data: next,
-                        displayData: next
+                        displayData: displayText
                       };
                       props.onChange(nextCell);
                       props.onFinishedEditing(nextCell, [0, 0]);
@@ -907,6 +928,34 @@ function getPicklistOptions(metadata: Record<string, unknown>): { label: string;
       return { label, value };
     })
     .filter((item): item is { label: string; value: string } => Boolean(item));
+}
+
+const PICKLIST_NONE_VALUE = "";
+const PICKLIST_NONE_LABEL = "-- None --";
+
+// 判断 picklist 字段是否允许为空。
+function isPicklistNullable(metadata: Record<string, unknown>): boolean {
+  return metadata.nillable === true;
+}
+
+// picklist 编辑器选项：可空字段在首位注入“-- None --”。
+function getPicklistEditorOptions(metadata: Record<string, unknown>): { label: string; value: string }[] {
+  const options = getPicklistOptions(metadata);
+  if (!isPicklistNullable(metadata)) return options;
+  return [{ label: PICKLIST_NONE_LABEL, value: PICKLIST_NONE_VALUE }, ...options];
+}
+
+// 统一 picklist 单元格值为字符串，null/undefined 视为空值。
+function normalizePicklistValue(value: unknown): string {
+  if (value === null || value === undefined) return PICKLIST_NONE_VALUE;
+  return String(value);
+}
+
+// 按 value 找到可读 label；若未匹配则回退显示原值。
+function resolvePicklistDisplayText(raw: string, options: { label: string; value: string }[]): string {
+  const matched = options.find((item) => item.value === raw);
+  if (matched) return matched.label;
+  return raw;
 }
 
 // 布尔值统一转换为编辑器可识别文本。
