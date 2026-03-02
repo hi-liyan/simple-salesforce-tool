@@ -1,4 +1,4 @@
-import { ExternalLink, RefreshCw, Save, Search, Trash2 } from "lucide-react";
+import { Cog, ExternalLink, RefreshCw, Save, Search, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { api } from "../../api";
@@ -43,6 +43,26 @@ export function SettingsPanel() {
   const [sources, setSources] = useState<SalesforceSource[]>([]);
   // 数据源加载状态：用于刷新按钮与加载提示。
   const [sourcesLoading, setSourcesLoading] = useState(false);
+  // MySQL 编辑弹窗开关：仅用于设置页编辑现有 MySQL 数据源。
+  const [showMySqlEditModal, setShowMySqlEditModal] = useState(false);
+  // 当前正在编辑的 MySQL 数据源。
+  const [editingMySqlSource, setEditingMySqlSource] = useState<SalesforceSource | null>(null);
+  // MySQL 编辑表单状态。
+  const [mySqlEditForm, setMySqlEditForm] = useState({
+    name: "",
+    host: "",
+    port: 3306,
+    database: "",
+    username: "",
+    password: "",
+    primaryKey: ""
+  });
+  // MySQL 编辑弹窗提示文本（测试连接结果/保存失败等）。
+  const [mySqlEditMessage, setMySqlEditMessage] = useState("");
+  // MySQL 编辑提交中状态。
+  const [mySqlEditSubmitting, setMySqlEditSubmitting] = useState(false);
+  // MySQL 测试连接中状态。
+  const [mySqlEditTesting, setMySqlEditTesting] = useState(false);
   // 反馈提交中状态：用于避免重复点击并反馈按钮处理中。
   const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
 
@@ -81,6 +101,105 @@ export function SettingsPanel() {
       setError(String(loadError));
     } finally {
       setSourcesLoading(false);
+    }
+  }
+
+  // 将数据源类型归一化为徽标文本。
+  function getSourceTypeBadge(sourceType: string | undefined): string {
+    const normalizedType = (sourceType || "salesforce").toLowerCase();
+    if (normalizedType === "mysql") {
+      return "MySQL";
+    }
+    return "SF";
+  }
+
+  // 生成数据源徽标样式：不同类型使用不同强调色。
+  function getSourceBadgeClassName(sourceType: string | undefined): string {
+    const normalizedType = (sourceType || "salesforce").toLowerCase();
+    if (normalizedType === "mysql") {
+      return "border border-amber-300 bg-amber-100 text-amber-700";
+    }
+    return "border border-sky-300 bg-sky-100 text-sky-700";
+  }
+
+  // 打开 MySQL 编辑弹窗：从 source.configJson 回填表单。
+  function openMySqlEditModal(source: SalesforceSource) {
+    const rawConfig = (source.configJson || {}) as Record<string, unknown>;
+    const host = String(rawConfig.host || "");
+    const port = Number(rawConfig.port || 3306);
+    const database = String(rawConfig.database || "");
+    const username = String(rawConfig.username || "");
+    const password = String(rawConfig.password || "");
+    const primaryKey = String(rawConfig.primaryKey || "");
+    setEditingMySqlSource(source);
+    setMySqlEditForm({
+      name: source.name || "",
+      host,
+      port: Number.isFinite(port) && port > 0 ? port : 3306,
+      database,
+      username,
+      password,
+      primaryKey
+    });
+    setMySqlEditMessage("");
+    setShowMySqlEditModal(true);
+  }
+
+  // 关闭 MySQL 编辑弹窗并清理状态。
+  function closeMySqlEditModal() {
+    setShowMySqlEditModal(false);
+    setEditingMySqlSource(null);
+    setMySqlEditMessage("");
+  }
+
+  // 构建 MySQL 更新 payload：用于测试连接与保存。
+  function buildMySqlPayloadFromEditForm() {
+    const primaryKey = mySqlEditForm.primaryKey.trim();
+    const normalizedPort = Number(mySqlEditForm.port) || 3306;
+    return {
+      name: mySqlEditForm.name.trim(),
+      sourceType: "mysql",
+      configJson: {
+        host: mySqlEditForm.host.trim(),
+        port: normalizedPort,
+        database: mySqlEditForm.database.trim(),
+        username: mySqlEditForm.username.trim(),
+        password: mySqlEditForm.password,
+        ...(primaryKey ? { primaryKey } : {})
+      },
+      instanceUrl: `mysql://${mySqlEditForm.host.trim()}:${normalizedPort}/${mySqlEditForm.database.trim()}`,
+      accessToken: "",
+      apiVersion: "mysql"
+    };
+  }
+
+  // 测试当前 MySQL 编辑表单连接。
+  async function testMySqlEditConnection() {
+    setMySqlEditMessage("");
+    setMySqlEditTesting(true);
+    try {
+      await api.testSourceConnection(buildMySqlPayloadFromEditForm());
+      setMySqlEditMessage("MySQL 连接测试成功。");
+    } catch (testError) {
+      setMySqlEditMessage(`MySQL 连接测试失败：${String(testError)}`);
+    } finally {
+      setMySqlEditTesting(false);
+    }
+  }
+
+  // 保存 MySQL 数据源编辑结果。
+  async function saveMySqlEditSource() {
+    if (!editingMySqlSource) return;
+    setMySqlEditMessage("");
+    setMySqlEditSubmitting(true);
+    try {
+      await api.updateSource(editingMySqlSource.id, buildMySqlPayloadFromEditForm());
+      await loadSources(); // 保存后立即刷新设置页列表，保持展示一致。
+      closeMySqlEditModal();
+    } catch (saveError) {
+      setMySqlEditMessage(`更新 MySQL 数据源失败：${String(saveError)}`);
+    } finally {
+      setMySqlEditSubmitting(false);
     }
   }
 
@@ -429,8 +548,30 @@ export function SettingsPanel() {
               {!sourcesLoading &&
                 sources.map((item) => (
                   <div key={item.id} className="rounded border border-base-300 bg-base-100 p-3 text-[12px]">
-                    <div className="mb-2 border-b border-base-300 pb-2">
-                      <p className="text-[13px] font-semibold">{item.name || "-"}</p>
+                    <div className="mb-2 flex items-start justify-between gap-2 border-b border-base-300 pb-2">
+                      {/* 卡片标题区：增加数据源类型徽标。 */}
+                      <div className="min-w-0">
+                        <p className="flex items-center gap-2 text-[13px] font-semibold">
+                          <span
+                            className={`inline-flex min-w-[52px] items-center justify-center rounded px-1.5 py-[1px] text-[10px] font-semibold ${getSourceBadgeClassName(item.sourceType)}`}
+                          >
+                            {getSourceTypeBadge(item.sourceType)}
+                          </span>
+                          <span className="truncate">{item.name || "-"}</span>
+                        </p>
+                      </div>
+                      {/* MySQL 专属齿轮按钮：点击打开编辑模态框。 */}
+                      {(item.sourceType || "salesforce").toLowerCase() === "mysql" && (
+                        <button
+                          className="btn btn-ghost btn-xs"
+                          aria-label="编辑 MySQL 数据源"
+                          onClick={() => openMySqlEditModal(item)}
+                        >
+                          <Cog size={14} />
+                        </button>
+                      )}
+                    </div>
+                    <div className="mb-2">
                       <p className="mt-1 text-neutral/70">ID: {item.id}</p>
                     </div>
                     <div className="space-y-1 break-all">
@@ -490,6 +631,98 @@ export function SettingsPanel() {
           </div>
         )}
       </div>
+
+      {/* MySQL 编辑弹窗：仅在设置页用于编辑已存在的 MySQL 数据源。 */}
+      {showMySqlEditModal && (
+        <div className="modal modal-open">
+          <div className="modal-box">
+            {/* 弹窗标题。 */}
+            <h3 className="text-base font-semibold">编辑 MySQL 数据源</h3>
+            {/* MySQL 配置表单。 */}
+            <div className="mt-3 space-y-2">
+              <input
+                className="input input-bordered input-sm w-full"
+                placeholder="数据源名称"
+                value={mySqlEditForm.name}
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
+                onChange={(event) => setMySqlEditForm((state) => ({ ...state, name: event.target.value }))}
+              />
+              <input
+                className="input input-bordered input-sm w-full"
+                placeholder="Host"
+                value={mySqlEditForm.host}
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
+                onChange={(event) => setMySqlEditForm((state) => ({ ...state, host: event.target.value }))}
+              />
+              <input
+                className="input input-bordered input-sm w-full"
+                placeholder="Port"
+                type="number"
+                value={String(mySqlEditForm.port)}
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
+                onChange={(event) => setMySqlEditForm((state) => ({ ...state, port: Number(event.target.value || 3306) }))}
+              />
+              <input
+                className="input input-bordered input-sm w-full"
+                placeholder="Database"
+                value={mySqlEditForm.database}
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
+                onChange={(event) => setMySqlEditForm((state) => ({ ...state, database: event.target.value }))}
+              />
+              <input
+                className="input input-bordered input-sm w-full"
+                placeholder="Username"
+                value={mySqlEditForm.username}
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
+                onChange={(event) => setMySqlEditForm((state) => ({ ...state, username: event.target.value }))}
+              />
+              <input
+                className="input input-bordered input-sm w-full"
+                placeholder="Password"
+                type="password"
+                value={mySqlEditForm.password}
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
+                onChange={(event) => setMySqlEditForm((state) => ({ ...state, password: event.target.value }))}
+              />
+              <input
+                className="input input-bordered input-sm w-full"
+                placeholder="Primary Key（可选，默认自动检测）"
+                value={mySqlEditForm.primaryKey}
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
+                onChange={(event) => setMySqlEditForm((state) => ({ ...state, primaryKey: event.target.value }))}
+              />
+            </div>
+            {/* 编辑结果提示。 */}
+            {mySqlEditMessage && <p className="mt-3 text-xs text-neutral/70">{mySqlEditMessage}</p>}
+            {/* 底部操作按钮。 */}
+            <div className="modal-action">
+              <button className="btn btn-outline" onClick={closeMySqlEditModal} disabled={mySqlEditSubmitting || mySqlEditTesting}>
+                取消
+              </button>
+              <button className="btn btn-secondary" onClick={() => void testMySqlEditConnection()} disabled={mySqlEditSubmitting || mySqlEditTesting}>
+                {mySqlEditTesting ? "测试中..." : "测试连接"}
+              </button>
+              <button className="btn btn-primary" onClick={() => void saveMySqlEditSource()} disabled={mySqlEditSubmitting || mySqlEditTesting}>
+                {mySqlEditSubmitting ? "保存中..." : "保存"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
