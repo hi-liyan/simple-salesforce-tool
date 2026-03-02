@@ -53,6 +53,8 @@ type DataGridSurfaceProps = {
   setActiveEditorCell: (cell: Item | null) => void;
   // 是否允许打开 Salesforce 记录页。
   canOpenRecordPage: boolean;
+  // 是否显示“打开 Salesforce 记录页”菜单项。
+  showOpenRecordPage: boolean;
   // 表头点击回调。
   onToggleAll: (checked: boolean, recordIds: string[]) => void;
   // 右键菜单动作：复制。
@@ -99,6 +101,7 @@ export function DataGridSurface({
   activeEditorCellRef,
   setActiveEditorCell,
   canOpenRecordPage,
+  showOpenRecordPage,
   onToggleAll,
   onCopyCell,
   onSetNone,
@@ -311,6 +314,7 @@ export function DataGridSurface({
             onSetNone={onSetNone}
             onOpenRecordPage={onOpenRecordPage}
             canOpenRecordPage={canOpenRecordPage}
+            showOpenRecordPage={showOpenRecordPage}
           />
         )}
       </div>

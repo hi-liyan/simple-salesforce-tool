@@ -853,6 +853,7 @@ export function SoqlExecutorWorkspace({
                     dirtyCellKeys={[]}
                     selectedRecordIds={activeTab.selectedRecordIds}
                     salesforceTimezone={salesforceTimezone}
+                    selectedSourceType={selectedSourceType}
                     pendingDeleteRecordIds={[]}
                     enableReadonlyCellHint={false}
                     showSelectionColumn={false}
