@@ -480,16 +480,6 @@ export function RightWorkspace({
                     </>
                   ) : (
                     <>
-                      <div className="w-[90px]">
-                        <label className="mb-1 block text-[12px]">LIMIT</label>
-                        <input
-                          className="input input-bordered input-sm w-full"
-                          type="number"
-                          value={activeTab.limit}
-                          onChange={(event) => onLimitChange(Number(event.target.value || 200))}
-                        />
-                      </div>
-
                       <div className="w-[200px]">
                         <label className="mb-1 block text-[12px]">排序字段</label>
                         <select
@@ -518,6 +508,16 @@ export function RightWorkspace({
                           <option value="ASC">ASC</option>
                           <option value="DESC">DESC</option>
                         </select>
+                      </div>
+
+                      <div className="w-[90px]">
+                        <label className="mb-1 block text-[12px]">LIMIT</label>
+                        <input
+                          className="input input-bordered input-sm w-full"
+                          type="number"
+                          value={activeTab.limit}
+                          onChange={(event) => onLimitChange(Number(event.target.value || 200))}
+                        />
                       </div>
                     </>
                   )}
