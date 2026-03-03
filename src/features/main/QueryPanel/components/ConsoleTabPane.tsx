@@ -1,4 +1,4 @@
-import { SoqlExecutorWorkspace } from "../../SoqlExecutorWorkspace";
+import { SoqlExecutorWorkspace } from "./SoqlExecutorWorkspace";
 import { QueryPanelActions, QueryPanelViewState } from "../types";
 
 type ConsoleTabPaneProps = {
