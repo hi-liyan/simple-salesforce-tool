@@ -94,14 +94,15 @@
 - 结果：
   - `npm run build`：通过。
   - `npm run test:datagrid-utils`：通过（8/8）。
+  - `npm run test:query-panel`：通过（6/6）。
   - 已形成回归清单与结果文档。
 - 待完成：
   - 多数据源真机交互回归（控制台多 Tab 焦点、切源+恢复组合场景等）。
 
 ## 4. 当前风险与处理
 
-- 风险：`MainPage` 仍较大，业务逻辑尚未进一步下沉到 `QueryPanel/hooks`。
-  - 处理：下一步把工作区适配与 Tab 状态协调逻辑拆分到独立 hooks。
+- 风险：`MainPage` 仍较大，虽已下沉统一工作区 Tab 逻辑，但查询执行/数据源切换等逻辑仍集中在页面层。
+  - 处理：后续继续按“状态适配层 + 行为 hook”拆分剩余业务逻辑。
 - 风险：MySQL `CHECK` 跨版本兼容差异。
   - 处理：补 5.7/8.x 实库验证记录，必要时后端补充信息架构查询。
 - 风险：自动化测试覆盖不足（当前主要覆盖 DataGrid 工具函数）。
@@ -118,7 +119,6 @@
 
 ## 6. 下一步执行建议（按优先级）
 
-1. 完成 Phase F 人工回归，补齐结果到 `QUERY_PANEL_REGRESSION_RESULT.md`。
-2. 将 `MainPage` 的工作区适配逻辑下沉到 `QueryPanel/hooks`，降低页面复杂度。
-3. 补 QueryPanel 关键交互测试用例（统一 Tab 与树交互）。
-
+1. 执行真机回归（真实 Salesforce/MySQL 源），补齐 Phase F 待确认项。
+2. 为树交互（单击展开/双击打开）补充自动化测试路径。
+3. 继续拆分 `MainPage` 里的查询执行与数据源切换流程到独立 hooks。

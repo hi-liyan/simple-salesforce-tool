@@ -1,12 +1,12 @@
-import { useMemo } from "react";
 import { Braces, Settings, Table2 } from "lucide-react";
-import { LeftSidebar } from "../LeftSidebar";
-import { RightWorkspace } from "../RightWorkspace";
 import { SettingsPanel } from "../SettingsPanel";
-import { SoqlExecutorWorkspace } from "../SoqlExecutorWorkspace";
 import { MainLayout } from "../../../layouts/MainLayout";
 import { QueryPanelActions, QueryPanelViewState } from "./types";
 import { QueryWorkspaceTabs } from "./components/QueryWorkspaceTabs";
+import { QuerySidebar } from "./components/QuerySidebar";
+import { DataQueryTabPane } from "./components/DataQueryTabPane";
+import { ConsoleTabPane } from "./components/ConsoleTabPane";
+import { useQueryPanelState } from "./hooks/useQueryPanelState";
 
 type QueryPanelProps = {
   // QueryPanel 视图状态。
@@ -17,17 +17,8 @@ type QueryPanelProps = {
 
 // QueryPanel：统一承载 Query/SOQL/设置三种视图，降低 MainPage 的 UI 编排复杂度。
 export function QueryPanel({ viewState, actions }: QueryPanelProps) {
-  // 当前是否处于工作区模式（非设置页）。
-  const inWorkspaceMode = viewState.viewMode !== "settings";
-  // Query 按钮激活态：工作区且当前焦点为 data。
-  const queryRailActive = inWorkspaceMode && viewState.activeWorkspaceTabKind === "data";
-  // 控制台按钮激活态：工作区且当前焦点为 console。
-  const consoleRailActive = inWorkspaceMode && viewState.activeWorkspaceTabKind === "console";
-  // 可查询对象名列表：供 data 工作区补全对象名。
-  const queryableObjectNames = useMemo(
-    () => viewState.objects.filter((item) => item.queryable).map((item) => item.name),
-    [viewState.objects]
-  );
+  // QueryPanel 派生视图状态：集中管理按钮高亮、工作区模式与对象补全集合。
+  const { inWorkspaceMode, queryRailActive, consoleRailActive, queryableObjectNames } = useQueryPanelState(viewState);
 
   return (
     // 主布局：左侧导航 + 右侧内容区。
@@ -67,7 +58,7 @@ export function QueryPanel({ viewState, actions }: QueryPanelProps) {
           {inWorkspaceMode && (
             <div className="grid h-full w-full grid-cols-[320px_1fr] overflow-hidden">
               <div className="flex min-h-0 flex-col border-r border-base-300">
-                <LeftSidebar
+                <QuerySidebar
                   sources={viewState.sources}
                   selectedSourceId={viewState.selectedSourceId}
                   pageLoading={viewState.pageLoading}
@@ -93,18 +84,9 @@ export function QueryPanel({ viewState, actions }: QueryPanelProps) {
                 />
                 {/* 统一工作区内容：按激活 Tab 类型切换 data 面板或 console 面板。 */}
                 {viewState.activeWorkspaceTabKind === "console" ? (
-                  <SoqlExecutorWorkspace
-                    selectedSourceId={viewState.selectedSourceId}
-                    selectedSourceType={viewState.selectedSourceType}
-                    salesforceTimezone={viewState.salesforceTimezone}
-                    loadingText={viewState.loadingText}
-                    objects={viewState.objects}
-                    workspaceNotice={viewState.workspaceNotice}
-                    onCloseWorkspaceNotice={actions.onCloseWorkspaceNotice}
-                    hideTabBar
-                  />
+                  <ConsoleTabPane viewState={viewState} actions={actions} />
                 ) : (
-                  <RightWorkspace
+                  <DataQueryTabPane
                     selectedSourceId={viewState.selectedSourceId}
                     selectedSourceType={viewState.selectedSourceType}
                     salesforceTimezone={viewState.salesforceTimezone}
