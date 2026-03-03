@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronRight } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { ObjectDdl, ObjectDescribe, SalesforceObject } from "../types";
 import {
@@ -52,8 +52,6 @@ export function ObjectList({ objects, sourceId, sourceType, activeObjectName, on
   const [expandedMysqlCategoryKeys, setExpandedMysqlCategoryKeys] = useState<string[]>([]);
   // 对象右键菜单状态：记录菜单位置与目标对象。
   const [objectContextMenu, setObjectContextMenu] = useState<{ x: number; y: number; objectItem: SalesforceObject } | null>(null);
-  // 树节点单击延迟定时器：用于区分单击展开与双击打开。
-  const objectNodeClickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // 全局关闭对象右键菜单：点击空白、滚动、按下 ESC 时关闭。
   useEffect(() => {
@@ -77,15 +75,6 @@ export function ObjectList({ objects, sourceId, sourceType, activeObjectName, on
       window.removeEventListener("keydown", onKeyDown);
     };
   }, [objectContextMenu]);
-
-  // 组件卸载时清理单击延迟定时器，避免悬空回调。
-  useEffect(() => {
-    return () => {
-      if (!objectNodeClickTimerRef.current) return;
-      clearTimeout(objectNodeClickTimerRef.current); // 释放残留定时器。
-      objectNodeClickTimerRef.current = null;
-    };
-  }, []);
 
   // 过滤结果：按对象名和标签模糊匹配。
   const filtered = useMemo(() => {
@@ -168,24 +157,8 @@ export function ObjectList({ objects, sourceId, sourceType, activeObjectName, on
     setExpandedMysqlCategoryKeys((current) => (current.includes(key) ? current.filter((item) => item !== key) : [...current, key]));
   }
 
-  // 树模式对象名单击：延迟触发展开，给双击留出判定窗口。
-  function handleTreeObjectSingleClick(objectItem: SalesforceObject) {
-    if (objectNodeClickTimerRef.current) {
-      clearTimeout(objectNodeClickTimerRef.current); // 清理上一次未触发的单击任务。
-      objectNodeClickTimerRef.current = null;
-    }
-    objectNodeClickTimerRef.current = setTimeout(() => {
-      void toggleObjectNode(objectItem); // 单击最终只执行展开/折叠。
-      objectNodeClickTimerRef.current = null;
-    }, 220);
-  }
-
-  // 树模式对象名双击：取消单击展开，并直接打开数据 Tab。
+  // 树模式对象名双击：直接打开数据 Tab（单击不触发任何行为）。
   function handleTreeObjectDoubleClick(objectItem: SalesforceObject) {
-    if (objectNodeClickTimerRef.current) {
-      clearTimeout(objectNodeClickTimerRef.current); // 双击命中时取消单击展开。
-      objectNodeClickTimerRef.current = null;
-    }
     if (!objectItem.queryable) {
       onNotQueryableClick?.(objectItem); // 不可查询对象：提示并阻断打开行为。
       return;
@@ -412,7 +385,7 @@ export function ObjectList({ objects, sourceId, sourceType, activeObjectName, on
                     setObjectContextMenu({ x: event.clientX, y: event.clientY, objectItem: item }); // 打开对象右键菜单。
                   }}
                   onClick={() => {
-                    handleTreeObjectSingleClick(item); // 单击对象名：展开/折叠字段。
+                    // 对象名单击无行为：按交互要求仅允许双击打开数据查询。
                   }}
                   onDoubleClick={() => {
                     handleTreeObjectDoubleClick(item); // 双击对象名：直接打开数据 Tab。
