@@ -4,7 +4,7 @@ import { DataGrid } from "../../components/DataGrid";
 import { NoticeAlert } from "../../components/NoticeAlert";
 import { SoqlMonacoEditor } from "../../components/SoqlMonacoEditor";
 import { api } from "../../api";
-import { Notice, TabState } from "../../types";
+import { Notice, ObjectDdl, TabState } from "../../types";
 
 type RightWorkspaceProps = {
   // 当前选中的数据源 ID：用于打开外部 Salesforce 页面。
@@ -13,6 +13,12 @@ type RightWorkspaceProps = {
   selectedSourceType: string;
   // Salesforce 当前用户时区（IANA），用于 datetime 与 Salesforce Web 一致显示。
   salesforceTimezone?: string | null;
+  // MySQL DDL 数据：用于 DDL 抽屉展示建表/索引/约束语句。
+  mysqlDdl: ObjectDdl | null;
+  // MySQL DDL 加载中状态。
+  mysqlDdlLoading: boolean;
+  // MySQL DDL 加载错误。
+  mysqlDdlError: string;
   tabs: TabState[];
   activeTabObjectName: string;
   activeTab: TabState | null;
@@ -39,6 +45,8 @@ type RightWorkspaceProps = {
   onApplyPendingChanges: () => void;
   onDiscardPendingChanges: () => void;
   onToggleDrawer: () => void;
+  // 刷新当前对象 DDL：仅 MySQL 抽屉使用。
+  onRefreshMysqlDdl: () => void;
   onToggleQueryBar: () => void;
   onToggleLogs: () => void;
   onWhereChange: (value: string) => void;
@@ -67,6 +75,9 @@ export function RightWorkspace({
   selectedSourceId,
   selectedSourceType,
   salesforceTimezone,
+  mysqlDdl,
+  mysqlDdlLoading,
+  mysqlDdlError,
   tabs,
   activeTabObjectName,
   activeTab,
@@ -87,6 +98,7 @@ export function RightWorkspace({
   onApplyPendingChanges,
   onDiscardPendingChanges,
   onToggleDrawer,
+  onRefreshMysqlDdl,
   onToggleQueryBar,
   onToggleLogs,
   onWhereChange,
@@ -416,7 +428,7 @@ export function RightWorkspace({
                 </button>
                 <button className="btn btn-outline btn-sm h-10" disabled={activeTab.loading} onClick={onToggleDrawer}>
                   <PanelRightOpen size={14} />
-                  字段与SOQL
+                  {isMysqlSource ? "DDL" : "字段与SOQL"}
                 </button>
                 <button className="btn btn-outline btn-sm h-10" disabled={activeTab.loading} onClick={onToggleLogs}>
                   <ScrollText size={14} />
@@ -587,18 +599,18 @@ export function RightWorkspace({
             )}
           </div>
 
-          {/* 右侧抽屉：字段列表 + SOQL 编辑器。 */}
+          {/* 右侧抽屉：Salesforce 显示字段与SOQL；MySQL 显示 DDL 信息。 */}
           {activeTab.showDrawer && (
             <div
               className="relative z-30 flex min-h-0 shrink-0 flex-col border-l border-base-300 bg-base-100"
               style={{ width: drawerWidth, minWidth: drawerWidth }}
             >
-              {/* 抽屉左侧拖拽热区：用于调整“字段与 SOQL”抽屉宽度。 */}
+              {/* 抽屉左侧拖拽热区：用于调整抽屉宽度。 */}
               <div
                 className="absolute -left-[3px] top-0 z-20 h-full w-[6px] cursor-col-resize"
                 role="separator"
                 aria-orientation="vertical"
-                aria-label="拖拽调整字段与SOQL抽屉宽度"
+                aria-label={isMysqlSource ? "拖拽调整DDL抽屉宽度" : "拖拽调整字段与SOQL抽屉宽度"}
                 onMouseDown={(event) => {
                   event.preventDefault(); // 阻止拖拽起点触发文本选中。
                   drawerResizeStartXRef.current = event.clientX; // 记录本次拖拽起点 X。
@@ -606,6 +618,62 @@ export function RightWorkspace({
                   setDraggingDrawerResize(true); // 进入拖拽状态。
                 }}
               />
+              {isMysqlSource ? (
+                <div className="flex min-h-0 flex-1 flex-col bg-base-100">
+                  <div className="flex items-center justify-between border-b border-base-300 px-3 py-2">
+                    <span className="text-[12px] text-neutral/70">DDL</span>
+                    <div className="flex flex-row items-center gap-1">
+                      <button className="btn btn-ghost btn-xs" disabled={mysqlDdlLoading || activeTab.loading} onClick={onRefreshMysqlDdl}>
+                        刷新
+                      </button>
+                      <button className="btn btn-circle btn-ghost btn-xs" onClick={onToggleDrawer} aria-label="关闭DDL抽屉">
+                        <X size={14} />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="min-h-0 flex-1 overflow-auto p-3 text-[12px]">
+                    {mysqlDdlLoading ? (
+                      <div className="text-neutral/70">正在加载 DDL...</div>
+                    ) : mysqlDdlError ? (
+                      <div className="rounded border border-error/40 bg-error/10 p-2 text-error">
+                        {mysqlDdlError}
+                      </div>
+                    ) : mysqlDdl ? (
+                      <div className="space-y-3">
+                        <section>
+                          <h4 className="mb-1 font-semibold">建表 DDL</h4>
+                          <pre className="overflow-x-auto rounded border border-base-300 bg-base-200/40 p-2 whitespace-pre-wrap break-words">
+                            {mysqlDdl.createTableDdl || "-"}
+                          </pre>
+                        </section>
+                        <section>
+                          <h4 className="mb-1 font-semibold">索引 DDL</h4>
+                          {mysqlDdl.indexDdls.length > 0 ? (
+                            <pre className="overflow-x-auto rounded border border-base-300 bg-base-200/40 p-2 whitespace-pre-wrap break-words">
+                              {mysqlDdl.indexDdls.join("\n")}
+                            </pre>
+                          ) : (
+                            <div className="text-neutral/70">暂无索引 DDL。</div>
+                          )}
+                        </section>
+                        <section>
+                          <h4 className="mb-1 font-semibold">约束 DDL</h4>
+                          {mysqlDdl.constraintDdls.length > 0 ? (
+                            <pre className="overflow-x-auto rounded border border-base-300 bg-base-200/40 p-2 whitespace-pre-wrap break-words">
+                              {mysqlDdl.constraintDdls.join("\n")}
+                            </pre>
+                          ) : (
+                            <div className="text-neutral/70">暂无约束 DDL。</div>
+                          )}
+                        </section>
+                      </div>
+                    ) : (
+                      <div className="text-neutral/70">暂无 DDL 信息。</div>
+                    )}
+                  </div>
+                </div>
+              ) : (
+              <>
               <div className="flex min-h-0 flex-[1_1_50%] flex-col border-b border-base-300 bg-base-100">
                 <div className="flex items-center justify-between border-b border-base-300 px-3 py-2">
                   <span className="text-[12px] text-neutral/70">Field 元数据</span>
@@ -691,6 +759,8 @@ export function RightWorkspace({
                   </button>
                 </div>
               </div>
+              </>
+              )}
             </div>
           )}
 

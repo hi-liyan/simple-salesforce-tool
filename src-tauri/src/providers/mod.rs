@@ -8,7 +8,7 @@ use serde_json::Value;
 use crate::app_state::AppState;
 use crate::error::AppError;
 use crate::models::{
-    CurrentUserContext, ObjectDescribe, QueryResult, RecordUpdatePayload, SalesforceObject,
+    CurrentUserContext, ObjectDdl, ObjectDescribe, QueryResult, RecordUpdatePayload, SalesforceObject,
     SalesforceSource,
 };
 use mysql_provider::MySqlProvider;
@@ -202,6 +202,20 @@ impl DataProvider<'_> {
         match self {
             DataProvider::Salesforce(provider) => provider.validate_token(source).await,
             DataProvider::MySql(provider) => provider.validate_token(source).await,
+        }
+    }
+
+    /// 读取对象 DDL（仅关系型数据源可用）。
+    pub async fn get_object_ddl(
+        &self,
+        source: &SalesforceSource,
+        object_name: &str,
+    ) -> Result<ObjectDdl, AppError> {
+        match self {
+            DataProvider::Salesforce(provider) => {
+                provider.get_object_ddl(source, object_name).await
+            }
+            DataProvider::MySql(provider) => provider.get_object_ddl(source, object_name).await,
         }
     }
 }
