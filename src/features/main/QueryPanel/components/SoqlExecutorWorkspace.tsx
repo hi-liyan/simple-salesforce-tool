@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { DataGrid } from "../../../../components/DataGrid";
 import { NoticeAlert } from "../../../../components/NoticeAlert";
 import { SoqlMonacoEditor } from "../../../../components/SoqlMonacoEditor";
+import { SqlMonacoEditor } from "../../../../components/SqlMonacoEditor";
 import { api } from "../../../../api";
 import { useSoqlExecutorStore, createSoqlExecutorTab, type SoqlExecutorTab, type AiConversationItem } from "../../../../store/useSoqlExecutorStore";
 import { AiChatTurnV2Response, Notice, ObjectDescribe, QueryResult, SalesforceObject, TabLog } from "../../../../types";
@@ -57,8 +58,10 @@ export function SoqlExecutorWorkspace({
   onCloseWorkspaceNotice,
   hideTabBar = false
 }: SoqlExecutorWorkspaceProps) {
+  // 是否是 MySQL 数据源：用于在控制台切换 SQL/SOQL 编辑器能力。
+  const isMysqlSource = (selectedSourceType || "salesforce").toLowerCase() === "mysql";
   // 查询语言标签：按数据源类型显示 SQL/SOQL 文案。
-  const queryLanguageLabel = (selectedSourceType || "salesforce").toLowerCase() === "mysql" ? "SQL" : "SOQL";
+  const queryLanguageLabel = isMysqlSource ? "SQL" : "SOQL";
   // SOQL 执行器的多标签状态（通过 Zustand persist 自动持久化到 SQLite）。
   const tabs = useSoqlExecutorStore((state) => state.tabs);
   const setTabs = useSoqlExecutorStore((state) => state.setTabs);
@@ -791,23 +794,42 @@ export function SoqlExecutorWorkspace({
           <>
             {/* SOQL 编辑器区域：始终占剩余空间，底部面板显示时会随拖拽动态伸缩。 */}
             <div className={activeTab.showBottomPanel ? "min-h-0 flex-1 border-b border-base-300 p-3" : "min-h-0 flex-1 p-3"}>
-              {/* SOQL 编辑器：统一复用 Monaco 组件，保持与主工作区一致的编辑体验。 */}
-              <SoqlMonacoEditor
-                value={activeTab.soqlDraft}
-                onChange={(value) => {
-                  patchActiveTab((tab) => ({ ...tab, soqlDraft: value })); // 同步当前标签草稿。
-                }}
-                onSelectionTextChange={(selectionText) => {
-                  selectedSoqlTextRef.current = selectionText; // 同步更新 ref，确保“点执行”的同一时刻可读取到最新选区。
-                  patchActiveTab((tab) => ({ ...tab, selectedSoqlText: selectionText })); // 同步当前标签选区文本。
-                }}
-                fieldNames={fallbackFieldNames}
-                objectNames={objectNames}
-                objectFieldsMap={objectFieldsMap}
-                placeholder={`输入 ${queryLanguageLabel}，支持多行与选区执行`}
-                height="100%"
-                className="h-full"
-              />
+              {/* 查询编辑器：按数据源类型切换 SQL/SOQL 语言模块。 */}
+              {isMysqlSource ? (
+                <SqlMonacoEditor
+                  value={activeTab.soqlDraft}
+                  onChange={(value) => {
+                    patchActiveTab((tab) => ({ ...tab, soqlDraft: value })); // 同步当前标签草稿。
+                  }}
+                  onSelectionTextChange={(selectionText) => {
+                    selectedSoqlTextRef.current = selectionText; // 同步更新 ref，确保“点执行”的同一时刻可读取到最新选区。
+                    patchActiveTab((tab) => ({ ...tab, selectedSoqlText: selectionText })); // 同步当前标签选区文本。
+                  }}
+                  fieldNames={fallbackFieldNames}
+                  objectNames={objectNames}
+                  objectFieldsMap={objectFieldsMap}
+                  placeholder={`输入 ${queryLanguageLabel}，支持多行与选区执行`}
+                  height="100%"
+                  className="h-full"
+                />
+              ) : (
+                <SoqlMonacoEditor
+                  value={activeTab.soqlDraft}
+                  onChange={(value) => {
+                    patchActiveTab((tab) => ({ ...tab, soqlDraft: value })); // 同步当前标签草稿。
+                  }}
+                  onSelectionTextChange={(selectionText) => {
+                    selectedSoqlTextRef.current = selectionText; // 同步更新 ref，确保“点执行”的同一时刻可读取到最新选区。
+                    patchActiveTab((tab) => ({ ...tab, selectedSoqlText: selectionText })); // 同步当前标签选区文本。
+                  }}
+                  fieldNames={fallbackFieldNames}
+                  objectNames={objectNames}
+                  objectFieldsMap={objectFieldsMap}
+                  placeholder={`输入 ${queryLanguageLabel}，支持多行与选区执行`}
+                  height="100%"
+                  className="h-full"
+                />
+              )}
             </div>
 
             {/* 底部结果日志区：默认新建 Tab 不显示，查询成功后显示并支持拖拽高度。 */}
