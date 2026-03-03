@@ -12,8 +12,6 @@ type MysqlSmartInputProps = {
   onChange: (value: string) => void;
   // 自动补全候选词。
   suggestions: string[];
-  // 宽度本地存储键：用于记住用户拖拽后的宽度。
-  widthStorageKey: string;
   // 输入框默认宽度。
   defaultWidth: number;
   // 输入框最小宽度。
@@ -43,7 +41,6 @@ export function MysqlSmartInput({
   placeholder,
   onChange,
   suggestions,
-  widthStorageKey,
   defaultWidth,
   minWidth = 220,
   maxWidth = 640,
@@ -61,13 +58,8 @@ export function MysqlSmartInput({
   const [caret, setCaret] = useState(0);
   // 拖拽状态。
   const [dragging, setDragging] = useState(false);
-  // 宽度状态：优先读取本地缓存。
-  const [width, setWidth] = useState(() => {
-    const raw = window.localStorage.getItem(widthStorageKey);
-    const parsed = raw ? Number(raw) : Number.NaN;
-    if (!Number.isFinite(parsed)) return defaultWidth;
-    return Math.max(minWidth, Math.min(maxWidth, parsed));
-  });
+  // 宽度状态：仅保留当前组件生命周期，不做本地持久化。
+  const [width, setWidth] = useState(defaultWidth);
   // 拖拽起始点 X。
   const resizeStartXRef = useRef(0);
   // 拖拽起始宽度。
@@ -104,11 +96,6 @@ export function MysqlSmartInput({
   useEffect(() => {
     setActiveIndex(0);
   }, [filteredSuggestions.length]);
-
-  // 同步持久化宽度。
-  useEffect(() => {
-    window.localStorage.setItem(widthStorageKey, String(width));
-  }, [width, widthStorageKey]);
 
   // 点击外部关闭补全弹层。
   useEffect(() => {
