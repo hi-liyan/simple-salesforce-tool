@@ -193,17 +193,39 @@ export function ObjectList({ objects, sourceId, sourceType, activeObjectName, on
     onOpenObject(objectItem); // 可查询对象：双击直接打开（已存在则激活）。
   }
 
-  // 提取 MySQL 键信息（覆盖主键/唯一键/普通索引键）。
-  function buildMysqlKeyItems(describe: ObjectDescribe | undefined): string[] {
-    if (!describe) return [];
-    return describe.fields
-      .map((field) => {
+  // 提取 MySQL 键信息（覆盖主键/唯一键/普通键；优先使用 DDL，describe 仅作兜底）。
+  function buildMysqlKeyItems(describe: ObjectDescribe | undefined, ddl: ObjectDdl | undefined): string[] {
+    const keySet = new Set<string>();
+
+    // 1) PRIMARY KEY：优先从建表语句解析，保留多列主键信息。
+    if (ddl?.createTableDdl) {
+      const primaryKeyMatch = ddl.createTableDdl.match(/PRIMARY\s+KEY\s*\(([^)]+)\)/i);
+      if (primaryKeyMatch && primaryKeyMatch[1]) {
+        keySet.add(`PRIMARY KEY (${primaryKeyMatch[1].trim()})`);
+      }
+    }
+
+    // 2) UNIQUE KEY：来自约束 DDL（UNIQUE）。
+    (ddl?.constraintDdls || [])
+      .filter((item) => /add\s+constraint/i.test(item) && /unique\s*\(/i.test(item))
+      .forEach((item) => keySet.add(item.trim()));
+
+    // 3) 普通/唯一索引键：来自索引 DDL（CREATE [UNIQUE] INDEX）。
+    (ddl?.indexDdls || [])
+      .filter((item) => /create\s+(unique\s+)?index/i.test(item))
+      .forEach((item) => keySet.add(item.trim()));
+
+    // 4) describe 兜底：当 DDL 无法提供完整键定义时，至少展示字段键标记。
+    if (keySet.size === 0 && describe) {
+      describe.fields.forEach((field) => {
         const rawKey = String(field.metadata?.columnKey || "").trim().toUpperCase();
-        if (!rawKey) return "";
+        if (!rawKey) return;
         const keyType = rawKey === "PRI" ? "PRIMARY KEY" : rawKey === "UNI" ? "UNIQUE KEY" : "KEY";
-        return `${field.name} (${keyType})`;
-      })
-      .filter((item) => item.length > 0);
+        keySet.add(`${field.name} (${keyType})`);
+      });
+    }
+
+    return Array.from(keySet);
   }
 
   // 提取 MySQL 外键信息（来自约束 DDL）。
@@ -218,12 +240,15 @@ export function ObjectList({ objects, sourceId, sourceType, activeObjectName, on
     return ddl.indexDdls;
   }
 
-  // 提取 MySQL 检查约束信息（优先 DDL 中 CHECK 语句，其次建表语句内 CHECK 片段）。
+  // 提取 MySQL 检查约束信息（优先 constraint DDL，其次建表语句中的 CHECK 行）。
   function buildMysqlCheckItems(ddl: ObjectDdl | undefined): string[] {
     if (!ddl) return [];
-    const fromConstraints = ddl.constraintDdls.filter((item) => /check\s*\(/i.test(item));
+    const fromConstraints = ddl.constraintDdls.filter((item) => /check\s*\(/i.test(item)).map((item) => item.trim());
     if (fromConstraints.length > 0) return fromConstraints;
-    const fromCreateTable = ddl.createTableDdl.match(/CHECK\s*\([^)]+\)/gi) || [];
+    const fromCreateTable = ddl.createTableDdl
+      .split("\n")
+      .map((line) => line.trim().replace(/,$/, ""))
+      .filter((line) => /check\s*\(/i.test(line));
     return fromCreateTable;
   }
 
@@ -351,7 +376,7 @@ export function ObjectList({ objects, sourceId, sourceType, activeObjectName, on
           const objectDdlLoading = ddlLoadingByObjectName[objectName] === true;
           const objectDdlError = ddlErrorByObjectName[objectName];
           const mysqlColumns = objectFields.map((field) => `${field.name} (${field.dataType})`);
-          const mysqlKeys = buildMysqlKeyItems(objectDescribe);
+          const mysqlKeys = buildMysqlKeyItems(objectDescribe, objectDdl);
           const mysqlForeignKeys = buildMysqlForeignKeyItems(objectDdl);
           const mysqlIndexes = buildMysqlIndexItems(objectDdl);
           const mysqlChecks = buildMysqlCheckItems(objectDdl);
