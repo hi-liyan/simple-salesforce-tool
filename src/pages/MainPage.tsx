@@ -7,6 +7,7 @@ import { QueryPanel } from "../features/main/QueryPanel";
 import { QueryPanelActions, QueryPanelViewState } from "../features/main/QueryPanel/types";
 import { useObjectsQuery, useSourcesQuery, useSyncSourcesMutation } from "../queries/salesforce";
 import { useAppStore } from "../store/useAppStore";
+import { SoqlExecutorTab } from "../store/useSoqlExecutorStore";
 import { useSoqlExecutorStore } from "../store/useSoqlExecutorStore";
 import { enableStorageWrite } from "../store/tauriStorage";
 import { Notice, ObjectDdl, ObjectDescribe, ObjectField, QueryResult, SalesforceObject, TabLog, TabState } from "../types";
@@ -43,6 +44,14 @@ export function MainPage() {
   const resetTabs = useAppStore((state) => state.resetTabs);
   // SOQL 控制台：用于“查询控制台”按钮每次点击都新增 Tab。
   const createSoqlConsoleTab = useSoqlExecutorStore((state) => state.createTab);
+  // SOQL 控制台 Tab 列表：用于统一工作区混合 Tab。
+  const soqlTabs = useSoqlExecutorStore((state) => state.tabs);
+  // 当前激活 SOQL 控制台 Tab ID。
+  const activeSoqlTabId = useSoqlExecutorStore((state) => state.activeTabId);
+  // 激活 SOQL 控制台 Tab。
+  const setActiveSoqlTabId = useSoqlExecutorStore((state) => state.setActiveTabId);
+  // 关闭 SOQL 控制台 Tab。
+  const closeSoqlTab = useSoqlExecutorStore((state) => state.closeTab);
 
   // React Query：数据源与对象列表。
   const queryClient = useQueryClient();
@@ -62,6 +71,8 @@ export function MainPage() {
     () => tabs.find((item) => item.objectName === activeTabObjectName) || null,
     [tabs, activeTabObjectName]
   );
+  // 统一工作区激活 Tab：格式为 data:{objectName} / console:{soqlTabId}。
+  const [activeWorkspaceTabId, setActiveWorkspaceTabId] = useState("");
 
   // 通知自动关闭的计时器。
   const noticeTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
@@ -1146,9 +1157,75 @@ export function MainPage() {
     }
   }
 
+  // 生成 data 工作区 Tab ID。
+  function buildDataWorkspaceTabId(objectName: string): string {
+    return `data:${objectName}`;
+  }
+
+  // 生成 console 工作区 Tab ID。
+  function buildConsoleWorkspaceTabId(tabId: string): string {
+    return `console:${tabId}`;
+  }
+
+  // 解析统一工作区 Tab ID。
+  function parseWorkspaceTabId(workspaceTabId: string): { kind: "data" | "console"; targetId: string } | null {
+    if (workspaceTabId.startsWith("data:")) {
+      return { kind: "data", targetId: workspaceTabId.slice("data:".length) };
+    }
+    if (workspaceTabId.startsWith("console:")) {
+      return { kind: "console", targetId: workspaceTabId.slice("console:".length) };
+    }
+    return null;
+  }
+
+  // 统一工作区 Tab 列表：按“data 在前，console 在后”输出，便于用户稳定定位。
+  const workspaceTabs = useMemo(
+    () => [
+      ...tabs.map((tab) => ({
+        id: buildDataWorkspaceTabId(tab.objectName),
+        kind: "data" as const,
+        title: tab.objectName
+      })),
+      ...soqlTabs.map((tab: SoqlExecutorTab) => ({
+        id: buildConsoleWorkspaceTabId(tab.id),
+        kind: "console" as const,
+        title: tab.name
+      }))
+    ],
+    [tabs, soqlTabs]
+  );
+
+  // 统一工作区激活态修正：确保当前激活 ID 始终存在；不存在时按优先级自动回退。
+  useEffect(() => {
+    const hasCurrent = workspaceTabs.some((tab) => tab.id === activeWorkspaceTabId);
+    if (hasCurrent) return;
+
+    if (activeTabObjectName) {
+      setActiveWorkspaceTabId(buildDataWorkspaceTabId(activeTabObjectName)); // 优先回退到当前激活对象 Tab。
+      return;
+    }
+    if (activeSoqlTabId) {
+      setActiveWorkspaceTabId(buildConsoleWorkspaceTabId(activeSoqlTabId)); // 无对象 Tab 时回退到当前控制台 Tab。
+      return;
+    }
+    setActiveWorkspaceTabId(""); // 都不存在时清空激活态。
+  }, [workspaceTabs, activeWorkspaceTabId, activeTabObjectName, activeSoqlTabId]);
+
+  // 当 store 侧主动切换对象 Tab 时，同步更新统一工作区激活态，保持双向一致。
+  useEffect(() => {
+    if (!activeTabObjectName) return;
+    const current = parseWorkspaceTabId(activeWorkspaceTabId);
+    if (current?.kind === "console") return; // 当前明确在控制台，不覆盖用户焦点。
+    setActiveWorkspaceTabId(buildDataWorkspaceTabId(activeTabObjectName));
+  }, [activeTabObjectName, activeWorkspaceTabId]);
+
   const pageLoading = loading || sourcesFetching || objectsFetching;
   const visibleColumns = activeTab ? getVisibleColumns(activeTab) : [];
   const loadingText = tokenRefreshing ? "重新获取认证凭证中..." : "Loading...";
+  // 当前激活统一工作区 Tab 的解析结果。
+  const activeWorkspaceTabParsed = parseWorkspaceTabId(activeWorkspaceTabId);
+  // 当前激活统一工作区类型：默认回退 data，保证 Query 页面可渲染。
+  const activeWorkspaceTabKind: "data" | "console" = activeWorkspaceTabParsed?.kind || "data";
   const fieldMetadataMap = activeTab
     ? activeTab.describe?.fields.reduce(
         (acc, field) => ({
@@ -1185,19 +1262,45 @@ export function MainPage() {
     sources,
     mysqlDdl: activeTab ? mysqlDdlMap[activeTab.objectName]?.data || null : null,
     mysqlDdlLoading: activeTab ? Boolean(mysqlDdlMap[activeTab.objectName]?.loading) : false,
-    mysqlDdlError: activeTab ? mysqlDdlMap[activeTab.objectName]?.error || "" : ""
+    mysqlDdlError: activeTab ? mysqlDdlMap[activeTab.objectName]?.error || "" : "",
+    workspaceTabs,
+    activeWorkspaceTabId,
+    activeWorkspaceTabKind
   };
   // QueryPanel 交互输出：所有行为回调都在 MainPage 侧实现，便于后续替换 store 适配层。
   const queryPanelActions: QueryPanelActions = {
     onSetViewMode: setViewMode,
     onOpenAuthWindow: openAuthWindow,
     onOpenConsole: () => {
-      createSoqlConsoleTab(); // 每次点击都新建并激活一个控制台 Tab。
-      setViewMode("soqlExecutor"); // 自动切换到控制台视图。
+      const nextConsoleTabId = createSoqlConsoleTab(); // 每次点击都新建并激活一个控制台 Tab。
+      setActiveWorkspaceTabId(buildConsoleWorkspaceTabId(nextConsoleTabId)); // 激活新建的 console 工作区 Tab。
+      setViewMode("query"); // 保持在统一 Query 工作区内切换，不跳离当前布局。
+    },
+    onActivateWorkspaceTab: (workspaceTabId) => {
+      const parsed = parseWorkspaceTabId(workspaceTabId);
+      if (!parsed) return;
+      setActiveWorkspaceTabId(workspaceTabId); // 先更新统一工作区焦点。
+      if (parsed.kind === "data") {
+        setActiveTabObjectName(parsed.targetId); // 同步对象 Tab 激活状态。
+        return;
+      }
+      setActiveSoqlTabId(parsed.targetId); // 同步控制台 Tab 激活状态。
+    },
+    onCloseWorkspaceTab: (workspaceTabId) => {
+      const parsed = parseWorkspaceTabId(workspaceTabId);
+      if (!parsed) return;
+      if (parsed.kind === "data") {
+        closeTab(parsed.targetId); // 关闭对象 Tab。
+        return;
+      }
+      closeSoqlTab(parsed.targetId); // 关闭控制台 Tab。
     },
     onChangeSource: handleSourceChange,
     onRefreshSources: () => void refreshSources(true),
-    onOpenObject: (item) => void openObjectTab(item),
+    onOpenObject: (item) => {
+      setActiveWorkspaceTabId(buildDataWorkspaceTabId(item.name)); // 双击对象后切回 data 工作区 Tab。
+      void openObjectTab(item);
+    },
     onNotQueryableObjectClick: handleNotQueryableObjectClick,
     onActivateTab: setActiveTabObjectName,
     onCloseTab: closeTab,

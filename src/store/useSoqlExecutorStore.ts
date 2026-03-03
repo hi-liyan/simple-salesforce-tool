@@ -86,7 +86,7 @@ type SoqlExecutorState = {
   // 设置激活 Tab ID。
   setActiveTabId: (tabId: string | ((current: string) => string)) => void;
   // 新建 Tab。
-  createTab: () => void;
+  createTab: () => string;
   // 关闭指定 Tab（批量）。
   closeTabsByIds: (tabIds: string[]) => void;
   // 关闭单个 Tab。
@@ -120,6 +120,7 @@ export const useSoqlExecutorStore = create<SoqlExecutorState>()(
         const nextIndex = tabs.length + 1;
         const nextTab = createSoqlExecutorTab(nextIndex);
         set({ tabs: [...tabs, nextTab], activeTabId: nextTab.id });
+        return nextTab.id; // 返回新建 Tab ID，便于外层统一工作区直接激活。
       },
 
       closeTabsByIds: (tabIds) => {

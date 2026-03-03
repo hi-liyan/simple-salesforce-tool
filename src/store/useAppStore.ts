@@ -3,8 +3,17 @@ import { persist, createJSONStorage } from "zustand/middleware";
 import { TabState } from "../types";
 import { tauriSqliteStorage } from "./tauriStorage";
 
-// 主页面视图模式：用于左侧工具栏的页面切换。
-export type MainViewMode = "query" | "soqlExecutor" | "settings";
+// 主页面视图模式：统一为 Query 工作区与设置页两种入口。
+export type MainViewMode = "query" | "settings";
+
+// 归一化视图模式：清理历史分裂视图值，统一进入 QueryPanel 工作区。
+function normalizeMainViewMode(viewMode: string | undefined): MainViewMode {
+  if (viewMode === "settings") return "settings";
+  if (viewMode === "query") return "query";
+  // 兼容旧值：systemLogs 已迁移到 settings，soqlExecutor 已并入 query。
+  if (viewMode === "systemLogs") return "settings";
+  return "query";
+}
 
 // Tab 持久化时保留的字段子集：排除运行时/瞬态状态，减小存储体积。
 type PersistedTabState = Pick<
@@ -86,7 +95,7 @@ export const useAppStore = create<AppState>()(
       activeTabObjectName: "",
       loading: false,
       setSelectedSourceId: (sourceId) => set({ selectedSourceId: sourceId }),
-      setViewMode: (viewMode) => set({ viewMode }),
+      setViewMode: (viewMode) => set({ viewMode: normalizeMainViewMode(viewMode) }),
       setSoqlSidebarWidth: (width) => set({ soqlSidebarWidth: Math.max(240, Math.min(1200, Math.round(width))) }),
       setActiveTabObjectName: (objectName) => set({ activeTabObjectName: objectName }),
       setTabs: (tabs) =>
@@ -139,8 +148,8 @@ export const useAppStore = create<AppState>()(
       // 从持久化快照恢复时，补全每个 Tab 被排除的运行时字段。
       merge: (persisted, current) => {
         const state = persisted as Partial<AppState>;
-        // 兼容旧版持久化数据：systemLogs 已移入设置面板，回退到 settings。
-        const viewMode = state.viewMode === ("systemLogs" as string) ? "settings" : state.viewMode;
+        // 兼容旧版持久化数据：systemLogs 回退 settings；soqlExecutor 回退 query。
+        const viewMode = normalizeMainViewMode(state.viewMode as string | undefined);
         return {
           ...current,
           ...state,

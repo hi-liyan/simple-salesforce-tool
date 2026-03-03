@@ -30,6 +30,8 @@ type SoqlExecutorWorkspaceProps = {
   workspaceNotice: Notice | null;
   // 关闭工作区全局提示回调。
   onCloseWorkspaceNotice: () => void;
+  // 是否隐藏内置 Tab 栏：用于统一工作区模式下由外层渲染混合 Tab。
+  hideTabBar?: boolean;
 };
 
 type BottomView = "result" | "logs";
@@ -52,7 +54,8 @@ export function SoqlExecutorWorkspace({
   loadingText,
   objects,
   workspaceNotice,
-  onCloseWorkspaceNotice
+  onCloseWorkspaceNotice,
+  hideTabBar = false
 }: SoqlExecutorWorkspaceProps) {
   // 查询语言标签：按数据源类型显示 SQL/SOQL 文案。
   const queryLanguageLabel = (selectedSourceType || "salesforce").toLowerCase() === "mysql" ? "SQL" : "SOQL";
@@ -534,100 +537,104 @@ export function SoqlExecutorWorkspace({
         />
       )}
 
-      {/* Tab 栏：支持切换、关闭与右侧新增。 */}
-      <div className="flex items-center border-b border-base-300">
-        <div className="flex min-w-0 flex-1 overflow-x-auto">
-          {tabs.map((tab) => {
-            const active = tab.id === activeTabId;
-            const tabIndex = tabs.findIndex((item) => item.id === tab.id);
-            const hasLeftTabs = tabIndex > 0;
-            const hasRightTabs = tabIndex >= 0 && tabIndex < tabs.length - 1;
-            const hasOtherTabs = tabs.length > 1;
-            return (
-              <div
-                key={tab.id}
-                className={`flex items-center border-r border-base-300 ${active ? "bg-base-100" : ""}`}
-                onContextMenu={(event) => {
-                  event.preventDefault(); // 阻止浏览器默认右键菜单。
-                  setActiveTabId(tab.id); // 右键时先切换到目标 Tab，避免操作目标不一致。
-                  setTabContextMenu({ x: event.clientX, y: event.clientY, tabId: tab.id }); // 打开自定义菜单。
-                }}
-              >
-                <button
-                  className={`min-w-0 px-3 py-2 text-[12px] ${active ? "text-primary" : "text-neutral/70"}`}
-                  onClick={() => setActiveTabId(tab.id)}
-                >
-                  {tab.name}
-                </button>
-                <button className="btn btn-circle btn-ghost btn-xs mr-1" onClick={() => storeCloseTab(tab.id)} aria-label={`关闭 ${tab.name}`}>
-                  <X size={13} />
-                </button>
-                {/* Tab 右键菜单：提供常见批量关闭操作。 */}
-                {tabContextMenu?.tabId === tab.id && (
+      {!hideTabBar && (
+        <>
+          {/* Tab 栏：支持切换、关闭与右侧新增。 */}
+          <div className="flex items-center border-b border-base-300">
+            <div className="flex min-w-0 flex-1 overflow-x-auto">
+              {tabs.map((tab) => {
+                const active = tab.id === activeTabId;
+                const tabIndex = tabs.findIndex((item) => item.id === tab.id);
+                const hasLeftTabs = tabIndex > 0;
+                const hasRightTabs = tabIndex >= 0 && tabIndex < tabs.length - 1;
+                const hasOtherTabs = tabs.length > 1;
+                return (
                   <div
-                    className="fixed z-[80] min-w-[132px] rounded border border-base-300 bg-base-100 p-1 shadow-xl"
-                    style={{ left: tabContextMenu.x, top: tabContextMenu.y }}
-                    onClick={(event) => event.stopPropagation()}
+                    key={tab.id}
+                    className={`flex items-center border-r border-base-300 ${active ? "bg-base-100" : ""}`}
+                    onContextMenu={(event) => {
+                      event.preventDefault(); // 阻止浏览器默认右键菜单。
+                      setActiveTabId(tab.id); // 右键时先切换到目标 Tab，避免操作目标不一致。
+                      setTabContextMenu({ x: event.clientX, y: event.clientY, tabId: tab.id }); // 打开自定义菜单。
+                    }}
                   >
                     <button
-                      className="btn btn-ghost btn-xs w-full justify-start"
-                      onClick={() => {
-                        storeCloseTab(tab.id); // 关闭当前 Tab。
-                        setTabContextMenu(null); // 执行后关闭菜单。
-                      }}
+                      className={`min-w-0 px-3 py-2 text-[12px] ${active ? "text-primary" : "text-neutral/70"}`}
+                      onClick={() => setActiveTabId(tab.id)}
                     >
-                      关闭当前
+                      {tab.name}
                     </button>
-                    <button
-                      className="btn btn-ghost btn-xs w-full justify-start"
-                      disabled={!hasLeftTabs}
-                      onClick={() => {
-                        closeLeftTabs(tab.id); // 关闭目标 Tab 左侧所有 Tab。
-                        setTabContextMenu(null); // 执行后关闭菜单。
-                      }}
-                    >
-                      关闭左侧
+                    <button className="btn btn-circle btn-ghost btn-xs mr-1" onClick={() => storeCloseTab(tab.id)} aria-label={`关闭 ${tab.name}`}>
+                      <X size={13} />
                     </button>
-                    <button
-                      className="btn btn-ghost btn-xs w-full justify-start"
-                      disabled={!hasRightTabs}
-                      onClick={() => {
-                        closeRightTabs(tab.id); // 关闭目标 Tab 右侧所有 Tab。
-                        setTabContextMenu(null); // 执行后关闭菜单。
-                      }}
-                    >
-                      关闭右侧
-                    </button>
-                    <button
-                      className="btn btn-ghost btn-xs w-full justify-start"
-                      disabled={!hasOtherTabs}
-                      onClick={() => {
-                        closeOtherTabs(tab.id); // 仅保留目标 Tab，关闭其它 Tab。
-                        setTabContextMenu(null); // 执行后关闭菜单。
-                      }}
-                    >
-                      关闭其他
-                    </button>
-                    <button
-                      className="btn btn-ghost btn-xs w-full justify-start"
-                      disabled={tabs.length === 0}
-                      onClick={() => {
-                        closeAllTabs(); // 关闭全部 Tab。
-                        setTabContextMenu(null); // 执行后关闭菜单。
-                      }}
-                    >
-                      全部关闭
-                    </button>
+                    {/* Tab 右键菜单：提供常见批量关闭操作。 */}
+                    {tabContextMenu?.tabId === tab.id && (
+                      <div
+                        className="fixed z-[80] min-w-[132px] rounded border border-base-300 bg-base-100 p-1 shadow-xl"
+                        style={{ left: tabContextMenu.x, top: tabContextMenu.y }}
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        <button
+                          className="btn btn-ghost btn-xs w-full justify-start"
+                          onClick={() => {
+                            storeCloseTab(tab.id); // 关闭当前 Tab。
+                            setTabContextMenu(null); // 执行后关闭菜单。
+                          }}
+                        >
+                          关闭当前
+                        </button>
+                        <button
+                          className="btn btn-ghost btn-xs w-full justify-start"
+                          disabled={!hasLeftTabs}
+                          onClick={() => {
+                            closeLeftTabs(tab.id); // 关闭目标 Tab 左侧所有 Tab。
+                            setTabContextMenu(null); // 执行后关闭菜单。
+                          }}
+                        >
+                          关闭左侧
+                        </button>
+                        <button
+                          className="btn btn-ghost btn-xs w-full justify-start"
+                          disabled={!hasRightTabs}
+                          onClick={() => {
+                            closeRightTabs(tab.id); // 关闭目标 Tab 右侧所有 Tab。
+                            setTabContextMenu(null); // 执行后关闭菜单。
+                          }}
+                        >
+                          关闭右侧
+                        </button>
+                        <button
+                          className="btn btn-ghost btn-xs w-full justify-start"
+                          disabled={!hasOtherTabs}
+                          onClick={() => {
+                            closeOtherTabs(tab.id); // 仅保留目标 Tab，关闭其它 Tab。
+                            setTabContextMenu(null); // 执行后关闭菜单。
+                          }}
+                        >
+                          关闭其他
+                        </button>
+                        <button
+                          className="btn btn-ghost btn-xs w-full justify-start"
+                          disabled={tabs.length === 0}
+                          onClick={() => {
+                            closeAllTabs(); // 关闭全部 Tab。
+                            setTabContextMenu(null); // 执行后关闭菜单。
+                          }}
+                        >
+                          全部关闭
+                        </button>
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-        <button className="btn btn-ghost btn-sm mx-1" onClick={storeCreateTab} aria-label={`新建 ${queryLanguageLabel} Tab`}>
-          <Plus size={14} />
-        </button>
-      </div>
+                );
+              })}
+            </div>
+            <button className="btn btn-ghost btn-sm mx-1" onClick={storeCreateTab} aria-label={`新建 ${queryLanguageLabel} Tab`}>
+              <Plus size={14} />
+            </button>
+          </div>
+        </>
+      )}
 
       {/* 当前标签提示。 */}
       {activeTab.notice && (
