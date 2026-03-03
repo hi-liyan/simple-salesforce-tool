@@ -1,4 +1,4 @@
-import { Braces, Settings, Table2 } from "lucide-react";
+import { Settings, Table2 } from "lucide-react";
 import { SettingsPanel } from "../SettingsPanel";
 import { MainLayout } from "../../../layouts/MainLayout";
 import { QueryPanelActions, QueryPanelViewState } from "./types";
@@ -18,7 +18,7 @@ type QueryPanelProps = {
 // QueryPanel：统一承载 Query/SOQL/设置三种视图，降低 MainPage 的 UI 编排复杂度。
 export function QueryPanel({ viewState, actions }: QueryPanelProps) {
   // QueryPanel 派生视图状态：集中管理按钮高亮、工作区模式与对象补全集合。
-  const { inWorkspaceMode, queryRailActive, consoleRailActive, queryableObjectNames } = useQueryPanelState(viewState);
+  const { inWorkspaceMode, queryRailActive, queryableObjectNames } = useQueryPanelState(viewState);
 
   return (
     // 主布局：左侧导航 + 右侧内容区。
@@ -33,14 +33,6 @@ export function QueryPanel({ viewState, actions }: QueryPanelProps) {
             onClick={() => actions.onSetViewMode("query")}
           >
             <Table2 size={16} />
-          </button>
-          {/* 查询控制台入口。 */}
-          <button
-            className={`tool-rail-btn ${consoleRailActive ? "tool-rail-btn--active" : ""}`}
-            title="查询控制台"
-            onClick={actions.onOpenConsole}
-          >
-            <Braces size={16} />
           </button>
           {/* 设置入口。 */}
           <button
