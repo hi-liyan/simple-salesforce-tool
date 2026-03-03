@@ -1,12 +1,12 @@
 import { useState } from "react";
 import { Braces, Plus, RefreshCw } from "lucide-react";
-import { ObjectList } from "../../components/ObjectList";
-import { DataSourceSelector } from "../../components/DataSourceSelector";
-import { api } from "../../api";
-import { DataSourceType, SalesforceObject, SalesforceSource, SourceUpsertPayload } from "../../types";
-import { QuerySidebarActions, type QuerySidebarActionItem } from "./QueryPanel/components/QuerySidebarActions";
+import { DataSourceSelector } from "../../../../components/DataSourceSelector";
+import { api } from "../../../../api";
+import { DataSourceType, SalesforceObject, SalesforceSource, SourceUpsertPayload } from "../../../../types";
+import { QuerySidebarActions, type QuerySidebarActionItem } from "./QuerySidebarActions";
+import { QueryObjectTree } from "./QueryObjectTree";
 
-type LeftSidebarProps = {
+type QuerySidebarProps = {
   // 数据源列表。
   sources: SalesforceSource[];
   // 当前选中的数据源 ID。
@@ -36,7 +36,7 @@ type LeftSidebarProps = {
 };
 
 // 左侧栏：数据源选择与对象列表。
-export function LeftSidebar({
+export function QuerySidebar({
   sources,
   selectedSourceId,
   pageLoading,
@@ -50,10 +50,7 @@ export function LeftSidebar({
   onOpenObject,
   onNotQueryableObjectClick,
   objectListMode = "list"
-}: LeftSidebarProps) {
-  // 当前选中数据源类型：用于对象右键菜单按类型展示能力项。
-  const selectedSourceType =
-    sources.find((source) => source.id === selectedSourceId)?.sourceType || "salesforce";
+}: QuerySidebarProps) {
   // 数据源类型选择弹窗开关。
   const [showSourceTypeModal, setShowSourceTypeModal] = useState(false);
   // Salesforce 配置弹窗开关。
@@ -261,25 +258,17 @@ export function LeftSidebar({
         <span className="text-[12px] text-neutral/70">OBJECTS</span>
       </div>
 
-      {/* 对象列表内容区。 */}
-      <div className="min-h-0 flex-1 px-3 pb-3 pt-2">
-        {objectsLoading ? (
-          <div className="flex h-full flex-col items-center justify-center gap-2 text-neutral/70">
-            <span className="loading loading-spinner" style={{ width: 18, height: 18 }} />
-            <span className="text-[12px]">拉取 Object 列表中...</span>
-          </div>
-        ) : (
-          <ObjectList
-            objects={objects}
-            sourceId={selectedSourceId}
-            sourceType={selectedSourceType}
-            activeObjectName={activeTabObjectName}
-            onOpenObject={onOpenObject}
-            onNotQueryableClick={onNotQueryableObjectClick}
-            treeMode={objectListMode === "tree"}
-          />
-        )}
-      </div>
+      {/* 对象树区域：统一由 QueryObjectTree 管理加载态与树渲染。 */}
+      <QueryObjectTree
+        sources={sources}
+        selectedSourceId={selectedSourceId}
+        objectsLoading={objectsLoading}
+        objects={objects}
+        activeTabObjectName={activeTabObjectName}
+        onOpenObject={onOpenObject}
+        onNotQueryableObjectClick={onNotQueryableObjectClick}
+        objectListMode={objectListMode}
+      />
 
       {/* 类型选择弹窗：先选择数据源类型，再进入对应配置窗口。 */}
       {showSourceTypeModal && (
