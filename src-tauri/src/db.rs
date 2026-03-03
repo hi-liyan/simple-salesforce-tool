@@ -9,8 +9,6 @@ use crate::models::{
     SystemLogPage,
 };
 
-const OBJECT_CACHE_TTL_SECONDS: i64 = 3600;
-
 /// 初始化数据库表结构。
 pub fn init_schema(connection: &Connection) -> Result<(), AppError> {
     connection.execute_batch(
@@ -41,6 +39,16 @@ pub fn init_schema(connection: &Connection) -> Result<(), AppError> {
             source_id TEXT PRIMARY KEY,
             payload TEXT NOT NULL,
             updated_at INTEGER NOT NULL,
+            FOREIGN KEY(source_id) REFERENCES salesforce_sources(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS source_metadata_cache (
+            source_id TEXT NOT NULL,
+            metadata_type TEXT NOT NULL,
+            object_name TEXT NOT NULL DEFAULT '',
+            payload TEXT NOT NULL,
+            updated_at INTEGER NOT NULL,
+            PRIMARY KEY(source_id, metadata_type, object_name),
             FOREIGN KEY(source_id) REFERENCES salesforce_sources(id) ON DELETE CASCADE
         );
 
@@ -426,6 +434,10 @@ pub fn prune_cli_sources(connection: &Connection, keep_ids: &[String]) -> Result
             "DELETE FROM column_visibility_settings WHERE source_id LIKE 'cli-%'",
             [],
         )?;
+        connection.execute(
+            "DELETE FROM source_metadata_cache WHERE source_id LIKE 'cli-%'",
+            [],
+        )?;
         connection.execute("DELETE FROM data_sources WHERE id LIKE 'cli-%'", [])?;
         return Ok(());
     }
@@ -447,6 +459,12 @@ pub fn prune_cli_sources(connection: &Connection, keep_ids: &[String]) -> Result
         placeholders
     );
     connection.execute(&visibility_sql, params_from_iter(keep_ids.iter()))?;
+
+    let metadata_sql = format!(
+        "DELETE FROM source_metadata_cache WHERE source_id LIKE 'cli-%' AND source_id NOT IN ({})",
+        placeholders
+    );
+    connection.execute(&metadata_sql, params_from_iter(keep_ids.iter()))?;
 
     let source_sql = format!(
         "DELETE FROM data_sources WHERE id LIKE 'cli-%' AND id NOT IN ({})",
@@ -476,6 +494,7 @@ pub fn delete_source(connection: &Connection, id: &str) -> Result<(), AppError> 
         "DELETE FROM column_visibility_settings WHERE source_id = ?1",
         [id],
     )?;
+    connection.execute("DELETE FROM source_metadata_cache WHERE source_id = ?1", [id])?;
     Ok(())
 }
 
@@ -573,33 +592,73 @@ pub fn write_column_visibility(
     Ok(())
 }
 
-/// 读取对象列表缓存（命中且未过期时返回 Some）。
+/// 读取对象列表缓存（命中即返回，刷新动作负责失效策略）。
 pub fn read_object_cache(
     connection: &Connection,
     source_id: &str,
 ) -> Result<Option<Vec<SalesforceObject>>, AppError> {
     let mut statement = connection
-        .prepare("SELECT payload, updated_at FROM object_metadata_cache WHERE source_id = ?1")?;
+        .prepare("SELECT payload FROM object_metadata_cache WHERE source_id = ?1")?;
 
     let cache = statement
         .query_row([source_id], |row| {
             Ok(CachedObjects {
                 payload: row.get(0)?,
-                updated_at: row.get(1)?,
             })
         })
         .optional()?;
 
     if let Some(item) = cache {
-        let now = Utc::now().timestamp();
-        // 仅在 TTL 内返回缓存，超时后强制走远端刷新。
-        if now - item.updated_at < OBJECT_CACHE_TTL_SECONDS {
-            let parsed: Vec<SalesforceObject> = serde_json::from_str(&item.payload)?;
-            return Ok(Some(parsed));
-        }
+        let parsed: Vec<SalesforceObject> = serde_json::from_str(&item.payload)?;
+        return Ok(Some(parsed));
     }
 
     Ok(None)
+}
+
+/// 读取指定数据源/对象的元数据缓存字符串。
+pub fn read_source_metadata_cache(
+    connection: &Connection,
+    source_id: &str,
+    metadata_type: &str,
+    object_name: Option<&str>,
+) -> Result<Option<String>, AppError> {
+    let normalized_object_name = object_name.unwrap_or("").trim();
+    let payload: Option<String> = connection
+        .query_row(
+            "SELECT payload FROM source_metadata_cache WHERE source_id = ?1 AND metadata_type = ?2 AND object_name = ?3",
+            params![source_id, metadata_type, normalized_object_name],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(payload)
+}
+
+/// 写入指定数据源/对象的元数据缓存字符串（UPSERT）。
+pub fn write_source_metadata_cache(
+    connection: &Connection,
+    source_id: &str,
+    metadata_type: &str,
+    object_name: Option<&str>,
+    payload: &str,
+) -> Result<(), AppError> {
+    let normalized_object_name = object_name.unwrap_or("").trim();
+    let now = Utc::now().timestamp();
+    connection.execute(
+        "INSERT INTO source_metadata_cache (source_id, metadata_type, object_name, payload, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(source_id, metadata_type, object_name) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at",
+        params![source_id, metadata_type, normalized_object_name, payload, now],
+    )?;
+    Ok(())
+}
+
+/// 删除指定数据源的全部元数据缓存（用于刷新数据源时失效旧元数据）。
+pub fn clear_source_metadata_cache(connection: &Connection, source_id: &str) -> Result<(), AppError> {
+    connection.execute(
+        "DELETE FROM source_metadata_cache WHERE source_id = ?1",
+        [source_id],
+    )?;
+    Ok(())
 }
 
 /// 写入对象列表缓存（按 source_id 覆盖）。

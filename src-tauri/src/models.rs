@@ -192,8 +192,6 @@ pub struct RecordSavePayload {
 pub struct CachedObjects {
     /// 缓存内容 JSON 字符串。
     pub payload: String,
-    /// 缓存写入时间（Unix 秒）。
-    pub updated_at: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

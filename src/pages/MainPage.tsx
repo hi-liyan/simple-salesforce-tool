@@ -68,7 +68,8 @@ export function MainPage() {
       setStartupComplete(true);
 
       // 异步重新拉取恢复的 Tab 数据（describe + query），不阻塞主界面。
-      void reloadRestoredTabs(persistedSourceId);
+      const finalSelectedSourceId = useAppStore.getState().selectedSourceId;
+      void reloadRestoredTabs(finalSelectedSourceId);
 
       if (!startupVersionCheckTriggered) {
         startupVersionCheckTriggered = true;

@@ -83,9 +83,9 @@ export function useMainPageQueryPanel({
   const setTabs = useAppStore((state) => state.setTabs);
   const setLoading = useAppStore((state) => state.setLoading);
   const patchTabInStore = useAppStore((state) => state.patchTab);
-  const resetTabs = useAppStore((state) => state.resetTabs);
 
   // Store：SOQL 控制台状态与行为。
+  const switchSoqlSource = useSoqlExecutorStore((state) => state.switchSource);
   const createSoqlConsoleTab = useSoqlExecutorStore((state) => state.createTab);
   const soqlTabs = useSoqlExecutorStore((state) => state.tabs);
   const activeSoqlTabId = useSoqlExecutorStore((state) => state.activeTabId);
@@ -455,11 +455,11 @@ export function useMainPageQueryPanel({
     };
   }, []);
 
-  // 数据源切换时：重置 Tab 状态，避免跨数据源混淆。
+  // 数据源切换时：切换控制台 source 上下文，恢复该数据源下的控制台 Tabs。
   useEffect(() => {
     if (!startupComplete) return;
-    resetTabs();
-  }, [startupComplete, selectedSourceId, resetTabs]);
+    switchSoqlSource(selectedSourceId);
+  }, [startupComplete, selectedSourceId, switchSoqlSource]);
 
   // 对象列表加载失败时给出明确提示，避免出现“空白但无错误”。
   useEffect(() => {
