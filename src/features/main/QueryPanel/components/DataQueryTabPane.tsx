@@ -1,10 +1,53 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { PanelRightOpen, Play, Plus, RotateCcw, ScrollText, Search, Trash2, X } from "lucide-react";
 import { DataGrid } from "../../../../components/DataGrid";
 import { NoticeAlert } from "../../../../components/NoticeAlert";
 import { SoqlMonacoEditor } from "../../../../components/SoqlMonacoEditor";
 import { api } from "../../../../api";
 import { Notice, ObjectDdl, TabState } from "../../../../types";
+import { MysqlSmartInput } from "./MysqlSmartInput";
+
+// MySQL 函数候选：覆盖常见字符串、日期、聚合、空值处理函数。
+const MYSQL_FUNCTION_SUGGESTIONS = [
+  "COUNT()",
+  "SUM()",
+  "AVG()",
+  "MIN()",
+  "MAX()",
+  "NOW()",
+  "CURDATE()",
+  "DATE_FORMAT()",
+  "DATE_ADD()",
+  "DATE_SUB()",
+  "TIMESTAMPDIFF()",
+  "IFNULL()",
+  "COALESCE()",
+  "NULLIF()",
+  "CONCAT()",
+  "SUBSTRING()",
+  "LENGTH()",
+  "LOWER()",
+  "UPPER()",
+  "TRIM()",
+  "ROUND()",
+  "FLOOR()",
+  "CEIL()"
+];
+
+// MySQL 关键字候选：用于 WHERE/ORDER BY 快速补全。
+const MYSQL_KEYWORD_SUGGESTIONS = [
+  "AND",
+  "OR",
+  "NOT",
+  "IN",
+  "LIKE",
+  "BETWEEN",
+  "IS NULL",
+  "IS NOT NULL",
+  "EXISTS",
+  "ASC",
+  "DESC"
+];
 
 type DataQueryTabPaneProps = {
   // 当前选中的数据源 ID：用于打开外部 Salesforce 页面。
@@ -229,6 +272,18 @@ export function DataQueryTabPane({
 
   // 当前对象可排序字段：仅展示字段元数据中 sortable=true 的字段。
   const sortableFields = (activeTab?.describe?.fields || []).filter((field) => field.metadata?.sortable === true);
+  // 当前对象字段名候选：MySQL 查询栏自动补全使用。
+  const mysqlFieldSuggestions = useMemo(() => (activeTab?.describe?.fields || []).map((field) => field.name), [activeTab?.describe?.fields]);
+  // WHERE 输入框候选：字段 + 函数 + 关键字。
+  const mysqlWhereSuggestions = useMemo(
+    () => [...mysqlFieldSuggestions, ...MYSQL_FUNCTION_SUGGESTIONS, ...MYSQL_KEYWORD_SUGGESTIONS],
+    [mysqlFieldSuggestions]
+  );
+  // 排序输入框候选：字段 + 排序方向 + 常见函数。
+  const mysqlSortSuggestions = useMemo(
+    () => [...mysqlFieldSuggestions, "ASC", "DESC", ...MYSQL_FUNCTION_SUGGESTIONS],
+    [mysqlFieldSuggestions]
+  );
 
   useEffect(() => {
     setSoqlObjectFieldsMap({}); // 切换数据源后清空缓存，避免跨源字段污染。
@@ -447,45 +502,64 @@ export function DataQueryTabPane({
             {/* 查询栏。 */}
             {activeTab.showQueryBar && (
               <div className="border-b border-base-300 px-3 py-2">
-                <div className="flex flex-row items-center gap-2 flex-nowrap">
-                  <div className="w-[320px]">
-                    <label className="mb-1 block text-[12px]">WHERE</label>
-                    <div className="relative">
-                      <input
-                        className="input input-bordered input-sm w-full pr-8"
-                        value={activeTab.whereClause}
-                        // 关闭系统文本替换，避免 macOS 下英文单引号被自动转换为弯引号/中文引号。
-                        autoCorrect="off"
-                        autoCapitalize="off"
-                        spellCheck={false}
-                        onChange={(event) => onWhereChange(event.target.value)}
-                      />
-                      {activeTab.whereClause ? (
-                        <button
-                          className="btn btn-circle btn-ghost btn-xs absolute right-1 top-1/2 -translate-y-1/2"
-                          aria-label="清空 WHERE 条件"
-                          onClick={() => onWhereChange("")}
-                        >
-                          <X size={13} />
-                        </button>
-                      ) : null}
-                    </div>
-                  </div>
-
+                <div className="flex min-w-max flex-row items-end gap-2">
                   {isMysqlSource ? (
-                    <>
-                      <div className="w-[260px]">
-                        <label className="mb-1 block text-[12px]">排序</label>
+                    <MysqlSmartInput
+                      label="WHERE"
+                      value={activeTab.whereClause}
+                      placeholder="例如：status = 'ACTIVE' AND created_at >= '2025-01-01'"
+                      // MySQL WHERE：联动更新 Tab 查询条件。
+                      onChange={onWhereChange}
+                      // 候选包含字段、函数与关键字。
+                      suggestions={mysqlWhereSuggestions}
+                      // 本地缓存键：保持 WHERE 输入宽度。
+                      widthStorageKey="query-panel.mysql.where.width"
+                      // 默认宽度：与旧版视觉接近。
+                      defaultWidth={360}
+                      // 允许快速清空 WHERE。
+                      allowClear
+                    />
+                  ) : (
+                    <div className="w-[320px]">
+                      <label className="mb-1 block text-[12px]">WHERE</label>
+                      <div className="relative">
                         <input
-                          className="input input-bordered input-sm w-full"
-                          value={activeTab.sortClause || ""}
-                          placeholder="例如：created_at DESC"
+                          className="input input-bordered input-sm w-full pr-8"
+                          value={activeTab.whereClause}
+                          // 关闭系统文本替换，避免 macOS 下英文单引号被自动转换为弯引号/中文引号。
                           autoCorrect="off"
                           autoCapitalize="off"
                           spellCheck={false}
-                          onChange={(event) => onSortClauseChange(event.target.value)}
+                          onChange={(event) => onWhereChange(event.target.value)}
                         />
+                        {activeTab.whereClause ? (
+                          <button
+                            className="btn btn-circle btn-ghost btn-xs absolute right-1 top-1/2 -translate-y-1/2"
+                            aria-label="清空 WHERE 条件"
+                            onClick={() => onWhereChange("")}
+                          >
+                            <X size={13} />
+                          </button>
+                        ) : null}
                       </div>
+                    </div>
+                  )}
+
+                  {isMysqlSource ? (
+                    <>
+                      <MysqlSmartInput
+                        label="排序"
+                        value={activeTab.sortClause || ""}
+                        placeholder="例如：created_at DESC, id ASC"
+                        // MySQL 排序表达式：直接写入 sortClause。
+                        onChange={onSortClauseChange}
+                        // 排序候选：字段 + 方向 + 常用函数。
+                        suggestions={mysqlSortSuggestions}
+                        // 本地缓存键：保持排序输入宽度。
+                        widthStorageKey="query-panel.mysql.sort.width"
+                        // 默认宽度：略窄于 WHERE。
+                        defaultWidth={300}
+                      />
 
                       <div className="w-[90px]">
                         <label className="mb-1 block text-[12px]">LIMIT</label>
