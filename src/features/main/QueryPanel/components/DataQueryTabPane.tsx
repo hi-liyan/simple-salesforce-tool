@@ -559,12 +559,14 @@ export function DataQueryTabPane({
                         widthStorageKey="query-panel.mysql.sort.width"
                         // 默认宽度：略窄于 WHERE。
                         defaultWidth={300}
+                        // 排序有值时显示清空按钮，与 WHERE 行为一致。
+                        allowClear
                       />
 
                       <div className="w-[90px]">
                         <label className="mb-1 block text-[12px]">LIMIT</label>
                         <input
-                          className="input input-bordered input-sm w-full"
+                          className="input input-bordered input-sm h-[38px] min-h-[38px] w-full leading-[20px]"
                           type="number"
                           value={activeTab.limit}
                           onChange={(event) => onLimitChange(Number(event.target.value || 200))}

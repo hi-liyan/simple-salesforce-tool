@@ -49,8 +49,8 @@ export function MysqlSmartInput({
   maxWidth = 640,
   allowClear = false
 }: MysqlSmartInputProps) {
-  // 文本域引用：用于读取/设置光标位置。
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  // 输入框引用：用于读取/设置光标位置。
+  const inputRef = useRef<HTMLInputElement | null>(null);
   // 根容器引用：用于点击外部关闭补全。
   const rootRef = useRef<HTMLDivElement | null>(null);
   // 是否显示候选弹层。
@@ -160,20 +160,20 @@ export function MysqlSmartInput({
     setOpen(false);
     setCaret(nextCaret);
     requestAnimationFrame(() => {
-      const textarea = textareaRef.current;
-      if (!textarea) return;
-      textarea.focus();
-      textarea.setSelectionRange(nextCaret, nextCaret);
+      const input = inputRef.current;
+      if (!input) return;
+      input.focus();
+      input.setSelectionRange(nextCaret, nextCaret);
     });
   }
 
   // 统一同步光标位置，保证补全范围准确。
-  function syncCaretFromTarget(target: HTMLTextAreaElement) {
+  function syncCaretFromTarget(target: HTMLInputElement) {
     setCaret(target.selectionStart || 0);
   }
 
   // 键盘交互：支持上下选择、回车/Tab 确认、Esc 关闭。
-  function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+  function onKeyDown(event: KeyboardEvent<HTMLInputElement>) {
     if (event.key === "Enter") {
       event.preventDefault();
       if (!open || filteredSuggestions.length === 0) return;
@@ -217,14 +217,12 @@ export function MysqlSmartInput({
       <label className="mb-1 block text-[12px]">{label}</label>
       {/* 输入框主体。 */}
       <div className="relative">
-        {/* 单行文本域：保留横向滚动能力，避免自动换行影响 SQL 片段输入。 */}
-        <textarea
-          ref={textareaRef}
-          className="textarea textarea-bordered textarea-sm h-[38px] min-h-[38px] w-full resize-none overflow-x-auto overflow-y-hidden whitespace-nowrap pr-8 leading-[20px]"
+        {/* 单行输入框：保留自动补全与光标 token 替换，placeholder 垂直居中。 */}
+        <input
+          ref={inputRef}
+          className="input input-bordered input-sm h-[38px] min-h-[38px] w-full pr-8 leading-[20px]"
           value={value}
           placeholder={placeholder}
-          rows={1}
-          wrap="off"
           autoCorrect="off"
           autoCapitalize="off"
           spellCheck={false}
@@ -260,7 +258,7 @@ export function MysqlSmartInput({
 
         {/* 宽度拖拽把手：按下后可水平调整输入框宽度。 */}
         <div
-          className="absolute -right-1 top-1/2 z-20 h-6 w-2 -translate-y-1/2 cursor-ew-resize rounded bg-base-300/70"
+          className="absolute -right-1 top-0 z-20 h-full w-2 cursor-ew-resize"
           role="separator"
           aria-orientation="vertical"
           aria-label={`${label}输入框宽度调节`}
