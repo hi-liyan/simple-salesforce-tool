@@ -2,13 +2,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { useQueryClient } from "@tanstack/react-query";
-import { Braces, Settings, Table2 } from "lucide-react";
 import { api } from "../api";
-import { LeftSidebar } from "../features/main/LeftSidebar";
-import { RightWorkspace } from "../features/main/RightWorkspace";
-import { SoqlExecutorWorkspace } from "../features/main/SoqlExecutorWorkspace";
-import { SettingsPanel } from "../features/main/SettingsPanel";
-import { MainLayout } from "../layouts/MainLayout";
+import { QueryPanel } from "../features/main/QueryPanel";
+import { QueryPanelActions, QueryPanelViewState } from "../features/main/QueryPanel/types";
 import { useObjectsQuery, useSourcesQuery, useSyncSourcesMutation } from "../queries/salesforce";
 import { useAppStore } from "../store/useAppStore";
 import { useSoqlExecutorStore } from "../store/useSoqlExecutorStore";
@@ -31,16 +27,6 @@ export function MainPage() {
   const setSoqlSidebarWidth = useAppStore((state) => state.setSoqlSidebarWidth);
   // 启动画面状态：首次初始化完成前显示全屏遮罩，避免用户误以为卡死。
   const [startupLoading, setStartupLoading] = useState(true);
-  // 是否正在拖拽 SOQL 侧栏分隔条。
-  const [soqlSidebarResizing, setSoqlSidebarResizing] = useState(false);
-  // 拖拽起始点 X 坐标。
-  const soqlResizeStartXRef = useRef(0);
-  // 拖拽起始宽度。
-  const soqlResizeStartWidthRef = useRef(320);
-  // 拖拽前 body 的 user-select 样式，结束拖拽后恢复。
-  const prevBodyUserSelectRef = useRef("");
-  // 拖拽前 body 的 cursor 样式，结束拖拽后恢复。
-  const prevBodyCursorRef = useRef("");
   // 启动完成标记：整个启动流程（rehydrate + refreshSources）完成前为 false，
   // 期间 selectedSourceId useEffect 跳过 resetTabs，避免清空 hydration 恢复的 Tab。
   const startupCompleteRef = useRef(false);
@@ -55,6 +41,8 @@ export function MainPage() {
   const setLoading = useAppStore((state) => state.setLoading);
   const patchTabInStore = useAppStore((state) => state.patchTab);
   const resetTabs = useAppStore((state) => state.resetTabs);
+  // SOQL 控制台：用于“查询控制台”按钮每次点击都新增 Tab。
+  const createSoqlConsoleTab = useSoqlExecutorStore((state) => state.createTab);
 
   // React Query：数据源与对象列表。
   const queryClient = useQueryClient();
@@ -98,39 +86,6 @@ export function MainPage() {
   // 用户上下文请求序号：用于忽略过期响应，避免并发切换数据源造成时区回写错乱。
   const userContextSeqRef = useRef(0);
 
-  // SOQL 执行器侧栏拖拽：鼠标移动时更新宽度，抬起时结束拖拽。
-  useEffect(() => {
-    if (!soqlSidebarResizing) return;
-
-    // 进入拖拽：禁用文本选中并统一鼠标样式，避免误选中与拖拽卡顿。
-    prevBodyUserSelectRef.current = document.body.style.userSelect;
-    prevBodyCursorRef.current = document.body.style.cursor;
-    document.body.style.userSelect = "none";
-    document.body.style.cursor = "col-resize";
-
-    const onMouseMove = (event: MouseEvent) => {
-      const deltaX = event.clientX - soqlResizeStartXRef.current;
-      const rawWidth = soqlResizeStartWidthRef.current + deltaX;
-      // 侧栏宽度限制：避免过窄影响可读性，避免过宽挤压主区域。
-      const maxWidth = Math.max(420, Math.floor(window.innerWidth * 0.6));
-      const nextWidth = Math.max(240, Math.min(maxWidth, rawWidth));
-      setSoqlSidebarWidth(nextWidth);
-    };
-
-    const onMouseUp = () => {
-      setSoqlSidebarResizing(false); // 结束拖拽状态，解除全局监听。
-    };
-
-    window.addEventListener("mousemove", onMouseMove);
-    window.addEventListener("mouseup", onMouseUp);
-    return () => {
-      window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("mouseup", onMouseUp);
-      // 退出拖拽：恢复页面原有光标与文本选中样式。
-      document.body.style.userSelect = prevBodyUserSelectRef.current;
-      document.body.style.cursor = prevBodyCursorRef.current;
-    };
-  }, [soqlSidebarResizing]);
 
   // 初始化加载：手动触发 Zustand rehydrate，等待完成后再同步数据源列表。
   useEffect(() => {
@@ -1208,271 +1163,192 @@ export function MainPage() {
       ) || {}
     : {};
   const activeTabHasPendingChanges = activeTab ? hasPendingChanges(activeTab) : false;
+  // QueryPanel 视图输入：统一聚合页面状态，降低渲染层耦合。
+  const queryPanelViewState: QueryPanelViewState = {
+    viewMode,
+    soqlSidebarWidth,
+    selectedSourceId,
+    selectedSourceType: selectedSource?.sourceType || "salesforce",
+    salesforceTimezone,
+    pageLoading,
+    objectsLoading: Boolean(selectedSourceId) && objectsFetching,
+    tabs,
+    activeTabObjectName,
+    activeTab,
+    workspaceNotice,
+    visibleColumns,
+    fieldMetadataMap,
+    hasPendingChanges: activeTabHasPendingChanges,
+    pendingDeleteRecordIds: activeTab?.pendingDeleteRecordIds ?? [],
+    loadingText,
+    objects,
+    sources,
+    mysqlDdl: activeTab ? mysqlDdlMap[activeTab.objectName]?.data || null : null,
+    mysqlDdlLoading: activeTab ? Boolean(mysqlDdlMap[activeTab.objectName]?.loading) : false,
+    mysqlDdlError: activeTab ? mysqlDdlMap[activeTab.objectName]?.error || "" : ""
+  };
+  // QueryPanel 交互输出：所有行为回调都在 MainPage 侧实现，便于后续替换 store 适配层。
+  const queryPanelActions: QueryPanelActions = {
+    onSetViewMode: setViewMode,
+    onOpenAuthWindow: openAuthWindow,
+    onOpenConsole: () => {
+      createSoqlConsoleTab(); // 每次点击都新建并激活一个控制台 Tab。
+      setViewMode("soqlExecutor"); // 自动切换到控制台视图。
+    },
+    onChangeSource: handleSourceChange,
+    onRefreshSources: () => void refreshSources(true),
+    onOpenObject: (item) => void openObjectTab(item),
+    onNotQueryableObjectClick: handleNotQueryableObjectClick,
+    onActivateTab: setActiveTabObjectName,
+    onCloseTab: closeTab,
+    onCloseCurrentTab: closeTab,
+    onCloseLeftTabs: closeLeftTabs,
+    onCloseRightTabs: closeRightTabs,
+    onCloseOtherTabs: closeOtherTabs,
+    onCloseAllTabs: closeAllTabs,
+    onCreateRecord: createRecordQuickly,
+    onDeleteCheckedRecords: () => void deleteCheckedRecords(),
+    onApplyPendingChanges: () => void applyPendingChanges(),
+    onDiscardPendingChanges: discardPendingChanges,
+    onToggleDrawer: () => void toggleDrawerForActiveTab(),
+    onRefreshMysqlDdl: () => {
+      if (!activeTab) return;
+      void loadMysqlDdl(activeTab.objectName);
+    },
+    onToggleQueryBar: () => {
+      if (!activeTab) return;
+      patchTab(activeTab.objectName, (item) => ({ ...item, showQueryBar: !item.showQueryBar }));
+    },
+    onToggleLogs: () => {
+      if (!activeTab) return;
+      patchTab(activeTab.objectName, (item) => ({ ...item, showLogs: !item.showLogs }));
+    },
+    onWhereChange: (value) => {
+      if (!activeTab) return;
+      patchTab(activeTab.objectName, (item) => ({ ...item, whereClause: value }));
+    },
+    onLimitChange: (value) => {
+      if (!activeTab) return;
+      patchTab(activeTab.objectName, (item) => ({ ...item, limit: value }));
+    },
+    onSortFieldChange: (value) => {
+      if (!activeTab) return;
+      patchTab(activeTab.objectName, (item) => ({ ...item, sortField: value }));
+    },
+    onSortDirectionChange: (value) => {
+      if (!activeTab) return;
+      patchTab(activeTab.objectName, (item) => ({ ...item, sortDirection: value }));
+    },
+    onSortClauseChange: (value) => {
+      if (!activeTab) return;
+      patchTab(activeTab.objectName, (item) => ({ ...item, sortClause: value }));
+    },
+    onQuery: () => {
+      if (!activeTab) return;
+      void queryTabData(
+        activeTab.objectName,
+        activeTab.describe || undefined,
+        activeTab.whereClause,
+        activeTab.sortField,
+        activeTab.limit,
+        activeTab.sortDirection,
+        activeTab.sortClause
+      );
+    },
+    onToggleRecord: (recordId, checked) => {
+      if (!activeTab) return;
+      patchTab(activeTab.objectName, (item) => ({
+        ...item,
+        selectedRecordIds: checked
+          ? Array.from(new Set([...item.selectedRecordIds, recordId]))
+          : item.selectedRecordIds.filter((id) => id !== recordId)
+      }));
+    },
+    onToggleAllRecords: (checked, recordIds) => {
+      if (!activeTab) return;
+      patchTab(activeTab.objectName, (item) => ({ ...item, selectedRecordIds: checked ? recordIds : [] }));
+    },
+    onEditCell: (rowIndex, columnName, value) => {
+      if (!activeTab) return;
+      patchTab(activeTab.objectName, (item) => {
+        const nextRecords = [...item.result.records];
+        const target = nextRecords[rowIndex];
+        if (!target) return item;
+
+        const nextRecord = { ...target, [columnName]: value };
+        const recordKey = getRecordKey(nextRecord, rowIndex);
+        const cellKey = `${recordKey}:${columnName}`;
+        const dirtySet = new Set(item.dirtyCellKeys);
+        const isNewRow = Boolean(nextRecord.__isNew);
+        if (isNewRow) {
+          dirtySet.add(cellKey); // 新增行任意修改都视为脏数据。
+        } else {
+          const baselineValue = stringifyComparableValue(item.baselineRecords[recordKey]?.[columnName]);
+          const nextValue = stringifyComparableValue(value);
+          if (baselineValue === nextValue) {
+            dirtySet.delete(cellKey); // 改回原值则移除脏标记。
+          } else {
+            dirtySet.add(cellKey); // 与基线不一致则保留脏标记。
+          }
+        }
+
+        nextRecords[rowIndex] = nextRecord;
+        return {
+          ...item,
+          result: { ...item.result, records: nextRecords },
+          dirtyCellKeys: Array.from(dirtySet)
+        };
+      });
+    },
+    onShowMessage: (message) => {
+      if (!activeTab) return;
+      patchTab(activeTab.objectName, (item) => ({
+        ...item,
+        notice: { type: "error", message }
+      }));
+    },
+    onToggleAllFields: () => {
+      if (!activeTab?.describe) return;
+      const allSelected = activeTab.describe.fields.every((field) => (activeTab.columnVisibility[field.name] ?? true) === true);
+      const nextChecked = !allSelected;
+      const nextVisibility = activeTab.describe.fields.reduce((acc, field) => {
+        acc[field.name] = nextChecked;
+        return acc;
+      }, {} as Record<string, boolean>);
+      patchTab(activeTab.objectName, (item) => ({ ...item, columnVisibility: nextVisibility }));
+      if (selectedSourceId) {
+        void persistColumnVisibility(selectedSourceId, activeTab.objectName, nextVisibility);
+      }
+    },
+    onToggleFieldVisibility: (fieldName, checked) => {
+      if (!activeTab) return;
+      const nextVisibility = { ...activeTab.columnVisibility, [fieldName]: checked };
+      patchTab(activeTab.objectName, (item) => ({
+        ...item,
+        columnVisibility: nextVisibility
+      }));
+      if (selectedSourceId) {
+        void persistColumnVisibility(selectedSourceId, activeTab.objectName, nextVisibility);
+      }
+    },
+    onSoqlChange: (value) => {
+      if (!activeTab) return;
+      patchTab(activeTab.objectName, (item) => ({ ...item, soqlDraft: value }));
+    },
+    onExecuteCustomSoql: () => void executeCustomSoql(),
+    onCloseWorkspaceNotice: clearWorkspaceNotice,
+    onCloseActiveTabNotice: () => {
+      if (!activeTab) return;
+      patchTab(activeTab.objectName, (item) => ({ ...item, notice: null }));
+    },
+    onSetSoqlSidebarWidth: setSoqlSidebarWidth
+  };
 
   return (
     // 页面容器：用于承载主布局与启动遮罩层。
     <div className="relative h-full w-full">
-      <MainLayout
-        navRail={
-          <div className="flex flex-col items-center gap-1 py-2">
-            <button
-              className={`tool-rail-btn ${viewMode === "query" ? "tool-rail-btn--active" : ""}`}
-              title="Query 布局"
-              onClick={() => setViewMode("query")}
-            >
-                <Table2 size={16} />
-            </button>
-            <button
-              className={`tool-rail-btn ${viewMode === "soqlExecutor" ? "tool-rail-btn--active" : ""}`}
-              title="SOQL 执行器"
-              onClick={() => setViewMode("soqlExecutor")}
-            >
-                <Braces size={16} />
-            </button>
-            <button
-              className={`tool-rail-btn ${viewMode === "settings" ? "tool-rail-btn--active" : ""}`}
-              title="设置"
-              onClick={() => setViewMode("settings")}
-            >
-                <Settings size={16} />
-            </button>
-          </div>
-        }
-        content={
-          <>
-            {viewMode === "query" && (
-              <div className="grid h-full w-full grid-cols-[320px_1fr] overflow-hidden">
-                <div className="flex min-h-0 flex-col border-r border-base-300">
-                  <LeftSidebar
-                    sources={sources}
-                    selectedSourceId={selectedSourceId}
-                    pageLoading={pageLoading}
-                    objectsLoading={Boolean(selectedSourceId) && objectsFetching}
-                    onOpenAuthWindow={openAuthWindow}
-                    onChangeSource={handleSourceChange}
-                    onRefreshSources={() => void refreshSources(true)}
-                    objects={objects}
-                    activeTabObjectName={activeTabObjectName}
-                    onOpenObject={(item) => void openObjectTab(item)}
-                    onNotQueryableObjectClick={handleNotQueryableObjectClick}
-                    objectListMode="list"
-                  />
-                </div>
-                <div className="flex min-h-0 min-w-0 flex-col overflow-hidden">
-                  <RightWorkspace
-                    selectedSourceId={selectedSourceId}
-                    selectedSourceType={selectedSource?.sourceType || "salesforce"}
-                    salesforceTimezone={salesforceTimezone}
-                    mysqlDdl={activeTab ? mysqlDdlMap[activeTab.objectName]?.data || null : null}
-                    mysqlDdlLoading={activeTab ? Boolean(mysqlDdlMap[activeTab.objectName]?.loading) : false}
-                    mysqlDdlError={activeTab ? mysqlDdlMap[activeTab.objectName]?.error || "" : ""}
-                    tabs={tabs}
-                    activeTabObjectName={activeTabObjectName}
-                    activeTab={activeTab}
-                    workspaceNotice={workspaceNotice}
-                    visibleColumns={visibleColumns}
-                    fieldMetadataMap={fieldMetadataMap}
-                    hasPendingChanges={activeTabHasPendingChanges}
-                    pendingDeleteRecordIds={activeTab?.pendingDeleteRecordIds ?? []}
-                    onActivateTab={setActiveTabObjectName}
-                    onCloseTab={closeTab}
-                    onCloseCurrentTab={closeTab}
-                    onCloseLeftTabs={closeLeftTabs}
-                    onCloseRightTabs={closeRightTabs}
-                    onCloseOtherTabs={closeOtherTabs}
-                    onCloseAllTabs={closeAllTabs}
-                    onCreateRecord={createRecordQuickly}
-                    onDeleteCheckedRecords={() => void deleteCheckedRecords()}
-                    onApplyPendingChanges={() => void applyPendingChanges()}
-                    onDiscardPendingChanges={discardPendingChanges}
-                    onToggleDrawer={() => void toggleDrawerForActiveTab()}
-                    onRefreshMysqlDdl={() => {
-                      if (!activeTab) return;
-                      void loadMysqlDdl(activeTab.objectName);
-                    }}
-                    onToggleQueryBar={() => {
-                      if (!activeTab) return;
-                      patchTab(activeTab.objectName, (item) => ({ ...item, showQueryBar: !item.showQueryBar }));
-                    }}
-                    onToggleLogs={() => {
-                      if (!activeTab) return;
-                      patchTab(activeTab.objectName, (item) => ({ ...item, showLogs: !item.showLogs }));
-                    }}
-                    onWhereChange={(value) => {
-                      if (!activeTab) return;
-                      patchTab(activeTab.objectName, (item) => ({ ...item, whereClause: value }));
-                    }}
-                    onLimitChange={(value) => {
-                      if (!activeTab) return;
-                      patchTab(activeTab.objectName, (item) => ({ ...item, limit: value }));
-                    }}
-                    onSortFieldChange={(value) => {
-                      if (!activeTab) return;
-                      patchTab(activeTab.objectName, (item) => ({ ...item, sortField: value }));
-                    }}
-                    onSortDirectionChange={(value) => {
-                      if (!activeTab) return;
-                      patchTab(activeTab.objectName, (item) => ({ ...item, sortDirection: value }));
-                    }}
-                    onSortClauseChange={(value) => {
-                      if (!activeTab) return;
-                      patchTab(activeTab.objectName, (item) => ({ ...item, sortClause: value }));
-                    }}
-                    onQuery={() => {
-                      if (!activeTab) return;
-                      void queryTabData(
-                        activeTab.objectName,
-                        activeTab.describe || undefined,
-                        activeTab.whereClause,
-                        activeTab.sortField,
-                        activeTab.limit,
-                        activeTab.sortDirection,
-                        activeTab.sortClause
-                      );
-                    }}
-                    onToggleRecord={(recordId, checked) => {
-                      if (!activeTab) return;
-                      patchTab(activeTab.objectName, (item) => ({
-                        ...item,
-                        selectedRecordIds: checked
-                          ? Array.from(new Set([...item.selectedRecordIds, recordId]))
-                          : item.selectedRecordIds.filter((id) => id !== recordId)
-                      }));
-                    }}
-                    onToggleAllRecords={(checked, recordIds) => {
-                      if (!activeTab) return;
-                      patchTab(activeTab.objectName, (item) => ({ ...item, selectedRecordIds: checked ? recordIds : [] }));
-                    }}
-                    onEditCell={(rowIndex, columnName, value) => {
-                      if (!activeTab) return;
-                      patchTab(activeTab.objectName, (item) => {
-                        const nextRecords = [...item.result.records];
-                        const target = nextRecords[rowIndex];
-                        if (!target) return item;
-
-                        const nextRecord = { ...target, [columnName]: value };
-                        const recordKey = getRecordKey(nextRecord, rowIndex);
-                        const cellKey = `${recordKey}:${columnName}`;
-                        const dirtySet = new Set(item.dirtyCellKeys);
-                        const isNewRow = Boolean(nextRecord.__isNew);
-                        if (isNewRow) {
-                          dirtySet.add(cellKey);
-                        } else {
-                          const baselineValue = stringifyComparableValue(item.baselineRecords[recordKey]?.[columnName]);
-                          const nextValue = stringifyComparableValue(value);
-                          if (baselineValue === nextValue) {
-                            dirtySet.delete(cellKey);
-                          } else {
-                            dirtySet.add(cellKey);
-                          }
-                        }
-
-                        nextRecords[rowIndex] = nextRecord;
-                        return {
-                          ...item,
-                          result: { ...item.result, records: nextRecords },
-                          dirtyCellKeys: Array.from(dirtySet)
-                        };
-                      });
-                    }}
-                    onShowMessage={(message) => {
-                      if (!activeTab) return;
-                      patchTab(activeTab.objectName, (item) => ({
-                        ...item,
-                        notice: { type: "error", message }
-                      }));
-                    }}
-                    onToggleAllFields={() => {
-                      if (!activeTab?.describe) return;
-                      const allSelected = activeTab.describe.fields.every((field) => (activeTab.columnVisibility[field.name] ?? true) === true);
-                      const nextChecked = !allSelected;
-                      const nextVisibility = activeTab.describe.fields.reduce((acc, field) => {
-                        acc[field.name] = nextChecked;
-                        return acc;
-                      }, {} as Record<string, boolean>);
-                      patchTab(activeTab.objectName, (item) => ({ ...item, columnVisibility: nextVisibility }));
-                      if (selectedSourceId) {
-                        void persistColumnVisibility(selectedSourceId, activeTab.objectName, nextVisibility);
-                      }
-                    }}
-                    onToggleFieldVisibility={(fieldName, checked) => {
-                      if (!activeTab) return;
-                      const nextVisibility = { ...activeTab.columnVisibility, [fieldName]: checked };
-                      patchTab(activeTab.objectName, (item) => ({
-                        ...item,
-                        columnVisibility: nextVisibility
-                      }));
-                      if (selectedSourceId) {
-                        void persistColumnVisibility(selectedSourceId, activeTab.objectName, nextVisibility);
-                      }
-                    }}
-                    onSoqlChange={(value) => {
-                      if (!activeTab) return;
-                      patchTab(activeTab.objectName, (item) => ({ ...item, soqlDraft: value }));
-                    }}
-                    onExecuteCustomSoql={() => void executeCustomSoql()}
-                    onCloseWorkspaceNotice={clearWorkspaceNotice}
-                    onCloseActiveTabNotice={() => {
-                      if (!activeTab) return;
-                      patchTab(activeTab.objectName, (item) => ({ ...item, notice: null }));
-                    }}
-                    loadingText={loadingText}
-                    objectNames={objects.filter((item) => item.queryable).map((item) => item.name)}
-                  />
-                </div>
-              </div>
-            )}
-
-            {/* SOQL 执行器面板：始终挂载，切换左侧导航时仅隐藏，避免内容与结果被清理。 */}
-            <div className={viewMode === "soqlExecutor" ? "flex h-full w-full overflow-hidden" : "hidden h-full w-full"}>
-              {/* 左侧沿用数据源/对象面板：便于在编写 SOQL 时参考对象信息。 */}
-              <div className="relative flex min-h-0 flex-col border-r border-base-300" style={{ width: soqlSidebarWidth }}>
-                <LeftSidebar
-                  sources={sources}
-                  selectedSourceId={selectedSourceId}
-                  pageLoading={pageLoading}
-                  objectsLoading={Boolean(selectedSourceId) && objectsFetching}
-                  onOpenAuthWindow={openAuthWindow}
-                  onChangeSource={handleSourceChange}
-                  onRefreshSources={() => void refreshSources(true)}
-                  objects={objects}
-                  activeTabObjectName={activeTabObjectName}
-                  onOpenObject={(item) => void openObjectTab(item)}
-                  onNotQueryableObjectClick={handleNotQueryableObjectClick}
-                  objectListMode="tree"
-                />
-                {/* 透明拖拽热区：视觉保持原样，仅提供宽度调整能力。 */}
-                <div
-                  className="absolute -right-[3px] top-0 z-20 h-full w-[6px] cursor-col-resize"
-                  role="separator"
-                  aria-orientation="vertical"
-                  aria-label="拖拽调整侧栏宽度"
-                  onMouseDown={(event) => {
-                    event.preventDefault(); // 阻止拖拽起点触发文本选中。
-                    soqlResizeStartXRef.current = event.clientX; // 记录本次拖拽起点 X。
-                    soqlResizeStartWidthRef.current = soqlSidebarWidth; // 记录本次拖拽起始宽度。
-                    setSoqlSidebarResizing(true); // 进入拖拽状态。
-                  }}
-                />
-              </div>
-              {/* 右侧 SOQL 执行器：多 Tab、执行、结果/层级/日志。 */}
-              <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-                <SoqlExecutorWorkspace
-                  selectedSourceId={selectedSourceId}
-                  selectedSourceType={selectedSource?.sourceType || "salesforce"}
-                  salesforceTimezone={salesforceTimezone}
-                  loadingText={loadingText}
-                  objects={objects}
-                  workspaceNotice={workspaceNotice}
-                  onCloseWorkspaceNotice={clearWorkspaceNotice}
-                />
-              </div>
-            </div>
-
-            {viewMode === "settings" && <SettingsPanel />}
-          </>
-        }
-      />
+      {/* QueryPanel 壳层：统一承载 Query/SOQL/设置视图编排。 */}
+      <QueryPanel viewState={queryPanelViewState} actions={queryPanelActions} />
       {versionUpdateModal && (
         // 新版本提示模态框：统一替代 confirm + 通知的双提示流程。
         <div className="fixed inset-0 z-[130] flex items-center justify-center bg-base-300/45 p-4 backdrop-blur-[2px]">
