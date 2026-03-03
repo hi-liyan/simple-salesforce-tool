@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { Plus, RefreshCw } from "lucide-react";
+import { Braces, Plus, RefreshCw } from "lucide-react";
 import { ObjectList } from "../../components/ObjectList";
 import { DataSourceSelector } from "../../components/DataSourceSelector";
 import { api } from "../../api";
 import { DataSourceType, SalesforceObject, SalesforceSource, SourceUpsertPayload } from "../../types";
+import { QuerySidebarActions, type QuerySidebarActionItem } from "./QueryPanel/components/QuerySidebarActions";
 
 type LeftSidebarProps = {
   // 数据源列表。
@@ -20,6 +21,8 @@ type LeftSidebarProps = {
   onChangeSource: (sourceId: string) => void;
   // 刷新数据源回调。
   onRefreshSources: () => void;
+  // 打开查询控制台回调。
+  onOpenConsole?: () => void;
   // 当前对象列表。
   objects: SalesforceObject[];
   // 当前激活对象名。
@@ -41,6 +44,7 @@ export function LeftSidebar({
   onOpenAuthWindow,
   onChangeSource,
   onRefreshSources,
+  onOpenConsole,
   objects,
   activeTabObjectName,
   onOpenObject,
@@ -204,27 +208,51 @@ export function LeftSidebar({
     onOpenAuthWindow();
   }
 
+  // 左侧动作区：统一用配置项渲染，便于未来按数据库类型扩展更多动作。
+  const actionItems: QuerySidebarActionItem[] = [
+    {
+      id: "create-source",
+      icon: Plus,
+      ariaLabel: "新增数据源",
+      onClick: openSourceTypeModal
+    },
+    {
+      id: "refresh-source",
+      icon: RefreshCw,
+      ariaLabel: "刷新数据源",
+      onClick: onRefreshSources
+    },
+    {
+      id: "open-console",
+      icon: Braces,
+      ariaLabel: "查询控制台",
+      onClick: () => {
+        if (!onOpenConsole) return;
+        onOpenConsole(); // 点击后交由外层决定打开控制台的具体行为（切页或新建 console tab）。
+      }
+    }
+  ];
+
   return (
     <>
-      {/* 数据源标题与新增按钮区域。 */}
+      {/* 数据源动作区：统一放置“新增/刷新/查询控制台”按钮。 */}
+      <div className="border-b border-base-300 px-3 py-2">
+        {/* 动作按钮行。 */}
+        <QuerySidebarActions actions={actionItems} disabled={pageLoading} />
+      </div>
+
+      {/* 数据源标题与选择器区域。 */}
       <div className="border-b border-base-300 px-3 py-2">
         <div className="flex items-center justify-between">
           <span className="text-[12px] text-neutral/70">DATA SOURCE</span>
-          <button className="btn btn-ghost btn-square btn-sm" aria-label="新增数据源" onClick={openSourceTypeModal} disabled={pageLoading}>
-            <Plus size={14} />
-          </button>
         </div>
 
-        {/* 数据源下拉与刷新按钮。 */}
-        <div className="mt-[6px] flex flex-row gap-2">
+        {/* 数据源下拉选择器。 */}
+        <div className="mt-[6px]">
           {/* 自定义数据源选择器：支持前置类型徽标与更灵活展示。 */}
           <div className="min-w-0 flex-1">
             <DataSourceSelector sources={sources} selectedSourceId={selectedSourceId} onChange={onChangeSource} disabled={pageLoading} />
           </div>
-          <button className="btn btn-primary btn-sm shrink-0" onClick={onRefreshSources} disabled={pageLoading}>
-            <RefreshCw size={14} />
-            刷新
-          </button>
         </div>
       </div>
 
