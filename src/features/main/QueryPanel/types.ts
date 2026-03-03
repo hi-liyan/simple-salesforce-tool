@@ -1,6 +1,16 @@
 import { Notice, ObjectDdl, SalesforceObject, SalesforceSource, TabState } from "../../../types";
 import { MainViewMode } from "../../../store/useAppStore";
 
+// 统一工作区 Tab 项：用于在 Query 视图中同时承载 data 与 console。
+export type QueryWorkspaceTabItem = {
+  // 唯一 ID（例如 data:Account / console:soql-tab-xxx）。
+  id: string;
+  // Tab 类型：data=对象查询，console=查询控制台。
+  kind: "data" | "console";
+  // Tab 标题。
+  title: string;
+};
+
 // QueryPanel 渲染所需状态：集中约束 UI 输入，降低 MainPage 与子组件耦合。
 export type QueryPanelViewState = {
   // 页面模式：Query/SOQL/设置。
@@ -45,6 +55,12 @@ export type QueryPanelViewState = {
   mysqlDdlLoading: boolean;
   // MySQL DDL 错误信息。
   mysqlDdlError: string;
+  // 统一工作区 Tab 列表（data + console）。
+  workspaceTabs: QueryWorkspaceTabItem[];
+  // 当前激活的统一工作区 Tab ID。
+  activeWorkspaceTabId: string;
+  // 当前激活的统一工作区 Tab 类型。
+  activeWorkspaceTabKind: "data" | "console";
 };
 
 // QueryPanel 交互回调：将行为从渲染层抽离，便于未来替换实现。
@@ -55,6 +71,10 @@ export type QueryPanelActions = {
   onOpenAuthWindow: () => void;
   // 新建并打开查询控制台。
   onOpenConsole: () => void;
+  // 激活统一工作区 Tab。
+  onActivateWorkspaceTab: (workspaceTabId: string) => void;
+  // 关闭统一工作区 Tab。
+  onCloseWorkspaceTab: (workspaceTabId: string) => void;
   // 切换数据源。
   onChangeSource: (sourceId: string) => void;
   // 刷新数据源。
