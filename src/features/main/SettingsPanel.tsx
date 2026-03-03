@@ -5,12 +5,12 @@ import { api } from "../../api";
 import { CliPathProbe, CliPathSettings, CliPathStatus, LlmSettings, SalesforceSource } from "../../types";
 import { SystemLogsPanel } from "./SystemLogsPanel";
 
-// 设置面板：通过顶部 Tab 切换 CLI 设置、LLM 设置、数据源信息、系统日志和关于与反馈页面。
+// 设置面板：通过顶部 Tab 切换数据源、CLI 设置、LLM 设置、系统日志和关于与反馈页面。
 export function SettingsPanel() {
   // 反馈入口 URL：统一集中管理，便于后续替换反馈地址。
   const feedbackIssueUrl = "https://github.com/hi-liyan/simple-salesforce-tool/issues/new";
   // 顶部 Tab 状态：控制当前展示的设置分区。
-  const [activeTab, setActiveTab] = useState<"cli" | "llm" | "sources" | "systemLogs" | "about">("cli");
+  const [activeTab, setActiveTab] = useState<"cli" | "llm" | "sources" | "systemLogs" | "about">("sources");
   // CLI 路径设置：包含自定义路径、生效路径和探测信息。
   const [settings, setSettings] = useState<CliPathSettings | null>(null);
   // CLI 自定义路径输入值：支持手动输入和候选回填。
@@ -425,10 +425,14 @@ export function SettingsPanel() {
   return (
     // 面板外层：保持与主页面一致的滚动和留白风格。
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      {/* 顶部 Tab 区：切换 CLI / LLM / 数据源 / 关于与反馈。 */}
+      {/* 顶部 Tab 区：切换 数据源 / CLI / LLM / 关于与反馈。 */}
       <div className="border-b border-base-300 px-4 pt-3">
         {/* Tab 组：使用 DaisyUI tab 样式。 */}
         <div className="tabs tabs-boxed inline-flex bg-base-200/60">
+          {/* 数据源 Tab 按钮。 */}
+          <button className={`tab ${activeTab === "sources" ? "tab-active" : ""}`} type="button" onClick={() => setActiveTab("sources")}>
+            数据源
+          </button>
           {/* CLI 设置 Tab 按钮。 */}
           <button className={`tab ${activeTab === "cli" ? "tab-active" : ""}`} type="button" onClick={() => setActiveTab("cli")}>
             CLI设置
@@ -436,10 +440,6 @@ export function SettingsPanel() {
           {/* LLM 设置 Tab 按钮。 */}
           <button className={`tab ${activeTab === "llm" ? "tab-active" : ""}`} type="button" onClick={() => setActiveTab("llm")}>
             LLM设置
-          </button>
-          {/* 数据源 Tab 按钮。 */}
-          <button className={`tab ${activeTab === "sources" ? "tab-active" : ""}`} type="button" onClick={() => setActiveTab("sources")}>
-            数据源
           </button>
           {/* 系统日志 Tab 按钮。 */}
           <button className={`tab ${activeTab === "systemLogs" ? "tab-active" : ""}`} type="button" onClick={() => setActiveTab("systemLogs")}>
