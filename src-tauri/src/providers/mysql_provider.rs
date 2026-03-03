@@ -8,7 +8,7 @@ use sqlx::{Column, MySql, QueryBuilder, Row};
 
 use crate::error::AppError;
 use crate::models::{
-    CurrentUserContext, ObjectDescribe, ObjectField, QueryResult, RecordUpdatePayload,
+    CurrentUserContext, ObjectDdl, ObjectDescribe, ObjectField, QueryResult, RecordUpdatePayload,
     SalesforceObject, SalesforceSource,
 };
 
@@ -389,6 +389,142 @@ impl MySqlProvider {
     /// MySQL 无 Salesforce token 校验，恒定返回 true。
     pub async fn validate_token(&self, _source: &SalesforceSource) -> bool {
         true
+    }
+
+    /// 读取表 DDL 信息（建表语句 + 索引/约束语句）。
+    pub async fn get_object_ddl(
+        &self,
+        source: &SalesforceSource,
+        object_name: &str,
+    ) -> Result<ObjectDdl, AppError> {
+        let safe_table = ensure_safe_identifier(object_name, "表名")?;
+        let config = MySqlSourceConfig::from_source(source)?;
+        let pool = build_mysql_pool(&config).await?;
+
+        // 1. 建表 DDL：直接读取 SHOW CREATE TABLE。
+        let create_row = sqlx::query(&format!("SHOW CREATE TABLE `{safe_table}`"))
+            .fetch_one(&pool)
+            .await
+            .map_err(|error| AppError::Db(format!("读取建表 DDL 失败: {error}")))?;
+        let create_table_ddl = decode_row_string(&create_row, 1usize, "建表DDL")?;
+
+        // 2. 索引 DDL：排除主键，按索引名聚合列。
+        let index_rows = sqlx::query(
+            r#"
+            SELECT
+                index_name,
+                non_unique,
+                index_type,
+                GROUP_CONCAT(
+                    CONCAT('`', column_name, '`', IF(collation = 'D', ' DESC', ''))
+                    ORDER BY seq_in_index
+                    SEPARATOR ', '
+                ) AS indexed_columns
+            FROM information_schema.statistics
+            WHERE table_schema = ? AND table_name = ? AND index_name <> 'PRIMARY'
+            GROUP BY index_name, non_unique, index_type
+            ORDER BY index_name ASC
+            "#,
+        )
+        .bind(&config.database)
+        .bind(&safe_table)
+        .fetch_all(&pool)
+        .await
+        .map_err(|error| AppError::Db(format!("读取索引 DDL 失败: {error}")))?;
+
+        let mut index_ddls = Vec::with_capacity(index_rows.len());
+        for row in index_rows {
+            let index_name = decode_row_string(&row, 0usize, "索引名")?;
+            let non_unique = row
+                .try_get::<i64, _>(1usize)
+                .map_err(|error| AppError::Db(format!("读取索引唯一性失败: {error}")))?;
+            let index_type = decode_row_string(&row, 2usize, "索引类型")?;
+            let indexed_columns =
+                decode_optional_row_string(&row, 3usize).unwrap_or_default();
+            if indexed_columns.trim().is_empty() {
+                continue;
+            }
+            let unique_prefix = if non_unique == 0 { "UNIQUE " } else { "" };
+            index_ddls.push(format!(
+                "CREATE {unique_prefix}INDEX `{index_name}` ON `{safe_table}` ({indexed_columns}) USING {index_type};"
+            ));
+        }
+
+        // 3. 约束 DDL：提取 UNIQUE/FK 约束，便于直接复制复用。
+        let constraint_rows = sqlx::query(
+            r#"
+            SELECT
+                tc.constraint_name,
+                tc.constraint_type,
+                GROUP_CONCAT(CONCAT('`', kcu.column_name, '`') ORDER BY kcu.ordinal_position SEPARATOR ', ') AS constraint_columns,
+                MIN(kcu.referenced_table_name) AS referenced_table,
+                GROUP_CONCAT(
+                    CONCAT('`', kcu.referenced_column_name, '`')
+                    ORDER BY COALESCE(kcu.position_in_unique_constraint, kcu.ordinal_position)
+                    SEPARATOR ', '
+                ) AS referenced_columns,
+                MIN(rc.update_rule) AS update_rule,
+                MIN(rc.delete_rule) AS delete_rule
+            FROM information_schema.table_constraints tc
+            LEFT JOIN information_schema.key_column_usage kcu
+                ON tc.constraint_schema = kcu.constraint_schema
+                AND tc.table_name = kcu.table_name
+                AND tc.constraint_name = kcu.constraint_name
+            LEFT JOIN information_schema.referential_constraints rc
+                ON tc.constraint_schema = rc.constraint_schema
+                AND tc.table_name = rc.table_name
+                AND tc.constraint_name = rc.constraint_name
+            WHERE tc.table_schema = ? AND tc.table_name = ?
+                AND tc.constraint_type IN ('UNIQUE', 'FOREIGN KEY')
+            GROUP BY tc.constraint_name, tc.constraint_type
+            ORDER BY tc.constraint_type ASC, tc.constraint_name ASC
+            "#,
+        )
+        .bind(&config.database)
+        .bind(&safe_table)
+        .fetch_all(&pool)
+        .await
+        .map_err(|error| AppError::Db(format!("读取约束 DDL 失败: {error}")))?;
+
+        let mut constraint_ddls = Vec::with_capacity(constraint_rows.len());
+        for row in constraint_rows {
+            let constraint_name = decode_row_string(&row, 0usize, "约束名")?;
+            let constraint_type = decode_row_string(&row, 1usize, "约束类型")?;
+            let columns = decode_optional_row_string(&row, 2usize).unwrap_or_default();
+            if columns.trim().is_empty() {
+                continue;
+            }
+
+            if constraint_type.eq_ignore_ascii_case("UNIQUE") {
+                constraint_ddls.push(format!(
+                    "ALTER TABLE `{safe_table}` ADD CONSTRAINT `{constraint_name}` UNIQUE ({columns});"
+                ));
+                continue;
+            }
+
+            if constraint_type.eq_ignore_ascii_case("FOREIGN KEY") {
+                let referenced_table =
+                    decode_optional_row_string(&row, 3usize).unwrap_or_default();
+                let referenced_columns =
+                    decode_optional_row_string(&row, 4usize).unwrap_or_default();
+                let update_rule = decode_optional_row_string(&row, 5usize)
+                    .unwrap_or_else(|| "NO ACTION".to_string());
+                let delete_rule = decode_optional_row_string(&row, 6usize)
+                    .unwrap_or_else(|| "NO ACTION".to_string());
+                if referenced_table.trim().is_empty() || referenced_columns.trim().is_empty() {
+                    continue;
+                }
+                constraint_ddls.push(format!(
+                    "ALTER TABLE `{safe_table}` ADD CONSTRAINT `{constraint_name}` FOREIGN KEY ({columns}) REFERENCES `{referenced_table}` ({referenced_columns}) ON UPDATE {update_rule} ON DELETE {delete_rule};"
+                ));
+            }
+        }
+
+        Ok(ObjectDdl {
+            create_table_ddl,
+            index_ddls,
+            constraint_ddls,
+        })
     }
 }
 

@@ -65,6 +65,13 @@ export type QueryResult = {
   records: Record<string, unknown>[];
 };
 
+// 对象 DDL 信息（关系型数据源专用）。
+export type ObjectDdl = {
+  createTableDdl: string;
+  indexDdls: string[];
+  constraintDdls: string[];
+};
+
 // 数据源新增/更新负载。
 export type SourceUpsertPayload = {
   name: string;

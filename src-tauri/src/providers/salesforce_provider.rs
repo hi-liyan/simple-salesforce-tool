@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use crate::error::AppError;
 use crate::models::{
-    CurrentUserContext, ObjectDescribe, QueryResult, RecordUpdatePayload, SalesforceObject,
+    CurrentUserContext, ObjectDdl, ObjectDescribe, QueryResult, RecordUpdatePayload, SalesforceObject,
     SalesforceSource,
 };
 use crate::salesforce::SalesforceClient;
@@ -129,5 +129,16 @@ impl<'a> SalesforceProvider<'a> {
     /// 快速校验 token 是否可用。
     pub async fn validate_token(&self, source: &SalesforceSource) -> bool {
         self.client.validate_token(source).await
+    }
+
+    /// Salesforce 不提供关系型表 DDL，统一返回不支持提示。
+    pub async fn get_object_ddl(
+        &self,
+        _source: &SalesforceSource,
+        _object_name: &str,
+    ) -> Result<ObjectDdl, AppError> {
+        Err(AppError::Biz(
+            "当前数据源类型不支持 DDL 信息展示。".to_string(),
+        ))
     }
 }

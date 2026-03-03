@@ -13,8 +13,8 @@ use crate::db;
 use crate::error::AppError;
 use crate::models::{
     AiCapabilities, AiChatTurnV2Request, AiChatTurnV2Response, CliPathProbe, CliPathSettings,
-    CliPathStatus, CurrentUserContext, LlmSettings, LlmSettingsView, ObjectDescribe, QueryResult,
-    RecordMutationPayload, RecordSavePayload, SalesforceObject, SalesforceSource,
+    CliPathStatus, CurrentUserContext, LlmSettings, LlmSettingsView, ObjectDdl, ObjectDescribe,
+    QueryResult, RecordMutationPayload, RecordSavePayload, SalesforceObject, SalesforceSource,
     SaveLlmSettingsPayload, SourceUpsertPayload, SystemLogPage,
 };
 use crate::providers::provider_for_source;
@@ -1368,6 +1368,60 @@ pub async fn describe_object(
                 Some(&object_name),
                 false,
                 "获取对象字段元数据失败。",
+                Some(&message),
+            );
+            Err(message)
+        }
+    }
+}
+
+/// 读取对象 DDL（MySQL 返回建表/索引/约束 DDL）。
+#[tauri::command]
+pub async fn get_object_ddl(
+    state: State<'_, AppState>,
+    source_id: String,
+    object_name: String,
+) -> Result<ObjectDdl, String> {
+    let source = {
+        let connection = state
+            .db
+            .lock()
+            .map_err(|error| format!("Database lock failed: {error}"))?;
+        db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
+    };
+    let provider = provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
+    let log_category = if source.is_salesforce() {
+        "SALESFORCE_API"
+    } else {
+        "MYSQL_DB"
+    };
+
+    match provider.get_object_ddl(&source, &object_name).await {
+        Ok(ddl) => {
+            write_system_log(
+                &state,
+                "INFO",
+                log_category,
+                "get_object_ddl",
+                Some(&source_id),
+                Some(&object_name),
+                true,
+                "读取对象 DDL 成功。",
+                None,
+            );
+            Ok(ddl)
+        }
+        Err(error) => {
+            let message = AppError::to_string_error(error);
+            write_system_log(
+                &state,
+                "ERROR",
+                log_category,
+                "get_object_ddl",
+                Some(&source_id),
+                Some(&object_name),
+                false,
+                "读取对象 DDL 失败。",
                 Some(&message),
             );
             Err(message)

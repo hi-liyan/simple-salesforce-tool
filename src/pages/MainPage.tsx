@@ -13,7 +13,7 @@ import { useObjectsQuery, useSourcesQuery, useSyncSourcesMutation } from "../que
 import { useAppStore } from "../store/useAppStore";
 import { useSoqlExecutorStore } from "../store/useSoqlExecutorStore";
 import { enableStorageWrite } from "../store/tauriStorage";
-import { Notice, ObjectDescribe, ObjectField, QueryResult, SalesforceObject, TabLog, TabState } from "../types";
+import { Notice, ObjectDdl, ObjectDescribe, ObjectField, QueryResult, SalesforceObject, TabLog, TabState } from "../types";
 
 // GitHub Releases 固定地址：用于更新提示中的展示与跳转。
 const GITHUB_RELEASE_PAGE_URL = "https://github.com/hi-liyan/simple-salesforce-tool/releases";
@@ -91,6 +91,10 @@ export function MainPage() {
   const [tokenRefreshing, setTokenRefreshing] = useState(false);
   // Salesforce 当前用户时区（IANA），用于 datetime 与 Salesforce Web 一致展示。
   const [salesforceTimezone, setSalesforceTimezone] = useState<string | null>(null);
+  // MySQL DDL 缓存：按对象维度保存建表/索引/约束信息。
+  const [mysqlDdlMap, setMysqlDdlMap] = useState<
+    Record<string, { loading: boolean; data: ObjectDdl | null; error: string }>
+  >({});
   // 用户上下文请求序号：用于忽略过期响应，避免并发切换数据源造成时区回写错乱。
   const userContextSeqRef = useRef(0);
 
@@ -280,8 +284,10 @@ export function MainPage() {
   useEffect(() => {
     if (!selectedSourceId) {
       setSalesforceTimezone(null); // 未选择数据源时重置时区，回退前端默认行为。
+      setMysqlDdlMap({}); // 未选择数据源时清空 DDL 缓存。
       return;
     }
+    setMysqlDdlMap({}); // 切换到新数据源后清空旧 DDL 缓存，避免跨源污染。
 
     const seq = userContextSeqRef.current + 1;
     userContextSeqRef.current = seq;
@@ -869,10 +875,21 @@ export function MainPage() {
 
   async function toggleDrawerForActiveTab() {
     if (!activeTab || !selectedSourceId) return;
+    const isMysqlSource = (selectedSource?.sourceType || "salesforce").toLowerCase() === "mysql";
 
     const nextOpen = !activeTab.showDrawer;
     if (!nextOpen) {
       patchTab(activeTab.objectName, (item) => ({ ...item, showDrawer: false }));
+      return;
+    }
+
+    if (isMysqlSource) {
+      // MySQL 抽屉展示 DDL：打开时按需加载 DDL 缓存。
+      patchTab(activeTab.objectName, (item) => ({ ...item, showDrawer: true }));
+      const ddlState = mysqlDdlMap[activeTab.objectName];
+      if (!ddlState?.loading && !ddlState?.data) {
+        await loadMysqlDdl(activeTab.objectName);
+      }
       return;
     }
 
@@ -897,6 +914,39 @@ export function MainPage() {
         ...item,
         loading: false,
         notice: { type: "error", message: `加载字段元数据失败：${String(error)}` }
+      }));
+    }
+  }
+
+  // 加载指定对象的 MySQL DDL（建表/索引/约束）。
+  async function loadMysqlDdl(objectName: string) {
+    if (!selectedSourceId) return;
+    setMysqlDdlMap((state) => ({
+      ...state,
+      [objectName]: {
+        loading: true,
+        data: state[objectName]?.data || null,
+        error: ""
+      }
+    }));
+    try {
+      const ddl = await api.getObjectDdl(selectedSourceId, objectName);
+      setMysqlDdlMap((state) => ({
+        ...state,
+        [objectName]: {
+          loading: false,
+          data: ddl,
+          error: ""
+        }
+      }));
+    } catch (error) {
+      setMysqlDdlMap((state) => ({
+        ...state,
+        [objectName]: {
+          loading: false,
+          data: state[objectName]?.data || null,
+          error: String(error)
+        }
       }));
     }
   }
@@ -1213,6 +1263,9 @@ export function MainPage() {
                     selectedSourceId={selectedSourceId}
                     selectedSourceType={selectedSource?.sourceType || "salesforce"}
                     salesforceTimezone={salesforceTimezone}
+                    mysqlDdl={activeTab ? mysqlDdlMap[activeTab.objectName]?.data || null : null}
+                    mysqlDdlLoading={activeTab ? Boolean(mysqlDdlMap[activeTab.objectName]?.loading) : false}
+                    mysqlDdlError={activeTab ? mysqlDdlMap[activeTab.objectName]?.error || "" : ""}
                     tabs={tabs}
                     activeTabObjectName={activeTabObjectName}
                     activeTab={activeTab}
@@ -1233,6 +1286,10 @@ export function MainPage() {
                     onApplyPendingChanges={() => void applyPendingChanges()}
                     onDiscardPendingChanges={discardPendingChanges}
                     onToggleDrawer={() => void toggleDrawerForActiveTab()}
+                    onRefreshMysqlDdl={() => {
+                      if (!activeTab) return;
+                      void loadMysqlDdl(activeTab.objectName);
+                    }}
                     onToggleQueryBar={() => {
                       if (!activeTab) return;
                       patchTab(activeTab.objectName, (item) => ({ ...item, showQueryBar: !item.showQueryBar }));

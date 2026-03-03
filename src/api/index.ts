@@ -9,6 +9,7 @@ import {
   CurrentUserContext,
   LlmSettings,
   LlmSettingsSavePayload,
+  ObjectDdl,
   ObjectDescribe,
   QueryResult,
   RecordMutationPayload,
@@ -71,6 +72,8 @@ export const api = {
     invokeApi<void>("open_record_page", { sourceId, objectName, recordId }),
   describeObject: (sourceId: string, objectName: string) =>
     invokeApi<ObjectDescribe>("describe_object", { sourceId, objectName }),
+  getObjectDdl: (sourceId: string, objectName: string) =>
+    invokeApi<ObjectDdl>("get_object_ddl", { sourceId, objectName }),
   resolveFieldChildRelationshipName: (sourceId: string, objectName: string, fieldName: string) =>
     invokeApi<string | null>("resolve_field_child_relationship_name", { sourceId, objectName, fieldName }),
   queryRecords: (sourceId: string, soql: string) =>
