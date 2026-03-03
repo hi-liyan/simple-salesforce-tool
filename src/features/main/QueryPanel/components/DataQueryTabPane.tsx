@@ -505,6 +505,7 @@ export function DataQueryTabPane({
                 <div className="flex min-w-max flex-row items-end gap-2">
                   {isMysqlSource ? (
                     <MysqlSmartInput
+                      key={`mysql-where-${activeTab.objectName}`}
                       label="WHERE"
                       value={activeTab.whereClause}
                       placeholder="例如：status = 'ACTIVE' AND created_at >= '2025-01-01'"
@@ -512,8 +513,6 @@ export function DataQueryTabPane({
                       onChange={onWhereChange}
                       // 候选包含字段、函数与关键字。
                       suggestions={mysqlWhereSuggestions}
-                      // 本地缓存键：保持 WHERE 输入宽度。
-                      widthStorageKey="query-panel.mysql.where.width"
                       // 默认宽度：与旧版视觉接近。
                       defaultWidth={360}
                       // 允许快速清空 WHERE。
@@ -548,6 +547,7 @@ export function DataQueryTabPane({
                   {isMysqlSource ? (
                     <>
                       <MysqlSmartInput
+                        key={`mysql-sort-${activeTab.objectName}`}
                         label="排序"
                         value={activeTab.sortClause || ""}
                         placeholder="例如：created_at DESC, id ASC"
@@ -555,8 +555,6 @@ export function DataQueryTabPane({
                         onChange={onSortClauseChange}
                         // 排序候选：字段 + 方向 + 常用函数。
                         suggestions={mysqlSortSuggestions}
-                        // 本地缓存键：保持排序输入宽度。
-                        widthStorageKey="query-panel.mysql.sort.width"
                         // 默认宽度：略窄于 WHERE。
                         defaultWidth={300}
                         // 排序有值时显示清空按钮，与 WHERE 行为一致。
