@@ -1,7 +1,7 @@
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
-import { ObjectDescribe, SalesforceObject } from "../types";
+import { ObjectDdl, ObjectDescribe, SalesforceObject } from "../types";
 import {
   buildDisplayMetadataFromField,
   formatFieldMetadataValue,
@@ -42,6 +42,14 @@ export function ObjectList({ objects, sourceId, sourceType, activeObjectName, on
   const [loadingByObjectName, setLoadingByObjectName] = useState<Record<string, boolean>>({});
   // 对象字段加载错误信息。
   const [errorByObjectName, setErrorByObjectName] = useState<Record<string, string>>({});
+  // MySQL DDL 缓存：用于渲染“外键/索引/检查”结构节点。
+  const [ddlByObjectName, setDdlByObjectName] = useState<Record<string, ObjectDdl>>({});
+  // MySQL DDL 加载状态。
+  const [ddlLoadingByObjectName, setDdlLoadingByObjectName] = useState<Record<string, boolean>>({});
+  // MySQL DDL 加载错误信息。
+  const [ddlErrorByObjectName, setDdlErrorByObjectName] = useState<Record<string, string>>({});
+  // MySQL 分类节点展开集合（key: objectName:category）。
+  const [expandedMysqlCategoryKeys, setExpandedMysqlCategoryKeys] = useState<string[]>([]);
   // 对象右键菜单状态：记录菜单位置与目标对象。
   const [objectContextMenu, setObjectContextMenu] = useState<{ x: number; y: number; objectItem: SalesforceObject } | null>(null);
 
@@ -79,11 +87,16 @@ export function ObjectList({ objects, sourceId, sourceType, activeObjectName, on
   function buildFieldKey(objectName: string, fieldName: string): string {
     return `${objectName}.${fieldName}`;
   }
+  // MySQL 分类节点 key 生成器。
+  function buildMysqlCategoryKey(objectName: string, categoryName: string): string {
+    return `${objectName}:${categoryName}`;
+  }
 
-  // 展开/折叠对象节点，并在首次展开时懒加载字段列表。
+  // 展开/折叠对象节点，并在首次展开时懒加载对象结构信息。
   async function toggleObjectNode(objectItem: SalesforceObject) {
     const objectName = objectItem.name;
     const alreadyExpanded = expandedObjectNames.includes(objectName);
+    const isMysqlSource = (sourceType || "salesforce").toLowerCase() === "mysql";
 
     // 已展开则直接折叠，避免多余请求。
     if (alreadyExpanded) {
@@ -94,8 +107,10 @@ export function ObjectList({ objects, sourceId, sourceType, activeObjectName, on
     // 先更新为展开状态，提升交互响应速度。
     setExpandedObjectNames((current) => [...current, objectName]);
 
-    // 已有缓存时不再重复请求 describe。
-    if (describeByObjectName[objectName]) {
+    // 已有缓存时不再重复请求结构。
+    const hasDescribeCache = Boolean(describeByObjectName[objectName]);
+    const hasDdlCache = !isMysqlSource || Boolean(ddlByObjectName[objectName]);
+    if (hasDescribeCache && hasDdlCache) {
       return;
     }
     if (loadingByObjectName[objectName]) return;
@@ -109,12 +124,23 @@ export function ObjectList({ objects, sourceId, sourceType, activeObjectName, on
 
     try {
       // 调用后端对象描述接口，后端已补齐 reference 字段 childRelationshipName。
-      const describe = await api.describeObject(sourceId, objectName);
+      const describe = hasDescribeCache ? describeByObjectName[objectName] : await api.describeObject(sourceId, objectName);
       setDescribeByObjectName((current) => ({ ...current, [objectName]: describe }));
+      if (!isMysqlSource || hasDdlCache) return;
+      setDdlLoadingByObjectName((current) => ({ ...current, [objectName]: true }));
+      setDdlErrorByObjectName((current) => ({ ...current, [objectName]: "" }));
+      const ddl = await api.getObjectDdl(sourceId, objectName);
+      setDdlByObjectName((current) => ({ ...current, [objectName]: ddl }));
     } catch (error) {
       setErrorByObjectName((current) => ({ ...current, [objectName]: `加载字段失败：${String(error)}` }));
+      if (isMysqlSource) {
+        setDdlErrorByObjectName((current) => ({ ...current, [objectName]: `加载 DDL 失败：${String(error)}` }));
+      }
     } finally {
       setLoadingByObjectName((current) => ({ ...current, [objectName]: false }));
+      if (isMysqlSource) {
+        setDdlLoadingByObjectName((current) => ({ ...current, [objectName]: false }));
+      }
     }
   }
 
@@ -124,6 +150,79 @@ export function ObjectList({ objects, sourceId, sourceType, activeObjectName, on
     setExpandedFieldKeys((current) =>
       current.includes(key) ? current.filter((item) => item !== key) : [...current, key]
     );
+  }
+  // 展开/折叠 MySQL 分类节点。
+  function toggleMysqlCategoryNode(objectName: string, categoryName: string) {
+    const key = buildMysqlCategoryKey(objectName, categoryName);
+    setExpandedMysqlCategoryKeys((current) => (current.includes(key) ? current.filter((item) => item !== key) : [...current, key]));
+  }
+
+  // 树模式对象名双击：直接打开数据 Tab（单击不触发任何行为）。
+  function handleTreeObjectDoubleClick(objectItem: SalesforceObject) {
+    if (!objectItem.queryable) {
+      onNotQueryableClick?.(objectItem); // 不可查询对象：提示并阻断打开行为。
+      return;
+    }
+    onOpenObject(objectItem); // 可查询对象：双击直接打开（已存在则激活）。
+  }
+
+  // 提取 MySQL 键信息（覆盖主键/唯一键/普通键；优先使用 DDL，describe 仅作兜底）。
+  function buildMysqlKeyItems(describe: ObjectDescribe | undefined, ddl: ObjectDdl | undefined): string[] {
+    const keySet = new Set<string>();
+
+    // 1) PRIMARY KEY：优先从建表语句解析，保留多列主键信息。
+    if (ddl?.createTableDdl) {
+      const primaryKeyMatch = ddl.createTableDdl.match(/PRIMARY\s+KEY\s*\(([^)]+)\)/i);
+      if (primaryKeyMatch && primaryKeyMatch[1]) {
+        keySet.add(`PRIMARY KEY (${primaryKeyMatch[1].trim()})`);
+      }
+    }
+
+    // 2) UNIQUE KEY：来自约束 DDL（UNIQUE）。
+    (ddl?.constraintDdls || [])
+      .filter((item) => /add\s+constraint/i.test(item) && /unique\s*\(/i.test(item))
+      .forEach((item) => keySet.add(item.trim()));
+
+    // 3) 普通/唯一索引键：来自索引 DDL（CREATE [UNIQUE] INDEX）。
+    (ddl?.indexDdls || [])
+      .filter((item) => /create\s+(unique\s+)?index/i.test(item))
+      .forEach((item) => keySet.add(item.trim()));
+
+    // 4) describe 兜底：当 DDL 无法提供完整键定义时，至少展示字段键标记。
+    if (keySet.size === 0 && describe) {
+      describe.fields.forEach((field) => {
+        const rawKey = String(field.metadata?.columnKey || "").trim().toUpperCase();
+        if (!rawKey) return;
+        const keyType = rawKey === "PRI" ? "PRIMARY KEY" : rawKey === "UNI" ? "UNIQUE KEY" : "KEY";
+        keySet.add(`${field.name} (${keyType})`);
+      });
+    }
+
+    return Array.from(keySet);
+  }
+
+  // 提取 MySQL 外键信息（来自约束 DDL）。
+  function buildMysqlForeignKeyItems(ddl: ObjectDdl | undefined): string[] {
+    if (!ddl) return [];
+    return ddl.constraintDdls.filter((item) => /foreign\s+key/i.test(item));
+  }
+
+  // 提取 MySQL 索引信息（来自索引 DDL）。
+  function buildMysqlIndexItems(ddl: ObjectDdl | undefined): string[] {
+    if (!ddl) return [];
+    return ddl.indexDdls;
+  }
+
+  // 提取 MySQL 检查约束信息（优先 constraint DDL，其次建表语句中的 CHECK 行）。
+  function buildMysqlCheckItems(ddl: ObjectDdl | undefined): string[] {
+    if (!ddl) return [];
+    const fromConstraints = ddl.constraintDdls.filter((item) => /check\s*\(/i.test(item)).map((item) => item.trim());
+    if (fromConstraints.length > 0) return fromConstraints;
+    const fromCreateTable = ddl.createTableDdl
+      .split("\n")
+      .map((line) => line.trim().replace(/,$/, ""))
+      .filter((line) => /check\s*\(/i.test(line));
+    return fromCreateTable;
   }
 
   // 右键菜单动作：打开当前组织的 Salesforce 对象列表页（自动登录）。
@@ -238,6 +337,7 @@ export function ObjectList({ objects, sourceId, sourceType, activeObjectName, on
 
         {treeMode && filtered.map((item) => {
           const objectName = item.name;
+          const isMysqlSource = (sourceType || "salesforce").toLowerCase() === "mysql";
           const tooltip = `名称: ${objectName}\n标签: ${item.label}\n可查询: ${item.queryable}\n可新增: ${item.createable}\n可更新: ${item.updateable}\n可删除: ${item.deletable}`;
           const selected = objectName === activeObjectName;
           const expanded = expandedObjectNames.includes(objectName);
@@ -245,6 +345,21 @@ export function ObjectList({ objects, sourceId, sourceType, activeObjectName, on
           const objectFields = objectDescribe?.fields || [];
           const objectLoading = loadingByObjectName[objectName] === true;
           const objectError = errorByObjectName[objectName];
+          const objectDdl = ddlByObjectName[objectName];
+          const objectDdlLoading = ddlLoadingByObjectName[objectName] === true;
+          const objectDdlError = ddlErrorByObjectName[objectName];
+          const mysqlColumns = objectFields.map((field) => `${field.name} (${field.dataType})`);
+          const mysqlKeys = buildMysqlKeyItems(objectDescribe, objectDdl);
+          const mysqlForeignKeys = buildMysqlForeignKeyItems(objectDdl);
+          const mysqlIndexes = buildMysqlIndexItems(objectDdl);
+          const mysqlChecks = buildMysqlCheckItems(objectDdl);
+          const mysqlCategoryItems = [
+            { name: "列", items: mysqlColumns },
+            { name: "键", items: mysqlKeys },
+            { name: "外键", items: mysqlForeignKeys },
+            { name: "索引", items: mysqlIndexes },
+            { name: "检查", items: mysqlChecks }
+          ];
 
           return (
             <div key={objectName}>
@@ -270,7 +385,10 @@ export function ObjectList({ objects, sourceId, sourceType, activeObjectName, on
                     setObjectContextMenu({ x: event.clientX, y: event.clientY, objectItem: item }); // 打开对象右键菜单。
                   }}
                   onClick={() => {
-                    void toggleObjectNode(item); // 点击对象名时展开/折叠字段。
+                    // 对象名单击无行为：按交互要求仅允许双击打开数据查询。
+                  }}
+                  onDoubleClick={() => {
+                    handleTreeObjectDoubleClick(item); // 双击对象名：直接打开数据 Tab。
                   }}
                 >
                   <div className="truncate text-[12px]">{objectName}</div>
@@ -287,7 +405,7 @@ export function ObjectList({ objects, sourceId, sourceType, activeObjectName, on
                 )}
               </div>
 
-              {/* 对象节点下的字段树。 */}
+              {/* 对象节点下的结构树。 */}
               {expanded && (
                 <div className="mb-1 pl-6 pr-2">
                   {objectLoading && <p className="py-1 text-[12px] text-neutral/70">加载字段中...</p>}
@@ -296,7 +414,48 @@ export function ObjectList({ objects, sourceId, sourceType, activeObjectName, on
                     <p className="py-1 text-[12px] text-neutral/70">暂无字段信息。</p>
                   )}
 
-                  {!objectLoading &&
+                  {isMysqlSource && !objectLoading && !objectError && (
+                    <div>
+                      {objectDdlLoading && <p className="py-1 text-[12px] text-neutral/70">加载 DDL 中...</p>}
+                      {!objectDdlLoading && objectDdlError && <p className="py-1 text-[12px] text-error">{objectDdlError}</p>}
+                      {!objectDdlLoading &&
+                        !objectDdlError &&
+                        mysqlCategoryItems.map((category) => {
+                          const categoryKey = buildMysqlCategoryKey(objectName, category.name);
+                          const categoryExpanded = expandedMysqlCategoryKeys.includes(categoryKey);
+                          return (
+                            <div key={categoryKey} className="mb-1 rounded border border-base-300 bg-base-100">
+                              {/* MySQL 分类节点：单击展开“列/键/外键/索引/检查”。 */}
+                              <button
+                                className="flex w-full items-center gap-1 px-2 py-1 text-left hover:bg-base-200/50"
+                                type="button"
+                                onClick={() => {
+                                  toggleMysqlCategoryNode(objectName, category.name); // 切换分类展开状态。
+                                }}
+                              >
+                                {categoryExpanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+                                <span className="truncate text-[11px] font-medium">{category.name}</span>
+                                <span className="ml-auto shrink-0 text-[10px] text-neutral/60">{category.items.length}</span>
+                              </button>
+                              {/* 分类明细列表。 */}
+                              {categoryExpanded && (
+                                <div className="border-t border-base-300 px-2 py-1.5 text-[11px]">
+                                  {category.items.length === 0 && <p className="text-neutral/70">暂无信息。</p>}
+                                  {category.items.map((entry, index) => (
+                                    <p key={`${categoryKey}-${index}`} className="break-all">
+                                      {entry}
+                                    </p>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                    </div>
+                  )}
+
+                  {!isMysqlSource &&
+                    !objectLoading &&
                     !objectError &&
                     objectFields.map((field) => {
                       const fieldKey = buildFieldKey(objectName, field.name);

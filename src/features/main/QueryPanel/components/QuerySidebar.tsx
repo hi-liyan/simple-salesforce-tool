@@ -1,11 +1,12 @@
 import { useState } from "react";
-import { Plus, RefreshCw } from "lucide-react";
-import { ObjectList } from "../../components/ObjectList";
-import { DataSourceSelector } from "../../components/DataSourceSelector";
-import { api } from "../../api";
-import { DataSourceType, SalesforceObject, SalesforceSource, SourceUpsertPayload } from "../../types";
+import { Braces, Plus, RefreshCw } from "lucide-react";
+import { DataSourceSelector } from "../../../../components/DataSourceSelector";
+import { api } from "../../../../api";
+import { DataSourceType, SalesforceObject, SalesforceSource, SourceUpsertPayload } from "../../../../types";
+import { QuerySidebarActions, type QuerySidebarActionItem } from "./QuerySidebarActions";
+import { QueryObjectTree } from "./QueryObjectTree";
 
-type LeftSidebarProps = {
+type QuerySidebarProps = {
   // 数据源列表。
   sources: SalesforceSource[];
   // 当前选中的数据源 ID。
@@ -20,6 +21,8 @@ type LeftSidebarProps = {
   onChangeSource: (sourceId: string) => void;
   // 刷新数据源回调。
   onRefreshSources: () => void;
+  // 打开查询控制台回调。
+  onOpenConsole?: () => void;
   // 当前对象列表。
   objects: SalesforceObject[];
   // 当前激活对象名。
@@ -33,7 +36,7 @@ type LeftSidebarProps = {
 };
 
 // 左侧栏：数据源选择与对象列表。
-export function LeftSidebar({
+export function QuerySidebar({
   sources,
   selectedSourceId,
   pageLoading,
@@ -41,15 +44,13 @@ export function LeftSidebar({
   onOpenAuthWindow,
   onChangeSource,
   onRefreshSources,
+  onOpenConsole,
   objects,
   activeTabObjectName,
   onOpenObject,
   onNotQueryableObjectClick,
   objectListMode = "list"
-}: LeftSidebarProps) {
-  // 当前选中数据源类型：用于对象右键菜单按类型展示能力项。
-  const selectedSourceType =
-    sources.find((source) => source.id === selectedSourceId)?.sourceType || "salesforce";
+}: QuerySidebarProps) {
   // 数据源类型选择弹窗开关。
   const [showSourceTypeModal, setShowSourceTypeModal] = useState(false);
   // Salesforce 配置弹窗开关。
@@ -204,27 +205,51 @@ export function LeftSidebar({
     onOpenAuthWindow();
   }
 
+  // 左侧动作区：统一用配置项渲染，便于未来按数据库类型扩展更多动作。
+  const actionItems: QuerySidebarActionItem[] = [
+    {
+      id: "create-source",
+      icon: Plus,
+      ariaLabel: "新增数据源",
+      onClick: openSourceTypeModal
+    },
+    {
+      id: "refresh-source",
+      icon: RefreshCw,
+      ariaLabel: "刷新数据源",
+      onClick: onRefreshSources
+    },
+    {
+      id: "open-console",
+      icon: Braces,
+      ariaLabel: "查询控制台",
+      onClick: () => {
+        if (!onOpenConsole) return;
+        onOpenConsole(); // 点击后交由外层决定打开控制台的具体行为（切页或新建 console tab）。
+      }
+    }
+  ];
+
   return (
     <>
-      {/* 数据源标题与新增按钮区域。 */}
+      {/* 数据源动作区：统一放置“新增/刷新/查询控制台”按钮。 */}
+      <div className="border-b border-base-300 px-3 py-2">
+        {/* 动作按钮行。 */}
+        <QuerySidebarActions actions={actionItems} disabled={pageLoading} />
+      </div>
+
+      {/* 数据源标题与选择器区域。 */}
       <div className="border-b border-base-300 px-3 py-2">
         <div className="flex items-center justify-between">
           <span className="text-[12px] text-neutral/70">DATA SOURCE</span>
-          <button className="btn btn-ghost btn-square btn-sm" aria-label="新增数据源" onClick={openSourceTypeModal} disabled={pageLoading}>
-            <Plus size={14} />
-          </button>
         </div>
 
-        {/* 数据源下拉与刷新按钮。 */}
-        <div className="mt-[6px] flex flex-row gap-2">
+        {/* 数据源下拉选择器。 */}
+        <div className="mt-[6px]">
           {/* 自定义数据源选择器：支持前置类型徽标与更灵活展示。 */}
           <div className="min-w-0 flex-1">
             <DataSourceSelector sources={sources} selectedSourceId={selectedSourceId} onChange={onChangeSource} disabled={pageLoading} />
           </div>
-          <button className="btn btn-primary btn-sm shrink-0" onClick={onRefreshSources} disabled={pageLoading}>
-            <RefreshCw size={14} />
-            刷新
-          </button>
         </div>
       </div>
 
@@ -233,25 +258,17 @@ export function LeftSidebar({
         <span className="text-[12px] text-neutral/70">OBJECTS</span>
       </div>
 
-      {/* 对象列表内容区。 */}
-      <div className="min-h-0 flex-1 px-3 pb-3 pt-2">
-        {objectsLoading ? (
-          <div className="flex h-full flex-col items-center justify-center gap-2 text-neutral/70">
-            <span className="loading loading-spinner" style={{ width: 18, height: 18 }} />
-            <span className="text-[12px]">拉取 Object 列表中...</span>
-          </div>
-        ) : (
-          <ObjectList
-            objects={objects}
-            sourceId={selectedSourceId}
-            sourceType={selectedSourceType}
-            activeObjectName={activeTabObjectName}
-            onOpenObject={onOpenObject}
-            onNotQueryableClick={onNotQueryableObjectClick}
-            treeMode={objectListMode === "tree"}
-          />
-        )}
-      </div>
+      {/* 对象树区域：统一由 QueryObjectTree 管理加载态与树渲染。 */}
+      <QueryObjectTree
+        sources={sources}
+        selectedSourceId={selectedSourceId}
+        objectsLoading={objectsLoading}
+        objects={objects}
+        activeTabObjectName={activeTabObjectName}
+        onOpenObject={onOpenObject}
+        onNotQueryableObjectClick={onNotQueryableObjectClick}
+        objectListMode={objectListMode}
+      />
 
       {/* 类型选择弹窗：先选择数据源类型，再进入对应配置窗口。 */}
       {showSourceTypeModal && (

@@ -73,6 +73,7 @@ fn main() {
             commands::open_object_edit_page,
             commands::open_record_page,
             commands::describe_object,
+            commands::get_object_ddl,
             commands::resolve_field_child_relationship_name,
             commands::query_records,
             commands::get_current_user_context,

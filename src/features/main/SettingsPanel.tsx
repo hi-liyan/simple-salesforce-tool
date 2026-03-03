@@ -43,6 +43,23 @@ export function SettingsPanel() {
   const [sources, setSources] = useState<SalesforceSource[]>([]);
   // 数据源加载状态：用于刷新按钮与加载提示。
   const [sourcesLoading, setSourcesLoading] = useState(false);
+  // Salesforce 编辑弹窗开关：仅用于设置页编辑非 CLI 的 Salesforce 数据源。
+  const [showSalesforceEditModal, setShowSalesforceEditModal] = useState(false);
+  // 当前正在编辑的 Salesforce 数据源。
+  const [editingSalesforceSource, setEditingSalesforceSource] = useState<SalesforceSource | null>(null);
+  // Salesforce 编辑表单状态。
+  const [salesforceEditForm, setSalesforceEditForm] = useState({
+    name: "",
+    instanceUrl: "",
+    accessToken: "",
+    apiVersion: "v61.0"
+  });
+  // Salesforce 编辑弹窗提示文本（测试连接结果/保存失败等）。
+  const [salesforceEditMessage, setSalesforceEditMessage] = useState("");
+  // Salesforce 编辑提交中状态。
+  const [salesforceEditSubmitting, setSalesforceEditSubmitting] = useState(false);
+  // Salesforce 测试连接中状态。
+  const [salesforceEditTesting, setSalesforceEditTesting] = useState(false);
   // MySQL 编辑弹窗开关：仅用于设置页编辑现有 MySQL 数据源。
   const [showMySqlEditModal, setShowMySqlEditModal] = useState(false);
   // 当前正在编辑的 MySQL 数据源。
@@ -145,6 +162,26 @@ export function SettingsPanel() {
     setShowMySqlEditModal(true);
   }
 
+  // 打开 Salesforce 编辑弹窗：仅允许编辑非 CLI 数据源。
+  function openSalesforceEditModal(source: SalesforceSource) {
+    setEditingSalesforceSource(source);
+    setSalesforceEditForm({
+      name: source.name || "",
+      instanceUrl: source.instanceUrl || "",
+      accessToken: source.accessToken || "",
+      apiVersion: source.apiVersion || "v61.0"
+    });
+    setSalesforceEditMessage("");
+    setShowSalesforceEditModal(true);
+  }
+
+  // 关闭 Salesforce 编辑弹窗并清理状态。
+  function closeSalesforceEditModal() {
+    setShowSalesforceEditModal(false);
+    setEditingSalesforceSource(null);
+    setSalesforceEditMessage("");
+  }
+
   // 关闭 MySQL 编辑弹窗并清理状态。
   function closeMySqlEditModal() {
     setShowMySqlEditModal(false);
@@ -173,6 +210,18 @@ export function SettingsPanel() {
     };
   }
 
+  // 构建 Salesforce 更新 payload：用于测试连接与保存。
+  function buildSalesforcePayloadFromEditForm() {
+    return {
+      name: salesforceEditForm.name.trim(),
+      sourceType: "salesforce",
+      configJson: {},
+      instanceUrl: salesforceEditForm.instanceUrl.trim(),
+      accessToken: salesforceEditForm.accessToken.trim(),
+      apiVersion: salesforceEditForm.apiVersion.trim()
+    };
+  }
+
   // 测试当前 MySQL 编辑表单连接。
   async function testMySqlEditConnection() {
     setMySqlEditMessage("");
@@ -184,6 +233,20 @@ export function SettingsPanel() {
       setMySqlEditMessage(`MySQL 连接测试失败：${String(testError)}`);
     } finally {
       setMySqlEditTesting(false);
+    }
+  }
+
+  // 测试当前 Salesforce 编辑表单连接。
+  async function testSalesforceEditConnection() {
+    setSalesforceEditMessage("");
+    setSalesforceEditTesting(true);
+    try {
+      await api.testSourceConnection(buildSalesforcePayloadFromEditForm());
+      setSalesforceEditMessage("Salesforce 连接测试成功。");
+    } catch (testError) {
+      setSalesforceEditMessage(`Salesforce 连接测试失败：${String(testError)}`);
+    } finally {
+      setSalesforceEditTesting(false);
     }
   }
 
@@ -200,6 +263,22 @@ export function SettingsPanel() {
       setMySqlEditMessage(`更新 MySQL 数据源失败：${String(saveError)}`);
     } finally {
       setMySqlEditSubmitting(false);
+    }
+  }
+
+  // 保存 Salesforce 数据源编辑结果。
+  async function saveSalesforceEditSource() {
+    if (!editingSalesforceSource) return;
+    setSalesforceEditMessage("");
+    setSalesforceEditSubmitting(true);
+    try {
+      await api.updateSource(editingSalesforceSource.id, buildSalesforcePayloadFromEditForm());
+      await loadSources(); // 保存后立即刷新设置页列表，保持展示一致。
+      closeSalesforceEditModal();
+    } catch (saveError) {
+      setSalesforceEditMessage(`更新 Salesforce 数据源失败：${String(saveError)}`);
+    } finally {
+      setSalesforceEditSubmitting(false);
     }
   }
 
@@ -548,7 +627,7 @@ export function SettingsPanel() {
               {!sourcesLoading &&
                 sources.map((item) => (
                   <div key={item.id} className="rounded border border-base-300 bg-base-100 p-3 text-[12px]">
-                    <div className="mb-2 flex items-start justify-between gap-2 border-b border-base-300 pb-2">
+                    <div className="mb-2 border-b border-base-300 pb-2">
                       {/* 卡片标题区：增加数据源类型徽标。 */}
                       <div className="min-w-0">
                         <p className="flex items-center gap-2 text-[13px] font-semibold">
@@ -558,18 +637,28 @@ export function SettingsPanel() {
                             {getSourceTypeBadge(item.sourceType)}
                           </span>
                           <span className="truncate">{item.name || "-"}</span>
+                          {/* Salesforce 非 CLI 数据源支持编辑连接信息。 */}
+                          {(item.sourceType || "salesforce").toLowerCase() === "salesforce" && !item.id.startsWith("cli-") && (
+                            <button
+                              className="btn btn-ghost btn-xs"
+                              aria-label="编辑 Salesforce 数据源"
+                              onClick={() => openSalesforceEditModal(item)}
+                            >
+                              <Cog size={14} />
+                            </button>
+                          )}
+                          {/* MySQL 专属齿轮按钮：紧跟在名称后面。 */}
+                          {(item.sourceType || "salesforce").toLowerCase() === "mysql" && (
+                            <button
+                              className="btn btn-ghost btn-xs"
+                              aria-label="编辑 MySQL 数据源"
+                              onClick={() => openMySqlEditModal(item)}
+                            >
+                              <Cog size={14} />
+                            </button>
+                          )}
                         </p>
                       </div>
-                      {/* MySQL 专属齿轮按钮：点击打开编辑模态框。 */}
-                      {(item.sourceType || "salesforce").toLowerCase() === "mysql" && (
-                        <button
-                          className="btn btn-ghost btn-xs"
-                          aria-label="编辑 MySQL 数据源"
-                          onClick={() => openMySqlEditModal(item)}
-                        >
-                          <Cog size={14} />
-                        </button>
-                      )}
                     </div>
                     <div className="mb-2">
                       <p className="mt-1 text-neutral/70">ID: {item.id}</p>
@@ -631,6 +720,69 @@ export function SettingsPanel() {
           </div>
         )}
       </div>
+
+      {/* Salesforce 编辑弹窗：仅在设置页用于编辑非 CLI 的 Salesforce 数据源。 */}
+      {showSalesforceEditModal && (
+        <div className="modal modal-open">
+          <div className="modal-box">
+            {/* 弹窗标题。 */}
+            <h3 className="text-base font-semibold">编辑 Salesforce 数据源</h3>
+            {/* Salesforce 配置表单。 */}
+            <div className="mt-3 space-y-2">
+              <input
+                className="input input-bordered input-sm w-full"
+                placeholder="数据源名称"
+                value={salesforceEditForm.name}
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
+                onChange={(event) => setSalesforceEditForm((state) => ({ ...state, name: event.target.value }))}
+              />
+              <input
+                className="input input-bordered input-sm w-full"
+                placeholder="Instance URL"
+                value={salesforceEditForm.instanceUrl}
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
+                onChange={(event) => setSalesforceEditForm((state) => ({ ...state, instanceUrl: event.target.value }))}
+              />
+              <input
+                className="input input-bordered input-sm w-full"
+                placeholder="Access Token"
+                value={salesforceEditForm.accessToken}
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
+                onChange={(event) => setSalesforceEditForm((state) => ({ ...state, accessToken: event.target.value }))}
+              />
+              <input
+                className="input input-bordered input-sm w-full"
+                placeholder="API Version（例如 v61.0）"
+                value={salesforceEditForm.apiVersion}
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
+                onChange={(event) => setSalesforceEditForm((state) => ({ ...state, apiVersion: event.target.value }))}
+              />
+            </div>
+            {/* 编辑结果提示。 */}
+            {salesforceEditMessage && <p className="mt-3 text-xs text-neutral/70">{salesforceEditMessage}</p>}
+            {/* 底部操作按钮。 */}
+            <div className="modal-action">
+              <button className="btn btn-outline" onClick={closeSalesforceEditModal} disabled={salesforceEditSubmitting || salesforceEditTesting}>
+                取消
+              </button>
+              <button className="btn btn-secondary" onClick={() => void testSalesforceEditConnection()} disabled={salesforceEditSubmitting || salesforceEditTesting}>
+                {salesforceEditTesting ? "测试中..." : "测试连接"}
+              </button>
+              <button className="btn btn-primary" onClick={() => void saveSalesforceEditSource()} disabled={salesforceEditSubmitting || salesforceEditTesting}>
+                {salesforceEditSubmitting ? "保存中..." : "保存"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* MySQL 编辑弹窗：仅在设置页用于编辑已存在的 MySQL 数据源。 */}
       {showMySqlEditModal && (

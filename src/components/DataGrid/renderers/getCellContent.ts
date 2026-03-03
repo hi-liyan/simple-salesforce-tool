@@ -36,6 +36,8 @@ type CreateGetCellContentParams = {
   pendingDeleteRecordSet: Set<string>;
   // Salesforce 用户时区：用于 datetime 显示对齐。
   effectiveSalesforceTimezone: string | null;
+  // 当前数据源类型：用于区分 Salesforce/MySQL 展示策略。
+  selectedSourceType?: string;
   // 行键提取器：统一获取 recordId。
   getRecordKey: (rowIndex: number) => string;
 };
@@ -49,8 +51,10 @@ export function createGetCellContent({
   dirtyCellSet,
   pendingDeleteRecordSet,
   effectiveSalesforceTimezone,
+  selectedSourceType,
   getRecordKey
 }: CreateGetCellContentParams): (cell: Item) => GridCell {
+  const isMysqlSource = (selectedSourceType || "salesforce").toLowerCase() === "mysql";
   return ([col, row]) => {
     const columnId = String(columns[col]?.id ?? "");
     const record = records[row] || {};
@@ -114,7 +118,8 @@ export function createGetCellContent({
       return {
         kind: GridCellKind.Number,
         data: num,
-        displayData: raw === null || raw === undefined ? "" : String(raw),
+        // 数值列优先使用归一化后的数字文本，避免 tinyint 等字段被显示为 true/false。
+        displayData: num === undefined ? (raw === null || raw === undefined ? "" : String(raw)) : String(num),
         allowOverlay: editable,
         readonly: !editable,
         themeOverride: commonTheme
@@ -122,7 +127,8 @@ export function createGetCellContent({
     }
 
     if (strategy === "date") {
-      const text = normalizeDateDisplayValue(raw);
+      // MySQL 日期值直接展示标准字符串；Salesforce 继续按既有日期规范展示。
+      const text = isMysqlSource ? stringifyCellValue(raw) : normalizeDateDisplayValue(raw);
       return {
         kind: GridCellKind.Text,
         // date 单元格展示与提交统一为 Salesforce 日期格式（YYYY-MM-DD）。
@@ -135,7 +141,8 @@ export function createGetCellContent({
     }
 
     if (strategy === "datetime") {
-      const text = normalizeDatetimeDisplayValue(raw, effectiveSalesforceTimezone);
+      // MySQL datetime/timestamp 不做 Salesforce 时区偏移转换，避免跨时区误差。
+      const text = isMysqlSource ? stringifyCellValue(raw) : normalizeDatetimeDisplayValue(raw, effectiveSalesforceTimezone);
       return {
         kind: GridCellKind.Text,
         // datetime 单元格展示为 Salesforce 日期时间格式（YYYY-MM-DDTHH:mm:ss.SSS+0000）。

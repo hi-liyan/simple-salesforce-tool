@@ -145,6 +145,17 @@ pub struct QueryResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ObjectDdl {
+    /// 建表 DDL（SHOW CREATE TABLE）。
+    pub create_table_ddl: String,
+    /// 索引 DDL 列表（不含主键）。
+    pub index_ddls: Vec<String>,
+    /// 约束 DDL 列表（如 UNIQUE/FOREIGN KEY）。
+    pub constraint_ddls: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RecordMutationPayload {
     /// 数据源 ID。
     pub source_id: String,
@@ -181,8 +192,6 @@ pub struct RecordSavePayload {
 pub struct CachedObjects {
     /// 缓存内容 JSON 字符串。
     pub payload: String,
-    /// 缓存写入时间（Unix 秒）。
-    pub updated_at: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
