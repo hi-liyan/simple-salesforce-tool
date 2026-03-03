@@ -100,6 +100,29 @@ export function normalizeDatetimeDisplayValue(raw: unknown, salesforceTimezone?:
   return formatDateAsLocalOffsetDatetime(parsed);
 }
 
+// MySQL datetime 保存值规范化：统一输出 YYYY-MM-DD HH:mm:ss，避免写入 Salesforce 风格时区串。
+export function normalizeMysqlDatetimeValueForSave(raw: string): string | null {
+  const text = raw.trim();
+  if (!text) return null;
+
+  // date-only 输入自动补齐到整点，降低手动补全成本。
+  if (DATE_ONLY_PATTERN.test(text)) {
+    return `${text} 00:00:00`;
+  }
+
+  const mysqlDateTimeMatch = text.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})(?::(\d{2}))?(?:\.\d{1,6})?$/);
+  if (mysqlDateTimeMatch) {
+    const datePart = mysqlDateTimeMatch[1];
+    const timeHm = normalizeTimeHm(mysqlDateTimeMatch[2]);
+    const secondPart = mysqlDateTimeMatch[3] || "00";
+    return `${datePart} ${timeHm}:${secondPart}`;
+  }
+
+  const parsed = parseDatetimeForInput(text);
+  if (!parsed) return null;
+  return formatDateAsLocalDatetimeSecond(parsed);
+}
+
 // datetime-local 输入框值规范化：统一为 YYYY-MM-DDTHH:mm。
 export function normalizeDatetimeLocalInputValue(raw: string, salesforceTimezone?: string | null): string {
   const parsed = parseDatetimeForInput(raw, salesforceTimezone);
@@ -501,4 +524,9 @@ function formatDateAsLocalYmd(value: Date): string {
   const month = String(value.getMonth() + 1).padStart(2, "0");
   const day = String(value.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+// 本地日期时间格式化（YYYY-MM-DD HH:mm:ss），用于 MySQL datetime 提交。
+function formatDateAsLocalDatetimeSecond(value: Date): string {
+  return `${formatDateAsLocalYmd(value)} ${String(value.getHours()).padStart(2, "0")}:${String(value.getMinutes()).padStart(2, "0")}:${String(value.getSeconds()).padStart(2, "0")}`;
 }

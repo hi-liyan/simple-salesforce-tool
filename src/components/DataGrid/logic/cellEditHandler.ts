@@ -7,7 +7,8 @@ import {
 } from "@glideapps/glide-data-grid";
 import {
   normalizeDateValueForSave,
-  normalizeDatetimeValueForSave
+  normalizeDatetimeValueForSave,
+  normalizeMysqlDatetimeValueForSave
 } from "../utils/datetime";
 import {
   isCellEditableByMeta,
@@ -32,6 +33,8 @@ type CreateCellEditedHandlerParams = {
   fieldMetadataMap: Record<string, Record<string, unknown>>;
   // Salesforce 用户时区：用于 datetime 保存时规范化。
   effectiveSalesforceTimezone: string | null;
+  // 当前数据源类型：用于区分 Salesforce/MySQL 保存格式。
+  selectedSourceType?: string;
   // 行键提取器：统一获取 recordId。
   getRecordKey: (rowIndex: number) => string;
   // 勾选状态回调。
@@ -48,11 +51,13 @@ export function createCellEditedHandler({
   records,
   fieldMetadataMap,
   effectiveSalesforceTimezone,
+  selectedSourceType,
   getRecordKey,
   onToggleRecord,
   onEditCell,
   onShowMessage
 }: CreateCellEditedHandlerParams): (location: Item, newValue: EditableGridCell) => void {
+  const isMysqlSource = (selectedSourceType || "salesforce").toLowerCase() === "mysql";
   return ([col, row], newValue) => {
     const columnId = String(columns[col]?.id ?? "");
 
@@ -124,7 +129,9 @@ export function createCellEditedHandler({
         return;
       }
 
-      const normalizedDatetime = normalizeDatetimeValueForSave(nextText, effectiveSalesforceTimezone);
+      const normalizedDatetime = isMysqlSource
+        ? normalizeMysqlDatetimeValueForSave(nextText)
+        : normalizeDatetimeValueForSave(nextText, effectiveSalesforceTimezone);
       if (!normalizedDatetime) {
         onShowMessage(`${columnId} 字段仅支持日期时间格式。`);
         return;
