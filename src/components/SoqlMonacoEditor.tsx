@@ -330,9 +330,20 @@ function normalizeSoqlSpaces(text: string): string {
 
 // 基于 Monaco 实际布局计算占位符位置，确保显示在第 1 行文本起始处。
 function getPlaceholderPosition(editor: Monaco.editor.IStandaloneCodeEditor): PlaceholderPosition {
+  // 占位符需要显示在光标后方，避免首字符与光标重叠造成“看起来在光标前”的视觉错觉。
+  const cursorGapPx = 3;
+  // 使用第 1 行第 1 列的实际可视坐标作为锚点，避免仅用 contentLeft 产生“比光标偏左”的误差。
+  const cursorAnchor = editor.getScrolledVisiblePosition({ lineNumber: 1, column: 1 });
+  if (cursorAnchor) {
+    return {
+      left: cursorAnchor.left + cursorGapPx,
+      top: cursorAnchor.top
+    };
+  }
+  // 极端情况下（例如编辑器尚未完成首帧布局）回退到布局坐标。
   const layoutInfo = editor.getLayoutInfo();
   return {
-    left: layoutInfo.contentLeft,
+    left: layoutInfo.contentLeft + cursorGapPx,
     top: editor.getTopForLineNumber(1) + 2
   };
 }
@@ -428,7 +439,7 @@ export function SoqlMonacoEditor({
           renderLineHighlight: "all",
           renderLineHighlightOnlyWhenFocus: false,
           lineNumbers: "on",
-          fontSize: 12,
+          fontSize: 16,
           tabSize: 2,
           automaticLayout: true,
           suggest: {
