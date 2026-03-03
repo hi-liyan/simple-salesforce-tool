@@ -71,6 +71,9 @@ const SOQL_SINGLE_TOKEN_KEYWORDS = Array.from(
   )
 );
 const SOQL_SINGLE_TOKEN_KEYWORD_SET = new Set<string>(SOQL_SINGLE_TOKEN_KEYWORDS);
+const SOQL_SINGLE_TOKEN_KEYWORD_SUGGESTIONS = SOQL_SINGLE_TOKEN_KEYWORDS.filter(
+  (token) => !SOQL_KEYWORDS.includes(token)
+);
 
 const runtimeCompletions: RuntimeCompletions = { fields: [], objects: [], objectFields: {} };
 let initialized = false;
@@ -247,6 +250,13 @@ function ensureSoqlLanguage(monaco: typeof Monaco) {
       const fieldSuggestions = buildSuggestions(monaco, fieldCandidates, monaco.languages.CompletionItemKind.Field, range);
       const objectSuggestions = buildSuggestions(monaco, runtimeCompletions.objects, monaco.languages.CompletionItemKind.Class, range);
       const keywordSuggestions = buildSuggestions(monaco, SOQL_KEYWORDS, monaco.languages.CompletionItemKind.Keyword, range);
+      // 追加单词级关键字（如 ORDER / BY），避免多词关键字在前缀过滤时丢失提示。
+      const singleTokenKeywordSuggestions = buildSuggestions(
+        monaco,
+        SOQL_SINGLE_TOKEN_KEYWORD_SUGGESTIONS,
+        monaco.languages.CompletionItemKind.Keyword,
+        range
+      );
       const clauseKeywordSuggestions = buildSuggestions(monaco, CLAUSE_KEYWORDS, monaco.languages.CompletionItemKind.Keyword, range);
       const filterOperatorSuggestions = buildSuggestions(monaco, FILTER_OPERATOR_KEYWORDS, monaco.languages.CompletionItemKind.Keyword, range);
       const orderModifierSuggestions = buildSuggestions(monaco, ORDER_MODIFIER_KEYWORDS, monaco.languages.CompletionItemKind.Keyword, range);
@@ -255,18 +265,18 @@ function ensureSoqlLanguage(monaco: typeof Monaco) {
 
       const suggestionsByContext: Record<SoqlCompletionContext, Monaco.languages.CompletionItem[]> = {
         // FROM 上下文也保留基础关键字，避免对象列表为空时无候选。
-        fromObject: [...objectSuggestions, ...keywordSuggestions],
+        fromObject: [...objectSuggestions, ...keywordSuggestions, ...singleTokenKeywordSuggestions],
         // SELECT 上下文保留关键字回退，确保关键字始终可提示。
-        selectField: [...fieldSuggestions, ...aggregateFunctionSuggestions, ...fromKeywordSuggestions, ...keywordSuggestions],
-        whereField: [...fieldSuggestions, ...filterOperatorSuggestions, ...clauseKeywordSuggestions, ...keywordSuggestions],
-        groupByField: [...fieldSuggestions, ...buildSuggestions(monaco, ["HAVING", "ORDER BY", "LIMIT", "OFFSET"], monaco.languages.CompletionItemKind.Keyword, range), ...keywordSuggestions],
-        havingField: [...fieldSuggestions, ...filterOperatorSuggestions, ...buildSuggestions(monaco, ["ORDER BY", "LIMIT", "OFFSET"], monaco.languages.CompletionItemKind.Keyword, range), ...keywordSuggestions],
-        orderByField: [...fieldSuggestions, ...orderModifierSuggestions, ...buildSuggestions(monaco, ["LIMIT", "OFFSET"], monaco.languages.CompletionItemKind.Keyword, range), ...keywordSuggestions],
-        orderByModifier: [...orderModifierSuggestions, ...buildSuggestions(monaco, ["LIMIT", "OFFSET"], monaco.languages.CompletionItemKind.Keyword, range), ...keywordSuggestions],
+        selectField: [...fieldSuggestions, ...aggregateFunctionSuggestions, ...fromKeywordSuggestions, ...keywordSuggestions, ...singleTokenKeywordSuggestions],
+        whereField: [...fieldSuggestions, ...filterOperatorSuggestions, ...clauseKeywordSuggestions, ...keywordSuggestions, ...singleTokenKeywordSuggestions],
+        groupByField: [...fieldSuggestions, ...buildSuggestions(monaco, ["HAVING", "ORDER BY", "LIMIT", "OFFSET"], monaco.languages.CompletionItemKind.Keyword, range), ...keywordSuggestions, ...singleTokenKeywordSuggestions],
+        havingField: [...fieldSuggestions, ...filterOperatorSuggestions, ...buildSuggestions(monaco, ["ORDER BY", "LIMIT", "OFFSET"], monaco.languages.CompletionItemKind.Keyword, range), ...keywordSuggestions, ...singleTokenKeywordSuggestions],
+        orderByField: [...fieldSuggestions, ...orderModifierSuggestions, ...buildSuggestions(monaco, ["LIMIT", "OFFSET"], monaco.languages.CompletionItemKind.Keyword, range), ...keywordSuggestions, ...singleTokenKeywordSuggestions],
+        orderByModifier: [...orderModifierSuggestions, ...buildSuggestions(monaco, ["LIMIT", "OFFSET"], monaco.languages.CompletionItemKind.Keyword, range), ...keywordSuggestions, ...singleTokenKeywordSuggestions],
         // LIMIT/OFFSET 场景增加关键字回退，便于继续补全下一子句。
-        limitNumber: [...buildSuggestions(monaco, ["OFFSET"], monaco.languages.CompletionItemKind.Keyword, range), ...keywordSuggestions],
-        offsetNumber: keywordSuggestions,
-        general: [...keywordSuggestions, ...fieldSuggestions]
+        limitNumber: [...buildSuggestions(monaco, ["OFFSET"], monaco.languages.CompletionItemKind.Keyword, range), ...keywordSuggestions, ...singleTokenKeywordSuggestions],
+        offsetNumber: [...keywordSuggestions, ...singleTokenKeywordSuggestions],
+        general: [...keywordSuggestions, ...singleTokenKeywordSuggestions, ...fieldSuggestions]
       };
 
       return { suggestions: dedupeSuggestionsByLabel(suggestionsByContext[completionContext]) };

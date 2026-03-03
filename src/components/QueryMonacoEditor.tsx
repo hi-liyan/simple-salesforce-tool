@@ -56,6 +56,8 @@ export function QueryMonacoEditor({
   const selectionDisposeRef = useRef<Monaco.IDisposable | null>(null);
   // 内容变更监听句柄：用于输入时主动触发补全弹层。
   const contentDisposeRef = useRef<Monaco.IDisposable | null>(null);
+  // 按键监听句柄：用于按键抬起时即时触发补全弹层。
+  const typeDisposeRef = useRef<Monaco.IDisposable | null>(null);
   // 占位符实际定位：默认值作为 Monaco 尚未挂载时的兜底。
   const [placeholderPosition, setPlaceholderPosition] = useState<PlaceholderPosition>({ left: 48, top: 2 });
 
@@ -90,9 +92,11 @@ export function QueryMonacoEditor({
       layoutDisposeRef.current?.dispose(); // 组件卸载时释放 Monaco 布局监听。
       selectionDisposeRef.current?.dispose(); // 组件卸载时释放 Monaco 选区监听。
       contentDisposeRef.current?.dispose(); // 组件卸载时释放内容变更监听。
+      typeDisposeRef.current?.dispose(); // 组件卸载时释放键入监听。
       layoutDisposeRef.current = null;
       selectionDisposeRef.current = null;
       contentDisposeRef.current = null;
+      typeDisposeRef.current = null;
       editorRef.current = null;
     };
   }, []);
@@ -118,8 +122,16 @@ export function QueryMonacoEditor({
             emitSelectionText(editor); // 选区变化时同步到上层，供“仅执行选中内容”使用。
           });
           contentDisposeRef.current?.dispose();
+          typeDisposeRef.current?.dispose();
+          typeDisposeRef.current = editor.onKeyUp((keyboardEvent) => {
+            // 按键输入字母/数字/下划线时，立即触发建议，保证关键字输入过程稳定提示。
+            const browserEvent = keyboardEvent.browserEvent;
+            const typedKey = browserEvent.key || "";
+            if (!/^[A-Za-z0-9_]$/.test(typedKey)) return;
+            editor.trigger("query-monaco-editor", "editor.action.triggerSuggest", {});
+          });
           contentDisposeRef.current = editor.onDidChangeModelContent((event) => {
-            // 输入字母/数字/下划线时主动触发建议，确保前缀场景（如 SELE）稳定弹出关键字。
+            // 粘贴场景兜底：当变更包含字母/数字/下划线时同样触发建议。
             const lastChange = event.changes[event.changes.length - 1];
             const insertedText = lastChange?.text || "";
             if (!insertedText) return;
