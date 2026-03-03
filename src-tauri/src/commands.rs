@@ -50,6 +50,8 @@ fn write_system_log(
 
 const SF_CLI_PATH_SETTING_KEY: &str = "sf_cli_path";
 const LLM_SETTINGS_KEY: &str = "llm.settings.openai";
+const METADATA_TYPE_OBJECT_DESCRIBE: &str = "object_describe";
+const METADATA_TYPE_OBJECT_DDL: &str = "object_ddl";
 
 /// 读取已配置的自定义 Salesforce CLI 路径。
 fn read_configured_cli_path(state: &State<'_, AppState>) -> Option<String> {
@@ -962,9 +964,10 @@ pub async fn refresh_objects(
             .db
             .lock()
             .map_err(|error| format!("Database lock failed: {error}"))?;
-        // 强制刷新成功后覆盖缓存,保证后续列表读取为最新远端快照。
+        // 强制刷新成功后覆盖对象列表缓存，并失效该数据源的对象级元数据缓存。
         db::write_object_cache(&connection, &source_id, &objects)
             .map_err(AppError::to_string_error)?;
+        db::clear_source_metadata_cache(&connection, &source_id).map_err(AppError::to_string_error)?;
     }
 
     write_system_log(
@@ -1315,6 +1318,52 @@ pub async fn describe_object(
     source_id: String,
     object_name: String,
 ) -> Result<ObjectDescribe, String> {
+    // 先读 SQLite 元数据缓存，命中时直接返回，避免重复请求远端。
+    let cached_describe = {
+        let connection = state
+            .db
+            .lock()
+            .map_err(|error| format!("Database lock failed: {error}"))?;
+        db::read_source_metadata_cache(
+            &connection,
+            &source_id,
+            METADATA_TYPE_OBJECT_DESCRIBE,
+            Some(&object_name),
+        )
+        .map_err(AppError::to_string_error)?
+    };
+    if let Some(payload) = cached_describe {
+        match serde_json::from_str::<ObjectDescribe>(&payload) {
+            Ok(describe) => {
+                write_system_log(
+                    &state,
+                    "INFO",
+                    "SALESFORCE_API",
+                    "describe_object",
+                    Some(&source_id),
+                    Some(&object_name),
+                    true,
+                    "命中对象字段元数据缓存。",
+                    None,
+                );
+                return Ok(describe);
+            }
+            Err(parse_error) => {
+                write_system_log(
+                    &state,
+                    "ERROR",
+                    "SALESFORCE_API",
+                    "describe_object",
+                    Some(&source_id),
+                    Some(&object_name),
+                    false,
+                    "对象字段元数据缓存解析失败，将回源重拉。",
+                    Some(&parse_error.to_string()),
+                );
+            }
+        }
+    }
+
     let mut source = {
         let connection = state
             .db
@@ -1344,6 +1393,22 @@ pub async fn describe_object(
             )
             .await
             {}
+            {
+                let connection = state
+                    .db
+                    .lock()
+                    .map_err(|error| format!("Database lock failed: {error}"))?;
+                let payload = serde_json::to_string(&describe)
+                    .map_err(|error| AppError::Serde(error.to_string()).to_string_error())?;
+                db::write_source_metadata_cache(
+                    &connection,
+                    &source_id,
+                    METADATA_TYPE_OBJECT_DESCRIBE,
+                    Some(&object_name),
+                    &payload,
+                )
+                .map_err(AppError::to_string_error)?;
+            }
             write_system_log(
                 &state,
                 "INFO",
@@ -1382,6 +1447,21 @@ pub async fn get_object_ddl(
     source_id: String,
     object_name: String,
 ) -> Result<ObjectDdl, String> {
+    // 先读 SQLite 元数据缓存，命中时直接返回，避免重复请求数据库/远端。
+    let cached_ddl = {
+        let connection = state
+            .db
+            .lock()
+            .map_err(|error| format!("Database lock failed: {error}"))?;
+        db::read_source_metadata_cache(&connection, &source_id, METADATA_TYPE_OBJECT_DDL, Some(&object_name))
+            .map_err(AppError::to_string_error)?
+    };
+    if let Some(payload) = cached_ddl {
+        if let Ok(ddl) = serde_json::from_str::<ObjectDdl>(&payload) {
+            return Ok(ddl);
+        }
+    }
+
     let source = {
         let connection = state
             .db
@@ -1398,6 +1478,22 @@ pub async fn get_object_ddl(
 
     match provider.get_object_ddl(&source, &object_name).await {
         Ok(ddl) => {
+            {
+                let connection = state
+                    .db
+                    .lock()
+                    .map_err(|error| format!("Database lock failed: {error}"))?;
+                let payload = serde_json::to_string(&ddl)
+                    .map_err(|error| AppError::Serde(error.to_string()).to_string_error())?;
+                db::write_source_metadata_cache(
+                    &connection,
+                    &source_id,
+                    METADATA_TYPE_OBJECT_DDL,
+                    Some(&object_name),
+                    &payload,
+                )
+                .map_err(AppError::to_string_error)?;
+            }
             write_system_log(
                 &state,
                 "INFO",
