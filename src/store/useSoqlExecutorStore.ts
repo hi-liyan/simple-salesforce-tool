@@ -97,13 +97,11 @@ type SoqlExecutorState = {
   resetTabs: () => void;
 };
 
-const initialTab = createSoqlExecutorTab(1);
-
 export const useSoqlExecutorStore = create<SoqlExecutorState>()(
   persist(
     (set, get) => ({
-      tabs: [initialTab],
-      activeTabId: initialTab.id,
+      tabs: [],
+      activeTabId: "",
 
       setTabs: (tabs) =>
         set((state) => ({
@@ -128,13 +126,8 @@ export const useSoqlExecutorStore = create<SoqlExecutorState>()(
         const closeSet = new Set(tabIds);
         const { tabs, activeTabId } = get();
         const nextTabs = tabs.filter((item) => !closeSet.has(item.id));
-        if (nextTabs.length === 0) {
-          const fallback = createSoqlExecutorTab(1);
-          set({ tabs: [fallback], activeTabId: fallback.id });
-          return;
-        }
-        const nextActive = closeSet.has(activeTabId) ? nextTabs[0].id : activeTabId;
-        set({ tabs: nextTabs, activeTabId: nextActive });
+        const nextActive = closeSet.has(activeTabId) ? nextTabs[0]?.id || "" : activeTabId;
+        set({ tabs: nextTabs, activeTabId: nextTabs.length > 0 ? nextActive : "" });
       },
 
       closeTab: (tabId) => {
@@ -148,8 +141,7 @@ export const useSoqlExecutorStore = create<SoqlExecutorState>()(
       },
 
       resetTabs: () => {
-        const fallback = createSoqlExecutorTab(1);
-        set({ tabs: [fallback], activeTabId: fallback.id });
+        set({ tabs: [], activeTabId: "" });
       }
     }),
     {
@@ -179,7 +171,7 @@ export const useSoqlExecutorStore = create<SoqlExecutorState>()(
           tabs: hydratedTabs.length > 0 ? hydratedTabs : current.tabs,
           activeTabId: state.activeTabId && hydratedTabs.some((t) => t.id === state.activeTabId)
             ? state.activeTabId
-            : hydratedTabs[0]?.id || current.activeTabId
+            : hydratedTabs[0]?.id || ""
         };
       }
     }

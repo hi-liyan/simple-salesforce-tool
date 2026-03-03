@@ -36,8 +36,29 @@ export function useWorkspaceTabs({
 }: UseWorkspaceTabsInput) {
   // 当前激活工作区 Tab ID：由 UI 层控制并与 store 双向同步。
   const [activeWorkspaceTabId, setActiveWorkspaceTabId] = useState("");
-  // 统一工作区 Tab 列表：固定输出顺序，降低用户定位成本。
-  const workspaceTabs = useMemo(() => buildWorkspaceTabs(dataTabs, consoleTabs), [dataTabs, consoleTabs]);
+  // 工作区 Tab 展示顺序：保留既有顺序，并将新打开 Tab 始终追加到末尾。
+  const [workspaceTabOrder, setWorkspaceTabOrder] = useState<string[]>([]);
+  // 统一工作区原始 Tab 列表：用于计算增量与基础映射。
+  const baseWorkspaceTabs = useMemo(() => buildWorkspaceTabs(dataTabs, consoleTabs), [dataTabs, consoleTabs]);
+
+  // 维护稳定顺序：删除已关闭 Tab，并把新增 Tab 统一追加在最后。
+  useEffect(() => {
+    const currentIdSet = new Set(baseWorkspaceTabs.map((tab) => tab.id));
+    const preservedOrder = workspaceTabOrder.filter((tabId) => currentIdSet.has(tabId));
+    const preservedSet = new Set(preservedOrder);
+    const appendedIds = baseWorkspaceTabs.map((tab) => tab.id).filter((tabId) => !preservedSet.has(tabId));
+    const nextOrder = [...preservedOrder, ...appendedIds];
+    if (nextOrder.length === workspaceTabOrder.length && nextOrder.every((tabId, index) => tabId === workspaceTabOrder[index])) {
+      return;
+    }
+    setWorkspaceTabOrder(nextOrder); // 仅在顺序真实变化时回写，避免无意义渲染。
+  }, [baseWorkspaceTabs, workspaceTabOrder]);
+
+  // 按稳定顺序输出工作区 Tab：确保“新开在末尾”。
+  const workspaceTabs = useMemo(() => {
+    const tabMap = new Map(baseWorkspaceTabs.map((tab) => [tab.id, tab] as const));
+    return workspaceTabOrder.map((tabId) => tabMap.get(tabId)).filter((tab): tab is NonNullable<typeof tab> => Boolean(tab));
+  }, [baseWorkspaceTabs, workspaceTabOrder]);
 
   // 工作区激活态修正：当前激活 ID 无效时，按 data > console > 空态回退。
   useEffect(() => {

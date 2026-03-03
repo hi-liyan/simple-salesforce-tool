@@ -51,7 +51,7 @@ export function parseWorkspaceTabId(workspaceTabId: string): WorkspaceTabTarget 
   return null;
 }
 
-// 构建统一工作区 Tab 列表：固定 data 在前、console 在后。
+// 构建统一工作区 Tab 列表：提供 data/console 基础映射，最终展示顺序由 hook 层维护。
 export function buildWorkspaceTabs(dataTabs: DataWorkspaceTab[], consoleTabs: ConsoleWorkspaceTab[]): WorkspaceTabItem[] {
   return [
     ...dataTabs.map((tab) => ({
@@ -87,6 +87,10 @@ export function resolveActiveWorkspaceTabId({
 }: ResolveActiveWorkspaceTabIdInput): string {
   const hasCurrent = workspaceTabs.some((tab) => tab.id === currentActiveWorkspaceTabId);
   if (hasCurrent) return currentActiveWorkspaceTabId;
+  // 若当前目标是 console（例如刚新建控制台 Tab 的瞬时阶段），优先保持 console 焦点。
+  if (currentActiveWorkspaceTabId.startsWith("console:") && activeConsoleTabId) {
+    return buildConsoleWorkspaceTabId(activeConsoleTabId);
+  }
   if (activeDataObjectName) return buildDataWorkspaceTabId(activeDataObjectName);
   if (activeConsoleTabId) return buildConsoleWorkspaceTabId(activeConsoleTabId);
   return "";
