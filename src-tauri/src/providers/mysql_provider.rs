@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::mysql::{MySqlPool, MySqlPoolOptions, MySqlRow};
-use sqlx::{Column, MySql, QueryBuilder, Row};
+use sqlx::{Column, MySql, QueryBuilder, Row, TypeInfo};
 
 use crate::error::AppError;
 use crate::models::{
@@ -127,7 +128,8 @@ impl MySqlProvider {
                 column_default,
                 column_key,
                 extra,
-                column_comment
+                column_comment,
+                column_type
             FROM information_schema.columns
             WHERE table_schema = ? AND table_name = ?
             ORDER BY ordinal_position ASC
@@ -148,6 +150,7 @@ impl MySqlProvider {
             let column_key: Option<String> = decode_optional_row_string(&row, 4usize);
             let extra: Option<String> = decode_optional_row_string(&row, 5usize);
             let column_comment: Option<String> = decode_optional_row_string(&row, 6usize);
+            let column_type: Option<String> = decode_optional_row_string(&row, 7usize);
 
             let mut metadata = HashMap::new();
             metadata.insert(
@@ -169,6 +172,10 @@ impl MySqlProvider {
             metadata.insert(
                 "mysqlDataType".to_string(),
                 Value::String(data_type.clone()),
+            );
+            metadata.insert(
+                "columnType".to_string(),
+                column_type.map(Value::String).unwrap_or(Value::Null),
             );
 
             fields.push(ObjectField {
@@ -776,15 +783,118 @@ fn row_to_json_record(row: &MySqlRow) -> HashMap<String, Value> {
     let mut item = HashMap::new();
     for column in row.columns() {
         let name = column.name().to_string();
-        let value = row_try_get_json_value(row, &name);
+        let mysql_type = column.type_info().name().to_string();
+        let value = row_try_get_json_value(row, &name, &mysql_type);
         item.insert(name, value);
     }
     item
 }
 
-/// 读取列值并做类型映射（尽量保留基础标量语义）。
-fn row_try_get_json_value(row: &MySqlRow, column_name: &str) -> Value {
-    // 先按数值读取：避免将 MySQL int/tinyint/bigint 等列误判成 bool（true/false）。
+/// 读取列值并做类型映射（按 MySQL 列类型优先解码，避免日期/时间被误读为空）。
+fn row_try_get_json_value(row: &MySqlRow, column_name: &str, mysql_type: &str) -> Value {
+    let normalized = normalize_mysql_type_name(mysql_type);
+
+    if is_mysql_date_type(&normalized) {
+        if let Ok(value) = row.try_get::<Option<NaiveDate>, _>(column_name) {
+            return value
+                .map(|item| Value::String(item.format("%Y-%m-%d").to_string()))
+                .unwrap_or(Value::Null);
+        }
+    }
+
+    if is_mysql_datetime_type(&normalized) {
+        if let Ok(value) = row.try_get::<Option<NaiveDateTime>, _>(column_name) {
+            return value
+                .map(|item| Value::String(item.format("%Y-%m-%d %H:%M:%S%.f").to_string()))
+                .unwrap_or(Value::Null);
+        }
+    }
+
+    if is_mysql_time_type(&normalized) {
+        if let Ok(value) = row.try_get::<Option<NaiveTime>, _>(column_name) {
+            return value
+                .map(|item| Value::String(item.format("%H:%M:%S%.f").to_string()))
+                .unwrap_or(Value::Null);
+        }
+    }
+
+    if is_mysql_bool_type(&normalized) {
+        if let Ok(value) = row.try_get::<Option<bool>, _>(column_name) {
+            // MySQL BOOLEAN 本质是 TINYINT(1)，统一按数值输出，避免前端出现 true/false 展示偏差。
+            return value
+                .map(|item| bool_to_json_number(item))
+                .unwrap_or(Value::Null);
+        }
+    }
+
+    if is_mysql_signed_integer_type(&normalized) {
+        if let Ok(value) = row.try_get::<Option<i64>, _>(column_name) {
+            return value
+                .map(|item| Value::Number(item.into()))
+                .unwrap_or(Value::Null);
+        }
+    }
+
+    if is_mysql_unsigned_integer_type(&normalized) {
+        if let Ok(value) = row.try_get::<Option<u64>, _>(column_name) {
+            return value
+                .map(|item| Value::Number(serde_json::Number::from(item)))
+                .unwrap_or(Value::Null);
+        }
+    }
+
+    if is_mysql_decimal_type(&normalized) {
+        if let Ok(value) = row.try_get::<Option<String>, _>(column_name) {
+            return value.map(Value::String).unwrap_or(Value::Null);
+        }
+        if let Ok(value) = row.try_get::<Option<f64>, _>(column_name) {
+            return value
+                .and_then(serde_json::Number::from_f64)
+                .map(Value::Number)
+                .unwrap_or(Value::Null);
+        }
+    }
+
+    if is_mysql_float_type(&normalized) {
+        if let Ok(value) = row.try_get::<Option<f64>, _>(column_name) {
+            return value
+                .and_then(serde_json::Number::from_f64)
+                .map(Value::Number)
+                .unwrap_or(Value::Null);
+        }
+    }
+
+    // YEAR 按数字展示，避免被字符串比较影响排序行为。
+    if normalized == "year" {
+        if let Ok(value) = row.try_get::<Option<i32>, _>(column_name) {
+            return value
+                .map(|item| Value::Number(item.into()))
+                .unwrap_or(Value::Null);
+        }
+    }
+
+    // JSON 原样保留字符串，前端可按需展开。
+    if is_mysql_json_type(&normalized) {
+        if let Ok(value) = row.try_get::<Option<String>, _>(column_name) {
+            return value.map(Value::String).unwrap_or(Value::Null);
+        }
+    }
+
+    if is_mysql_textual_type(&normalized) {
+        if let Ok(value) = row.try_get::<Option<String>, _>(column_name) {
+            return value.map(Value::String).unwrap_or(Value::Null);
+        }
+    }
+
+    if is_mysql_binary_type(&normalized) {
+        if let Ok(value) = row.try_get::<Option<Vec<u8>>, _>(column_name) {
+            return value
+                .map(|bytes| Value::String(String::from_utf8_lossy(&bytes).to_string()))
+                .unwrap_or(Value::Null);
+        }
+    }
+
+    // 兜底顺序：按最常见标量再尝试一次，防止驱动类型名与预期不一致导致丢值。
     if let Ok(value) = row.try_get::<Option<i64>, _>(column_name) {
         return value
             .map(|item| Value::Number(item.into()))
@@ -801,9 +911,10 @@ fn row_try_get_json_value(row: &MySqlRow, column_name: &str) -> Value {
             .map(Value::Number)
             .unwrap_or(Value::Null);
     }
-    // 最后再尝试布尔：仅在数值解码失败时作为兜底。
     if let Ok(value) = row.try_get::<Option<bool>, _>(column_name) {
-        return value.map(Value::Bool).unwrap_or(Value::Null);
+        return value
+            .map(|item| bool_to_json_number(item))
+            .unwrap_or(Value::Null);
     }
     if let Ok(value) = row.try_get::<Option<String>, _>(column_name) {
         return value.map(Value::String).unwrap_or(Value::Null);
@@ -814,6 +925,113 @@ fn row_try_get_json_value(row: &MySqlRow, column_name: &str) -> Value {
             .unwrap_or(Value::Null);
     }
     Value::Null
+}
+
+/// 标准化 MySQL 列类型名，统一转小写并压缩空白字符。
+fn normalize_mysql_type_name(raw: &str) -> String {
+    raw.split_whitespace()
+        .filter(|item| !item.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
+}
+
+/// 判断是否为 DATE 类型。
+fn is_mysql_date_type(mysql_type: &str) -> bool {
+    mysql_type == "date"
+}
+
+/// 判断是否为 DATETIME/TIMESTAMP 类型。
+fn is_mysql_datetime_type(mysql_type: &str) -> bool {
+    mysql_type == "datetime" || mysql_type == "timestamp"
+}
+
+/// 判断是否为 TIME 类型。
+fn is_mysql_time_type(mysql_type: &str) -> bool {
+    mysql_type == "time"
+}
+
+/// 判断是否为布尔语义类型。
+fn is_mysql_bool_type(mysql_type: &str) -> bool {
+    mysql_type == "bool" || mysql_type == "boolean"
+}
+
+/// 判断是否为有符号整数类型。
+fn is_mysql_signed_integer_type(mysql_type: &str) -> bool {
+    matches!(
+        mysql_type,
+        "tinyint" | "smallint" | "mediumint" | "int" | "integer" | "bigint"
+    )
+}
+
+/// 判断是否为无符号整数类型。
+fn is_mysql_unsigned_integer_type(mysql_type: &str) -> bool {
+    matches!(
+        mysql_type,
+        "tinyint unsigned"
+            | "smallint unsigned"
+            | "mediumint unsigned"
+            | "int unsigned"
+            | "integer unsigned"
+            | "bigint unsigned"
+    )
+}
+
+/// 判断是否为定点数类型。
+fn is_mysql_decimal_type(mysql_type: &str) -> bool {
+    matches!(mysql_type, "decimal" | "newdecimal" | "numeric")
+}
+
+/// 判断是否为浮点数类型。
+fn is_mysql_float_type(mysql_type: &str) -> bool {
+    matches!(mysql_type, "float" | "double" | "real")
+}
+
+/// 判断是否为 JSON 类型。
+fn is_mysql_json_type(mysql_type: &str) -> bool {
+    mysql_type == "json"
+}
+
+/// 判断是否为文本语义类型（含枚举与集合）。
+fn is_mysql_textual_type(mysql_type: &str) -> bool {
+    matches!(
+        mysql_type,
+        "char"
+            | "varchar"
+            | "tinytext"
+            | "text"
+            | "mediumtext"
+            | "longtext"
+            | "enum"
+            | "set"
+    )
+}
+
+/// 判断是否为二进制语义类型。
+fn is_mysql_binary_type(mysql_type: &str) -> bool {
+    matches!(
+        mysql_type,
+        "binary"
+            | "varbinary"
+            | "tinyblob"
+            | "blob"
+            | "mediumblob"
+            | "longblob"
+            | "bit"
+            | "geometry"
+            | "point"
+            | "linestring"
+            | "polygon"
+            | "multipoint"
+            | "multilinestring"
+            | "multipolygon"
+            | "geometrycollection"
+    )
+}
+
+/// 将布尔值转换为 JSON 数字（false=0, true=1），与 MySQL tinyint 语义对齐。
+fn bool_to_json_number(value: bool) -> Value {
+    Value::Number(serde_json::Number::from(if value { 1 } else { 0 }))
 }
 
 /// 识别字符串是否为安全标识符，仅允许字母/数字/下划线。

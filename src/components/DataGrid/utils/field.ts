@@ -6,7 +6,7 @@ export function getFieldType(metadata: Record<string, unknown>): string {
 
 // 判断布尔字段类型。
 export function isBooleanType(fieldType: string): boolean {
-  return fieldType === "boolean";
+  return fieldType === "boolean" || fieldType === "bool";
 }
 
 // 判断数字字段类型。
@@ -24,6 +24,7 @@ export function isNumberType(fieldType: string): boolean {
     "decimal",
     "numeric",
     "real",
+    "year",
     "currency",
     "percent",
     "long"
@@ -42,7 +43,7 @@ export function isDateType(fieldType: string): boolean {
 
 // 判断 datetime 字段类型。
 export function isDateTimeType(fieldType: string): boolean {
-  return fieldType === "datetime";
+  return fieldType === "datetime" || fieldType === "timestamp";
 }
 
 // 判断字段是否可编辑。

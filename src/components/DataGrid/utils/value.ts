@@ -19,6 +19,8 @@ export function normalizeSelectValue(raw: string, options: { label: string; valu
 // 将值转换为数字。
 export function coerceNumber(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) return value;
+  // 兼容后端布尔回退值：统一映射到 0/1，避免数值列显示 true/false。
+  if (typeof value === "boolean") return value ? 1 : 0;
   if (typeof value === "string" && value.trim() !== "") {
     const parsed = Number(value);
     if (Number.isFinite(parsed)) return parsed;

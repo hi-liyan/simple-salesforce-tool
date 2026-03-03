@@ -142,6 +142,7 @@ export function DataGrid({
         dirtyCellSet,
         pendingDeleteRecordSet,
         effectiveSalesforceTimezone,
+        selectedSourceType,
         getRecordKey
       }),
     [
@@ -152,6 +153,7 @@ export function DataGrid({
       dirtyCellSet,
       pendingDeleteRecordSet,
       effectiveSalesforceTimezone,
+      selectedSourceType,
       getRecordKey
     ]
   );
@@ -163,6 +165,7 @@ export function DataGrid({
         records,
         fieldMetadataMap,
         effectiveSalesforceTimezone,
+        selectedSourceType,
         getRecordKey,
         onToggleRecord,
         onEditCell,
@@ -173,6 +176,7 @@ export function DataGrid({
       records,
       fieldMetadataMap,
       effectiveSalesforceTimezone,
+      selectedSourceType,
       getRecordKey,
       onToggleRecord,
       onEditCell,
