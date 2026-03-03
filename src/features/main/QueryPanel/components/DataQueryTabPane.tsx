@@ -6,6 +6,7 @@ import { SoqlMonacoEditor } from "../../../../components/SoqlMonacoEditor";
 import { api } from "../../../../api";
 import { Notice, ObjectDdl, TabState } from "../../../../types";
 import { MysqlSmartInput } from "./MysqlSmartInput";
+import { SalesforceSmartInput } from "./SalesforceSmartInput";
 
 // MySQL 函数候选：覆盖常见字符串、日期、聚合、空值处理函数。
 const MYSQL_FUNCTION_SUGGESTIONS = [
@@ -48,6 +49,71 @@ const MYSQL_KEYWORD_SUGGESTIONS = [
   "ASC",
   "DESC"
 ];
+
+// SOQL 函数候选：覆盖常用日期、转换、聚合与分组函数。
+const SOQL_FUNCTION_SUGGESTIONS = [
+  "COUNT()",
+  "COUNT_DISTINCT()",
+  "SUM()",
+  "AVG()",
+  "MIN()",
+  "MAX()",
+  "CALENDAR_MONTH()",
+  "CALENDAR_QUARTER()",
+  "CALENDAR_YEAR()",
+  "DAY_IN_MONTH()",
+  "DAY_IN_WEEK()",
+  "DAY_IN_YEAR()",
+  "DAY_ONLY()",
+  "FISCAL_MONTH()",
+  "FISCAL_QUARTER()",
+  "FISCAL_YEAR()",
+  "HOUR_IN_DAY()",
+  "WEEK_IN_MONTH()",
+  "WEEK_IN_YEAR()",
+  "CONVERTTIMEZONE()",
+  "FORMAT()",
+  "TOLABEL()"
+];
+
+// SOQL WHERE 常用关键字与日期字面量候选。
+const SOQL_WHERE_SUGGESTIONS = [
+  "AND",
+  "OR",
+  "NOT",
+  "IN",
+  "NOT IN",
+  "INCLUDES",
+  "EXCLUDES",
+  "LIKE",
+  "NULL",
+  "TRUE",
+  "FALSE",
+  "TODAY",
+  "YESTERDAY",
+  "TOMORROW",
+  "THIS_WEEK",
+  "LAST_WEEK",
+  "NEXT_WEEK",
+  "THIS_MONTH",
+  "LAST_MONTH",
+  "NEXT_MONTH",
+  "THIS_QUARTER",
+  "LAST_QUARTER",
+  "NEXT_QUARTER",
+  "THIS_YEAR",
+  "LAST_YEAR",
+  "NEXT_YEAR",
+  "LAST_N_DAYS:7",
+  "NEXT_N_DAYS:7",
+  "LAST_N_MONTHS:3",
+  "NEXT_N_MONTHS:3",
+  "LAST_N_YEARS:1",
+  "NEXT_N_YEARS:1"
+];
+
+// SOQL 排序关键字候选：配合字段名输入完整 ORDER BY 条件。
+const SOQL_ORDER_BY_SUGGESTIONS = ["ASC", "DESC", "NULLS FIRST", "NULLS LAST"];
 
 type DataQueryTabPaneProps = {
   // 当前选中的数据源 ID：用于打开外部 Salesforce 页面。
@@ -284,6 +350,23 @@ export function DataQueryTabPane({
     () => [...mysqlFieldSuggestions, "ASC", "DESC", ...MYSQL_FUNCTION_SUGGESTIONS],
     [mysqlFieldSuggestions]
   );
+  // 当前对象字段名候选：Salesforce WHERE 自动补全使用。
+  const salesforceFieldSuggestions = useMemo(
+    () => (activeTab?.describe?.fields || []).map((field) => field.name),
+    [activeTab?.describe?.fields]
+  );
+  // Salesforce WHERE 输入框候选：字段 + SOQL 函数 + 关键字/日期字面量。
+  const salesforceWhereSuggestions = useMemo(
+    () => [...salesforceFieldSuggestions, ...SOQL_FUNCTION_SUGGESTIONS, ...SOQL_WHERE_SUGGESTIONS],
+    [salesforceFieldSuggestions]
+  );
+  // Salesforce 排序字段候选：仅允许字段元数据中 sortable=true 的字段参与自动补全。
+  const salesforceSortableFieldSuggestions = useMemo(() => sortableFields.map((field) => field.name), [sortableFields]);
+  // Salesforce 排序候选：可排序字段 + 排序关键字。
+  const salesforceSortSuggestions = useMemo(
+    () => [...salesforceSortableFieldSuggestions, ...SOQL_ORDER_BY_SUGGESTIONS],
+    [salesforceSortableFieldSuggestions]
+  );
 
   useEffect(() => {
     setSoqlObjectFieldsMap({}); // 切换数据源后清空缓存，避免跨源字段污染。
@@ -519,29 +602,20 @@ export function DataQueryTabPane({
                       allowClear
                     />
                   ) : (
-                    <div className="w-[320px]">
-                      <label className="mb-1 block text-[12px]">WHERE</label>
-                      <div className="relative">
-                        <input
-                          className="input input-bordered input-sm w-full pr-8"
-                          value={activeTab.whereClause}
-                          // 关闭系统文本替换，避免 macOS 下英文单引号被自动转换为弯引号/中文引号。
-                          autoCorrect="off"
-                          autoCapitalize="off"
-                          spellCheck={false}
-                          onChange={(event) => onWhereChange(event.target.value)}
-                        />
-                        {activeTab.whereClause ? (
-                          <button
-                            className="btn btn-circle btn-ghost btn-xs absolute right-1 top-1/2 -translate-y-1/2"
-                            aria-label="清空 WHERE 条件"
-                            onClick={() => onWhereChange("")}
-                          >
-                            <X size={13} />
-                          </button>
-                        ) : null}
-                      </div>
-                    </div>
+                    <SalesforceSmartInput
+                      key={`soql-where-${activeTab.objectName}`}
+                      label="WHERE"
+                      value={activeTab.whereClause}
+                      placeholder="例如：CreatedDate >= LAST_N_DAYS:7 AND Name LIKE 'Acme%'"
+                      // Salesforce WHERE：联动更新 Tab 查询条件。
+                      onChange={onWhereChange}
+                      // 候选包含当前对象字段、SOQL 函数与关键字/日期字面量。
+                      suggestions={salesforceWhereSuggestions}
+                      // 默认宽度与 MySQL WHERE 保持一致。
+                      defaultWidth={360}
+                      // 允许快速清空 WHERE。
+                      allowClear
+                    />
                   )}
 
                   {isMysqlSource ? (
@@ -573,40 +647,25 @@ export function DataQueryTabPane({
                     </>
                   ) : (
                     <>
-                      <div className="w-[200px]">
-                        <label className="mb-1 block text-[12px]">排序字段</label>
-                        <select
-                          className="select select-bordered select-sm w-full"
-                          value={activeTab.sortField}
-                          disabled={sortableFields.length === 0}
-                          onChange={(event) => onSortFieldChange(event.target.value)}
-                        >
-                          {sortableFields.length === 0 && <option value="">无可排序字段</option>}
-                          {sortableFields.map((field) => (
-                            <option key={field.name} value={field.name}>
-                              {field.name}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-
-                      <div className="w-[92px]">
-                        <label className="mb-1 block text-[12px]">排序</label>
-                        <select
-                          className="select select-bordered select-sm w-full"
-                          value={activeTab.sortDirection}
-                          disabled={!activeTab.sortField}
-                          onChange={(event) => onSortDirectionChange(event.target.value as "ASC" | "DESC")}
-                        >
-                          <option value="ASC">ASC</option>
-                          <option value="DESC">DESC</option>
-                        </select>
-                      </div>
+                      <SalesforceSmartInput
+                        key={`soql-sort-${activeTab.objectName}`}
+                        label="排序"
+                        value={activeTab.sortClause || (activeTab.sortField ? `${activeTab.sortField} ${activeTab.sortDirection}` : "")}
+                        placeholder="例如：LastModifiedDate DESC, Name ASC"
+                        // Salesforce 排序：支持手动输入完整 ORDER BY 片段。
+                        onChange={onSortClauseChange}
+                        // 自动补全字段仅来自 sortable=true 字段。
+                        suggestions={salesforceSortSuggestions}
+                        // 排序输入宽度与 MySQL 风格保持一致。
+                        defaultWidth={300}
+                        // 排序有值时可快速清空。
+                        allowClear
+                      />
 
                       <div className="w-[90px]">
                         <label className="mb-1 block text-[12px]">LIMIT</label>
                         <input
-                          className="input input-bordered input-sm w-full"
+                          className="input input-bordered input-sm h-[38px] min-h-[38px] w-full leading-[20px]"
                           type="number"
                           value={activeTab.limit}
                           onChange={(event) => onLimitChange(Number(event.target.value || 200))}

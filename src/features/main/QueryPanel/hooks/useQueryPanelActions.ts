@@ -193,7 +193,27 @@ export function useQueryPanelActions({
       },
       onSortClauseChange: (value) => {
         if (!activeTab) return;
-        patchTab(activeTab.objectName, (item) => ({ ...item, sortClause: value }));
+        patchTab(activeTab.objectName, (item) => {
+          const normalized = value.trim();
+          if (!normalized) {
+            // 手动清空排序条件时同步清空旧版排序字段，避免 UI 回退显示旧值。
+            return { ...item, sortClause: "", sortField: "" };
+          }
+          // 解析首个排序片段（字段 + 可选方向），用于兼容旧逻辑字段。
+          const firstPart = normalized
+            .replace(/^order\s+by\s+/i, "")
+            .split(",")[0]
+            ?.trim();
+          const match = firstPart?.match(/^([A-Za-z_][\w.]*)\s*(ASC|DESC)?/i);
+          const parsedField = match?.[1] || item.sortField;
+          const parsedDirection = (match?.[2]?.toUpperCase() as "ASC" | "DESC" | undefined) || item.sortDirection;
+          return {
+            ...item,
+            sortClause: value,
+            sortField: parsedField,
+            sortDirection: parsedDirection
+          };
+        });
       },
       onQuery: () => {
         if (!activeTab) return;
