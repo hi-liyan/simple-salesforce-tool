@@ -232,6 +232,10 @@ export function DataQueryTabPane({
   objectNames,
   hideTabBar = false
 }: DataQueryTabPaneProps) {
+  // 字段搜索模式：支持“名称/标签”与“数据类型”两种过滤维度。
+  const [fieldSearchMode, setFieldSearchMode] = useState<"nameOrLabel" | "dataType">("nameOrLabel");
+  // 字段搜索关键词：用于过滤当前对象字段列表。
+  const [fieldSearchKeyword, setFieldSearchKeyword] = useState("");
   // 根据数据源类型切换查询栏布局（MySQL 使用 SQL 手工排序表达式）。
   const isMysqlSource = (selectedSourceType || "salesforce").toLowerCase() === "mysql";
   // 日志面板高度状态。
@@ -367,10 +371,30 @@ export function DataQueryTabPane({
     () => [...salesforceSortableFieldSuggestions, ...SOQL_ORDER_BY_SUGGESTIONS],
     [salesforceSortableFieldSuggestions]
   );
+  // 当前对象字段搜索结果：按搜索模式过滤名称/标签或数据类型。
+  const filteredDrawerFields = useMemo(() => {
+    const allFields = activeTab?.describe?.fields || [];
+    const trimmedKeyword = fieldSearchKeyword.trim().toLowerCase();
+    if (!trimmedKeyword) return allFields;
+    return allFields.filter((field) => {
+      if (fieldSearchMode === "dataType") {
+        return String(field.dataType || "").toLowerCase().includes(trimmedKeyword);
+      }
+      const normalizedName = String(field.name || "").toLowerCase();
+      const normalizedLabel = String(field.label || "").toLowerCase();
+      return normalizedName.includes(trimmedKeyword) || normalizedLabel.includes(trimmedKeyword);
+    });
+  }, [activeTab?.describe?.fields, fieldSearchKeyword, fieldSearchMode]);
 
   useEffect(() => {
     setSoqlObjectFieldsMap({}); // 切换数据源后清空缓存，避免跨源字段污染。
   }, [selectedSourceId]);
+
+  // 切换对象 Tab 时重置字段搜索，避免跨对象保留旧关键词导致“空结果”误解。
+  useEffect(() => {
+    setFieldSearchKeyword("");
+    setFieldSearchMode("nameOrLabel");
+  }, [activeTab?.objectName]);
 
   // 抽屉 SOQL 自动格式化：把“单行长 SQL”转换为多行，提升可读性。
   useEffect(() => {
@@ -826,6 +850,42 @@ export function DataQueryTabPane({
                     </button>
                   </div>
                 </div>
+                {/* 字段搜索栏：可按名称/标签或数据类型过滤当前对象字段。 */}
+                <div className="flex items-center gap-2 border-b border-base-300 px-3 py-2">
+                  {/* 搜索模式选择器。 */}
+                  <select
+                    className="select select-bordered select-xs w-[120px]"
+                    value={fieldSearchMode}
+                    onChange={(event) => setFieldSearchMode(event.target.value as "nameOrLabel" | "dataType")}
+                    disabled={!activeTab.describe || activeTab.describe.fields.length === 0}
+                  >
+                    <option value="nameOrLabel">名称/Label</option>
+                    <option value="dataType">数据类型</option>
+                  </select>
+                  {/* 搜索关键词输入框。 */}
+                  <label className="input input-bordered input-xs flex h-7 flex-1 items-center gap-1">
+                    <Search size={12} className="text-neutral/60" />
+                    <input
+                      value={fieldSearchKeyword}
+                      onChange={(event) => setFieldSearchKeyword(event.target.value)}
+                      placeholder={fieldSearchMode === "dataType" ? "搜索数据类型，例如 string" : "搜索字段名称或 Label"}
+                      className="w-full bg-transparent text-[12px]"
+                      disabled={!activeTab.describe || activeTab.describe.fields.length === 0}
+                    />
+                    {/* 清空按钮：仅在输入关键词时显示，支持一键清空。 */}
+                    {fieldSearchKeyword.trim().length > 0 && (
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-xs btn-circle"
+                        onClick={() => setFieldSearchKeyword("")}
+                        aria-label="清空字段搜索关键词"
+                        disabled={!activeTab.describe || activeTab.describe.fields.length === 0}
+                      >
+                        <X size={12} />
+                      </button>
+                    )}
+                  </label>
+                </div>
 
                 <div className="min-h-0 flex-1 overflow-auto">
                   {!activeTab.describe && (
@@ -838,8 +898,13 @@ export function DataQueryTabPane({
                       <span className="text-[12px] text-neutral/70">未获取到字段元数据。</span>
                     </div>
                   )}
+                  {activeTab.describe && activeTab.describe.fields.length > 0 && filteredDrawerFields.length === 0 && (
+                    <div className="px-3 py-2">
+                      <span className="text-[12px] text-neutral/70">未匹配到字段，请调整搜索条件。</span>
+                    </div>
+                  )}
 
-                  {activeTab.describe?.fields.map((field) => {
+                  {filteredDrawerFields.map((field) => {
                     const checked = activeTab.columnVisibility[field.name] ?? true;
                     return (
                       <div key={field.name} className="px-3 py-2">
