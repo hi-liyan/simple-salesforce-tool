@@ -5,7 +5,7 @@ use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::mysql::{MySqlPool, MySqlPoolOptions, MySqlRow};
-use sqlx::{Column, MySql, QueryBuilder, Row, TypeInfo};
+use sqlx::{types::Json, Column, MySql, QueryBuilder, Row, TypeInfo};
 
 use crate::error::AppError;
 use crate::models::{
@@ -873,8 +873,11 @@ fn row_try_get_json_value(row: &MySqlRow, column_name: &str, mysql_type: &str) -
         }
     }
 
-    // JSON 原样保留字符串，前端可按需展开。
+    // JSON 优先解码为结构化值，前端可直接展示对象/数组内容。
     if is_mysql_json_type(&normalized) {
+        if let Ok(value) = row.try_get::<Option<Json<Value>>, _>(column_name) {
+            return value.map(|item| item.0).unwrap_or(Value::Null);
+        }
         if let Ok(value) = row.try_get::<Option<String>, _>(column_name) {
             return value.map(Value::String).unwrap_or(Value::Null);
         }
