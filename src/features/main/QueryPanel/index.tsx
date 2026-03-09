@@ -73,6 +73,7 @@ export function QueryPanel({ viewState, actions }: QueryPanelProps) {
                   activeTabId={viewState.activeWorkspaceTabId}
                   onActivateTab={actions.onActivateWorkspaceTab}
                   onCloseTab={actions.onCloseWorkspaceTab}
+                  onCloseTabs={actions.onCloseWorkspaceTabs}
                 />
                 {/* 统一工作区内容：按激活 Tab 类型切换 data 面板或 console 面板。 */}
                 {viewState.activeWorkspaceTabKind === "console" ? (

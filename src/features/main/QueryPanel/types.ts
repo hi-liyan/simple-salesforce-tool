@@ -75,6 +75,8 @@ export type QueryPanelActions = {
   onActivateWorkspaceTab: (workspaceTabId: string) => void;
   // 关闭统一工作区 Tab。
   onCloseWorkspaceTab: (workspaceTabId: string) => void;
+  // 批量关闭统一工作区 Tabs。
+  onCloseWorkspaceTabs: (workspaceTabIds: string[]) => void;
   // 切换数据源。
   onChangeSource: (sourceId: string) => void;
   // 刷新数据源。

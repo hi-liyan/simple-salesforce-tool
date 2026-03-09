@@ -26,6 +26,8 @@ type UseQueryPanelActionsInput = {
   setActiveSoqlTabId: (tabId: string) => void;
   // 关闭控制台 Tab。
   closeSoqlTab: (tabId: string) => void;
+  // 批量关闭控制台 Tabs。
+  closeSoqlTabsByIds: (tabIds: string[]) => void;
   // 刷新数据源。
   refreshSources: (syncCli: boolean, preferredOrgId?: string, preferredSourceId?: string) => Promise<void>;
   // 切换数据源。
@@ -38,6 +40,8 @@ type UseQueryPanelActionsInput = {
   handleNotQueryableObjectClick: (item: SalesforceObject) => void;
   // 关闭对象 Tab。
   closeTab: (objectName: string) => void;
+  // 批量关闭对象 Tabs。
+  closeTabsByObjectNames: (objectNames: string[]) => void;
   // 关闭左侧对象 Tabs。
   closeLeftTabs: (objectName: string) => void;
   // 关闭右侧对象 Tabs。
@@ -93,12 +97,14 @@ export function useQueryPanelActions({
   setActiveTabObjectName,
   setActiveSoqlTabId,
   closeSoqlTab,
+  closeSoqlTabsByIds,
   refreshSources,
   handleSourceChange,
   buildDataWorkspaceTabId,
   openObjectTab,
   handleNotQueryableObjectClick,
   closeTab,
+  closeTabsByObjectNames,
   closeLeftTabs,
   closeRightTabs,
   closeOtherTabs,
@@ -143,6 +149,26 @@ export function useQueryPanelActions({
           return;
         }
         closeSoqlTab(parsed.targetId); // 关闭控制台 Tab。
+      },
+      onCloseWorkspaceTabs: (workspaceTabIds) => {
+        if (workspaceTabIds.length === 0) return;
+        const dataObjectNames: string[] = [];
+        const consoleTabIds: string[] = [];
+        workspaceTabIds.forEach((workspaceTabId) => {
+          const parsed = parseWorkspaceTabId(workspaceTabId);
+          if (!parsed) return;
+          if (parsed.kind === "data") {
+            dataObjectNames.push(parsed.targetId); // 汇总 data tabs，走对象批量关闭。
+            return;
+          }
+          consoleTabIds.push(parsed.targetId); // 汇总 console tabs，走控制台批量关闭。
+        });
+        if (dataObjectNames.length > 0) {
+          closeTabsByObjectNames(dataObjectNames);
+        }
+        if (consoleTabIds.length > 0) {
+          closeSoqlTabsByIds(consoleTabIds);
+        }
       },
       onChangeSource: (sourceId) => void handleSourceChange(sourceId),
       onRefreshSources: () => void refreshSources(true),
@@ -335,7 +361,9 @@ export function useQueryPanelActions({
       setActiveTabObjectName,
       setActiveSoqlTabId,
       closeTab,
+      closeTabsByObjectNames,
       closeSoqlTab,
+      closeSoqlTabsByIds,
       handleSourceChange,
       refreshSources,
       buildDataWorkspaceTabId,

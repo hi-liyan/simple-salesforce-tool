@@ -91,6 +91,7 @@ export function useMainPageQueryPanel({
   const activeSoqlTabId = useSoqlExecutorStore((state) => state.activeTabId);
   const setActiveSoqlTabId = useSoqlExecutorStore((state) => state.setActiveTabId);
   const closeSoqlTab = useSoqlExecutorStore((state) => state.closeTab);
+  const closeSoqlTabsByIds = useSoqlExecutorStore((state) => state.closeTabsByIds);
 
   // Objects 查询：随数据源变化拉取对象元数据。
   const { data: objects = [], isFetching: objectsFetching, error: objectsError } = useObjectsQuery(selectedSourceId);
@@ -389,12 +390,14 @@ export function useMainPageQueryPanel({
     setActiveTabObjectName,
     setActiveSoqlTabId,
     closeSoqlTab,
+    closeSoqlTabsByIds,
     refreshSources,
     handleSourceChange,
     buildDataWorkspaceTabId,
     openObjectTab,
     handleNotQueryableObjectClick,
     closeTab,
+    closeTabsByObjectNames,
     closeLeftTabs,
     closeRightTabs,
     closeOtherTabs,
