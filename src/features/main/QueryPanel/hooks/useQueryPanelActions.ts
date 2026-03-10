@@ -62,7 +62,7 @@ type UseQueryPanelActionsInput = {
   // 撤销未提交修改。
   discardPendingChanges: () => void;
   // 切换字段/DDL 抽屉。
-  toggleDrawerForActiveTab: () => Promise<void>;
+  toggleDrawerForActiveTab: (drawerView?: "salesforce" | "mysql-ddl" | "mysql-fields") => Promise<void>;
   // 加载 MySQL DDL。
   loadMysqlDdl: (objectName: string) => Promise<void>;
   // 更新 Tab。
@@ -192,7 +192,7 @@ export function useQueryPanelActions({
       onDeleteCheckedRecords: () => void deleteCheckedRecords(),
       onApplyPendingChanges: () => void applyPendingChanges(),
       onDiscardPendingChanges: discardPendingChanges,
-      onToggleDrawer: () => void toggleDrawerForActiveTab(),
+      onToggleDrawer: (drawerView) => void toggleDrawerForActiveTab(drawerView),
       onRefreshMysqlDdl: () => {
         if (!activeTab) return;
         void loadMysqlDdl(activeTab.objectName);
