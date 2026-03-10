@@ -40,6 +40,8 @@ type CreateGetCellContentParams = {
   selectedSourceType?: string;
   // 行键提取器：统一获取 recordId。
   getRecordKey: (rowIndex: number) => string;
+  // 只读单元格是否允许双击打开 Overlay（仅查看不可编辑）。
+  allowReadonlyOverlay?: boolean;
 };
 
 // 构建单元格读取函数：只负责“按坐标返回展示单元格”。
@@ -52,7 +54,8 @@ export function createGetCellContent({
   pendingDeleteRecordSet,
   effectiveSalesforceTimezone,
   selectedSourceType,
-  getRecordKey
+  getRecordKey,
+  allowReadonlyOverlay = false
 }: CreateGetCellContentParams): (cell: Item) => GridCell {
   const isMysqlSource = (selectedSourceType || "salesforce").toLowerCase() === "mysql";
   return ([col, row]) => {
@@ -107,7 +110,7 @@ export function createGetCellContent({
         kind: GridCellKind.Text,
         data: text,
         displayData: text,
-        allowOverlay: editable,
+        allowOverlay: editable || allowReadonlyOverlay,
         readonly: !editable,
         themeOverride: commonTheme
       };
@@ -120,7 +123,7 @@ export function createGetCellContent({
         data: num,
         // 数值列优先使用归一化后的数字文本，避免 tinyint 等字段被显示为 true/false。
         displayData: num === undefined ? (raw === null || raw === undefined ? "" : String(raw)) : String(num),
-        allowOverlay: editable,
+        allowOverlay: editable || allowReadonlyOverlay,
         readonly: !editable,
         themeOverride: commonTheme
       };
@@ -134,7 +137,7 @@ export function createGetCellContent({
         // date 单元格展示与提交统一为 Salesforce 日期格式（YYYY-MM-DD）。
         data: text,
         displayData: text,
-        allowOverlay: editable,
+        allowOverlay: editable || allowReadonlyOverlay,
         readonly: !editable,
         themeOverride: commonTheme
       };
@@ -148,7 +151,7 @@ export function createGetCellContent({
         // datetime 单元格展示为 Salesforce 日期时间格式（YYYY-MM-DDTHH:mm:ss.SSS+0000）。
         data: text,
         displayData: text,
-        allowOverlay: editable,
+        allowOverlay: editable || allowReadonlyOverlay,
         readonly: !editable,
         themeOverride: commonTheme
       };
@@ -164,7 +167,7 @@ export function createGetCellContent({
         data: value,
         // 单元格显示统一改为 label，满足数据库工具预期阅读体验。
         displayData: displayText,
-        allowOverlay: editable,
+        allowOverlay: editable || allowReadonlyOverlay,
         readonly: !editable,
         themeOverride: commonTheme
       };
@@ -175,7 +178,7 @@ export function createGetCellContent({
       kind: GridCellKind.Text,
       data: text,
       displayData: text,
-      allowOverlay: editable,
+      allowOverlay: editable || allowReadonlyOverlay,
       readonly: !editable,
       themeOverride: commonTheme
     };

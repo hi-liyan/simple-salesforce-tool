@@ -8,6 +8,11 @@ import { RowContextMenuState, HoveredHeaderMetaState } from "../types";
 import { isHeaderInfoIconHit } from "../renderers/drawHeader";
 import { buildDisplayMetadataFromRaw } from "../../../utils/fieldMetadata";
 
+// DataGrid 表头高度：与 DataEditor 的 headerHeight 配置保持一致。
+const DATA_GRID_HEADER_HEIGHT = 42;
+// DataGrid 数据行高度：与 DataEditor 的 rowHeight 配置保持一致。
+const DATA_GRID_ROW_HEIGHT = 30;
+
 type DataGridSurfaceProps = {
   // 查询总数（展示在工具栏）。
   totalSize: number;
@@ -118,6 +123,7 @@ export function DataGridSurface({
 }: DataGridSurfaceProps) {
   // 受控选区状态：用于实现“点击 # 选整行”。
   const [gridSelection, setGridSelection] = React.useState<GridSelection | undefined>(undefined);
+
   // 统一处理选区变更：命中 # 序号列时，将默认单元格选区改写为整行选区。
   const handleGridSelectionChange = React.useCallback(
     (nextSelection: GridSelection) => {
@@ -340,8 +346,8 @@ export function DataGridSurface({
           minColumnWidth={44}
           maxColumnWidth={900}
           // 行高与表头高度：表头提高到双行，支持 Field Name/Label 分行显示。
-          rowHeight={30}
-          headerHeight={42}
+          rowHeight={DATA_GRID_ROW_HEIGHT}
+          headerHeight={DATA_GRID_HEADER_HEIGHT}
           // 平滑滚动：提升大数据量横向/纵向浏览体验。
           smoothScrollX
           smoothScrollY
@@ -353,6 +359,13 @@ export function DataGridSurface({
           // 启用二维粘贴（按行列拆分），行为与 Excel 类似。
           onPaste
         />
+        {/* 空白区遮罩：仅保留“有数据区域”的网格线，隐藏数据末行以下的网格背景。 */}
+        {records.length > 0 && (
+          <div
+            className="pointer-events-none absolute inset-x-0 bottom-0 z-[1] border-t border-base-300 bg-base-100"
+            style={{ top: DATA_GRID_HEADER_HEIGHT + records.length * DATA_GRID_ROW_HEIGHT }}
+          />
+        )}
 
         {/* 表头字段元数据悬浮提示：仅在 hover 到 info icon 时显示。 */}
         {showHeaderMetadata && hoveredHeaderMeta && (
