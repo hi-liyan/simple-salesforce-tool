@@ -19,6 +19,7 @@ use crate::models::{
     CliPathStatus, CurrentUserContext, LlmSettings, LlmSettingsView, ObjectDdl, ObjectDescribe,
     QueryResult, RecordMutationPayload, RecordSavePayload, RecordUpdatePayload, SalesforceObject,
     SalesforceSource, SaveLlmSettingsPayload, SourceUpsertPayload, SystemLogPage,
+    TerminalCommandGroup, TerminalCommandItem, TerminalCommandUpsertPayload,
 };
 use crate::providers::provider_for_source;
 use crate::sf_cli;
@@ -2425,6 +2426,98 @@ const TOOL_GET_FIELD_METADATA: &str = "get_salesforce_field_metadata";
 /// LLM 工具:获取对象关系图。
 const TOOL_GET_OBJECT_RELATIONSHIP_GRAPH: &str = "get_salesforce_object_relationship_graph";
 
+/// 读取全局终端命令组（含命令列表）。
+#[tauri::command]
+pub fn list_terminal_command_groups(
+    state: State<'_, AppState>,
+) -> Result<Vec<TerminalCommandGroup>, String> {
+    let connection = state
+        .db
+        .lock()
+        .map_err(|error| format!("Database lock failed: {error}"))?;
+    db::list_terminal_command_groups(&connection).map_err(AppError::to_string_error)
+}
+
+/// 创建终端命令组。
+#[tauri::command]
+pub fn create_terminal_command_group(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<TerminalCommandGroup, String> {
+    let normalized_name = name.trim().to_string();
+    if normalized_name.is_empty() {
+        return Err("命令组名称不能为空".to_string());
+    }
+
+    let connection = state
+        .db
+        .lock()
+        .map_err(|error| format!("Database lock failed: {error}"))?;
+    db::create_terminal_command_group(&connection, &normalized_name)
+        .map_err(AppError::to_string_error)
+}
+
+/// 创建终端命令。
+#[tauri::command]
+pub fn create_terminal_command(
+    state: State<'_, AppState>,
+    payload: TerminalCommandUpsertPayload,
+) -> Result<TerminalCommandItem, String> {
+    let connection = state
+        .db
+        .lock()
+        .map_err(|error| format!("Database lock failed: {error}"))?;
+    db::create_terminal_command(&connection, &payload).map_err(AppError::to_string_error)
+}
+
+/// 更新终端命令。
+#[tauri::command]
+pub fn update_terminal_command(
+    state: State<'_, AppState>,
+    command_id: String,
+    payload: TerminalCommandUpsertPayload,
+) -> Result<TerminalCommandItem, String> {
+    let normalized_command_id = command_id.trim().to_string();
+    if normalized_command_id.is_empty() {
+        return Err("commandId 不能为空".to_string());
+    }
+
+    let connection = state
+        .db
+        .lock()
+        .map_err(|error| format!("Database lock failed: {error}"))?;
+    db::update_terminal_command(&connection, &normalized_command_id, &payload)
+        .map_err(AppError::to_string_error)
+}
+
+/// 删除终端命令。
+#[tauri::command]
+pub fn delete_terminal_command(
+    state: State<'_, AppState>,
+    group_id: String,
+    command_id: String,
+) -> Result<(), String> {
+    let normalized_group_id = group_id.trim().to_string();
+    let normalized_command_id = command_id.trim().to_string();
+    if normalized_group_id.is_empty() {
+        return Err("groupId 不能为空".to_string());
+    }
+    if normalized_command_id.is_empty() {
+        return Err("commandId 不能为空".to_string());
+    }
+
+    let connection = state
+        .db
+        .lock()
+        .map_err(|error| format!("Database lock failed: {error}"))?;
+    db::delete_terminal_command(
+        &connection,
+        &normalized_group_id,
+        &normalized_command_id,
+    )
+    .map_err(AppError::to_string_error)
+}
+
 /// 打开终端会话：每个前端 Tab 对应一个系统终端进程。
 #[tauri::command]
 pub fn open_terminal_session(
@@ -2485,7 +2578,12 @@ pub fn resize_terminal_session(
     if normalized_tab_id.is_empty() {
         return Err("Tab ID 不能为空".to_string());
     }
-    terminal_runtime::resize_terminal_session(&state.terminal_sessions, normalized_tab_id, cols, rows)
+    terminal_runtime::resize_terminal_session(
+        &state.terminal_sessions,
+        normalized_tab_id,
+        cols,
+        rows,
+    )
 }
 
 /// 关闭终端会话并终止对应进程。
@@ -2505,8 +2603,8 @@ pub fn open_elevated_terminal(_state: State<'_, AppState>) -> Result<(), String>
     #[cfg(target_os = "windows")]
     {
         // 管理员终端同样遵循终端首选 shell 配置。
-        let elevated_program = read_terminal_shell_command(&_state)
-            .unwrap_or_else(|| "pwsh.exe".to_string());
+        let elevated_program =
+            read_terminal_shell_command(&_state).unwrap_or_else(|| "pwsh.exe".to_string());
         let escaped_program = elevated_program.replace('\'', "''");
         let guard_script = terminal_runtime::build_windows_parent_guard_script(std::process::id());
         let escaped_guard_script = guard_script.replace('\'', "''");

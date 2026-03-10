@@ -10,7 +10,6 @@ import { TerminalPanel } from "../features/main/TerminalPanel";
 import { MainLayout } from "../layouts/MainLayout";
 import { useAppStore } from "../store/useAppStore";
 import { useSoqlExecutorStore } from "../store/useSoqlExecutorStore";
-import { useTerminalStore } from "../store/useTerminalStore";
 import { enableStorageWrite } from "../store/tauriStorage";
 
 // GitHub Releases 固定地址：用于更新提示中的展示与跳转。
@@ -58,7 +57,7 @@ export function MainPage() {
 
     const setup = async () => {
       // 手动触发 rehydrate（skipHydration: true），从 SQLite 恢复持久化状态。
-      await Promise.all([useAppStore.persist.rehydrate(), useSoqlExecutorStore.persist.rehydrate(), useTerminalStore.persist.rehydrate()]);
+      await Promise.all([useAppStore.persist.rehydrate(), useSoqlExecutorStore.persist.rehydrate()]);
       if (!active) return;
 
       // rehydrate 完成且确认组件仍存活后，才开启写入门控。

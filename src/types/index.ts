@@ -298,3 +298,30 @@ export type TerminalShellOption = {
   shellName: string;
   shellVersion: string;
 };
+
+// 终端命令项：用于左侧命令库展示与执行。
+export type TerminalCommandItem = {
+  id: string;
+  name: string;
+  command: string;
+  description: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+// 终端命令组：全局存储（与数据源无关）。
+export type TerminalCommandGroup = {
+  id: string;
+  name: string;
+  commands: TerminalCommandItem[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+// 终端命令写入载荷：用于创建和更新命令。
+export type TerminalCommandUpsertPayload = {
+  groupId: string;
+  name: string;
+  command: string;
+  description: string;
+};

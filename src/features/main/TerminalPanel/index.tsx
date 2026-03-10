@@ -1,12 +1,33 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Editor from "@monaco-editor/react";
 import { listen } from "@tauri-apps/api/event";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { Copy, FolderPlus, Play, Plus, Search, Shield, Trash2, X } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  Clipboard,
+  Copy,
+  FolderPlus,
+  PencilLine,
+  Play,
+  Plus,
+  RefreshCw,
+  Search,
+  Shield,
+  Trash2,
+  X
+} from "lucide-react";
 import { api } from "../../../api";
-import { TerminalClosedEvent, TerminalOutputEvent } from "../../../types";
-import { TerminalCommandItem, TerminalTab, useTerminalStore } from "../../../store/useTerminalStore";
+import {
+  TerminalClosedEvent,
+  TerminalCommandGroup,
+  TerminalCommandItem,
+  TerminalCommandUpsertPayload,
+  TerminalOutputEvent
+} from "../../../types";
+import { TerminalTab, useTerminalStore } from "../../../store/useTerminalStore";
 
 type TerminalPanelProps = {
   // 当前 Terminal 面板是否可见：用于控制激活时的 fit/focus。
@@ -37,48 +58,86 @@ type TerminalProcessMeta = {
   opening: boolean;
 };
 
+// 左侧编辑器模式。
+type CommandEditorMode = "closed" | "group" | "create" | "edit";
+
+// 编辑命令目标。
+type EditingCommandTarget = {
+  // 所属命令组 ID。
+  groupId: string;
+  // 命令 ID。
+  commandId: string;
+};
+
+// 命令编辑表单。
+type CommandEditorForm = {
+  // 目标命令组 ID。
+  groupId: string;
+  // 命令名称。
+  name: string;
+  // 命令描述。
+  description: string;
+  // 命令正文。
+  command: string;
+};
+
+// 创建空白命令表单。
+function createEmptyCommandForm(groupId: string): CommandEditorForm {
+  return {
+    groupId,
+    name: "",
+    description: "",
+    command: ""
+  };
+}
+
+// 由命令实体回填编辑表单。
+function createFormFromCommand(groupId: string, command: TerminalCommandItem): CommandEditorForm {
+  return {
+    groupId,
+    name: command.name,
+    description: command.description,
+    command: command.command
+  };
+}
+
 // TerminalPanel：左侧命令库 + 右侧真实终端工作区。
 export function TerminalPanel({ visible = true }: TerminalPanelProps) {
-  // Store：命令组、终端 Tab 与操作能力。
-  const commandGroups = useTerminalStore((state) => state.commandGroups);
+  // Store：终端 Tab 与会话操作能力。
   const tabs = useTerminalStore((state) => state.tabs);
   const activeTabId = useTerminalStore((state) => state.activeTabId);
-  const createCommandGroup = useTerminalStore((state) => state.createCommandGroup);
-  const createCommand = useTerminalStore((state) => state.createCommand);
-  const updateCommand = useTerminalStore((state) => state.updateCommand);
-  const deleteCommand = useTerminalStore((state) => state.deleteCommand);
   const createTerminalTab = useTerminalStore((state) => state.createTerminalTab);
   const setActiveTabId = useTerminalStore((state) => state.setActiveTabId);
   const closeTerminalTab = useTerminalStore((state) => state.closeTerminalTab);
   // 平台标识：仅 Windows 显示“管理员终端”入口。
   const isWindowsPlatform = useMemo(() => /Win/i.test(navigator.platform || navigator.userAgent), []);
 
-  // 搜索关键字：支持按组名、命令名、命令内容全局匹配。
+  // 全局命令组（由后端 SQLite 表读取）。
+  const [commandGroups, setCommandGroups] = useState<TerminalCommandGroup[]>([]);
+  // 命令库加载态。
+  const [commandLibraryLoading, setCommandLibraryLoading] = useState(false);
+  // 命令库错误文本。
+  const [commandLibraryError, setCommandLibraryError] = useState("");
+  // 命令写入提交态。
+  const [commandLibrarySubmitting, setCommandLibrarySubmitting] = useState(false);
+  // 搜索关键字：支持组名、命令名、描述、命令文本匹配。
   const [searchKeyword, setSearchKeyword] = useState("");
-  // 当前选中命令组 ID：用于右键菜单和创建命令时默认分组。
+  // 当前选中命令组 ID。
   const [selectedGroupId, setSelectedGroupId] = useState("");
+  // 每个分组的展开状态。
+  const [expandedByGroupId, setExpandedByGroupId] = useState<Record<string, boolean>>({});
   // 命令右键菜单状态。
   const [commandContextMenu, setCommandContextMenu] = useState<{ x: number; y: number; groupId: string; command: TerminalCommandItem } | null>(
     null
   );
-  // 是否展开“创建命令组”表单。
-  const [showCreateGroupPanel, setShowCreateGroupPanel] = useState(false);
-  // 是否展开“创建命令”表单。
-  const [showCreateCommandPanel, setShowCreateCommandPanel] = useState(false);
+  // 左侧编辑器模式。
+  const [editorMode, setEditorMode] = useState<CommandEditorMode>("closed");
+  // 编辑态命令目标。
+  const [editingTarget, setEditingTarget] = useState<EditingCommandTarget | null>(null);
   // 新命令组名称输入值。
   const [newGroupName, setNewGroupName] = useState("");
-  // 新命令的目标分组 ID。
-  const [newCommandGroupId, setNewCommandGroupId] = useState("");
-  // 新命令名称输入值。
-  const [newCommandName, setNewCommandName] = useState("");
-  // 新命令正文输入值。
-  const [newCommandValue, setNewCommandValue] = useState("");
-  // 当前编辑命令 ID（仅允许一条命令处于编辑态）。
-  const [editingCommandId, setEditingCommandId] = useState("");
-  // 编辑态命令名称。
-  const [editingCommandName, setEditingCommandName] = useState("");
-  // 编辑态命令正文。
-  const [editingCommandValue, setEditingCommandValue] = useState("");
+  // 命令编辑表单。
+  const [commandForm, setCommandForm] = useState<CommandEditorForm>(() => createEmptyCommandForm(""));
   // 每个 Tab 的后端进程元信息。
   const [processMetaByTabId, setProcessMetaByTabId] = useState<Record<string, TerminalProcessMeta>>({});
 
@@ -92,22 +151,39 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
   const pendingRunCommandByTabIdRef = useRef<Record<string, string>>({});
   // 上一次渲染时的 Tab ID 集合：用于回收已关闭 Tab 资源。
   const previousTabIdsRef = useRef<string[]>([]);
+  // 命令库请求序号：用于丢弃过期响应。
+  const commandLibraryRequestSeqRef = useRef(0);
 
   // 激活终端 Tab 派生值。
   const activeTab = useMemo(() => tabs.find((item) => item.id === activeTabId) || tabs[0] || null, [tabs, activeTabId]);
 
-  // 过滤后的命令组：支持按组名、命令名、命令文本全局搜索。
+  // 当前选中命令组。
+  const selectedGroup = useMemo(
+    () => commandGroups.find((item) => item.id === selectedGroupId) || commandGroups[0] || null,
+    [commandGroups, selectedGroupId]
+  );
+
+  // 命令总量：用于头部统计。
+  const totalCommandCount = useMemo(
+    () => commandGroups.reduce((total, group) => total + group.commands.length, 0),
+    [commandGroups]
+  );
+
+  // 过滤后的命令组：支持按组名、命令名、描述、命令正文检索。
   const filteredGroups = useMemo(() => {
     const keyword = searchKeyword.trim().toLowerCase();
     if (!keyword) return commandGroups;
 
     return commandGroups
       .map((group) => {
-        const groupMatch = group.name.toLowerCase().includes(keyword);
-        if (groupMatch) return group;
-        const commands = group.commands.filter(
-          (item) => item.name.toLowerCase().includes(keyword) || item.command.toLowerCase().includes(keyword)
-        );
+        const groupMatched = group.name.toLowerCase().includes(keyword);
+        if (groupMatched) return group;
+
+        const commands = group.commands.filter((command) => {
+          const searchableText = [command.name, command.description, command.command].join(" ").toLowerCase();
+          return searchableText.includes(keyword);
+        });
+
         return {
           ...group,
           commands
@@ -116,20 +192,65 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
       .filter((group) => group.commands.length > 0 || group.name.toLowerCase().includes(keyword));
   }, [commandGroups, searchKeyword]);
 
-  // 当前选中命令组。
-  const selectedGroup = useMemo(() => commandGroups.find((item) => item.id === selectedGroupId) || commandGroups[0] || null, [commandGroups, selectedGroupId]);
+  // 命令表单是否可提交。
+  const canSubmitCommandForm = useMemo(
+    () => Boolean(commandForm.groupId && commandForm.name.trim() && commandForm.command.trim()),
+    [commandForm]
+  );
 
-  // 初始化/兜底选中命令组，避免出现空选中状态。
+  // 拉取全局命令库。
+  const loadCommandLibrary = useCallback(
+    async (options?: { keepSelection?: boolean }) => {
+      const requestSeq = commandLibraryRequestSeqRef.current + 1;
+      commandLibraryRequestSeqRef.current = requestSeq;
+      setCommandLibraryLoading(true);
+      setCommandLibraryError("");
+
+      try {
+        const groups = await api.listTerminalCommandGroups();
+        // 仅接纳最后一次请求结果，避免并发切换数据源时状态回退。
+        if (commandLibraryRequestSeqRef.current !== requestSeq) return;
+        setCommandGroups(groups);
+        setExpandedByGroupId((state) => {
+          const next: Record<string, boolean> = {};
+          groups.forEach((group, index) => {
+            next[group.id] = state[group.id] ?? index === 0;
+          });
+          return next;
+        });
+
+        if (options?.keepSelection && selectedGroupId && groups.some((group) => group.id === selectedGroupId)) {
+          return;
+        }
+        setSelectedGroupId(groups[0]?.id || "");
+      } catch (error) {
+        if (commandLibraryRequestSeqRef.current !== requestSeq) return;
+        setCommandLibraryError(`加载命令库失败：${String(error)}`);
+      } finally {
+        if (commandLibraryRequestSeqRef.current !== requestSeq) return;
+        setCommandLibraryLoading(false);
+      }
+    },
+    [selectedGroupId]
+  );
+
+  // 组件初始化后自动加载命令库。
   useEffect(() => {
-    if (selectedGroupId && commandGroups.some((item) => item.id === selectedGroupId)) return;
+    void loadCommandLibrary();
+  }, [loadCommandLibrary]);
+
+  // 初始化/兜底选中命令组。
+  useEffect(() => {
+    if (selectedGroupId && commandGroups.some((group) => group.id === selectedGroupId)) return;
     setSelectedGroupId(commandGroups[0]?.id || "");
   }, [selectedGroupId, commandGroups]);
 
-  // 当命令组变化时，同步“创建命令”面板默认分组。
+  // 当编辑表单分组不可用时回退到首个分组。
   useEffect(() => {
-    if (newCommandGroupId && commandGroups.some((item) => item.id === newCommandGroupId)) return;
-    setNewCommandGroupId(commandGroups[0]?.id || "");
-  }, [newCommandGroupId, commandGroups]);
+    if (!editorMode || editorMode === "closed") return;
+    if (commandForm.groupId && commandGroups.some((group) => group.id === commandForm.groupId)) return;
+    setCommandForm((state) => ({ ...state, groupId: commandGroups[0]?.id || "" }));
+  }, [editorMode, commandForm.groupId, commandGroups]);
 
   // 当 activeTabId 不可用时，自动收敛到第一个终端。
   useEffect(() => {
@@ -218,17 +339,20 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
   }, []);
 
   // 将 xterm 挂载到容器并执行 fit。
-  const mountRuntimeToContainer = useCallback((tab: TerminalTab) => {
-    const container = terminalContainerByTabIdRef.current[tab.id];
-    if (!container) return;
+  const mountRuntimeToContainer = useCallback(
+    (tab: TerminalTab) => {
+      const container = terminalContainerByTabIdRef.current[tab.id];
+      if (!container) return;
 
-    const runtime = ensureTerminalRuntime(tab);
-    // xterm 仅需 open 一次；若重复 open 会抛错，这里通过 children 长度判断。
-    if (container.childElementCount === 0) {
-      runtime.terminal.open(container);
-    }
-    runtime.fitAddon.fit(); // 每次挂载后重新 fit。
-  }, [ensureTerminalRuntime]);
+      const runtime = ensureTerminalRuntime(tab);
+      // xterm 仅需 open 一次；若重复 open 会抛错，这里通过 children 长度判断。
+      if (container.childElementCount === 0) {
+        runtime.terminal.open(container);
+      }
+      runtime.fitAddon.fit(); // 每次挂载后重新 fit。
+    },
+    [ensureTerminalRuntime]
+  );
 
   // 打开后端终端会话（每个 Tab 一个系统进程）。
   const ensureBackendSession = useCallback(
@@ -415,64 +539,140 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
     };
   }, []);
 
-  // 创建命令组。
-  function handleCreateGroup() {
-    const groupId = createCommandGroup(newGroupName);
-    if (!groupId) return;
-    setSelectedGroupId(groupId);
-    setNewCommandGroupId(groupId);
+  // 更新命令表单字段。
+  function patchCommandForm(patch: Partial<CommandEditorForm>) {
+    setCommandForm((state) => ({
+      ...state,
+      ...patch
+    }));
+  }
+
+  // 打开“创建命令组”面板。
+  function openCreateGroupPanel() {
+    setEditorMode("group");
+    setEditingTarget(null);
     setNewGroupName("");
-    setShowCreateGroupPanel(false);
   }
 
-  // 创建命令。
-  function handleCreateCommand() {
-    const normalizedGroupId = newCommandGroupId || selectedGroup?.id || "";
-    if (!normalizedGroupId) return;
-    const commandId = createCommand(normalizedGroupId, newCommandName, newCommandValue);
-    if (!commandId) return;
-    setSelectedGroupId(normalizedGroupId);
-    setNewCommandName("");
-    setNewCommandValue("");
-    setShowCreateCommandPanel(false);
+  // 打开“创建命令”面板。
+  function openCreateCommandPanel(seedGroupId?: string) {
+    const nextGroupId = seedGroupId || selectedGroup?.id || commandGroups[0]?.id || "";
+    setEditorMode("create");
+    setEditingTarget(null);
+    setCommandForm(createEmptyCommandForm(nextGroupId));
   }
 
-  // 开始编辑命令。
-  function startEditCommand(command: TerminalCommandItem) {
-    setEditingCommandId(command.id);
-    setEditingCommandName(command.name);
-    setEditingCommandValue(command.command);
+  // 打开“编辑命令”面板。
+  function openEditCommandPanel(groupId: string, command: TerminalCommandItem) {
+    setEditorMode("edit");
+    setEditingTarget({ groupId, commandId: command.id });
+    setCommandForm(createFormFromCommand(groupId, command));
+    setSelectedGroupId(groupId);
+    setExpandedByGroupId((state) => ({ ...state, [groupId]: true }));
   }
 
-  // 取消编辑命令。
-  function cancelEditCommand() {
-    setEditingCommandId("");
-    setEditingCommandName("");
-    setEditingCommandValue("");
+  // 关闭编辑面板并清理临时状态。
+  function closeEditorPanel() {
+    setEditorMode("closed");
+    setEditingTarget(null);
   }
 
-  // 保存编辑命令。
-  function saveEditCommand(groupId: string, commandId: string) {
-    updateCommand(groupId, commandId, {
-      name: editingCommandName,
-      command: editingCommandValue
-    });
-    cancelEditCommand();
+  // 创建命令组。
+  async function handleCreateGroup() {
+    const normalizedName = newGroupName.trim();
+    if (!normalizedName) return;
+
+    setCommandLibrarySubmitting(true);
+    try {
+      const created = await api.createTerminalCommandGroup(normalizedName);
+      setSelectedGroupId(created.id);
+      setExpandedByGroupId((state) => ({ ...state, [created.id]: true }));
+      setNewGroupName("");
+      closeEditorPanel();
+      await loadCommandLibrary({ keepSelection: true });
+    } catch (error) {
+      window.alert(`创建命令组失败：${String(error)}`); // 即时反馈失败原因，避免用户误以为提交无效。
+    } finally {
+      setCommandLibrarySubmitting(false);
+    }
+  }
+
+  // 读取系统剪贴板并覆盖命令输入。
+  async function handlePasteFromClipboard() {
+    try {
+      const text = await navigator.clipboard.readText();
+      patchCommandForm({ command: text });
+    } catch (error) {
+      window.alert(`读取剪贴板失败：${String(error)}`); // 明确提示权限异常或系统限制。
+    }
+  }
+
+  // 创建/更新命令。
+  async function handleSubmitCommand() {
+    if (!canSubmitCommandForm) return;
+
+    const payload: TerminalCommandUpsertPayload = {
+      groupId: commandForm.groupId,
+      name: commandForm.name.trim(),
+      description: commandForm.description.trim(),
+      command: commandForm.command.trim()
+    };
+
+    setCommandLibrarySubmitting(true);
+    try {
+      if (editorMode === "edit" && editingTarget) {
+        // 若编辑时切换了目标分组，则按“创建新命令 + 删除旧命令”处理。
+        if (editingTarget.groupId !== payload.groupId) {
+          await api.createTerminalCommand(payload);
+          await api.deleteTerminalCommand(editingTarget.groupId, editingTarget.commandId);
+        } else {
+          await api.updateTerminalCommand(editingTarget.commandId, payload);
+        }
+      } else {
+        await api.createTerminalCommand(payload);
+      }
+
+      setSelectedGroupId(payload.groupId);
+      setExpandedByGroupId((state) => ({ ...state, [payload.groupId]: true }));
+      closeEditorPanel();
+      await loadCommandLibrary({ keepSelection: true });
+    } catch (error) {
+      window.alert(`保存命令失败：${String(error)}`); // 写操作失败时给出明确反馈。
+    } finally {
+      setCommandLibrarySubmitting(false);
+    }
+  }
+
+  // 删除命令。
+  async function handleDeleteCommand(groupId: string, commandId: string) {
+    try {
+      await api.deleteTerminalCommand(groupId, commandId);
+      await loadCommandLibrary({ keepSelection: true });
+    } catch (error) {
+      window.alert(`删除命令失败：${String(error)}`); // 避免删除失败后 UI 与数据库状态不一致。
+    }
   }
 
   // 复制命令到当前终端并立即执行。
   async function handleRunInCurrentTerminal(command: TerminalCommandItem) {
-    if (!activeTab) return;
+    let targetTab: TerminalTab | undefined = activeTab;
+    if (!targetTab) {
+      // 当前没有可用终端时自动创建新 Tab，保证“当前终端执行”可用。
+      const createdTabId = createTerminalTab(undefined, command.name ? `Terminal · ${command.name}` : undefined);
+      if (!createdTabId) return;
+      targetTab = useTerminalStore.getState().tabs.find((item) => item.id === createdTabId);
+      if (!targetTab) return;
+    }
 
     // 若会话尚未建立，则先缓存命令并触发建立。
-    if (!openedSessionTabIdRef.current.has(activeTab.id)) {
-      pendingRunCommandByTabIdRef.current[activeTab.id] = command.command;
-      await ensureBackendSession(activeTab);
+    if (!openedSessionTabIdRef.current.has(targetTab.id)) {
+      pendingRunCommandByTabIdRef.current[targetTab.id] = command.command;
+      await ensureBackendSession(targetTab);
       setCommandContextMenu(null);
       return;
     }
 
-    await api.writeTerminalInput(activeTab.id, `${command.command}\r`);
+    await api.writeTerminalInput(targetTab.id, `${command.command}\r`);
     setCommandContextMenu(null);
   }
 
@@ -506,154 +706,270 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
 
   return (
     // Terminal 主体布局：左侧命令库 + 右侧终端工作区。
-    <div className="grid h-full w-full grid-cols-[340px_1fr] overflow-hidden">
+    <div className="grid h-full w-full grid-cols-[380px_1fr] overflow-hidden">
       {/* 左侧命令库面板。 */}
       <div className="flex min-h-0 flex-col border-r border-base-300 bg-base-100">
-        {/* 顶部工具区：icon 按钮 + 搜索栏。 */}
+        {/* 顶部控制区：统计、搜索、操作。 */}
         <div className="border-b border-base-300 p-3">
-          {/* 顶部 icon 操作行。 */}
-          <div className="mb-2 flex items-center justify-end gap-1">
-            {/* 创建命令组 icon 按钮（悬浮显示名称）。 */}
-            <button
-              className="btn btn-ghost btn-square btn-sm"
-              title="创建命令组"
-              onClick={() => {
-                setShowCreateGroupPanel((value) => !value);
-                setShowCreateCommandPanel(false);
-              }}
-            >
-              <FolderPlus size={15} />
-            </button>
-            {/* 创建命令 icon 按钮（悬浮显示名称）。 */}
-            <button
-              className="btn btn-ghost btn-square btn-sm"
-              title="创建命令"
-              onClick={() => {
-                setShowCreateCommandPanel((value) => !value);
-                setShowCreateGroupPanel(false);
-              }}
-              disabled={commandGroups.length === 0}
-            >
-              {/* 创建命令入口改为“+”图标，与 QueryPanel 侧边栏动作视觉一致。 */}
-              <Plus size={14} />
-            </button>
-          </div>
+          {/* 头部卡片。 */}
+          <div className="rounded-xl border border-base-300 bg-base-100 p-3 shadow-sm">
+            {/* 标题与动作。 */}
+            <div className="flex items-start justify-between gap-2">
+              {/* 左侧标题。 */}
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.16em] text-primary/70">Command Library</p>
+                <h3 className="mt-1 text-[15px] font-semibold text-neutral">终端命令库</h3>
+                <p className="mt-1 text-[11px] text-neutral/70">命令组与命令存储在 SQLite 独立表。</p>
+              </div>
+              {/* 右侧按钮组。 */}
+              <div className="flex items-center gap-1">
+                <button className="btn btn-ghost btn-square btn-sm" title="刷新命令库" onClick={() => void loadCommandLibrary({ keepSelection: true })}>
+                  <RefreshCw size={14} />
+                </button>
+                <button
+                  className="btn btn-ghost btn-square btn-sm"
+                  title="新建命令组"
+                  onClick={openCreateGroupPanel}
+                  disabled={commandLibrarySubmitting}
+                >
+                  <FolderPlus size={15} />
+                </button>
+                <button
+                  className="btn btn-ghost btn-square btn-sm"
+                  title="新建命令"
+                  onClick={() => openCreateCommandPanel()}
+                  disabled={commandGroups.length === 0 || commandLibrarySubmitting}
+                >
+                  <Plus size={15} />
+                </button>
+              </div>
+            </div>
 
-          {/* 搜索输入行：支持组名/命令名/命令内容全局搜索。 */}
-          <label className="input input-bordered input-sm flex w-full items-center gap-2">
-            {/* 搜索图标。 */}
-            <Search size={14} className="text-neutral/60" />
-            {/* 搜索输入框。 */}
-            <input
-              type="text"
-              className="grow"
-              placeholder="搜索命令组 / 命令名 / 命令内容"
-              value={searchKeyword}
-              onChange={(event) => setSearchKeyword(event.target.value)}
-            />
-          </label>
+            {/* 指标区。 */}
+            <div className="mt-3 grid grid-cols-2 gap-2 text-[11px]">
+              {/* 命令组数量。 */}
+              <div className="rounded-lg border border-base-300 bg-base-200/60 px-2 py-1.5">
+                <p className="text-neutral/60">命令组</p>
+                <p className="mt-0.5 text-[14px] font-semibold">{commandGroups.length}</p>
+              </div>
+              {/* 命令总量。 */}
+              <div className="rounded-lg border border-base-300 bg-base-200/60 px-2 py-1.5">
+                <p className="text-neutral/60">命令条数</p>
+                <p className="mt-0.5 text-[14px] font-semibold">{totalCommandCount}</p>
+              </div>
+            </div>
 
-          {/* 创建命令组面板。 */}
-          {showCreateGroupPanel && (
-            <div className="mt-2 rounded-md border border-base-300 bg-base-200/60 p-2">
-              {/* 命令组名称输入框。 */}
+            {/* 搜索输入。 */}
+            <label className="input input-bordered input-sm mt-3 flex w-full items-center gap-2">
+              <Search size={14} className="text-neutral/60" />
               <input
                 type="text"
-                className="input input-bordered input-sm w-full"
-                placeholder="输入命令组名称"
+                className="grow"
+                placeholder="搜索组名 / 命令名 / 描述 / 命令正文"
+                value={searchKeyword}
+                onChange={(event) => setSearchKeyword(event.target.value)}
+              />
+            </label>
+          </div>
+
+          {/* 错误提示。 */}
+          {commandLibraryError && <p className="mt-2 text-[12px] text-error">{commandLibraryError}</p>}
+
+          {/* 创建命令组面板。 */}
+          {editorMode === "group" && (
+            <div className="mt-3 rounded-xl border border-base-300 bg-base-100 p-3 shadow-sm">
+              {/* 面板标题。 */}
+              <h4 className="text-[13px] font-semibold text-neutral">新建命令组</h4>
+              {/* 分组名输入。 */}
+              <input
+                type="text"
+                className="input input-bordered input-sm mt-2 w-full"
+                placeholder="例如：常用、脚本、排障"
                 value={newGroupName}
                 onChange={(event) => setNewGroupName(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key !== "Enter") return;
-                  handleCreateGroup(); // 回车快速创建命令组。
+                  void handleCreateGroup(); // 回车快速创建命令组。
                 }}
               />
-              {/* 创建命令组操作区。 */}
-              <div className="mt-2 flex justify-end gap-2">
-                <button className="btn btn-ghost btn-xs" onClick={() => setShowCreateGroupPanel(false)}>
+              {/* 操作按钮。 */}
+              <div className="mt-3 flex justify-end gap-2">
+                <button className="btn btn-ghost btn-sm" onClick={closeEditorPanel} disabled={commandLibrarySubmitting}>
                   取消
                 </button>
-                <button className="btn btn-primary btn-xs" onClick={handleCreateGroup}>
-                  创建
+                <button className="btn btn-primary btn-sm" onClick={() => void handleCreateGroup()} disabled={commandLibrarySubmitting}>
+                  创建分组
                 </button>
               </div>
             </div>
           )}
 
-          {/* 创建命令面板。 */}
-          {showCreateCommandPanel && (
-            <div className="mt-2 rounded-md border border-base-300 bg-base-200/60 p-2">
-              {/* 目标命令组选择器。 */}
-              <select
-                className="select select-bordered select-sm w-full"
-                value={newCommandGroupId}
-                onChange={(event) => setNewCommandGroupId(event.target.value)}
-              >
-                {commandGroups.map((group) => (
-                  <option key={group.id} value={group.id}>
-                    {group.name}
-                  </option>
-                ))}
-              </select>
-              {/* 命令名称输入框。 */}
-              <input
-                type="text"
-                className="input input-bordered input-sm mt-2 w-full"
-                placeholder="命令名称"
-                value={newCommandName}
-                onChange={(event) => setNewCommandName(event.target.value)}
-              />
-              {/* 命令正文输入框。 */}
-              <textarea
-                className="textarea textarea-bordered textarea-sm mt-2 h-[74px] w-full font-mono"
-                placeholder="命令内容，例如 npm run dev"
-                value={newCommandValue}
-                onChange={(event) => setNewCommandValue(event.target.value)}
-              />
-              {/* 创建命令操作区。 */}
-              <div className="mt-2 flex justify-end gap-2">
-                <button className="btn btn-ghost btn-xs" onClick={() => setShowCreateCommandPanel(false)}>
+          {/* 创建/编辑命令面板。 */}
+          {(editorMode === "create" || editorMode === "edit") && (
+            <div className="mt-3 rounded-xl border border-base-300 bg-base-100 p-3 shadow-sm">
+              {/* 面板标题。 */}
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <h4 className="text-[13px] font-semibold text-neutral">{editorMode === "create" ? "创建命令" : "编辑命令"}</h4>
+                  <p className="mt-0.5 text-[11px] text-neutral/70">命令输入使用编辑器，支持更友好的粘贴与修改。</p>
+                </div>
+                <button className="btn btn-ghost btn-xs" onClick={() => void handlePasteFromClipboard()} title="从剪贴板粘贴">
+                  <Clipboard size={13} />
+                </button>
+              </div>
+
+              {/* 基础字段：分组、名称、描述。 */}
+              <div className="mt-3 grid grid-cols-1 gap-2">
+                {/* 分组选择。 */}
+                <select
+                  className="select select-bordered select-sm w-full"
+                  value={commandForm.groupId}
+                  onChange={(event) => patchCommandForm({ groupId: event.target.value })}
+                >
+                  {commandGroups.map((group) => (
+                    <option key={group.id} value={group.id}>
+                      {group.name}
+                    </option>
+                  ))}
+                </select>
+
+                {/* 名称输入。 */}
+                <input
+                  type="text"
+                  className="input input-bordered input-sm w-full"
+                  placeholder="命令名称，例如：启动开发服务"
+                  value={commandForm.name}
+                  onChange={(event) => patchCommandForm({ name: event.target.value })}
+                />
+
+                {/* 描述输入。 */}
+                <input
+                  type="text"
+                  className="input input-bordered input-sm w-full"
+                  placeholder="命令描述（可选）"
+                  value={commandForm.description}
+                  onChange={(event) => patchCommandForm({ description: event.target.value })}
+                />
+              </div>
+
+              {/* 命令输入编辑器。 */}
+              <div className="mt-3 overflow-hidden rounded-lg border border-base-300">
+                {/* 编辑器标题行。 */}
+                <div className="flex items-center justify-between border-b border-base-300 bg-neutral px-2 py-1 text-[11px] text-neutral-content">
+                  <span className="font-mono">$ command</span>
+                  <span className="text-neutral-content/70">支持粘贴多行后再整理为单条命令</span>
+                </div>
+                {/* Monaco 命令输入框。 */}
+                <Editor
+                  height="118px"
+                  defaultLanguage="plaintext"
+                  value={commandForm.command}
+                  theme="vs-dark"
+                  onChange={(value) => {
+                    patchCommandForm({ command: value || "" }); // 同步编辑器内容到表单。
+                  }}
+                  options={{
+                    minimap: { enabled: false },
+                    lineNumbers: "off",
+                    glyphMargin: false,
+                    folding: false,
+                    lineDecorationsWidth: 0,
+                    lineNumbersMinChars: 0,
+                    renderLineHighlight: "none",
+                    scrollBeyondLastLine: false,
+                    wordWrap: "on",
+                    tabSize: 2,
+                    fontSize: 13,
+                    fontFamily: '"Cascadia Mono", "Consolas", "Noto Sans Mono CJK SC", monospace',
+                    automaticLayout: true,
+                    contextmenu: true,
+                    padding: { top: 8, bottom: 8 }
+                  }}
+                />
+              </div>
+
+              {/* 操作按钮。 */}
+              <div className="mt-3 flex justify-end gap-2">
+                <button className="btn btn-ghost btn-sm" onClick={closeEditorPanel} disabled={commandLibrarySubmitting}>
                   取消
                 </button>
-                <button className="btn btn-primary btn-xs" onClick={handleCreateCommand}>
-                  创建
+                <button
+                  className="btn btn-primary btn-sm"
+                  onClick={() => void handleSubmitCommand()}
+                  disabled={!canSubmitCommandForm || commandLibrarySubmitting}
+                >
+                  {editorMode === "create" ? "保存命令" : "保存变更"}
                 </button>
               </div>
             </div>
           )}
         </div>
 
-        {/* 命令组与命令列表区域。 */}
-        <div className="min-h-0 flex-1 overflow-auto p-2">
+        {/* 命令组与命令列表。 */}
+        <div className="min-h-0 flex-1 overflow-auto p-3 pt-2">
+          {/* 加载态提示。 */}
+          {commandLibraryLoading && (
+            <div className="rounded-lg border border-base-300 bg-base-100 px-3 py-3 text-[12px] text-neutral/60">命令库加载中...</div>
+          )}
+
+          {/* 空结果提示。 */}
+          {!commandLibraryLoading && filteredGroups.length === 0 && (
+            <div className="rounded-lg border border-dashed border-base-300 bg-base-100 px-3 py-5 text-center text-[12px] text-neutral/60">
+              当前没有命令，先创建一个命令组和命令。
+            </div>
+          )}
+
           {filteredGroups.map((group) => {
             const selected = selectedGroup?.id === group.id;
+            const searchMode = Boolean(searchKeyword.trim());
+            const expanded = searchMode ? true : (expandedByGroupId[group.id] ?? false);
+
             return (
               // 单个命令组卡片。
-              <div key={group.id} className="mb-2 rounded-lg border border-base-300 bg-base-100">
-                {/* 分组标题行。 */}
-                <button
-                  className={`flex w-full items-center justify-between rounded-t-lg px-3 py-2 text-left text-[12px] font-medium ${selected ? "bg-base-200" : ""}`}
-                  onClick={() => setSelectedGroupId(group.id)}
-                >
-                  {/* 分组名称。 */}
-                  <span className="truncate">{group.name}</span>
-                  {/* 分组命令数。 */}
-                  <span className="text-[11px] text-neutral/60">{group.commands.length}</span>
-                </button>
+              <div key={group.id} className="mb-2 rounded-xl border border-base-300 bg-base-100 shadow-sm">
+                {/* 分组标题。 */}
+                <div className="flex items-center gap-1 border-b border-base-300/70 px-2 py-1.5">
+                  <button
+                    className="btn btn-ghost btn-xs h-6 min-h-0 px-1"
+                    onClick={() => {
+                      setExpandedByGroupId((state) => ({ ...state, [group.id]: !expanded }));
+                    }}
+                  >
+                    {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                  </button>
+                  <button
+                    className={`flex min-w-0 flex-1 items-center justify-between rounded-md px-2 py-1 text-left ${selected ? "bg-primary/10" : "hover:bg-base-200/70"}`}
+                    onClick={() => {
+                      setSelectedGroupId(group.id);
+                      setExpandedByGroupId((state) => ({ ...state, [group.id]: true }));
+                    }}
+                  >
+                    <span className="truncate text-[12px] font-medium">{group.name}</span>
+                    <span className="text-[11px] text-neutral/60">{group.commands.length}</span>
+                  </button>
+                  <button
+                    className="btn btn-ghost btn-xs h-6 min-h-0 px-1"
+                    title="在本组新建命令"
+                    onClick={() => openCreateCommandPanel(group.id)}
+                    disabled={commandLibrarySubmitting}
+                  >
+                    <Plus size={12} />
+                  </button>
+                </div>
 
                 {/* 分组命令列表。 */}
-                <div className="space-y-1 p-2">
-                  {group.commands.length === 0 && <div className="px-2 py-1 text-[12px] text-neutral/60">暂无命令</div>}
-                  {group.commands.map((commandItem) => {
-                    const editing = editingCommandId === commandItem.id;
-                    return (
-                      // 单条命令项。
+                {expanded && (
+                  <div className="space-y-2 p-2">
+                    {group.commands.length === 0 && <div className="px-2 py-2 text-[12px] text-neutral/55">当前分组还没有命令</div>}
+
+                    {group.commands.map((commandItem) => (
+                      // 单条命令卡片。
                       <div
                         key={commandItem.id}
-                        className="rounded-md border border-base-300 bg-base-100 p-2"
+                        className="rounded-lg border border-base-300 bg-base-100 p-2 transition-colors hover:border-primary/45"
                         onContextMenu={(event) => {
                           event.preventDefault(); // 阻止系统默认右键菜单。
-                          setSelectedGroupId(group.id); // 打开右键菜单时同步选中当前组。
+                          setSelectedGroupId(group.id);
                           setCommandContextMenu({
                             x: event.clientX,
                             y: event.clientY,
@@ -662,83 +978,52 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
                           });
                         }}
                       >
-                        {editing ? (
-                          // 命令编辑态。
-                          <div className="space-y-2">
-                            {/* 命令名称编辑框。 */}
-                            <input
-                              type="text"
-                              className="input input-bordered input-xs w-full"
-                              value={editingCommandName}
-                              onChange={(event) => setEditingCommandName(event.target.value)}
-                            />
-                            {/* 命令正文编辑框。 */}
-                            <textarea
-                              className="textarea textarea-bordered textarea-xs h-[72px] w-full font-mono"
-                              value={editingCommandValue}
-                              onChange={(event) => setEditingCommandValue(event.target.value)}
-                            />
-                            {/* 编辑态操作按钮。 */}
-                            <div className="flex justify-end gap-2">
-                              <button className="btn btn-ghost btn-xs" onClick={cancelEditCommand}>
-                                取消
-                              </button>
-                              <button className="btn btn-primary btn-xs" onClick={() => saveEditCommand(group.id, commandItem.id)}>
-                                保存
-                              </button>
-                            </div>
+                        {/* 命令标题与操作。 */}
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="truncate text-[12px] font-semibold text-neutral">{commandItem.name}</p>
+                            {commandItem.description && <p className="mt-0.5 line-clamp-2 text-[11px] text-neutral/65">{commandItem.description}</p>}
                           </div>
-                        ) : (
-                          // 命令展示态。
-                          <>
-                            {/* 命令标题与操作。 */}
-                            <div className="flex items-center justify-between gap-2">
-                              {/* 命令名称。 */}
-                              <p className="truncate text-[12px] font-medium">{commandItem.name}</p>
-                              {/* 快捷操作按钮。 */}
-                              <div className="flex items-center gap-1">
-                                <button
-                                  className="btn btn-ghost btn-xs"
-                                  title="在当前终端执行"
-                                  onClick={() => {
-                                    void handleRunInCurrentTerminal(commandItem);
-                                  }}
-                                >
-                                  <Play size={12} />
-                                </button>
-                                <button
-                                  className="btn btn-ghost btn-xs"
-                                  title="在新终端执行"
-                                  onClick={() => handleRunInNewTerminal(commandItem)}
-                                >
-                                  <Copy size={12} />
-                                </button>
-                                <button
-                                  className="btn btn-ghost btn-xs"
-                                  title="编辑"
-                                  onClick={() => startEditCommand(commandItem)}
-                                >
-                                  编辑
-                                </button>
-                                <button
-                                  className="btn btn-ghost btn-xs text-error"
-                                  title="删除"
-                                  onClick={() => deleteCommand(group.id, commandItem.id)}
-                                >
-                                  <Trash2 size={12} />
-                                </button>
-                              </div>
-                            </div>
-                            {/* 命令正文。 */}
-                            <p className="mt-1 line-clamp-2 whitespace-pre-wrap break-all rounded bg-base-200 px-2 py-1 font-mono text-[11px] text-neutral/80">
-                              {commandItem.command}
-                            </p>
-                          </>
-                        )}
+                          <div className="flex shrink-0 items-center gap-1">
+                            <button
+                              className="btn btn-ghost btn-xs"
+                              title="当前终端执行"
+                              onClick={() => {
+                                void handleRunInCurrentTerminal(commandItem);
+                              }}
+                            >
+                              <Play size={12} />
+                            </button>
+                            <button className="btn btn-ghost btn-xs" title="新终端执行" onClick={() => handleRunInNewTerminal(commandItem)}>
+                              <Copy size={12} />
+                            </button>
+                            <button
+                              className="btn btn-ghost btn-xs"
+                              title="编辑命令"
+                              onClick={() => openEditCommandPanel(group.id, commandItem)}
+                            >
+                              <PencilLine size={12} />
+                            </button>
+                            <button
+                              className="btn btn-ghost btn-xs text-error"
+                              title="删除命令"
+                              onClick={() => {
+                                void handleDeleteCommand(group.id, commandItem.id);
+                              }}
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* 命令正文。 */}
+                        <p className="mt-2 line-clamp-2 whitespace-pre-wrap break-all rounded-md bg-neutral/95 px-2 py-1 font-mono text-[11px] text-base-100">
+                          {commandItem.command}
+                        </p>
                       </div>
-                    );
-                  })}
-                </div>
+                    ))}
+                  </div>
+                )}
               </div>
             );
           })}
@@ -821,7 +1106,7 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
       {/* 命令右键菜单。 */}
       {commandContextMenu && (
         <div
-          className="fixed z-[110] min-w-[176px] rounded border border-base-300 bg-base-100 p-1 shadow-xl"
+          className="fixed z-[110] min-w-[192px] rounded border border-base-300 bg-base-100 p-1 shadow-xl"
           style={{ left: commandContextMenu.x, top: commandContextMenu.y }}
           onClick={(event) => event.stopPropagation()}
         >
@@ -837,8 +1122,30 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
           </button>
           {/* 菜单项：在新终端执行。 */}
           <button className="btn btn-ghost btn-xs w-full justify-start" onClick={() => handleRunInNewTerminal(commandContextMenu.command)}>
-            <Plus size={12} />
+            <Copy size={12} />
             在新终端执行
+          </button>
+          {/* 菜单项：编辑命令。 */}
+          <button
+            className="btn btn-ghost btn-xs w-full justify-start"
+            onClick={() => {
+              openEditCommandPanel(commandContextMenu.groupId, commandContextMenu.command);
+              setCommandContextMenu(null);
+            }}
+          >
+            <PencilLine size={12} />
+            编辑命令
+          </button>
+          {/* 菜单项：删除命令。 */}
+          <button
+            className="btn btn-ghost btn-xs w-full justify-start text-error"
+            onClick={() => {
+              void handleDeleteCommand(commandContextMenu.groupId, commandContextMenu.command.id);
+              setCommandContextMenu(null);
+            }}
+          >
+            <Trash2 size={12} />
+            删除命令
           </button>
         </div>
       )}
