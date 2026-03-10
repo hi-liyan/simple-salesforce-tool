@@ -5,8 +5,8 @@ type RowContextMenuProps = {
   menuState: RowContextMenuState;
   // 复制单元格值。
   onCopyCell: () => void;
-  // 设置单元格为空（None）。
-  onSetNone: () => void;
+  // 设置单元格为空（None/Null）。
+  onSetNullish: () => void;
   // 打开 Salesforce 记录页。
   onOpenRecordPage: () => void;
   // 当前上下文是否允许打开 Salesforce 记录页。
@@ -19,7 +19,7 @@ type RowContextMenuProps = {
 export function RowContextMenu({
   menuState,
   onCopyCell,
-  onSetNone,
+  onSetNullish,
   onOpenRecordPage,
   canOpenRecordPage,
   showOpenRecordPage
@@ -38,14 +38,14 @@ export function RowContextMenu({
       >
         复制
       </button>
-      {menuState.canSetNone && (
+      {menuState.canSetNullish && (
         <button
           className="btn btn-ghost btn-xs w-full justify-start"
           onClick={() => {
-            onSetNone(); // 可空字段支持“一键置空”。
+            onSetNullish(); // 可空字段支持“一键置空”。
           }}
         >
-          设置为 None
+          {menuState.nullishActionLabel}
         </button>
       )}
       {showOpenRecordPage && (

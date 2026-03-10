@@ -15,6 +15,7 @@ import {
 } from "../utils/picklist";
 import {
   coerceNumber,
+  getNullPlaceholderBySourceType,
   isEmptyValue,
   normalizeBooleanText,
   stringifyCellValue
@@ -58,6 +59,7 @@ export function createGetCellContent({
   allowReadonlyOverlay = false
 }: CreateGetCellContentParams): (cell: Item) => GridCell {
   const isMysqlSource = (selectedSourceType || "salesforce").toLowerCase() === "mysql";
+  const nullPlaceholderText = getNullPlaceholderBySourceType(selectedSourceType);
   return ([col, row]) => {
     const columnId = String(columns[col]?.id ?? "");
     const record = records[row] || {};
@@ -101,18 +103,23 @@ export function createGetCellContent({
     const raw = record[columnId];
     const isDirty = dirtyCellSet.has(`${recordId}:${columnId}`);
     const isRequiredEmpty = requiredNewField && isEmptyValue(raw);
+    const isNullishValue = raw === null || raw === undefined;
 
     const commonTheme = buildCellThemeOverride(isDirty, isRequiredEmpty, isPendingDeleteRow, isNewRowHighlight);
+    // 空值仅在展示态使用淡化样式，避免把编辑器里的输入文字也渲染成灰色。
+    const nullPlaceholderStyle: "normal" | "faded" = isNullishValue ? "faded" : "normal";
 
     if (strategy === "boolean") {
-      const text = normalizeBooleanText(raw);
+      // 空值仅显示占位，不把 None/Null 作为真实编辑值写入编辑器。
+      const text = isNullishValue ? "" : normalizeBooleanText(raw);
       return {
         kind: GridCellKind.Text,
         data: text,
-        displayData: text,
+        displayData: isNullishValue ? nullPlaceholderText : text,
         allowOverlay: editable || allowReadonlyOverlay,
         readonly: !editable,
-        themeOverride: commonTheme
+        themeOverride: commonTheme,
+        style: nullPlaceholderStyle
       };
     }
 
@@ -122,10 +129,11 @@ export function createGetCellContent({
         kind: GridCellKind.Number,
         data: num,
         // 数值列优先使用归一化后的数字文本，避免 tinyint 等字段被显示为 true/false。
-        displayData: num === undefined ? (raw === null || raw === undefined ? "" : String(raw)) : String(num),
+        displayData: isNullishValue ? nullPlaceholderText : num === undefined ? String(raw) : String(num),
         allowOverlay: editable || allowReadonlyOverlay,
         readonly: !editable,
-        themeOverride: commonTheme
+        themeOverride: commonTheme,
+        style: nullPlaceholderStyle
       };
     }
 
@@ -136,10 +144,11 @@ export function createGetCellContent({
         kind: GridCellKind.Text,
         // date 单元格展示与提交统一为 Salesforce 日期格式（YYYY-MM-DD）。
         data: text,
-        displayData: text,
+        displayData: isNullishValue ? nullPlaceholderText : text,
         allowOverlay: editable || allowReadonlyOverlay,
         readonly: !editable,
-        themeOverride: commonTheme
+        themeOverride: commonTheme,
+        style: nullPlaceholderStyle
       };
     }
 
@@ -150,10 +159,11 @@ export function createGetCellContent({
         kind: GridCellKind.Text,
         // datetime 单元格展示为 Salesforce 日期时间格式（YYYY-MM-DDTHH:mm:ss.SSS+0000）。
         data: text,
-        displayData: text,
+        displayData: isNullishValue ? nullPlaceholderText : text,
         allowOverlay: editable || allowReadonlyOverlay,
         readonly: !editable,
-        themeOverride: commonTheme
+        themeOverride: commonTheme,
+        style: nullPlaceholderStyle
       };
     }
 
@@ -166,10 +176,11 @@ export function createGetCellContent({
         // picklist 单元格保留 value 作为真实值，提交时按 value/null 写回后端。
         data: value,
         // 单元格显示统一改为 label，满足数据库工具预期阅读体验。
-        displayData: displayText,
+        displayData: isNullishValue ? nullPlaceholderText : displayText,
         allowOverlay: editable || allowReadonlyOverlay,
         readonly: !editable,
-        themeOverride: commonTheme
+        themeOverride: commonTheme,
+        style: nullPlaceholderStyle
       };
     }
 
@@ -177,10 +188,11 @@ export function createGetCellContent({
     return {
       kind: GridCellKind.Text,
       data: text,
-      displayData: text,
+      displayData: isNullishValue ? nullPlaceholderText : text,
       allowOverlay: editable || allowReadonlyOverlay,
       readonly: !editable,
-      themeOverride: commonTheme
+      themeOverride: commonTheme,
+      style: nullPlaceholderStyle
     };
   };
 }
