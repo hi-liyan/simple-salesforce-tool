@@ -1,4 +1,5 @@
 use serde::Serialize;
+use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -14,8 +15,8 @@ use crate::error::AppError;
 use crate::models::{
     AiCapabilities, AiChatTurnV2Request, AiChatTurnV2Response, CliPathProbe, CliPathSettings,
     CliPathStatus, CurrentUserContext, LlmSettings, LlmSettingsView, ObjectDdl, ObjectDescribe,
-    QueryResult, RecordMutationPayload, RecordSavePayload, SalesforceObject, SalesforceSource,
-    SaveLlmSettingsPayload, SourceUpsertPayload, SystemLogPage,
+    QueryResult, RecordMutationPayload, RecordSavePayload, RecordUpdatePayload, SalesforceObject,
+    SalesforceSource, SaveLlmSettingsPayload, SourceUpsertPayload, SystemLogPage,
 };
 use crate::providers::provider_for_source;
 use crate::sf_cli;
@@ -120,6 +121,207 @@ fn is_unauthorized_error(error: &AppError) -> bool {
                 || message.contains("status code 401")
                 || message.contains("401 Unauthorized")
     )
+}
+
+/// 按数据源类型返回系统日志分类。
+fn resolve_log_category(source: &SalesforceSource) -> &'static str {
+    if source.is_salesforce() {
+        "SALESFORCE_API"
+    } else {
+        "MYSQL_DB"
+    }
+}
+
+/// 转义 SQL 字符串字面量（用于日志展示，不参与实际执行）。
+fn escape_sql_literal(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('\'', "\\'")
+}
+
+/// 转义 SOQL 字符串字面量（用于日志展示，不参与实际执行）。
+fn escape_soql_literal(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('\'', "\\'")
+}
+
+/// 解析 MySQL 日志使用的主键字段名（优先读取 configJson.primaryKey）。
+fn resolve_mysql_primary_key_for_log(source: &SalesforceSource) -> String {
+    source
+        .config_json
+        .get("primaryKey")
+        .and_then(|value| value.as_str())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "Id".to_string())
+}
+
+/// 渲染 MySQL 可读值文本，便于系统日志白盒追踪。
+fn format_mysql_value_literal(value: &Value) -> String {
+    match value {
+        Value::Null => "NULL".to_string(),
+        Value::Bool(item) => {
+            if *item {
+                "TRUE".to_string()
+            } else {
+                "FALSE".to_string()
+            }
+        }
+        Value::Number(item) => item.to_string(),
+        Value::String(item) => format!("'{}'", escape_sql_literal(item)),
+        // 复杂 JSON 统一序列化为字符串字面量，便于观察真实写入内容。
+        other => {
+            let encoded = serde_json::to_string(other).unwrap_or_else(|_| "null".to_string());
+            format!("'{}'", escape_sql_literal(&encoded))
+        }
+    }
+}
+
+/// 构造 MySQL INSERT 日志语句。
+fn build_mysql_insert_sql(object_name: &str, values: &HashMap<String, Value>) -> String {
+    if values.is_empty() {
+        return format!("INSERT INTO `{object_name}` () VALUES ();");
+    }
+    let mut entries: Vec<(&String, &Value)> = values.iter().collect();
+    entries.sort_by(|a, b| a.0.cmp(b.0));
+    let columns = entries
+        .iter()
+        .map(|(key, _)| format!("`{key}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let values_sql = entries
+        .iter()
+        .map(|(_, value)| format_mysql_value_literal(value))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("INSERT INTO `{object_name}` ({columns}) VALUES ({values_sql});")
+}
+
+/// 构造 MySQL UPDATE 日志语句（主键列来自配置）。
+fn build_mysql_update_sql(
+    object_name: &str,
+    primary_key: &str,
+    record_id: &str,
+    values: &HashMap<String, Value>,
+) -> String {
+    let mut entries: Vec<(&String, &Value)> = values.iter().collect();
+    entries.sort_by(|a, b| a.0.cmp(b.0));
+    let set_clause = entries
+        .iter()
+        .map(|(key, value)| format!("`{key}` = {}", format_mysql_value_literal(value)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "UPDATE `{object_name}` SET {set_clause} WHERE `{primary_key}` = '{}';",
+        escape_sql_literal(record_id)
+    )
+}
+
+/// 构造 MySQL DELETE 日志语句（主键列来自配置）。
+fn build_mysql_delete_sql(object_name: &str, primary_key: &str, record_id: &str) -> String {
+    format!(
+        "DELETE FROM `{object_name}` WHERE `{primary_key}` = '{}';",
+        escape_sql_literal(record_id)
+    )
+}
+
+/// 构造 Salesforce 查询日志详情。
+fn build_salesforce_query_detail(soql: &str) -> String {
+    format!("raw_soql:\n{soql}")
+}
+
+/// 构造 MySQL 查询日志详情。
+fn build_mysql_query_detail(sql: &str) -> String {
+    format!("raw_sql:\n{sql}")
+}
+
+/// 构造 Salesforce 新增日志详情（包含 API 和追踪 SOQL）。
+fn build_salesforce_create_detail(object_name: &str, values: &HashMap<String, Value>) -> String {
+    let mut fields = values.keys().cloned().collect::<Vec<_>>();
+    fields.sort();
+    let projection = if fields.is_empty() {
+        "Id".to_string()
+    } else {
+        format!("Id, {}", fields.join(", "))
+    };
+    let payload = serde_json::to_string(values).unwrap_or_else(|_| "{}".to_string());
+    format!(
+        "api=POST /sobjects/{object_name}\npayload={payload}\ntrace_soql=SELECT {projection} FROM {object_name} WHERE Id = '<new_record_id>' LIMIT 1"
+    )
+}
+
+/// 构造 Salesforce 更新日志详情（包含 API 和追踪 SOQL）。
+fn build_salesforce_update_detail(
+    object_name: &str,
+    record_id: &str,
+    values: &HashMap<String, Value>,
+) -> String {
+    let mut fields = values.keys().cloned().collect::<Vec<_>>();
+    fields.sort();
+    let projection = if fields.is_empty() {
+        "Id".to_string()
+    } else {
+        format!("Id, {}", fields.join(", "))
+    };
+    let payload = serde_json::to_string(values).unwrap_or_else(|_| "{}".to_string());
+    format!(
+        "api=PATCH /sobjects/{object_name}/{record_id}\npayload={payload}\ntrace_soql=SELECT {projection} FROM {object_name} WHERE Id = '{}' LIMIT 1",
+        escape_soql_literal(record_id)
+    )
+}
+
+/// 构造 Salesforce 删除日志详情（包含 API 和追踪 SOQL）。
+fn build_salesforce_delete_detail(object_name: &str, record_id: &str) -> String {
+    format!(
+        "api=DELETE /sobjects/{object_name}/{record_id}\ntrace_soql=SELECT Id FROM {object_name} WHERE Id = '{}' LIMIT 1",
+        escape_soql_literal(record_id)
+    )
+}
+
+/// 构造 Salesforce 批量保存日志详情（逐条列出 API 与追踪 SOQL）。
+fn build_salesforce_save_detail(
+    object_name: &str,
+    creates: &[HashMap<String, Value>],
+    updates: &[RecordUpdatePayload],
+) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    // 新增记录逐条输出可追踪细节。
+    for (index, item) in creates.iter().enumerate() {
+        lines.push(format!(
+            "[create#{index}] {}",
+            build_salesforce_create_detail(object_name, item)
+        ));
+    }
+    // 更新记录逐条输出可追踪细节。
+    for (index, item) in updates.iter().enumerate() {
+        lines.push(format!(
+            "[update#{index}] {}",
+            build_salesforce_update_detail(object_name, &item.record_id, &item.values)
+        ));
+    }
+    lines.join("\n")
+}
+
+/// 构造 MySQL 批量保存日志详情（逐条列出原始 SQL）。
+fn build_mysql_save_detail(
+    object_name: &str,
+    primary_key: &str,
+    creates: &[HashMap<String, Value>],
+    updates: &[RecordUpdatePayload],
+) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    // 新增语句逐条展开，便于定位本番误操作。
+    for (index, item) in creates.iter().enumerate() {
+        lines.push(format!(
+            "[create#{index}] {}",
+            build_mysql_insert_sql(object_name, item)
+        ));
+    }
+    // 更新语句逐条展开，便于定位本番误操作。
+    for (index, item) in updates.iter().enumerate() {
+        lines.push(format!(
+            "[update#{index}] {}",
+            build_mysql_update_sql(object_name, primary_key, &item.record_id, &item.values)
+        ));
+    }
+    lines.join("\n")
 }
 
 /// 仅针对 CLI 数据源:发生 401 后通过 CLI 刷新 token,并回写本地数据源。
@@ -1651,6 +1853,7 @@ pub async fn query_records(
     if soql.trim().is_empty() {
         return Err("查询语句不能为空".to_string());
     }
+    let query_text = soql.trim().to_string();
 
     let source = {
         let connection = state
@@ -1661,8 +1864,14 @@ pub async fn query_records(
     };
     let provider =
         provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
+    let log_category = resolve_log_category(&source);
+    let query_detail = if source.is_salesforce() {
+        build_salesforce_query_detail(&query_text)
+    } else {
+        build_mysql_query_detail(&query_text)
+    };
 
-    let query_result = match provider.query_records(&source, &soql).await {
+    let query_result = match provider.query_records(&source, &query_text).await {
         Ok(result) => Ok(result),
         Err(error) if is_unauthorized_error(&error) && source_id.starts_with("cli-") => {
             let refreshed_source =
@@ -1672,7 +1881,7 @@ pub async fn query_records(
             let refreshed_provider = provider_for_source(state.inner(), &refreshed_source)
                 .map_err(AppError::to_string_error)?;
             refreshed_provider
-                .query_records(&refreshed_source, &soql)
+                .query_records(&refreshed_source, &query_text)
                 .await
         }
         Err(error) => Err(error),
@@ -1683,28 +1892,29 @@ pub async fn query_records(
             write_system_log(
                 &state,
                 "INFO",
-                "SALESFORCE_API",
+                log_category,
                 "query_records",
                 Some(&source_id),
                 None,
                 true,
                 &format!("执行查询成功,返回 {} 条。", result.total_size),
-                Some(&soql),
+                Some(&query_detail),
             );
             Ok(result)
         }
         Err(error) => {
             let message = AppError::to_string_error(error);
+            let detail = format!("{query_detail}\nerror={message}");
             write_system_log(
                 &state,
                 "ERROR",
-                "SALESFORCE_API",
+                log_category,
                 "query_records",
                 Some(&source_id),
                 None,
                 false,
                 "执行查询失败。",
-                Some(&message),
+                Some(&detail),
             );
             Err(message)
         }
@@ -1802,9 +2012,15 @@ pub async fn create_record(
     };
     let provider =
         provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
+    let log_category = resolve_log_category(&source);
 
     let object_name = payload.object_name.clone();
     let values = payload.values.clone();
+    let operation_detail = if source.is_salesforce() {
+        build_salesforce_create_detail(&object_name, &values)
+    } else {
+        build_mysql_insert_sql(&object_name, &values)
+    };
     let create_result = match provider
         .create_record(&source, &object_name, values.clone())
         .await
@@ -1834,28 +2050,29 @@ pub async fn create_record(
             write_system_log(
                 &state,
                 "INFO",
-                "SALESFORCE_API",
+                log_category,
                 "create_record",
                 Some(&payload.source_id),
                 Some(&payload.object_name),
                 true,
                 "新增记录成功。",
-                Some(&format!("recordId={record_id}")),
+                Some(&format!("recordId={record_id}\n{operation_detail}")),
             );
             Ok(record_id)
         }
         Err(error) => {
             let message = AppError::to_string_error(error);
+            let detail = format!("{operation_detail}\nerror={message}");
             write_system_log(
                 &state,
                 "ERROR",
-                "SALESFORCE_API",
+                log_category,
                 "create_record",
                 Some(&payload.source_id),
                 Some(&payload.object_name),
                 false,
                 "新增记录失败。",
-                Some(&message),
+                Some(&detail),
             );
             Err(message)
         }
@@ -1882,12 +2099,19 @@ pub async fn save_records(
     };
     let provider =
         provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
+    let log_category = resolve_log_category(&source);
+    let mysql_primary_key = resolve_mysql_primary_key_for_log(&source);
 
     let create_count = payload.creates.len();
     let update_count = payload.updates.len();
     let object_name = payload.object_name.clone();
     let creates = payload.creates.clone();
     let updates = payload.updates.clone();
+    let operation_detail = if source.is_salesforce() {
+        build_salesforce_save_detail(&object_name, &creates, &updates)
+    } else {
+        build_mysql_save_detail(&object_name, &mysql_primary_key, &creates, &updates)
+    };
     let save_result = match provider
         .save_records(&source, &object_name, creates.clone(), updates.clone())
         .await
@@ -1922,7 +2146,7 @@ pub async fn save_records(
             write_system_log(
                 &state,
                 "INFO",
-                "SALESFORCE_API",
+                log_category,
                 "save_records",
                 Some(&payload.source_id),
                 Some(&payload.object_name),
@@ -1931,22 +2155,23 @@ pub async fn save_records(
                     "批量保存成功,新增 {} 条,更新 {} 条。",
                     create_count, update_count
                 ),
-                None,
+                Some(&operation_detail),
             );
             Ok(())
         }
         Err(error) => {
             let message = AppError::to_string_error(error);
+            let detail = format!("{operation_detail}\nerror={message}");
             write_system_log(
                 &state,
                 "ERROR",
-                "SALESFORCE_API",
+                log_category,
                 "save_records",
                 Some(&payload.source_id),
                 Some(&payload.object_name),
                 false,
                 "批量保存失败。",
-                Some(&message),
+                Some(&detail),
             );
             Err(message)
         }
@@ -1972,6 +2197,13 @@ pub async fn update_record(
     };
     let provider =
         provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
+    let log_category = resolve_log_category(&source);
+    let mysql_primary_key = resolve_mysql_primary_key_for_log(&source);
+    let operation_detail = if source.is_salesforce() {
+        build_salesforce_update_detail(&object_name, &record_id, &values)
+    } else {
+        build_mysql_update_sql(&object_name, &mysql_primary_key, &record_id, &values)
+    };
 
     let update_result = match provider
         .update_record(&source, &object_name, &record_id, values.clone())
@@ -2002,28 +2234,29 @@ pub async fn update_record(
             write_system_log(
                 &state,
                 "INFO",
-                "SALESFORCE_API",
+                log_category,
                 "update_record",
                 Some(&source_id),
                 Some(&object_name),
                 true,
                 "更新记录成功。",
-                Some(&format!("recordId={record_id}")),
+                Some(&format!("recordId={record_id}\n{operation_detail}")),
             );
             Ok(())
         }
         Err(error) => {
             let message = AppError::to_string_error(error);
+            let detail = format!("{operation_detail}\nerror={message}");
             write_system_log(
                 &state,
                 "ERROR",
-                "SALESFORCE_API",
+                log_category,
                 "update_record",
                 Some(&source_id),
                 Some(&object_name),
                 false,
                 "更新记录失败。",
-                Some(&message),
+                Some(&detail),
             );
             Err(message)
         }
@@ -2048,6 +2281,13 @@ pub async fn delete_record(
     };
     let provider =
         provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
+    let log_category = resolve_log_category(&source);
+    let mysql_primary_key = resolve_mysql_primary_key_for_log(&source);
+    let operation_detail = if source.is_salesforce() {
+        build_salesforce_delete_detail(&object_name, &record_id)
+    } else {
+        build_mysql_delete_sql(&object_name, &mysql_primary_key, &record_id)
+    };
 
     let delete_result = match provider
         .delete_record(&source, &object_name, &record_id)
@@ -2078,28 +2318,29 @@ pub async fn delete_record(
             write_system_log(
                 &state,
                 "INFO",
-                "SALESFORCE_API",
+                log_category,
                 "delete_record",
                 Some(&source_id),
                 Some(&object_name),
                 true,
                 "删除记录成功。",
-                Some(&format!("recordId={record_id}")),
+                Some(&format!("recordId={record_id}\n{operation_detail}")),
             );
             Ok(())
         }
         Err(error) => {
             let message = AppError::to_string_error(error);
+            let detail = format!("{operation_detail}\nerror={message}");
             write_system_log(
                 &state,
                 "ERROR",
-                "SALESFORCE_API",
+                log_category,
                 "delete_record",
                 Some(&source_id),
                 Some(&object_name),
                 false,
                 "删除记录失败。",
-                Some(&message),
+                Some(&detail),
             );
             Err(message)
         }
