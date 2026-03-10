@@ -97,6 +97,7 @@ fn main() {
             commands::create_terminal_command,
             commands::update_terminal_command,
             commands::delete_terminal_command,
+            commands::reorder_terminal_commands,
             commands::open_terminal_session,
             commands::list_available_terminal_shells,
             commands::write_terminal_input,

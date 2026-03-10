@@ -20,6 +20,7 @@ import {
   SystemLogPage,
   TerminalCommandGroup,
   TerminalCommandItem,
+  TerminalCommandReorderPayload,
   TerminalCommandUpsertPayload,
   TerminalSessionInfo,
   TerminalShellOption
@@ -110,6 +111,9 @@ export const api = {
   // 删除终端命令。
   deleteTerminalCommand: (groupId: string, commandId: string) =>
     invokeApi<void>("delete_terminal_command", { groupId, commandId }),
+  // 调整终端命令排序。
+  reorderTerminalCommands: (payload: TerminalCommandReorderPayload) =>
+    invokeApi<void>("reorder_terminal_commands", { payload }),
   // 打开终端会话：每个 Tab 对应一个系统 shell 进程。
   openTerminalSession: (tabId: string, cols: number, rows: number, initialCommand?: string) =>
     invokeApi<TerminalSessionInfo>("open_terminal_session", {
