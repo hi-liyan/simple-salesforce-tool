@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use crate::error::AppError;
 use crate::models::{
     CachedObjects, SalesforceObject, SalesforceSource, SourceUpsertPayload, SystemLogEntry,
-    SystemLogPage,
+    SystemLogPage, TerminalCommandGroup, TerminalCommandItem, TerminalCommandUpsertPayload,
 };
 
 /// 初始化数据库表结构。
@@ -82,6 +82,31 @@ pub fn init_schema(connection: &Connection) -> Result<(), AppError> {
             value TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS terminal_command_groups (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS terminal_commands (
+            id TEXT PRIMARY KEY,
+            group_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            command_text TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(group_id) REFERENCES terminal_command_groups(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_terminal_command_groups_sort
+            ON terminal_command_groups(sort_order, id);
+        CREATE INDEX IF NOT EXISTS idx_terminal_commands_group
+            ON terminal_commands(group_id, sort_order, id);
         "#,
     )?;
 
@@ -238,6 +263,281 @@ pub fn write_app_setting(connection: &Connection, key: &str, value: &str) -> Res
 /// 删除应用配置项。
 pub fn delete_app_setting(connection: &Connection, key: &str) -> Result<(), AppError> {
     connection.execute("DELETE FROM app_settings WHERE key = ?1", [key])?;
+    Ok(())
+}
+
+/// 计算命令组下一序号（全局维度）。
+fn next_terminal_group_sort_order(connection: &Connection) -> Result<i64, AppError> {
+    let max_sort_order: Option<i64> = connection.query_row(
+        "SELECT MAX(sort_order) FROM terminal_command_groups",
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(max_sort_order.unwrap_or(0) + 1)
+}
+
+/// 计算命令下一序号（按命令组维度）。
+fn next_terminal_command_sort_order(
+    connection: &Connection,
+    group_id: &str,
+) -> Result<i64, AppError> {
+    let max_sort_order: Option<i64> = connection.query_row(
+        "SELECT MAX(sort_order) FROM terminal_commands WHERE group_id = ?1",
+        [group_id],
+        |row| row.get(0),
+    )?;
+    Ok(max_sort_order.unwrap_or(0) + 1)
+}
+
+/// 读取全局终端命令组（含命令列表）。
+pub fn list_terminal_command_groups(connection: &Connection) -> Result<Vec<TerminalCommandGroup>, AppError> {
+    let mut group_statement = connection.prepare(
+        "SELECT id, name, created_at, updated_at
+         FROM terminal_command_groups
+         ORDER BY sort_order ASC, created_at ASC, id ASC",
+    )?;
+
+    let group_rows = group_statement.query_map([], |row| {
+        Ok(TerminalCommandGroup {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            commands: Vec::new(),
+            created_at: row.get(2)?,
+            updated_at: row.get(3)?,
+        })
+    })?;
+
+    let mut groups: Vec<TerminalCommandGroup> = Vec::new();
+    for row in group_rows {
+        groups.push(row?);
+    }
+    if groups.is_empty() {
+        return Ok(groups);
+    }
+
+    // 建立 group_id 到数组下标映射，便于后续批量装配命令列表。
+    let mut group_index_by_id: HashMap<String, usize> = HashMap::new();
+    for (index, group) in groups.iter().enumerate() {
+        group_index_by_id.insert(group.id.clone(), index);
+    }
+
+    let mut command_statement = connection.prepare(
+        "SELECT id, group_id, name, command_text, description, created_at, updated_at
+         FROM terminal_commands
+         ORDER BY sort_order ASC, created_at ASC, id ASC",
+    )?;
+
+    let command_rows = command_statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(1)?,
+            TerminalCommandItem {
+                id: row.get(0)?,
+                name: row.get(2)?,
+                command: row.get(3)?,
+                description: row.get(4)?,
+                created_at: row.get(5)?,
+                updated_at: row.get(6)?,
+            },
+        ))
+    })?;
+
+    for row in command_rows {
+        let (group_id, command) = row?;
+        if let Some(group_index) = group_index_by_id.get(&group_id) {
+            groups[*group_index].commands.push(command);
+        }
+    }
+
+    Ok(groups)
+}
+
+/// 新建终端命令组。
+pub fn create_terminal_command_group(
+    connection: &Connection,
+    name: &str,
+) -> Result<TerminalCommandGroup, AppError> {
+    let normalized_name = name.trim();
+    if normalized_name.is_empty() {
+        return Err(AppError::Biz("命令组名称不能为空".to_string()));
+    }
+
+    let now = Utc::now().to_rfc3339();
+    let id = uuid::Uuid::new_v4().to_string();
+    let sort_order = next_terminal_group_sort_order(connection)?;
+    connection.execute(
+        "INSERT INTO terminal_command_groups (id, name, sort_order, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![id, normalized_name, sort_order, now, now],
+    )?;
+
+    Ok(TerminalCommandGroup {
+        id,
+        name: normalized_name.to_string(),
+        commands: Vec::new(),
+        created_at: now.clone(),
+        updated_at: now,
+    })
+}
+
+/// 新建命令并返回最新记录。
+pub fn create_terminal_command(
+    connection: &Connection,
+    payload: &TerminalCommandUpsertPayload,
+) -> Result<TerminalCommandItem, AppError> {
+    let normalized_group_id = payload.group_id.trim();
+    let normalized_name = payload.name.trim();
+    let normalized_command = payload.command.trim();
+    let normalized_description = payload.description.trim();
+
+    if normalized_group_id.is_empty() {
+        return Err(AppError::Biz("groupId 不能为空".to_string()));
+    }
+    if normalized_name.is_empty() {
+        return Err(AppError::Biz("命令名称不能为空".to_string()));
+    }
+    if normalized_command.is_empty() {
+        return Err(AppError::Biz("命令内容不能为空".to_string()));
+    }
+
+    let group_exists: Option<i64> = connection
+        .query_row(
+            "SELECT 1 FROM terminal_command_groups WHERE id = ?1",
+            params![normalized_group_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if group_exists.is_none() {
+        return Err(AppError::Biz("命令组不存在".to_string()));
+    }
+
+    let now = Utc::now().to_rfc3339();
+    let id = uuid::Uuid::new_v4().to_string();
+    let sort_order = next_terminal_command_sort_order(connection, normalized_group_id)?;
+    connection.execute(
+        "INSERT INTO terminal_commands (id, group_id, name, command_text, description, sort_order, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            id,
+            normalized_group_id,
+            normalized_name,
+            normalized_command,
+            normalized_description,
+            sort_order,
+            now,
+            now
+        ],
+    )?;
+    connection.execute(
+        "UPDATE terminal_command_groups SET updated_at = ?2 WHERE id = ?1",
+        params![normalized_group_id, now],
+    )?;
+
+    Ok(TerminalCommandItem {
+        id,
+        name: normalized_name.to_string(),
+        command: normalized_command.to_string(),
+        description: normalized_description.to_string(),
+        created_at: now.clone(),
+        updated_at: now,
+    })
+}
+
+/// 更新命令并返回最新记录。
+pub fn update_terminal_command(
+    connection: &Connection,
+    command_id: &str,
+    payload: &TerminalCommandUpsertPayload,
+) -> Result<TerminalCommandItem, AppError> {
+    let normalized_command_id = command_id.trim();
+    let normalized_group_id = payload.group_id.trim();
+    let normalized_name = payload.name.trim();
+    let normalized_command = payload.command.trim();
+    let normalized_description = payload.description.trim();
+
+    if normalized_command_id.is_empty() {
+        return Err(AppError::Biz("commandId 不能为空".to_string()));
+    }
+    if normalized_group_id.is_empty() {
+        return Err(AppError::Biz("groupId 不能为空".to_string()));
+    }
+    if normalized_name.is_empty() {
+        return Err(AppError::Biz("命令名称不能为空".to_string()));
+    }
+    if normalized_command.is_empty() {
+        return Err(AppError::Biz("命令内容不能为空".to_string()));
+    }
+
+    let created_at: Option<String> = connection
+        .query_row(
+            "SELECT created_at FROM terminal_commands WHERE id = ?1 AND group_id = ?2",
+            params![normalized_command_id, normalized_group_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if created_at.is_none() {
+        return Err(AppError::Biz("命令不存在或不属于当前分组".to_string()));
+    }
+
+    let now = Utc::now().to_rfc3339();
+    let affected_rows = connection.execute(
+        "UPDATE terminal_commands
+         SET name = ?3, command_text = ?4, description = ?5, updated_at = ?6
+         WHERE id = ?1 AND group_id = ?2",
+        params![
+            normalized_command_id,
+            normalized_group_id,
+            normalized_name,
+            normalized_command,
+            normalized_description,
+            now
+        ],
+    )?;
+    if affected_rows == 0 {
+        return Err(AppError::Biz("命令不存在或不属于当前分组".to_string()));
+    }
+
+    connection.execute(
+        "UPDATE terminal_command_groups SET updated_at = ?2 WHERE id = ?1",
+        params![normalized_group_id, now],
+    )?;
+
+    Ok(TerminalCommandItem {
+        id: normalized_command_id.to_string(),
+        name: normalized_name.to_string(),
+        command: normalized_command.to_string(),
+        description: normalized_description.to_string(),
+        created_at: created_at.unwrap_or_else(|| now.clone()),
+        updated_at: now,
+    })
+}
+
+/// 删除命令。
+pub fn delete_terminal_command(
+    connection: &Connection,
+    group_id: &str,
+    command_id: &str,
+) -> Result<(), AppError> {
+    let normalized_group_id = group_id.trim();
+    let normalized_command_id = command_id.trim();
+    if normalized_group_id.is_empty() {
+        return Err(AppError::Biz("groupId 不能为空".to_string()));
+    }
+    if normalized_command_id.is_empty() {
+        return Err(AppError::Biz("commandId 不能为空".to_string()));
+    }
+
+    let now = Utc::now().to_rfc3339();
+    let affected_rows = connection.execute(
+        "DELETE FROM terminal_commands WHERE id = ?1 AND group_id = ?2",
+        params![normalized_command_id, normalized_group_id],
+    )?;
+    if affected_rows == 0 {
+        return Err(AppError::Biz("命令不存在或已删除".to_string()));
+    }
+    connection.execute(
+        "UPDATE terminal_command_groups SET updated_at = ?2 WHERE id = ?1",
+        params![normalized_group_id, now],
+    )?;
     Ok(())
 }
 

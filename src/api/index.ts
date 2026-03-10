@@ -18,6 +18,9 @@ import {
   SalesforceSource,
   SourceUpsertPayload,
   SystemLogPage,
+  TerminalCommandGroup,
+  TerminalCommandItem,
+  TerminalCommandUpsertPayload,
   TerminalSessionInfo,
   TerminalShellOption
 } from "../types";
@@ -92,6 +95,21 @@ export const api = {
   // UI 状态持久化：通用键值读写，供 Zustand persist adapter 使用。
   getUiState: (key: string) => invokeApi<string | null>("get_ui_state", { key }),
   saveUiState: (key: string, value: string) => invokeApi<void>("save_ui_state", { key, value }),
+  // 读取全局终端命令组（含命令列表）。
+  listTerminalCommandGroups: () =>
+    invokeApi<TerminalCommandGroup[]>("list_terminal_command_groups"),
+  // 创建终端命令组。
+  createTerminalCommandGroup: (name: string) =>
+    invokeApi<TerminalCommandGroup>("create_terminal_command_group", { name }),
+  // 创建终端命令。
+  createTerminalCommand: (payload: TerminalCommandUpsertPayload) =>
+    invokeApi<TerminalCommandItem>("create_terminal_command", { payload }),
+  // 更新终端命令。
+  updateTerminalCommand: (commandId: string, payload: TerminalCommandUpsertPayload) =>
+    invokeApi<TerminalCommandItem>("update_terminal_command", { commandId, payload }),
+  // 删除终端命令。
+  deleteTerminalCommand: (groupId: string, commandId: string) =>
+    invokeApi<void>("delete_terminal_command", { groupId, commandId }),
   // 打开终端会话：每个 Tab 对应一个系统 shell 进程。
   openTerminalSession: (tabId: string, cols: number, rows: number, initialCommand?: string) =>
     invokeApi<TerminalSessionInfo>("open_terminal_session", {
