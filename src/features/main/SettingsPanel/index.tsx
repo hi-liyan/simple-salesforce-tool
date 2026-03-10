@@ -1,9 +1,9 @@
 import { Cog, ExternalLink, RefreshCw, Save, Search, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
-import { api } from "../../api";
-import { CliPathProbe, CliPathSettings, CliPathStatus, LlmSettings, SalesforceSource } from "../../types";
-import { SystemLogsPanel } from "./SystemLogsPanel";
+import { api } from "../../../api";
+import { CliPathProbe, CliPathSettings, CliPathStatus, LlmSettings, SalesforceSource } from "../../../types";
+import { SystemLogsPanel } from "./SystemLogs";
 
 // 设置面板：通过顶部 Tab 切换数据源、CLI 设置、LLM 设置、系统日志和关于与反馈页面。
 export function SettingsPanel() {

@@ -3,12 +3,13 @@ import { persist, createJSONStorage } from "zustand/middleware";
 import { TabState } from "../types";
 import { tauriSqliteStorage } from "./tauriStorage";
 
-// 主页面视图模式：统一为 Query 工作区与设置页两种入口。
-export type MainViewMode = "query" | "settings";
+// 主页面视图模式：支持 Query 工作区、Terminal 工作区与设置页入口。
+export type MainViewMode = "query" | "terminal" | "settings";
 
 // 归一化视图模式：清理历史分裂视图值，统一进入 QueryPanel 工作区。
 function normalizeMainViewMode(viewMode: string | undefined): MainViewMode {
   if (viewMode === "settings") return "settings";
+  if (viewMode === "terminal") return "terminal";
   if (viewMode === "query") return "query";
   // 兼容旧值：systemLogs 已迁移到 settings，soqlExecutor 已并入 query。
   if (viewMode === "systemLogs") return "settings";
