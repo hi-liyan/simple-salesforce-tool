@@ -8,6 +8,11 @@ import { api } from "../../../api";
 import { TerminalClosedEvent, TerminalOutputEvent } from "../../../types";
 import { TerminalCommandItem, TerminalTab, useTerminalStore } from "../../../store/useTerminalStore";
 
+type TerminalPanelProps = {
+  // 当前 Terminal 面板是否可见：用于控制激活时的 fit/focus。
+  visible?: boolean;
+};
+
 // 单个 xterm 运行时句柄。
 type TerminalRuntime = {
   // xterm 实例。
@@ -33,7 +38,7 @@ type TerminalProcessMeta = {
 };
 
 // TerminalPanel：左侧命令库 + 右侧真实终端工作区。
-export function TerminalPanel() {
+export function TerminalPanel({ visible = true }: TerminalPanelProps) {
   // Store：命令组、终端 Tab 与操作能力。
   const commandGroups = useTerminalStore((state) => state.commandGroups);
   const tabs = useTerminalStore((state) => state.tabs);
@@ -365,6 +370,7 @@ export function TerminalPanel() {
 
   // 激活 Tab 切换时：聚焦终端并同步 resize。
   useEffect(() => {
+    if (!visible) return;
     if (!activeTab) return;
     const runtime = terminalRuntimeByTabIdRef.current[activeTab.id];
     if (!runtime) return;
@@ -378,10 +384,11 @@ export function TerminalPanel() {
     if (openedSessionTabIdRef.current.has(activeTab.id)) {
       void api.resizeTerminalSession(activeTab.id, cols, rows);
     }
-  }, [activeTab, mountRuntimeToContainer]);
+  }, [visible, activeTab, mountRuntimeToContainer]);
 
   // 监听窗口 resize：实时调整当前激活终端尺寸。
   useEffect(() => {
+    if (!visible) return;
     if (!activeTab) return;
 
     const onResize = () => {
@@ -396,7 +403,7 @@ export function TerminalPanel() {
     return () => {
       window.removeEventListener("resize", onResize);
     };
-  }, [activeTab]);
+  }, [visible, activeTab]);
 
   // 组件卸载时，兜底销毁全部 xterm 实例。
   useEffect(() => {

@@ -34,6 +34,8 @@ export function MainPage() {
   const [startupComplete, setStartupComplete] = useState(false);
   // 新版本提示模态框状态：有值时显示升级弹窗。
   const [versionUpdateModal, setVersionUpdateModal] = useState<VersionUpdateModalState | null>(null);
+  // Terminal 面板是否已初始化：首次进入 Terminal 后保持挂载，避免切页时重建会话。
+  const [terminalPanelMounted, setTerminalPanelMounted] = useState(viewMode === "terminal");
 
   // 认证凭证刷新计数器：用于处理并发 API 请求下的开始/结束配对。
   const tokenRefreshingCountRef = useRef(0);
@@ -116,6 +118,12 @@ export function MainPage() {
       tokenRefreshingCountRef.current = 0;
     };
   }, []);
+
+  // 记录 Terminal 是否访问过：一旦访问即常驻挂载，仅通过显示/隐藏切换。
+  useEffect(() => {
+    if (viewMode !== "terminal") return;
+    setTerminalPanelMounted(true);
+  }, [viewMode]);
 
   // 监听登录成功事件：自动刷新数据源并切换到新登录的 org。
   useEffect(() => {
@@ -209,8 +217,12 @@ export function MainPage() {
           <>
             {/* Query 工作区：对象树 + 数据/控制台统一 Tab。 */}
             {viewMode === "query" && <QueryPanel viewState={queryPanelViewState} actions={queryPanelActions} />}
-            {/* Terminal 工作区。 */}
-            {viewMode === "terminal" && <TerminalPanel />}
+            {/* Terminal 工作区：首次进入后常驻挂载，切换视图仅隐藏，避免终端进程重建。 */}
+            {terminalPanelMounted && (
+              <div className={viewMode === "terminal" ? "h-full w-full" : "hidden h-full w-full"}>
+                <TerminalPanel visible={viewMode === "terminal"} />
+              </div>
+            )}
             {/* 设置视图。 */}
             {viewMode === "settings" && <SettingsPanel />}
           </>
