@@ -234,10 +234,12 @@ export function DataQueryTabPane({
 }: DataQueryTabPaneProps) {
   // “执行更新”按钮是否可用：可用时使用绿色强调，强化“可提交”感知。
   const canApplyPendingChanges = Boolean(activeTab && !activeTab.loading && hasPendingChanges);
+  // 工具栏按钮统一尺寸：使用 34px 中间档高度（介于 h-8 与 h-9 之间）。
+  const toolbarButtonClassName = "btn btn-outline btn-sm h-[34px] min-h-[34px]";
   // “执行更新”按钮样式：可用态使用蓝青渐变强调，贴合项目品牌色并提升可见性。
   const applyButtonClassName = canApplyPendingChanges
-    ? "btn btn-sm h-10 border border-brand-600 bg-gradient-to-r from-brand-600 to-brand-500 text-white shadow-[0_6px_16px_rgba(18,158,242,0.25)] hover:from-brand-700 hover:to-brand-600"
-    : "btn btn-outline btn-sm h-10";
+    ? "btn btn-sm h-[34px] min-h-[34px] border border-brand-600 bg-gradient-to-r from-brand-600 to-brand-500 text-white shadow-[0_6px_16px_rgba(18,158,242,0.25)] hover:from-brand-700 hover:to-brand-600"
+    : toolbarButtonClassName;
   // 字段搜索模式：支持“名称/标签”与“数据类型”两种过滤维度。
   const [fieldSearchMode, setFieldSearchMode] = useState<"nameOrLabel" | "dataType">("nameOrLabel");
   // 字段搜索关键词：用于过滤当前对象字段列表。
@@ -593,16 +595,16 @@ export function DataQueryTabPane({
           <div className="flex min-w-0 flex-1 flex-col">
             <div className="border-b border-base-300 px-3 py-1.5 overflow-x-auto">
               <div className="flex flex-row items-center gap-1 min-w-max">
-                <button className="btn btn-outline btn-sm h-10" disabled={activeTab.loading} onClick={onCreateRecord}>
-                  <Plus size={14} />
+                <button className={toolbarButtonClassName} disabled={activeTab.loading} onClick={onCreateRecord}>
+                  <Plus size={13} />
                   新建记录
                 </button>
                 <button
-                  className="btn btn-outline btn-error btn-sm h-10"
+                  className={`${toolbarButtonClassName} btn-error`}
                   disabled={activeTab.loading || activeTab.selectedRecordIds.length === 0}
                   onClick={onDeleteCheckedRecords}
                 >
-                  <Trash2 size={14} />
+                  <Trash2 size={13} />
                   删除勾选({activeTab.selectedRecordIds.length})
                 </button>
                 <button
@@ -610,46 +612,46 @@ export function DataQueryTabPane({
                   disabled={activeTab.loading || !hasPendingChanges}
                   onClick={onApplyPendingChanges}
                 >
-                  <Play size={14} />
+                  <Play size={13} />
                   执行更新
                 </button>
-                <button className="btn btn-outline btn-sm h-10" disabled={activeTab.loading || !hasPendingChanges} onClick={onDiscardPendingChanges}>
-                  <RotateCcw size={14} />
+                <button className={toolbarButtonClassName} disabled={activeTab.loading || !hasPendingChanges} onClick={onDiscardPendingChanges}>
+                  <RotateCcw size={13} />
                   撤回修改
                 </button>
-                <button className="btn btn-outline btn-sm h-10" disabled={activeTab.loading} onClick={onToggleQueryBar}>
-                  <Search size={14} />
+                <button className={toolbarButtonClassName} disabled={activeTab.loading} onClick={onToggleQueryBar}>
+                  <Search size={13} />
                   {activeTab.showQueryBar ? "隐藏查询栏" : "显示查询栏"}
                 </button>
                 {isMysqlSource ? (
                   <>
                     {/* MySQL DDL 抽屉按钮：点击同按钮可关闭，再次点击可打开。 */}
                     <button
-                      className={`btn btn-outline btn-sm h-10 ${activeTab.showDrawer && activeDrawerView === "mysql-ddl" ? "btn-active" : ""}`}
+                      className={`${toolbarButtonClassName} ${activeTab.showDrawer && activeDrawerView === "mysql-ddl" ? "btn-active" : ""}`}
                       disabled={activeTab.loading}
                       onClick={() => onToggleDrawer("mysql-ddl")}
                     >
-                      <PanelRightOpen size={14} />
+                      <PanelRightOpen size={13} />
                       DDL
                     </button>
                     {/* MySQL 字段抽屉按钮：参考 Salesforce“字段与SOQL”中的字段勾选能力。 */}
                     <button
-                      className={`btn btn-outline btn-sm h-10 ${activeTab.showDrawer && activeDrawerView === "mysql-fields" ? "btn-active" : ""}`}
+                      className={`${toolbarButtonClassName} ${activeTab.showDrawer && activeDrawerView === "mysql-fields" ? "btn-active" : ""}`}
                       disabled={activeTab.loading}
                       onClick={() => onToggleDrawer("mysql-fields")}
                     >
-                      <PanelRightOpen size={14} />
+                      <PanelRightOpen size={13} />
                       字段
                     </button>
                   </>
                 ) : (
-                  <button className="btn btn-outline btn-sm h-10" disabled={activeTab.loading} onClick={() => onToggleDrawer("salesforce")}>
-                    <PanelRightOpen size={14} />
+                  <button className={toolbarButtonClassName} disabled={activeTab.loading} onClick={() => onToggleDrawer("salesforce")}>
+                    <PanelRightOpen size={13} />
                     字段与SOQL
                   </button>
                 )}
-                <button className="btn btn-outline btn-sm h-10" disabled={activeTab.loading} onClick={onToggleLogs}>
-                  <ScrollText size={14} />
+                <button className={toolbarButtonClassName} disabled={activeTab.loading} onClick={onToggleLogs}>
+                  <ScrollText size={13} />
                   日志
                 </button>
               </div>
