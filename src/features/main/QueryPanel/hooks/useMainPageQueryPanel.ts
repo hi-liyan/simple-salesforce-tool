@@ -4,6 +4,7 @@ import { api } from "../../../../api";
 import { useObjectsQuery, useSourcesQuery, useSyncSourcesMutation } from "../../../../queries/salesforce";
 import { MainViewMode, useAppStore } from "../../../../store/useAppStore";
 import { useSoqlExecutorStore } from "../../../../store/useSoqlExecutorStore";
+import { useTerminalStore } from "../../../../store/useTerminalStore";
 import { Notice, ObjectDescribe, ObjectDdl, SalesforceObject, TabLog, TabState } from "../../../../types";
 import { useSourceActions } from "./useSourceActions";
 import { useQueryExecution } from "./useQueryExecution";
@@ -92,6 +93,8 @@ export function useMainPageQueryPanel({
   const setActiveSoqlTabId = useSoqlExecutorStore((state) => state.setActiveTabId);
   const closeSoqlTab = useSoqlExecutorStore((state) => state.closeTab);
   const closeSoqlTabsByIds = useSoqlExecutorStore((state) => state.closeTabsByIds);
+  // Store：Terminal 工作区状态与行为。
+  const switchTerminalSource = useTerminalStore((state) => state.switchSource);
 
   // Objects 查询：随数据源变化拉取对象元数据。
   const { data: objects = [], isFetching: objectsFetching, error: objectsError } = useObjectsQuery(selectedSourceId);
@@ -462,7 +465,8 @@ export function useMainPageQueryPanel({
   useEffect(() => {
     if (!startupComplete) return;
     switchSoqlSource(selectedSourceId);
-  }, [startupComplete, selectedSourceId, switchSoqlSource]);
+    switchTerminalSource(selectedSourceId);
+  }, [startupComplete, selectedSourceId, switchSoqlSource, switchTerminalSource]);
 
   // 对象列表加载失败时给出明确提示，避免出现“空白但无错误”。
   useEffect(() => {

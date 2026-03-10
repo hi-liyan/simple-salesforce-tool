@@ -1,11 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
+import { Settings, SquareTerminal, Table2 } from "lucide-react";
 import { api } from "../api";
 import { QueryPanel } from "../features/main/QueryPanel";
 import { useMainPageQueryPanel } from "../features/main/QueryPanel/hooks/useMainPageQueryPanel";
+import { SettingsPanel } from "../features/main/SettingsPanel";
+import { TerminalPanel } from "../features/main/TerminalPanel";
+import { MainLayout } from "../layouts/MainLayout";
 import { useAppStore } from "../store/useAppStore";
 import { useSoqlExecutorStore } from "../store/useSoqlExecutorStore";
+import { useTerminalStore } from "../store/useTerminalStore";
 import { enableStorageWrite } from "../store/tauriStorage";
 
 // GitHub Releases 固定地址：用于更新提示中的展示与跳转。
@@ -51,7 +56,7 @@ export function MainPage() {
 
     const setup = async () => {
       // 手动触发 rehydrate（skipHydration: true），从 SQLite 恢复持久化状态。
-      await Promise.all([useAppStore.persist.rehydrate(), useSoqlExecutorStore.persist.rehydrate()]);
+      await Promise.all([useAppStore.persist.rehydrate(), useSoqlExecutorStore.persist.rehydrate(), useTerminalStore.persist.rehydrate()]);
       if (!active) return;
 
       // rehydrate 完成且确认组件仍存活后，才开启写入门控。
@@ -169,8 +174,48 @@ export function MainPage() {
   return (
     // 页面容器：用于承载主布局与启动遮罩层。
     <div className="relative h-full w-full">
-      {/* QueryPanel 壳层：统一承载 Query/SOQL/设置视图编排。 */}
-      <QueryPanel viewState={queryPanelViewState} actions={queryPanelActions} />
+      {/* 主布局：MainPage 统一承接导航 rail 与三视图编排。 */}
+      <MainLayout
+        navRail={
+          // 导航栏按钮区。
+          <div className="flex flex-col items-center gap-1 py-2">
+            {/* Query 工作区入口。 */}
+            <button
+              className={`tool-rail-btn ${viewMode === "query" ? "tool-rail-btn--active" : ""}`}
+              title="Query 布局"
+              onClick={() => queryPanelActions.onSetViewMode("query")}
+            >
+              <Table2 size={16} />
+            </button>
+            {/* Terminal 工作区入口。 */}
+            <button
+              className={`tool-rail-btn ${viewMode === "terminal" ? "tool-rail-btn--active" : ""}`}
+              title="Terminal 布局"
+              onClick={() => queryPanelActions.onSetViewMode("terminal")}
+            >
+              <SquareTerminal size={16} />
+            </button>
+            {/* 设置入口。 */}
+            <button
+              className={`tool-rail-btn ${viewMode === "settings" ? "tool-rail-btn--active" : ""}`}
+              title="设置"
+              onClick={() => queryPanelActions.onSetViewMode("settings")}
+            >
+              <Settings size={16} />
+            </button>
+          </div>
+        }
+        content={
+          <>
+            {/* Query 工作区：对象树 + 数据/控制台统一 Tab。 */}
+            {viewMode === "query" && <QueryPanel viewState={queryPanelViewState} actions={queryPanelActions} />}
+            {/* Terminal 工作区。 */}
+            {viewMode === "terminal" && <TerminalPanel />}
+            {/* 设置视图。 */}
+            {viewMode === "settings" && <SettingsPanel />}
+          </>
+        }
+      />
       {versionUpdateModal && (
         // 新版本提示模态框：统一替代 confirm + 通知的双提示流程。
         <div className="fixed inset-0 z-[130] flex items-center justify-center bg-base-300/45 p-4 backdrop-blur-[2px]">
