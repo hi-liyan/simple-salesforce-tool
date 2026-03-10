@@ -3,8 +3,10 @@ import Editor from "@monaco-editor/react";
 import {
   closestCenter,
   DndContext,
+  DragOverlay,
   type DragEndEvent,
   type DragStartEvent,
+  type Modifier,
   PointerSensor,
   useSensor,
   useSensors
@@ -87,6 +89,18 @@ type DeleteCommandTarget = {
   command: TerminalCommandItem;
 };
 
+// 拖拽快照：用于 Overlay 固定尺寸与内容展示。
+type ActiveDragCommandSnapshot = {
+  // 所属命令组 ID。
+  groupId: string;
+  // 当前拖拽命令。
+  command: TerminalCommandItem;
+  // 拖拽开始时的卡片宽度。
+  width: number;
+  // 拖拽开始时的卡片高度。
+  height: number;
+};
+
 // 命令编辑表单。
 type CommandEditorForm = {
   // 目标命令组 ID。
@@ -119,15 +133,26 @@ function createFormFromCommand(groupId: string, command: TerminalCommandItem): C
   };
 }
 
+// 仅允许纵向拖拽，并移除 dnd-kit 默认 scale 形变，避免卡片因目标高度不同而变形。
+const restrictVerticalNoScale: Modifier = ({ transform }) => ({
+  ...transform,
+  x: 0,
+  scaleX: 1,
+  scaleY: 1
+});
+
 function SortableCommandCard({
   groupId,
   commandItem,
   searchMode,
   isActiveDrag,
+  isPlaceholder = false,
+  lockedHeight,
   commandLibrarySubmitting,
   onEdit,
   onDelete,
   onPaste,
+  registerCardElement,
   onContextMenu
 }: SortableCommandCardProps) {
   // 绑定 sortable：提供容器引用、拖拽手柄监听和位移动画。
@@ -137,21 +162,36 @@ function SortableCommandCard({
   });
   // 将 dnd-kit transform 映射为 CSS transform，驱动排序动画。
   const style = {
-    transform: CSS.Transform.toString(transform),
-    transition
+    transform: CSS.Transform.toString(
+      transform
+        ? {
+            ...transform,
+            x: 0,
+            scaleX: 1,
+            scaleY: 1
+          }
+        : null
+    ),
+    transition,
+    height: isPlaceholder && lockedHeight ? `${lockedHeight}px` : undefined
   };
 
   return (
     <div
-      ref={setNodeRef}
+      ref={(element) => {
+        registerCardElement(commandItem.id, element);
+        setNodeRef(element);
+      }}
       style={style}
       className={`rounded-lg border bg-base-100 p-2 transition-colors hover:border-primary/45 ${
-        isDragging || isActiveDrag ? "border-primary opacity-85" : "border-base-300"
+        isDragging || isActiveDrag ? "border-primary" : "border-base-300"
       }`}
+      data-command-id={commandItem.id}
       onContextMenu={(event) => {
         onContextMenu(event, groupId, commandItem);
       }}
     >
+      <div className={isPlaceholder ? "pointer-events-none opacity-35" : undefined}>
       {/* 命令标题与操作。 */}
       <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-start gap-2">
@@ -197,6 +237,7 @@ function SortableCommandCard({
       <p className="mt-2 whitespace-pre-wrap break-all rounded-md bg-neutral/95 px-2 py-1 font-mono text-[11px] text-base-100">
         {commandItem.command}
       </p>
+      </div>
     </div>
   );
 }
@@ -210,6 +251,10 @@ type SortableCommandCardProps = {
   searchMode: boolean;
   // 当前是否处于拖拽激活态。
   isActiveDrag: boolean;
+  // 拖拽中的占位态：保留布局高度但隐藏内容。
+  isPlaceholder?: boolean;
+  // 锁定卡片高度：拖拽时用于稳定原位置占位高度。
+  lockedHeight?: number;
   // 是否正在提交命令库写操作。
   commandLibrarySubmitting: boolean;
   // 打开编辑面板。
@@ -218,6 +263,8 @@ type SortableCommandCardProps = {
   onDelete: (groupId: string, command: TerminalCommandItem) => void;
   // 粘贴到当前终端。
   onPaste: (command: TerminalCommandItem) => void;
+  // 注册命令卡片元素：用于拖拽开始时读取尺寸。
+  registerCardElement: (commandId: string, element: HTMLDivElement | null) => void;
   // 打开右键菜单。
   onContextMenu: (event: MouseEvent<HTMLDivElement>, groupId: string, command: TerminalCommandItem) => void;
 };
@@ -257,6 +304,8 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
   const [editingTarget, setEditingTarget] = useState<EditingCommandTarget | null>(null);
   // 当前拖拽中的命令 ID：用于高亮排序项。
   const [activeDragCommandId, setActiveDragCommandId] = useState("");
+  // 当前拖拽命令快照：用于 DragOverlay 锁定尺寸。
+  const [activeDragCommandSnapshot, setActiveDragCommandSnapshot] = useState<ActiveDragCommandSnapshot | null>(null);
   // 删除确认弹窗目标。
   const [deleteCommandTarget, setDeleteCommandTarget] = useState<DeleteCommandTarget | null>(null);
   // 新命令组名称输入值。
@@ -278,6 +327,8 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
   const previousTabIdsRef = useRef<string[]>([]);
   // 命令库请求序号：用于丢弃过期响应。
   const commandLibraryRequestSeqRef = useRef(0);
+  // 命令卡片元素映射：用于拖拽开始时读取真实尺寸。
+  const commandCardElementByIdRef = useRef<Record<string, HTMLDivElement | null>>({});
 
   // 激活终端 Tab 派生值。
   const activeTab = useMemo(() => tabs.find((item) => item.id === activeTabId) || tabs[0] || null, [tabs, activeTabId]);
@@ -849,7 +900,23 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
 
   // 拖拽开始：记录当前激活命令，供 UI 高亮。
   function handleCommandSortStart(event: DragStartEvent) {
-    setActiveDragCommandId(String(event.active.id || ""));
+    const activeId = String(event.active.id || "");
+    setActiveDragCommandId(activeId);
+    const activeGroup = commandGroups.find((group) => group.commands.some((command) => command.id === activeId));
+    const activeCommand = activeGroup?.commands.find((command) => command.id === activeId) || null;
+    const activeElement = commandCardElementByIdRef.current[activeId];
+    if (!activeGroup || !activeCommand || !activeElement) {
+      setActiveDragCommandSnapshot(null);
+      return;
+    }
+
+    const rect = activeElement.getBoundingClientRect();
+    setActiveDragCommandSnapshot({
+      groupId: activeGroup.id,
+      command: activeCommand,
+      width: rect.width,
+      height: rect.height
+    });
   }
 
   // 拖拽结束：计算组内新顺序并持久化到后端。
@@ -857,6 +924,7 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
     const activeId = String(event.active.id || "");
     const overId = String(event.over?.id || "");
     setActiveDragCommandId("");
+    setActiveDragCommandSnapshot(null);
     if (!activeId || !overId || activeId === overId) return;
 
     const oldIndex = commands.findIndex((command) => command.id === activeId);
@@ -870,6 +938,7 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
   // 拖拽取消：清理激活态。
   function handleCommandSortCancel() {
     setActiveDragCommandId("");
+    setActiveDragCommandSnapshot(null);
   }
 
   // 新建空终端并立即激活。
@@ -1082,7 +1151,7 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
         </div>
 
         {/* 命令组与命令列表。 */}
-        <div className="min-h-0 flex-1 overflow-auto p-3 pt-2">
+        <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden p-3 pt-2">
           {/* 加载态提示。 */}
           {commandLibraryLoading && (
             <div className="rounded-lg border border-base-300 bg-base-100 px-3 py-3 text-[12px] text-neutral/60">命令库加载中...</div>
@@ -1146,7 +1215,12 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
                             commandItem={commandItem}
                             searchMode={searchMode}
                             isActiveDrag={false}
+                            isPlaceholder={false}
+                            lockedHeight={undefined}
                             commandLibrarySubmitting={commandLibrarySubmitting}
+                            registerCardElement={(commandId, element) => {
+                              commandCardElementByIdRef.current[commandId] = element;
+                            }}
                             onEdit={openEditCommandPanel}
                             onDelete={openDeleteCommandDialog}
                             onPaste={(command) => {
@@ -1169,6 +1243,7 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
                       <DndContext
                         sensors={dndSensors}
                         collisionDetection={closestCenter}
+                        modifiers={[restrictVerticalNoScale]}
                         onDragStart={handleCommandSortStart}
                         onDragEnd={(event) => {
                           handleCommandSortEnd(group.id, group.commands, event);
@@ -1184,7 +1259,14 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
                                 commandItem={commandItem}
                                 searchMode={searchMode}
                                 isActiveDrag={activeDragCommandId === commandItem.id}
+                                isPlaceholder={activeDragCommandId === commandItem.id}
+                                lockedHeight={
+                                  activeDragCommandId === commandItem.id ? activeDragCommandSnapshot?.height : undefined
+                                }
                                 commandLibrarySubmitting={commandLibrarySubmitting}
+                                registerCardElement={(commandId, element) => {
+                                  commandCardElementByIdRef.current[commandId] = element;
+                                }}
                                 onEdit={openEditCommandPanel}
                                 onDelete={openDeleteCommandDialog}
                                 onPaste={(command) => {
@@ -1363,6 +1445,43 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
           </div>
         </div>
       )}
+
+      {/* 拖拽浮层：使用独立 Overlay 固定拖拽卡片尺寸，避免不同高度卡片在排序时抖动。 */}
+      <DragOverlay modifiers={[restrictVerticalNoScale]}>
+        {activeDragCommandSnapshot ? (
+          <div
+            className="rounded-lg border border-primary bg-base-100 p-2 shadow-xl"
+            style={{
+              width: `${activeDragCommandSnapshot.width}px`,
+              height: `${activeDragCommandSnapshot.height}px`,
+              boxSizing: "border-box",
+              overflow: "hidden"
+            }}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex min-w-0 items-start gap-2">
+                <span className="mt-0.5 text-neutral/35">
+                  <GripVertical size={14} />
+                </span>
+                <div className="min-w-0">
+                  <p className="truncate text-[12px] font-semibold text-neutral">{activeDragCommandSnapshot.command.name}</p>
+                  {activeDragCommandSnapshot.command.description && (
+                    <p className="mt-0.5 line-clamp-2 text-[11px] text-neutral/65">{activeDragCommandSnapshot.command.description}</p>
+                  )}
+                </div>
+              </div>
+              <div className="flex shrink-0 items-center gap-1 opacity-70">
+                <Clipboard size={12} />
+                <PencilLine size={12} />
+                <Trash2 size={12} />
+              </div>
+            </div>
+            <p className="mt-2 whitespace-pre-wrap break-all rounded-md bg-neutral/95 px-2 py-1 font-mono text-[11px] text-base-100">
+              {activeDragCommandSnapshot.command.command}
+            </p>
+          </div>
+        ) : null}
+      </DragOverlay>
     </div>
   );
 }
