@@ -5,6 +5,53 @@ import { useAppStore } from "../../../../store/useAppStore";
 
 type MysqlDdlState = Record<string, { loading: boolean; data: ObjectDdl | null; error: string }>;
 
+// MySQL 新增行必填字段缺失信息。
+type MysqlMissingRequiredFieldItem = {
+  // 行号（从 1 开始，便于用户在表格里定位）。
+  row: number;
+  // 当前行缺失的字段名列表。
+  fields: string[];
+};
+
+// 判断单元格值是否可视为“未输入”。
+function isBlankCellValue(value: unknown): boolean {
+  // null/undefined 统一视为空。
+  if (value === null || value === undefined) return true;
+  // 字符串去掉空白后为空，也视为未输入。
+  if (typeof value === "string") return value.trim() === "";
+  return false;
+}
+
+// 收集 MySQL 新增行中“NOT NULL 且无默认值”的缺失字段。
+function collectMysqlMissingRequiredFields(
+  records: Record<string, unknown>[],
+  describe: ObjectDescribe
+): MysqlMissingRequiredFieldItem[] {
+  // 只校验创建时可写、非可空、无默认值，且排除自增/生成列。
+  const requiredFields = describe.fields.filter((field) => {
+    if (!field.createable || field.nillable) return false;
+    const defaultValue = field.metadata?.columnDefault;
+    if (defaultValue !== null && defaultValue !== undefined) return false;
+    const extraText = String(field.metadata?.extra || "").toLowerCase();
+    if (extraText.includes("auto_increment") || extraText.includes("generated")) return false;
+    return true;
+  });
+  if (requiredFields.length === 0) return [];
+
+  const missingItems: MysqlMissingRequiredFieldItem[] = [];
+  records.forEach((record, rowIndex) => {
+    // 仅对前端本地新增行做必填校验。
+    if (!record.__isNew) return;
+    const missingFieldNames = requiredFields
+      .filter((field) => isBlankCellValue(record[field.name]))
+      .map((field) => field.name);
+    if (missingFieldNames.length > 0) {
+      missingItems.push({ row: rowIndex + 1, fields: missingFieldNames });
+    }
+  });
+  return missingItems;
+}
+
 type UseQueryPanelRuntimeInput = {
   // 当前选中数据源 ID。
   selectedSourceId: string;
@@ -442,6 +489,21 @@ export function useQueryPanelRuntime({
     if (!hasPendingChanges(activeTab)) return;
 
     const isMysqlSource = (selectedSourceType || "salesforce").toLowerCase() === "mysql";
+    // MySQL 新增前置校验：必填字段缺失时直接提示并中断提交。
+    if (isMysqlSource) {
+      const mysqlMissingRequiredItems = collectMysqlMissingRequiredFields(activeTab.result.records, activeTab.describe);
+      if (mysqlMissingRequiredItems.length > 0) {
+        const message = `MySQL 新增失败：存在 NOT NULL 且无默认值字段未填写。${mysqlMissingRequiredItems
+          .map((item) => `第 ${item.row} 行缺少 ${item.fields.join("、")}`)
+          .join("；")}。`;
+        patchTab(activeTab.objectName, (item) => ({
+          ...item,
+          notice: { type: "error", message }
+        }));
+        return;
+      }
+    }
+
     const editableFields = new Set(activeTab.describe.fields.map((field) => field.name));
     const mysqlPrimaryKeyField = isMysqlSource
       ? activeTab.describe.fields.find((field) => String(field.metadata?.columnKey || "").toUpperCase() === "PRI")?.name || ""
