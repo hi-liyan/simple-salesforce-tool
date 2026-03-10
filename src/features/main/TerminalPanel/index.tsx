@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { Copy, FolderPlus, Play, Plus, Search, Shield, SquareTerminal, Trash2, X } from "lucide-react";
+import { Copy, FolderPlus, Play, Plus, Search, Shield, Trash2, X } from "lucide-react";
 import { api } from "../../../api";
 import { TerminalClosedEvent, TerminalOutputEvent } from "../../../types";
 import { TerminalCommandItem, TerminalTab, useTerminalStore } from "../../../store/useTerminalStore";
@@ -505,10 +505,10 @@ export function TerminalPanel() {
         {/* 顶部工具区：icon 按钮 + 搜索栏。 */}
         <div className="border-b border-base-300 p-3">
           {/* 顶部 icon 操作行。 */}
-          <div className="mb-2 flex items-center gap-2">
+          <div className="mb-2 flex items-center justify-end gap-1">
             {/* 创建命令组 icon 按钮（悬浮显示名称）。 */}
             <button
-              className="btn btn-ghost btn-sm"
+              className="btn btn-ghost btn-square btn-sm"
               title="创建命令组"
               onClick={() => {
                 setShowCreateGroupPanel((value) => !value);
@@ -519,7 +519,7 @@ export function TerminalPanel() {
             </button>
             {/* 创建命令 icon 按钮（悬浮显示名称）。 */}
             <button
-              className="btn btn-ghost btn-sm"
+              className="btn btn-ghost btn-square btn-sm"
               title="创建命令"
               onClick={() => {
                 setShowCreateCommandPanel((value) => !value);
@@ -527,7 +527,8 @@ export function TerminalPanel() {
               }}
               disabled={commandGroups.length === 0}
             >
-              <SquareTerminal size={15} />
+              {/* 创建命令入口改为“+”图标，与 QueryPanel 侧边栏动作视觉一致。 */}
+              <Plus size={14} />
             </button>
           </div>
 
