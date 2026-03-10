@@ -2,12 +2,15 @@ import { useMemo } from "react";
 import { QueryPanelActions } from "../types";
 import { ObjectDescribe, SalesforceObject, TabState } from "../../../../types";
 import { MainViewMode } from "../../../../store/useAppStore";
+import { getMysqlPrimaryKeyField, getRecordKey } from "../logic/queryUtils";
 
 type UseQueryPanelActionsInput = {
   // 当前激活 Query Tab。
   activeTab: TabState | null;
   // 当前选中数据源 ID。
   selectedSourceId: string;
+  // 当前选中数据源类型：用于 MySQL 主键键值计算。
+  selectedSourceType: string;
   // 切换页面模式。
   setViewMode: (viewMode: MainViewMode) => void;
   // 打开认证窗口。
@@ -88,6 +91,7 @@ type UseQueryPanelActionsInput = {
 export function useQueryPanelActions({
   activeTab,
   selectedSourceId,
+  selectedSourceType,
   setViewMode,
   openAuthWindow,
   createSoqlConsoleTab,
@@ -274,7 +278,11 @@ export function useQueryPanelActions({
           if (!target) return item;
 
           const nextRecord = { ...target, [columnName]: value };
-          const recordKey = nextRecord.__localId ? String(nextRecord.__localId) : nextRecord.Id ? String(nextRecord.Id) : `row-${rowIndex}`;
+          // 统一记录键：MySQL 使用主键值，Salesforce 使用 Id，确保脏标记与渲染高亮一致。
+          const recordKey = getRecordKey(nextRecord, rowIndex, {
+            sourceType: selectedSourceType,
+            mysqlPrimaryKeyField: getMysqlPrimaryKeyField(item.describe)
+          });
           const cellKey = `${recordKey}:${columnName}`;
           const dirtySet = new Set(item.dirtyCellKeys);
           const isNewRow = Boolean(nextRecord.__isNew);
@@ -359,6 +367,7 @@ export function useQueryPanelActions({
       buildConsoleWorkspaceTabId,
       parseWorkspaceTabId,
       setActiveTabObjectName,
+      selectedSourceType,
       setActiveSoqlTabId,
       closeTab,
       closeTabsByObjectNames,

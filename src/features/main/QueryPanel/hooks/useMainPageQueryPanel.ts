@@ -384,6 +384,7 @@ export function useMainPageQueryPanel({
   const rawQueryPanelActions: QueryPanelActions = useQueryPanelActions({
     activeTab,
     selectedSourceId,
+    selectedSourceType: selectedSource?.sourceType || "salesforce",
     setViewMode,
     openAuthWindow,
     createSoqlConsoleTab,

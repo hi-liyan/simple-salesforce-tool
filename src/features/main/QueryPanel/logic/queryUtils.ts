@@ -1,5 +1,13 @@
 import { ObjectDescribe, ObjectField, QueryResult, TabState } from "../../../../types";
 
+// 记录键计算参数：用于按数据源类型统一 key 生成规则。
+export type RecordKeyOptions = {
+  // 当前数据源类型（salesforce/mysql）。
+  sourceType?: string;
+  // MySQL 主键字段名（来自 describe 字段元数据）。
+  mysqlPrimaryKeyField?: string;
+};
+
 // 计算默认字段可见性。
 export function buildDefaultVisibility(describe: ObjectDescribe): Record<string, boolean> {
   return describe.fields.reduce((acc, field) => ({ ...acc, [field.name]: true }), {} as Record<string, boolean>);
@@ -148,19 +156,36 @@ export function hasPendingChanges(tab: TabState): boolean {
   return hasNewRows || tab.dirtyCellKeys.length > 0 || tab.pendingDeleteRecordIds.length > 0;
 }
 
+// 提取 MySQL 主键字段名：优先使用 columnKey=PRI 的字段。
+export function getMysqlPrimaryKeyField(describe: ObjectDescribe | null | undefined): string {
+  if (!describe) return "";
+  const mysqlPrimaryField = describe.fields.find((field) => String(field.metadata?.columnKey || "").toUpperCase() === "PRI");
+  return mysqlPrimaryField?.name || "";
+}
+
 // 基线记录：用于比较单元格是否发生变化。
-export function buildBaselineRecords(records: Record<string, unknown>[]): Record<string, Record<string, unknown>> {
+export function buildBaselineRecords(
+  records: Record<string, unknown>[],
+  options: RecordKeyOptions = {}
+): Record<string, Record<string, unknown>> {
   const baseline: Record<string, Record<string, unknown>> = {};
   records.forEach((record, index) => {
-    baseline[getRecordKey(record, index)] = { ...record };
+    baseline[getRecordKey(record, index, options)] = { ...record };
   });
   return baseline;
 }
 
 // 获取记录主键或临时键。
-export function getRecordKey(record: Record<string, unknown>, rowIndex: number): string {
+export function getRecordKey(record: Record<string, unknown>, rowIndex: number, options: RecordKeyOptions = {}): string {
   if (record.__localId) return String(record.__localId);
   if (record.Id) return String(record.Id);
+  // MySQL 行键回退：缺失 Id 时使用主键字段值，保证编辑高亮与更新提交使用同一键。
+  if ((options.sourceType || "salesforce").toLowerCase() === "mysql" && options.mysqlPrimaryKeyField) {
+    const mysqlPrimaryValue = record[options.mysqlPrimaryKeyField];
+    if (mysqlPrimaryValue !== null && mysqlPrimaryValue !== undefined && String(mysqlPrimaryValue).trim() !== "") {
+      return String(mysqlPrimaryValue);
+    }
+  }
   return `row-${rowIndex}`;
 }
 
