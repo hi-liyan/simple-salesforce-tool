@@ -30,6 +30,16 @@ export function DataSourceSelector({
     () => sources.find((item) => item.id === selectedSourceId) || null,
     [sources, selectedSourceId]
   );
+  // 按序号稳定排序：序号相同时按名称兜底，避免渲染抖动。
+  const sortedSources = useMemo(
+    () =>
+      [...sources].sort((a, b) => {
+        const sortDiff = (a.sortOrder || 0) - (b.sortOrder || 0);
+        if (sortDiff !== 0) return sortDiff;
+        return a.name.localeCompare(b.name, "zh-CN");
+      }),
+    [sources]
+  );
 
   // 将类型归一化为展示徽标文案。
   function getSourceTypeBadge(sourceType: string | undefined): string {
@@ -108,7 +118,7 @@ export function DataSourceSelector({
                 {getSourceTypeBadge(selectedSource.sourceType)}
               </span>
               {/* 数据源名称：超长时截断。 */}
-              <span className="truncate">{selectedSource.name}</span>
+              <span className="truncate">[{selectedSource.sortOrder || 0}] {selectedSource.name}</span>
             </>
           ) : (
             <span className="truncate text-neutral/70">请选择数据源</span>
@@ -133,7 +143,7 @@ export function DataSourceSelector({
           </button>
 
           {/* 数据源选项列表：每项显示类型徽标与名称。 */}
-          {sources.map((source) => {
+          {sortedSources.map((source) => {
             const active = source.id === selectedSourceId;
             return (
               <button
@@ -151,7 +161,7 @@ export function DataSourceSelector({
                   {getSourceTypeBadge(source.sourceType)}
                 </span>
                 {/* 选项名称。 */}
-                <span className="whitespace-nowrap">{source.name}</span>
+                <span className="whitespace-nowrap">[{source.sortOrder || 0}] {source.name}</span>
               </button>
             );
           })}

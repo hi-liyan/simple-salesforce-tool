@@ -53,6 +53,16 @@ export function SourcePanel({
     () => sources.find((source) => source.id === selectedSourceId) || null,
     [sources, selectedSourceId]
   );
+  // 按序号升序渲染下拉项，确保与设置页排序一致。
+  const sortedSources = useMemo(
+    () =>
+      [...sources].sort((a, b) => {
+        const sortDiff = (a.sortOrder || 0) - (b.sortOrder || 0);
+        if (sortDiff !== 0) return sortDiff;
+        return a.name.localeCompare(b.name, "zh-CN");
+      }),
+    [sources]
+  );
 
   function resetForm() {
     setEditingId("");
@@ -182,9 +192,9 @@ export function SourcePanel({
         onChange={(event) => onChangeSelectedSource(event.target.value)}
       >
         <option value="">请选择数据源</option>
-        {sources.map((source) => (
+        {sortedSources.map((source) => (
           <option key={source.id} value={source.id}>
-            {source.name}
+            [{source.sortOrder || 0}] {source.name}
           </option>
         ))}
       </select>

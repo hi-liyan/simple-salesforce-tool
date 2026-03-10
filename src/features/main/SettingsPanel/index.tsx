@@ -1,5 +1,16 @@
-import { Cog, ExternalLink, RefreshCw, Save, Search, Trash2 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { Cog, ExternalLink, GripVertical, RefreshCw, Save, Search, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  closestCenter,
+  DndContext,
+  DragEndEvent,
+  DragStartEvent,
+  PointerSensor,
+  useSensor,
+  useSensors
+} from "@dnd-kit/core";
+import { arrayMove, SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { getVersion } from "@tauri-apps/api/app";
 import { api } from "../../../api";
 import { CliPathProbe, CliPathSettings, CliPathStatus, LlmSettings, SalesforceSource } from "../../../types";
@@ -41,6 +52,8 @@ export function SettingsPanel() {
   const [appVersion, setAppVersion] = useState("-");
   // 数据源列表：用于“数据源”Tab 展示完整信息（含 token）。
   const [sources, setSources] = useState<SalesforceSource[]>([]);
+  // 当前拖拽中的数据源 ID：用于渲染拖拽态样式。
+  const [activeDragSourceId, setActiveDragSourceId] = useState("");
   // 数据源加载状态：用于刷新按钮与加载提示。
   const [sourcesLoading, setSourcesLoading] = useState(false);
   // Salesforce 编辑弹窗开关：仅用于设置页编辑非 CLI 的 Salesforce 数据源。
@@ -119,6 +132,63 @@ export function SettingsPanel() {
     } finally {
       setSourcesLoading(false);
     }
+  }
+
+  // 设置页数据源视图：按 sortOrder 升序展示，序号相同则按名称兜底。
+  const sortedSources = useMemo(
+    () =>
+      [...sources].sort((a, b) => {
+        const sortDiff = (a.sortOrder || 0) - (b.sortOrder || 0);
+        if (sortDiff !== 0) return sortDiff;
+        return a.name.localeCompare(b.name, "zh-CN");
+      }),
+    [sources]
+  );
+  // 排序上下文 IDs：供 dnd-kit 计算拖拽位置。
+  const sortedSourceIds = useMemo(() => sortedSources.map((item) => item.id), [sortedSources]);
+  // 鼠标拖拽传感器：设置激活距离，降低误触。
+  const dndSensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 6 }
+    })
+  );
+
+  // 持久化当前排序结果：失败时回滚到后端顺序。
+  async function persistSourceOrder(nextSources: SalesforceSource[]) {
+    try {
+      const orderedIds = nextSources.map((item) => item.id);
+      const persistedSources = await api.reorderSources(orderedIds);
+      setSources(persistedSources); // 使用后端归一化后的结果覆盖，保证序号绝对一致。
+    } catch (reorderError) {
+      setError(`拖拽排序失败：${String(reorderError)}`);
+      await loadSources(); // 失败后回滚为服务端顺序，避免前后端状态不一致。
+    }
+  }
+
+  // 拖拽开始：记录当前拖拽源，供 UI 高亮。
+  function onSourceDragStart(event: DragStartEvent) {
+    setActiveDragSourceId(String(event.active.id)); // 记录当前拖拽的数据源 ID。
+  }
+
+  // 拖拽结束：计算新顺序并落库。
+  function onSourceDragEnd(event: DragEndEvent) {
+    const activeId = String(event.active.id || "");
+    const overId = String(event.over?.id || "");
+    setActiveDragSourceId(""); // 无论成功与否都先清理拖拽态。
+    if (!activeId || !overId || activeId === overId) return;
+
+    const oldIndex = sortedSources.findIndex((item) => item.id === activeId);
+    const newIndex = sortedSources.findIndex((item) => item.id === overId);
+    if (oldIndex < 0 || newIndex < 0) return;
+
+    const nextSources = arrayMove(sortedSources, oldIndex, newIndex);
+    setSources(nextSources); // 先乐观更新，提升拖拽反馈即时性。
+    void persistSourceOrder(nextSources); // 异步持久化序号到后端。
+  }
+
+  // 拖拽取消：清理拖拽态标记。
+  function onSourceDragCancel() {
+    setActiveDragSourceId(""); // 用户取消拖拽时重置状态。
   }
 
   // 将数据源类型归一化为徽标文本。
@@ -625,63 +695,32 @@ export function SettingsPanel() {
               )}
 
               {!sourcesLoading &&
-                sources.map((item) => (
-                  <div key={item.id} className="rounded border border-base-300 bg-base-100 p-3 text-[12px]">
-                    <div className="mb-2 border-b border-base-300 pb-2">
-                      {/* 卡片标题区：增加数据源类型徽标。 */}
-                      <div className="min-w-0">
-                        <p className="flex items-center gap-2 text-[13px] font-semibold">
-                          <span
-                            className={`inline-flex min-w-[52px] items-center justify-center rounded px-1.5 py-[1px] text-[10px] font-semibold ${getSourceBadgeClassName(item.sourceType)}`}
-                          >
-                            {getSourceTypeBadge(item.sourceType)}
-                          </span>
-                          <span className="truncate">{item.name || "-"}</span>
-                          {/* Salesforce 非 CLI 数据源支持编辑连接信息。 */}
-                          {(item.sourceType || "salesforce").toLowerCase() === "salesforce" && !item.id.startsWith("cli-") && (
-                            <button
-                              className="btn btn-ghost btn-xs"
-                              aria-label="编辑 Salesforce 数据源"
-                              onClick={() => openSalesforceEditModal(item)}
-                            >
-                              <Cog size={14} />
-                            </button>
-                          )}
-                          {/* MySQL 专属齿轮按钮：紧跟在名称后面。 */}
-                          {(item.sourceType || "salesforce").toLowerCase() === "mysql" && (
-                            <button
-                              className="btn btn-ghost btn-xs"
-                              aria-label="编辑 MySQL 数据源"
-                              onClick={() => openMySqlEditModal(item)}
-                            >
-                              <Cog size={14} />
-                            </button>
-                          )}
-                        </p>
+                sortedSources.length > 0 && (
+                  <DndContext
+                    sensors={dndSensors}
+                    collisionDetection={closestCenter}
+                    onDragStart={onSourceDragStart}
+                    onDragEnd={onSourceDragEnd}
+                    onDragCancel={onSourceDragCancel}
+                  >
+                    <SortableContext items={sortedSourceIds} strategy={verticalListSortingStrategy}>
+                      {/* 可排序卡片列表：使用 dnd-kit 提供稳定拖拽能力。 */}
+                      <div className="space-y-3">
+                        {sortedSources.map((item) => (
+                          <SortableSourceCard
+                            key={item.id}
+                            item={item}
+                            isActiveDrag={activeDragSourceId === item.id}
+                            getSourceBadgeClassName={getSourceBadgeClassName}
+                            getSourceTypeBadge={getSourceTypeBadge}
+                            onOpenSalesforceEdit={openSalesforceEditModal}
+                            onOpenMySqlEdit={openMySqlEditModal}
+                          />
+                        ))}
                       </div>
-                    </div>
-                    <div className="mb-2">
-                      <p className="mt-1 text-neutral/70">ID: {item.id}</p>
-                    </div>
-                    <div className="space-y-1 break-all">
-                      <p>
-                        <span className="font-semibold">instanceUrl:</span> {item.instanceUrl || "-"}
-                      </p>
-                      <p>
-                        <span className="font-semibold">apiVersion:</span> {item.apiVersion || "-"}
-                      </p>
-                      <p>
-                        <span className="font-semibold">accessToken:</span> {item.accessToken || "-"}
-                      </p>
-                      <p>
-                        <span className="font-semibold">createdAt:</span> {item.createdAt || "-"}
-                      </p>
-                      <p>
-                        <span className="font-semibold">updatedAt:</span> {item.updatedAt || "-"}
-                      </p>
-                    </div>
-                  </div>
-                ))}
+                    </SortableContext>
+                  </DndContext>
+                )}
             </div>
           </>
         ) : activeTab === "systemLogs" ? (
@@ -875,6 +914,112 @@ export function SettingsPanel() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+type SortableSourceCardProps = {
+  // 当前卡片对应的数据源。
+  item: SalesforceSource;
+  // 当前卡片是否处于激活拖拽态。
+  isActiveDrag: boolean;
+  // 数据源类型徽标文案计算函数。
+  getSourceTypeBadge: (sourceType: string | undefined) => string;
+  // 数据源类型徽标样式计算函数。
+  getSourceBadgeClassName: (sourceType: string | undefined) => string;
+  // 打开 Salesforce 编辑弹窗回调。
+  onOpenSalesforceEdit: (source: SalesforceSource) => void;
+  // 打开 MySQL 编辑弹窗回调。
+  onOpenMySqlEdit: (source: SalesforceSource) => void;
+};
+
+// 可拖拽数据源卡片：封装 dnd-kit sortable 行为，避免主组件 JSX 过长。
+function SortableSourceCard({
+  item,
+  isActiveDrag,
+  getSourceTypeBadge,
+  getSourceBadgeClassName,
+  onOpenSalesforceEdit,
+  onOpenMySqlEdit
+}: SortableSourceCardProps) {
+  // 绑定 sortable：提供容器引用、拖拽 handle 监听和位移动画信息。
+  const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({
+    id: item.id
+  });
+  // 将 dnd-kit transform 映射为 CSS transform，驱动拖拽动画。
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition
+  };
+
+  return (
+    // 卡片容器：setNodeRef 必须绑定到可排序根节点。
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`rounded border bg-base-100 p-3 text-[12px] ${isDragging || isActiveDrag ? "border-primary opacity-80" : "border-base-300"}`}
+    >
+      <div className="mb-2 border-b border-base-300 pb-2">
+        {/* 卡片标题区：包含拖拽 handle、类型徽标、名称和编辑按钮。 */}
+        <div className="min-w-0">
+          <p className="flex items-center gap-2 text-[13px] font-semibold">
+            {/* 拖拽 icon：通过 listeners/attributes 绑定可拖拽手柄。 */}
+            <button
+              ref={setActivatorNodeRef}
+              type="button"
+              className="cursor-grab text-neutral/60 active:cursor-grabbing"
+              title="拖拽调整排序"
+              {...attributes}
+              {...listeners}
+            >
+              <GripVertical size={14} />
+            </button>
+            {/* 数据源类型徽标。 */}
+            <span
+              className={`inline-flex min-w-[52px] items-center justify-center rounded px-1.5 py-[1px] text-[10px] font-semibold ${getSourceBadgeClassName(item.sourceType)}`}
+            >
+              {getSourceTypeBadge(item.sourceType)}
+            </span>
+            {/* 数据源名称与序号。 */}
+            <span className="truncate">
+              [{item.sortOrder || 0}] {item.name || "-"}
+            </span>
+            {/* Salesforce 非 CLI 数据源支持编辑连接信息。 */}
+            {(item.sourceType || "salesforce").toLowerCase() === "salesforce" && !item.id.startsWith("cli-") && (
+              <button className="btn btn-ghost btn-xs" aria-label="编辑 Salesforce 数据源" onClick={() => onOpenSalesforceEdit(item)}>
+                <Cog size={14} />
+              </button>
+            )}
+            {/* MySQL 专属齿轮按钮：紧跟在名称后面。 */}
+            {(item.sourceType || "salesforce").toLowerCase() === "mysql" && (
+              <button className="btn btn-ghost btn-xs" aria-label="编辑 MySQL 数据源" onClick={() => onOpenMySqlEdit(item)}>
+                <Cog size={14} />
+              </button>
+            )}
+          </p>
+        </div>
+      </div>
+      <div className="mb-2">
+        <p className="mt-1 text-neutral/70">序号: {item.sortOrder || 0}</p>
+        <p className="mt-1 text-neutral/70">ID: {item.id}</p>
+      </div>
+      <div className="space-y-1 break-all">
+        <p>
+          <span className="font-semibold">instanceUrl:</span> {item.instanceUrl || "-"}
+        </p>
+        <p>
+          <span className="font-semibold">apiVersion:</span> {item.apiVersion || "-"}
+        </p>
+        <p>
+          <span className="font-semibold">accessToken:</span> {item.accessToken || "-"}
+        </p>
+        <p>
+          <span className="font-semibold">createdAt:</span> {item.createdAt || "-"}
+        </p>
+        <p>
+          <span className="font-semibold">updatedAt:</span> {item.updatedAt || "-"}
+        </p>
+      </div>
     </div>
   );
 }
