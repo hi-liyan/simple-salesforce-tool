@@ -44,6 +44,10 @@ function hydrateTab(persisted: Partial<PersistedTabState>): TabState {
     soqlDraft: persisted.soqlDraft || "",
     showQueryBar: persisted.showQueryBar !== false,
     showDrawer: persisted.showDrawer === true,
+    drawerView:
+      persisted.drawerView === "mysql-ddl" || persisted.drawerView === "mysql-fields" || persisted.drawerView === "salesforce"
+        ? persisted.drawerView
+        : "salesforce",
     showLogs: persisted.showLogs === true,
     logs: Array.isArray(persisted.logs) ? persisted.logs : [],
     columnVisibility: persisted.columnVisibility || {},

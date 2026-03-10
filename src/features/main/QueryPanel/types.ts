@@ -107,8 +107,8 @@ export type QueryPanelActions = {
   onApplyPendingChanges: () => void;
   // 撤销未提交修改。
   onDiscardPendingChanges: () => void;
-  // 打开/关闭抽屉。
-  onToggleDrawer: () => void;
+  // 打开/关闭抽屉（可指定目标视图：MySQL DDL / MySQL 字段 / Salesforce）。
+  onToggleDrawer: (drawerView?: "salesforce" | "mysql-ddl" | "mysql-fields") => void;
   // 刷新 MySQL DDL。
   onRefreshMysqlDdl: () => void;
   // 打开/关闭查询栏。

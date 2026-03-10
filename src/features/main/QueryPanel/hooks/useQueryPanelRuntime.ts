@@ -126,6 +126,8 @@ export function useQueryPanelRuntime({
         soqlDraft: "",
         showQueryBar: true,
         showDrawer: false,
+        // 新建 Tab 时按数据源初始化抽屉视图：MySQL 默认先看 DDL。
+        drawerView: (selectedSourceType || "salesforce").toLowerCase() === "mysql" ? "mysql-ddl" : "salesforce",
         showLogs: false,
         logs: [],
         columnVisibility: {},
@@ -318,19 +320,27 @@ export function useQueryPanelRuntime({
     [selectedSourceId, setMysqlDdlMap]
   );
 
-  // 切换抽屉：MySQL 打开 DDL 抽屉，Salesforce 打开字段抽屉。
-  const toggleDrawerForActiveTab = useCallback(async () => {
+  // 切换抽屉：支持按目标视图打开（MySQL DDL / MySQL 字段 / Salesforce）。
+  const toggleDrawerForActiveTab = useCallback(async (drawerView?: "salesforce" | "mysql-ddl" | "mysql-fields") => {
     if (!activeTab || !selectedSourceId) return;
     const isMysqlSource = (selectedSourceType || "salesforce").toLowerCase() === "mysql";
+    // 目标视图推导：MySQL 默认 DDL，Salesforce 固定复合抽屉。
+    const targetDrawerView = isMysqlSource
+      ? drawerView === "mysql-fields"
+        ? "mysql-fields"
+        : "mysql-ddl"
+      : "salesforce";
+    // 兼容历史数据：旧快照缺少 drawerView 时按数据源回退默认值。
+    const currentDrawerView = activeTab.drawerView || (isMysqlSource ? "mysql-ddl" : "salesforce");
 
-    const nextOpen = !activeTab.showDrawer;
-    if (!nextOpen) {
-      patchTab(activeTab.objectName, (item) => ({ ...item, showDrawer: false }));
+    // 点击同一个按钮时直接关闭；点击另一个按钮时保持打开并切换抽屉内容。
+    if (activeTab.showDrawer && currentDrawerView === targetDrawerView) {
+      patchTab(activeTab.objectName, (item) => ({ ...item, showDrawer: false, drawerView: targetDrawerView }));
       return;
     }
 
-    if (isMysqlSource) {
-      patchTab(activeTab.objectName, (item) => ({ ...item, showDrawer: true }));
+    if (targetDrawerView === "mysql-ddl") {
+      patchTab(activeTab.objectName, (item) => ({ ...item, showDrawer: true, drawerView: targetDrawerView }));
       const ddlState = mysqlDdlMap[activeTab.objectName];
       if (!ddlState?.loading && !ddlState?.data) {
         await loadMysqlDdl(activeTab.objectName);
@@ -338,12 +348,13 @@ export function useQueryPanelRuntime({
       return;
     }
 
+    // MySQL 字段抽屉与 Salesforce 抽屉都依赖 describe 字段元数据。
     if (activeTab.describe) {
-      patchTab(activeTab.objectName, (item) => ({ ...item, showDrawer: true }));
+      patchTab(activeTab.objectName, (item) => ({ ...item, showDrawer: true, drawerView: targetDrawerView }));
       return;
     }
 
-    patchTab(activeTab.objectName, (item) => ({ ...item, showDrawer: true, loading: true }));
+    patchTab(activeTab.objectName, (item) => ({ ...item, showDrawer: true, drawerView: targetDrawerView, loading: true }));
     try {
       const describe = await api.describeObject(selectedSourceId, activeTab.objectName);
       const visibility = await loadColumnVisibilityFromDb(selectedSourceId, activeTab.objectName, describe);
@@ -351,6 +362,7 @@ export function useQueryPanelRuntime({
         ...item,
         describe,
         columnVisibility: visibility,
+        drawerView: targetDrawerView,
         loading: false
       }));
     } catch (error) {

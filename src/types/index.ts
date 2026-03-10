@@ -72,6 +72,9 @@ export type ObjectDdl = {
   constraintDdls: string[];
 };
 
+// Query 右侧抽屉视图类型：按数据源区分 DDL、字段以及 Salesforce 复合抽屉。
+export type QueryDrawerView = "salesforce" | "mysql-ddl" | "mysql-fields";
+
 // 数据源新增/更新负载。
 export type SourceUpsertPayload = {
   name: string;
@@ -141,6 +144,8 @@ export type TabState = {
   soqlDraft: string;
   showQueryBar: boolean;
   showDrawer: boolean;
+  // 抽屉当前视图：MySQL 可在 DDL / 字段间切换，Salesforce 固定为复合抽屉。
+  drawerView: QueryDrawerView;
   showLogs: boolean;
   logs: TabLog[];
   columnVisibility: Record<string, boolean>;
