@@ -1,12 +1,13 @@
 use chrono::Utc;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::error::AppError;
 use crate::models::{
     CachedObjects, SalesforceObject, SalesforceSource, SourceUpsertPayload, SystemLogEntry,
-    SystemLogPage, TerminalCommandGroup, TerminalCommandItem, TerminalCommandUpsertPayload,
+    SystemLogPage, TerminalCommandGroup, TerminalCommandItem, TerminalCommandReorderPayload,
+    TerminalCommandUpsertPayload,
 };
 
 /// 初始化数据库表结构。
@@ -289,6 +290,42 @@ fn next_terminal_command_sort_order(
     Ok(max_sort_order.unwrap_or(0) + 1)
 }
 
+/// 归一化单个命令组内的命令序号，确保从 1 开始连续递增。
+fn normalize_terminal_command_sort_orders(
+    connection: &Connection,
+    group_id: &str,
+) -> Result<(), AppError> {
+    let mut statement = connection.prepare(
+        "SELECT id, sort_order, created_at
+         FROM terminal_commands
+         WHERE group_id = ?1
+         ORDER BY sort_order ASC, created_at ASC, id ASC",
+    )?;
+
+    let rows = statement.query_map([group_id], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+
+    for (index, row) in rows.enumerate() {
+        let (command_id, current_sort_order, _) = row?;
+        let expected_sort_order = (index + 1) as i64;
+        if current_sort_order == expected_sort_order {
+            continue;
+        }
+
+        connection.execute(
+            "UPDATE terminal_commands SET sort_order = ?2 WHERE id = ?1 AND group_id = ?3",
+            params![command_id, expected_sort_order, group_id],
+        )?;
+    }
+
+    Ok(())
+}
+
 /// 读取全局终端命令组（含命令列表）。
 pub fn list_terminal_command_groups(connection: &Connection) -> Result<Vec<TerminalCommandGroup>, AppError> {
     let mut group_statement = connection.prepare(
@@ -538,6 +575,66 @@ pub fn delete_terminal_command(
         "UPDATE terminal_command_groups SET updated_at = ?2 WHERE id = ?1",
         params![normalized_group_id, now],
     )?;
+    normalize_terminal_command_sort_orders(connection, normalized_group_id)?;
+    Ok(())
+}
+
+/// 调整单个命令组内的命令排序。
+pub fn reorder_terminal_commands(
+    connection: &Connection,
+    payload: &TerminalCommandReorderPayload,
+) -> Result<(), AppError> {
+    let normalized_group_id = payload.group_id.trim();
+    if normalized_group_id.is_empty() {
+        return Err(AppError::Biz("groupId 不能为空".to_string()));
+    }
+
+    let normalized_command_ids: Vec<String> = payload
+        .command_ids
+        .iter()
+        .map(|command_id| command_id.trim().to_string())
+        .filter(|command_id| !command_id.is_empty())
+        .collect();
+    if normalized_command_ids.is_empty() {
+        return Err(AppError::Biz("commandIds 不能为空".to_string()));
+    }
+
+    let mut statement = connection.prepare(
+        "SELECT id
+         FROM terminal_commands
+         WHERE group_id = ?1
+         ORDER BY sort_order ASC, created_at ASC, id ASC",
+    )?;
+    let existing_command_ids: Vec<String> = statement
+        .query_map([normalized_group_id], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    if existing_command_ids.len() != normalized_command_ids.len() {
+        return Err(AppError::Biz("命令排序列表与当前分组命令数量不一致".to_string()));
+    }
+
+    let existing_command_id_set: HashSet<String> = existing_command_ids.into_iter().collect();
+    let submitted_command_id_set: HashSet<String> = normalized_command_ids.iter().cloned().collect();
+    if existing_command_id_set.len() != normalized_command_ids.len()
+        || submitted_command_id_set.len() != normalized_command_ids.len()
+        || existing_command_id_set != submitted_command_id_set
+    {
+        return Err(AppError::Biz("命令排序列表无效或包含非当前分组命令".to_string()));
+    }
+
+    for (index, command_id) in normalized_command_ids.iter().enumerate() {
+        connection.execute(
+            "UPDATE terminal_commands SET sort_order = ?3 WHERE id = ?1 AND group_id = ?2",
+            params![command_id, normalized_group_id, (index + 1) as i64],
+        )?;
+    }
+
+    let now = Utc::now().to_rfc3339();
+    connection.execute(
+        "UPDATE terminal_command_groups SET updated_at = ?2 WHERE id = ?1",
+        params![normalized_group_id, now],
+    )?;
+    normalize_terminal_command_sort_orders(connection, normalized_group_id)?;
     Ok(())
 }
 

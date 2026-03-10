@@ -19,7 +19,8 @@ use crate::models::{
     CliPathStatus, CurrentUserContext, LlmSettings, LlmSettingsView, ObjectDdl, ObjectDescribe,
     QueryResult, RecordMutationPayload, RecordSavePayload, RecordUpdatePayload, SalesforceObject,
     SalesforceSource, SaveLlmSettingsPayload, SourceUpsertPayload, SystemLogPage,
-    TerminalCommandGroup, TerminalCommandItem, TerminalCommandUpsertPayload,
+    TerminalCommandGroup, TerminalCommandItem, TerminalCommandReorderPayload,
+    TerminalCommandUpsertPayload,
 };
 use crate::providers::provider_for_source;
 use crate::sf_cli;
@@ -2516,6 +2517,28 @@ pub fn delete_terminal_command(
         &normalized_command_id,
     )
     .map_err(AppError::to_string_error)
+}
+
+/// 调整终端命令排序。
+#[tauri::command]
+pub fn reorder_terminal_commands(
+    state: State<'_, AppState>,
+    payload: TerminalCommandReorderPayload,
+) -> Result<(), String> {
+    let normalized_group_id = payload.group_id.trim().to_string();
+    if normalized_group_id.is_empty() {
+        return Err("groupId 不能为空".to_string());
+    }
+
+    if payload.command_ids.is_empty() {
+        return Err("commandIds 不能为空".to_string());
+    }
+
+    let connection = state
+        .db
+        .lock()
+        .map_err(|error| format!("Database lock failed: {error}"))?;
+    db::reorder_terminal_commands(&connection, &payload).map_err(AppError::to_string_error)
 }
 
 /// 打开终端会话：每个前端 Tab 对应一个系统终端进程。

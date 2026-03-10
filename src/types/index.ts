@@ -325,3 +325,9 @@ export type TerminalCommandUpsertPayload = {
   command: string;
   description: string;
 };
+
+// 终端命令排序载荷：按组内最新顺序提交命令 ID 列表。
+export type TerminalCommandReorderPayload = {
+  groupId: string;
+  commandIds: string[];
+};

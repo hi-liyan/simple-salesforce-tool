@@ -235,6 +235,15 @@ pub struct TerminalCommandUpsertPayload {
     pub description: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalCommandReorderPayload {
+    /// 命令组 ID。
+    pub group_id: String,
+    /// 组内命令 ID 顺序列表。
+    pub command_ids: Vec<String>,
+}
+
 /// 对象列表缓存行（SQLite 内部结构）。
 #[derive(Debug)]
 pub struct CachedObjects {

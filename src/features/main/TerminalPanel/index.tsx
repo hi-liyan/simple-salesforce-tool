@@ -1,5 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type MouseEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Editor from "@monaco-editor/react";
+import {
+  closestCenter,
+  DndContext,
+  type DragEndEvent,
+  type DragStartEvent,
+  PointerSensor,
+  useSensor,
+  useSensors
+} from "@dnd-kit/core";
+import { arrayMove, SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { listen } from "@tauri-apps/api/event";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
@@ -8,10 +19,9 @@ import {
   ChevronDown,
   ChevronRight,
   Clipboard,
-  Copy,
   FolderPlus,
+  GripVertical,
   PencilLine,
-  Play,
   Plus,
   RefreshCw,
   Search,
@@ -69,6 +79,14 @@ type EditingCommandTarget = {
   commandId: string;
 };
 
+// 待确认删除的命令目标。
+type DeleteCommandTarget = {
+  // 所属命令组 ID。
+  groupId: string;
+  // 待删除命令实体。
+  command: TerminalCommandItem;
+};
+
 // 命令编辑表单。
 type CommandEditorForm = {
   // 目标命令组 ID。
@@ -100,6 +118,109 @@ function createFormFromCommand(groupId: string, command: TerminalCommandItem): C
     command: command.command
   };
 }
+
+function SortableCommandCard({
+  groupId,
+  commandItem,
+  searchMode,
+  isActiveDrag,
+  commandLibrarySubmitting,
+  onEdit,
+  onDelete,
+  onPaste,
+  onContextMenu
+}: SortableCommandCardProps) {
+  // 绑定 sortable：提供容器引用、拖拽手柄监听和位移动画。
+  const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({
+    id: commandItem.id,
+    disabled: searchMode || commandLibrarySubmitting
+  });
+  // 将 dnd-kit transform 映射为 CSS transform，驱动排序动画。
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`rounded-lg border bg-base-100 p-2 transition-colors hover:border-primary/45 ${
+        isDragging || isActiveDrag ? "border-primary opacity-85" : "border-base-300"
+      }`}
+      onContextMenu={(event) => {
+        onContextMenu(event, groupId, commandItem);
+      }}
+    >
+      {/* 命令标题与操作。 */}
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-start gap-2">
+          {/* 拖拽手柄：未搜索时可在组内排序。 */}
+          {!searchMode && (
+            <button
+              ref={setActivatorNodeRef}
+              type="button"
+              className="mt-0.5 cursor-grab text-neutral/35 active:cursor-grabbing"
+              title="拖动排序"
+              disabled={commandLibrarySubmitting}
+              {...attributes}
+              {...listeners}
+            >
+              <GripVertical size={14} />
+            </button>
+          )}
+          <div className="min-w-0">
+            <p className="truncate text-[12px] font-semibold text-neutral">{commandItem.name}</p>
+            {commandItem.description && <p className="mt-0.5 line-clamp-2 text-[11px] text-neutral/65">{commandItem.description}</p>}
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <button
+            className="btn btn-ghost btn-xs"
+            title="粘贴到当前终端"
+            onClick={() => {
+              onPaste(commandItem);
+            }}
+          >
+            <Clipboard size={12} />
+          </button>
+          <button className="btn btn-ghost btn-xs" title="编辑命令" onClick={() => onEdit(groupId, commandItem)}>
+            <PencilLine size={12} />
+          </button>
+          <button className="btn btn-ghost btn-xs text-error" title="删除命令" onClick={() => onDelete(groupId, commandItem)}>
+            <Trash2 size={12} />
+          </button>
+        </div>
+      </div>
+
+      {/* 命令正文。 */}
+      <p className="mt-2 whitespace-pre-wrap break-all rounded-md bg-neutral/95 px-2 py-1 font-mono text-[11px] text-base-100">
+        {commandItem.command}
+      </p>
+    </div>
+  );
+}
+
+type SortableCommandCardProps = {
+  // 所属命令组 ID。
+  groupId: string;
+  // 当前命令实体。
+  commandItem: TerminalCommandItem;
+  // 是否处于搜索态：搜索时禁用排序。
+  searchMode: boolean;
+  // 当前是否处于拖拽激活态。
+  isActiveDrag: boolean;
+  // 是否正在提交命令库写操作。
+  commandLibrarySubmitting: boolean;
+  // 打开编辑面板。
+  onEdit: (groupId: string, command: TerminalCommandItem) => void;
+  // 打开删除确认弹窗。
+  onDelete: (groupId: string, command: TerminalCommandItem) => void;
+  // 粘贴到当前终端。
+  onPaste: (command: TerminalCommandItem) => void;
+  // 打开右键菜单。
+  onContextMenu: (event: MouseEvent<HTMLDivElement>, groupId: string, command: TerminalCommandItem) => void;
+};
 
 // TerminalPanel：左侧命令库 + 右侧真实终端工作区。
 export function TerminalPanel({ visible = true }: TerminalPanelProps) {
@@ -134,6 +255,10 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
   const [editorMode, setEditorMode] = useState<CommandEditorMode>("closed");
   // 编辑态命令目标。
   const [editingTarget, setEditingTarget] = useState<EditingCommandTarget | null>(null);
+  // 当前拖拽中的命令 ID：用于高亮排序项。
+  const [activeDragCommandId, setActiveDragCommandId] = useState("");
+  // 删除确认弹窗目标。
+  const [deleteCommandTarget, setDeleteCommandTarget] = useState<DeleteCommandTarget | null>(null);
   // 新命令组名称输入值。
   const [newGroupName, setNewGroupName] = useState("");
   // 命令编辑表单。
@@ -147,8 +272,8 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
   const terminalRuntimeByTabIdRef = useRef<Record<string, TerminalRuntime>>({});
   // 已经打开后端会话的 Tab 集合。
   const openedSessionTabIdRef = useRef<Set<string>>(new Set());
-  // 等待会话建立后自动执行的命令（用于“复制到新终端并执行”）。
-  const pendingRunCommandByTabIdRef = useRef<Record<string, string>>({});
+  // 等待会话建立后自动粘贴的命令（用于“粘贴到当前终端”兜底）。
+  const pendingPasteCommandByTabIdRef = useRef<Record<string, string>>({});
   // 上一次渲染时的 Tab ID 集合：用于回收已关闭 Tab 资源。
   const previousTabIdsRef = useRef<string[]>([]);
   // 命令库请求序号：用于丢弃过期响应。
@@ -190,6 +315,15 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
   const canSubmitCommandForm = useMemo(
     () => Boolean(commandForm.groupId && commandForm.name.trim() && commandForm.command.trim()),
     [commandForm]
+  );
+
+  // dnd 传感器：设置轻微拖拽距离，减少点按按钮时误触排序。
+  const dndSensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 6
+      }
+    })
   );
 
   // 拉取全局命令库。
@@ -384,11 +518,11 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
           }
         }));
 
-        // 若该 Tab 有待执行命令，会话建立后立即执行。
-        const pending = pendingRunCommandByTabIdRef.current[tab.id]?.trim();
+        // 若该 Tab 有待粘贴命令，会话建立后立即写入终端输入区。
+        const pending = pendingPasteCommandByTabIdRef.current[tab.id];
         if (pending) {
-          await api.writeTerminalInput(tab.id, `${pending}\r`);
-          delete pendingRunCommandByTabIdRef.current[tab.id];
+          await api.writeTerminalInput(tab.id, pending);
+          delete pendingPasteCommandByTabIdRef.current[tab.id];
         }
       } catch (error) {
         setProcessMetaByTabId((state) => ({
@@ -422,7 +556,7 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
       }
       openedSessionTabIdRef.current.delete(tabId);
       delete terminalContainerByTabIdRef.current[tabId];
-      delete pendingRunCommandByTabIdRef.current[tabId];
+      delete pendingPasteCommandByTabIdRef.current[tabId];
       setProcessMetaByTabId((state) => {
         const next = { ...state };
         delete next[tabId];
@@ -637,21 +771,38 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
     }
   }
 
-  // 删除命令。
-  async function handleDeleteCommand(groupId: string, commandId: string) {
+  // 打开删除确认弹窗。
+  function openDeleteCommandDialog(groupId: string, command: TerminalCommandItem) {
+    setDeleteCommandTarget({ groupId, command });
+    setCommandContextMenu(null);
+  }
+
+  // 关闭删除确认弹窗。
+  function closeDeleteCommandDialog() {
+    setDeleteCommandTarget(null);
+  }
+
+  // 确认删除命令。
+  async function handleConfirmDeleteCommand() {
+    if (!deleteCommandTarget) return;
+
+    setCommandLibrarySubmitting(true);
     try {
-      await api.deleteTerminalCommand(groupId, commandId);
+      await api.deleteTerminalCommand(deleteCommandTarget.groupId, deleteCommandTarget.command.id);
+      closeDeleteCommandDialog();
       await loadCommandLibrary({ keepSelection: true });
     } catch (error) {
       window.alert(`删除命令失败：${String(error)}`); // 避免删除失败后 UI 与数据库状态不一致。
+    } finally {
+      setCommandLibrarySubmitting(false);
     }
   }
 
-  // 复制命令到当前终端并立即执行。
-  async function handleRunInCurrentTerminal(command: TerminalCommandItem) {
+  // 将命令粘贴到当前终端输入区。
+  async function handlePasteToCurrentTerminal(command: TerminalCommandItem) {
     let targetTab: TerminalTab | undefined = activeTab;
     if (!targetTab) {
-      // 当前没有可用终端时自动创建新 Tab，保证“当前终端执行”可用。
+      // 当前没有可用终端时自动创建新 Tab，保证“粘贴到当前终端”可用。
       const createdTabId = createTerminalTab(undefined, command.name ? `Terminal · ${command.name}` : undefined);
       if (!createdTabId) return;
       targetTab = useTerminalStore.getState().tabs.find((item) => item.id === createdTabId);
@@ -660,22 +811,65 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
 
     // 若会话尚未建立，则先缓存命令并触发建立。
     if (!openedSessionTabIdRef.current.has(targetTab.id)) {
-      pendingRunCommandByTabIdRef.current[targetTab.id] = command.command;
+      pendingPasteCommandByTabIdRef.current[targetTab.id] = command.command;
       await ensureBackendSession(targetTab);
       setCommandContextMenu(null);
       return;
     }
 
-    await api.writeTerminalInput(targetTab.id, `${command.command}\r`);
+    await api.writeTerminalInput(targetTab.id, command.command);
     setCommandContextMenu(null);
   }
 
-  // 复制命令到新终端并执行。
-  function handleRunInNewTerminal(command: TerminalCommandItem) {
-    const tabId = createTerminalTab(undefined, command.name ? `Terminal · ${command.name}` : undefined);
-    if (!tabId) return;
-    pendingRunCommandByTabIdRef.current[tabId] = command.command;
-    setCommandContextMenu(null);
+  // 提交命令组内排序结果，并同步到后端维护序号。
+  async function handleReorderCommands(groupId: string, nextCommands: TerminalCommandItem[]) {
+    setCommandGroups((state) =>
+      state.map((group) => {
+        if (group.id !== groupId) return group;
+        return {
+          ...group,
+          commands: nextCommands
+        };
+      })
+    );
+
+    setCommandLibrarySubmitting(true);
+    try {
+      await api.reorderTerminalCommands({
+        groupId,
+        commandIds: nextCommands.map((command) => command.id)
+      });
+    } catch (error) {
+      window.alert(`排序命令失败：${String(error)}`); // 排序失败时回滚到后端最新状态。
+      await loadCommandLibrary({ keepSelection: true });
+    } finally {
+      setCommandLibrarySubmitting(false);
+    }
+  }
+
+  // 拖拽开始：记录当前激活命令，供 UI 高亮。
+  function handleCommandSortStart(event: DragStartEvent) {
+    setActiveDragCommandId(String(event.active.id || ""));
+  }
+
+  // 拖拽结束：计算组内新顺序并持久化到后端。
+  function handleCommandSortEnd(groupId: string, commands: TerminalCommandItem[], event: DragEndEvent) {
+    const activeId = String(event.active.id || "");
+    const overId = String(event.over?.id || "");
+    setActiveDragCommandId("");
+    if (!activeId || !overId || activeId === overId) return;
+
+    const oldIndex = commands.findIndex((command) => command.id === activeId);
+    const newIndex = commands.findIndex((command) => command.id === overId);
+    if (oldIndex < 0 || newIndex < 0) return;
+
+    const nextCommands = arrayMove(commands, oldIndex, newIndex);
+    void handleReorderCommands(groupId, nextCommands);
+  }
+
+  // 拖拽取消：清理激活态。
+  function handleCommandSortCancel() {
+    setActiveDragCommandId("");
   }
 
   // 新建空终端并立即激活。
@@ -943,66 +1137,75 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
                   <div className="space-y-2 p-2">
                     {group.commands.length === 0 && <div className="px-2 py-2 text-[12px] text-neutral/55">当前分组还没有命令</div>}
 
-                    {group.commands.map((commandItem) => (
-                      // 单条命令卡片。
-                      <div
-                        key={commandItem.id}
-                        className="rounded-lg border border-base-300 bg-base-100 p-2 transition-colors hover:border-primary/45"
-                        onContextMenu={(event) => {
-                          event.preventDefault(); // 阻止系统默认右键菜单。
-                          setSelectedGroupId(group.id);
-                          setCommandContextMenu({
-                            x: event.clientX,
-                            y: event.clientY,
-                            groupId: group.id,
-                            command: commandItem
-                          });
-                        }}
-                      >
-                        {/* 命令标题与操作。 */}
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="min-w-0">
-                            <p className="truncate text-[12px] font-semibold text-neutral">{commandItem.name}</p>
-                            {commandItem.description && <p className="mt-0.5 line-clamp-2 text-[11px] text-neutral/65">{commandItem.description}</p>}
-                          </div>
-                          <div className="flex shrink-0 items-center gap-1">
-                            <button
-                              className="btn btn-ghost btn-xs"
-                              title="当前终端执行"
-                              onClick={() => {
-                                void handleRunInCurrentTerminal(commandItem);
-                              }}
-                            >
-                              <Play size={12} />
-                            </button>
-                            <button className="btn btn-ghost btn-xs" title="新终端执行" onClick={() => handleRunInNewTerminal(commandItem)}>
-                              <Copy size={12} />
-                            </button>
-                            <button
-                              className="btn btn-ghost btn-xs"
-                              title="编辑命令"
-                              onClick={() => openEditCommandPanel(group.id, commandItem)}
-                            >
-                              <PencilLine size={12} />
-                            </button>
-                            <button
-                              className="btn btn-ghost btn-xs text-error"
-                              title="删除命令"
-                              onClick={() => {
-                                void handleDeleteCommand(group.id, commandItem.id);
-                              }}
-                            >
-                              <Trash2 size={12} />
-                            </button>
-                          </div>
-                        </div>
-
-                        {/* 命令正文。 */}
-                        <p className="mt-2 whitespace-pre-wrap break-all rounded-md bg-neutral/95 px-2 py-1 font-mono text-[11px] text-base-100">
-                          {commandItem.command}
-                        </p>
+                    {searchMode ? (
+                      <div className="space-y-2">
+                        {group.commands.map((commandItem) => (
+                          <SortableCommandCard
+                            key={commandItem.id}
+                            groupId={group.id}
+                            commandItem={commandItem}
+                            searchMode={searchMode}
+                            isActiveDrag={false}
+                            commandLibrarySubmitting={commandLibrarySubmitting}
+                            onEdit={openEditCommandPanel}
+                            onDelete={openDeleteCommandDialog}
+                            onPaste={(command) => {
+                              void handlePasteToCurrentTerminal(command);
+                            }}
+                            onContextMenu={(event, nextGroupId, command) => {
+                              event.preventDefault(); // 阻止系统默认右键菜单。
+                              setSelectedGroupId(nextGroupId);
+                              setCommandContextMenu({
+                                x: event.clientX,
+                                y: event.clientY,
+                                groupId: nextGroupId,
+                                command
+                              });
+                            }}
+                          />
+                        ))}
                       </div>
-                    ))}
+                    ) : (
+                      <DndContext
+                        sensors={dndSensors}
+                        collisionDetection={closestCenter}
+                        onDragStart={handleCommandSortStart}
+                        onDragEnd={(event) => {
+                          handleCommandSortEnd(group.id, group.commands, event);
+                        }}
+                        onDragCancel={handleCommandSortCancel}
+                      >
+                        <SortableContext items={group.commands.map((command) => command.id)} strategy={verticalListSortingStrategy}>
+                          <div className="space-y-2">
+                            {group.commands.map((commandItem) => (
+                              <SortableCommandCard
+                                key={commandItem.id}
+                                groupId={group.id}
+                                commandItem={commandItem}
+                                searchMode={searchMode}
+                                isActiveDrag={activeDragCommandId === commandItem.id}
+                                commandLibrarySubmitting={commandLibrarySubmitting}
+                                onEdit={openEditCommandPanel}
+                                onDelete={openDeleteCommandDialog}
+                                onPaste={(command) => {
+                                  void handlePasteToCurrentTerminal(command);
+                                }}
+                                onContextMenu={(event, nextGroupId, command) => {
+                                  event.preventDefault(); // 阻止系统默认右键菜单。
+                                  setSelectedGroupId(nextGroupId);
+                                  setCommandContextMenu({
+                                    x: event.clientX,
+                                    y: event.clientY,
+                                    groupId: nextGroupId,
+                                    command
+                                  });
+                                }}
+                              />
+                            ))}
+                          </div>
+                        </SortableContext>
+                      </DndContext>
+                    )}
                   </div>
                 )}
               </div>
@@ -1099,20 +1302,15 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
           style={{ left: commandContextMenu.x, top: commandContextMenu.y }}
           onClick={(event) => event.stopPropagation()}
         >
-          {/* 菜单项：在当前终端执行。 */}
+          {/* 菜单项：粘贴到当前终端。 */}
           <button
             className="btn btn-ghost btn-xs w-full justify-start"
             onClick={() => {
-              void handleRunInCurrentTerminal(commandContextMenu.command);
+              void handlePasteToCurrentTerminal(commandContextMenu.command);
             }}
           >
-            <Play size={12} />
-            在当前终端执行
-          </button>
-          {/* 菜单项：在新终端执行。 */}
-          <button className="btn btn-ghost btn-xs w-full justify-start" onClick={() => handleRunInNewTerminal(commandContextMenu.command)}>
-            <Copy size={12} />
-            在新终端执行
+            <Clipboard size={12} />
+            粘贴到当前终端
           </button>
           {/* 菜单项：编辑命令。 */}
           <button
@@ -1129,13 +1327,40 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
           <button
             className="btn btn-ghost btn-xs w-full justify-start text-error"
             onClick={() => {
-              void handleDeleteCommand(commandContextMenu.groupId, commandContextMenu.command.id);
-              setCommandContextMenu(null);
+              openDeleteCommandDialog(commandContextMenu.groupId, commandContextMenu.command);
             }}
           >
             <Trash2 size={12} />
             删除命令
           </button>
+        </div>
+      )}
+
+      {/* 删除确认弹窗。 */}
+      {deleteCommandTarget && (
+        <div className="modal modal-open">
+          <div className="modal-box">
+            {/* 弹窗标题。 */}
+            <h3 className="text-base font-semibold">确认删除命令</h3>
+            {/* 删除说明。 */}
+            <p className="mt-2 text-sm text-neutral/70">
+              确定删除命令“{deleteCommandTarget.command.name}”吗？删除后无法恢复。
+            </p>
+            {/* 命令预览。 */}
+            <div className="mt-3 rounded-lg bg-base-200/70 px-3 py-2 text-[12px] text-neutral/75">
+              <p className="font-medium text-neutral">{deleteCommandTarget.command.name}</p>
+              <p className="mt-1 whitespace-pre-wrap break-all font-mono text-[11px]">{deleteCommandTarget.command.command}</p>
+            </div>
+            {/* 弹窗底部操作。 */}
+            <div className="modal-action">
+              <button className="btn btn-outline" onClick={closeDeleteCommandDialog} disabled={commandLibrarySubmitting}>
+                取消
+              </button>
+              <button className="btn btn-error" onClick={() => void handleConfirmDeleteCommand()} disabled={commandLibrarySubmitting}>
+                {commandLibrarySubmitting ? "删除中..." : "确认删除"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
