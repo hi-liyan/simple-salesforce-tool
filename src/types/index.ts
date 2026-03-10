@@ -5,6 +5,8 @@ export type DataSourceType = "salesforce" | "mysql";
 export type SalesforceSource = {
   id: string;
   name: string;
+  // 数据源序号：用于稳定排序与拖拽重排。
+  sortOrder: number;
   // 数据源类型：用于后续按类型路由不同 provider。
   sourceType: DataSourceType | string;
   // 通用配置 JSON：为未来关系型数据库扩展预留。

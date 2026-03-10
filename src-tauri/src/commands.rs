@@ -578,6 +578,19 @@ pub fn create_source(
     db::create_source(&connection, payload).map_err(AppError::to_string_error)
 }
 
+/// 按前端传入顺序重排数据源序号。
+#[tauri::command]
+pub fn reorder_sources(
+    state: State<'_, AppState>,
+    ordered_ids: Vec<String>,
+) -> Result<Vec<SalesforceSource>, String> {
+    let connection = state
+        .db
+        .lock()
+        .map_err(|error| format!("Database lock failed: {error}"))?;
+    db::reorder_sources(&connection, &ordered_ids).map_err(AppError::to_string_error)
+}
+
 /// 测试数据源连接可用性（不写库）。
 #[tauri::command]
 pub async fn test_source_connection(
@@ -588,6 +601,7 @@ pub async fn test_source_connection(
     let probe_source = SalesforceSource {
         id: "probe".to_string(),
         name: payload.name.clone(),
+        sort_order: 0,
         source_type: payload.source_type.clone(),
         config_json: payload.config_json.clone(),
         instance_url: payload.instance_url.clone(),
@@ -967,7 +981,8 @@ pub async fn refresh_objects(
         // 强制刷新成功后覆盖对象列表缓存，并失效该数据源的对象级元数据缓存。
         db::write_object_cache(&connection, &source_id, &objects)
             .map_err(AppError::to_string_error)?;
-        db::clear_source_metadata_cache(&connection, &source_id).map_err(AppError::to_string_error)?;
+        db::clear_source_metadata_cache(&connection, &source_id)
+            .map_err(AppError::to_string_error)?;
     }
 
     write_system_log(
@@ -1453,8 +1468,13 @@ pub async fn get_object_ddl(
             .db
             .lock()
             .map_err(|error| format!("Database lock failed: {error}"))?;
-        db::read_source_metadata_cache(&connection, &source_id, METADATA_TYPE_OBJECT_DDL, Some(&object_name))
-            .map_err(AppError::to_string_error)?
+        db::read_source_metadata_cache(
+            &connection,
+            &source_id,
+            METADATA_TYPE_OBJECT_DDL,
+            Some(&object_name),
+        )
+        .map_err(AppError::to_string_error)?
     };
     if let Some(payload) = cached_ddl {
         if let Ok(ddl) = serde_json::from_str::<ObjectDdl>(&payload) {
@@ -1469,7 +1489,8 @@ pub async fn get_object_ddl(
             .map_err(|error| format!("Database lock failed: {error}"))?;
         db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
     };
-    let provider = provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
+    let provider =
+        provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
     let log_category = if source.is_salesforce() {
         "SALESFORCE_API"
     } else {

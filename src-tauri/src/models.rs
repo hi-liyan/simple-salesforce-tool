@@ -9,6 +9,9 @@ pub struct SalesforceSource {
     pub id: String,
     /// 数据源显示名称（用于前端下拉与提示）。
     pub name: String,
+    /// 数据源序号（用于稳定排序与拖拽重排）。
+    #[serde(default)]
+    pub sort_order: i64,
     /// 数据源类型（如 salesforce/mysql）。
     #[serde(default = "default_source_type")]
     pub source_type: String,

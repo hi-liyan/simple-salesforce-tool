@@ -57,6 +57,7 @@ export const api = {
   testSourceConnection: (payload: SourceUpsertPayload) => invokeApi<void>("test_source_connection", { payload }),
   updateSource: (id: string, payload: SourceUpsertPayload) =>
     invokeApi<SalesforceSource>("update_source", { id, payload }),
+  reorderSources: (orderedIds: string[]) => invokeApi<SalesforceSource[]>("reorder_sources", { orderedIds }),
   deleteSource: (id: string) => invokeApi<void>("delete_source", { id }),
   getColumnVisibility: (sourceId: string, objectName: string) =>
     invokeApi<Record<string, boolean>>("get_column_visibility", { sourceId, objectName }),

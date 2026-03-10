@@ -62,6 +62,7 @@ fn main() {
             commands::open_external_url,
             commands::list_system_logs,
             commands::create_source,
+            commands::reorder_sources,
             commands::test_source_connection,
             commands::update_source,
             commands::delete_source,
