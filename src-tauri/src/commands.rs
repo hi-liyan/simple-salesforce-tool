@@ -1,6 +1,8 @@
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
+#[cfg(target_os = "windows")]
+use std::process::Command as StdCommand;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::Emitter;
@@ -20,6 +22,7 @@ use crate::models::{
 };
 use crate::providers::provider_for_source;
 use crate::sf_cli;
+use crate::terminal::{self as terminal_runtime, TerminalSessionInfo, TerminalShellOption};
 
 /// 写系统日志的统一入口。
 /// 说明:日志写入失败不应影响主流程,因此这里吞掉错误。
@@ -51,6 +54,8 @@ fn write_system_log(
 
 const SF_CLI_PATH_SETTING_KEY: &str = "sf_cli_path";
 const LLM_SETTINGS_KEY: &str = "llm.settings.openai";
+const TERMINAL_SHELL_COMMAND_KEY: &str = "terminal.shell.command";
+const LEGACY_TERMINAL_SHELL_PREFERENCE_KEY: &str = "terminal.shell.preference";
 const METADATA_TYPE_OBJECT_DESCRIBE: &str = "object_describe";
 const METADATA_TYPE_OBJECT_DDL: &str = "object_ddl";
 
@@ -2419,6 +2424,148 @@ const TOOL_SEARCH_OBJECT_FIELDS: &str = "search_salesforce_object_fields";
 const TOOL_GET_FIELD_METADATA: &str = "get_salesforce_field_metadata";
 /// LLM 工具:获取对象关系图。
 const TOOL_GET_OBJECT_RELATIONSHIP_GRAPH: &str = "get_salesforce_object_relationship_graph";
+
+/// 打开终端会话：每个前端 Tab 对应一个系统终端进程。
+#[tauri::command]
+pub fn open_terminal_session(
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+    tab_id: String,
+    cols: Option<u16>,
+    rows: Option<u16>,
+    initial_command: Option<String>,
+) -> Result<TerminalSessionInfo, String> {
+    let normalized_tab_id = tab_id.trim();
+    if normalized_tab_id.is_empty() {
+        return Err("Tab ID 不能为空".to_string());
+    }
+    // 读取终端首选 shell 命令配置（动态路径，不限制固定版本）。
+    let preferred_shell_command = read_terminal_shell_command(&state);
+
+    terminal_runtime::open_terminal_session(
+        &app_handle,
+        &state.terminal_sessions,
+        normalized_tab_id,
+        cols.unwrap_or(120),
+        rows.unwrap_or(36),
+        preferred_shell_command.as_deref(),
+        initial_command.as_deref(),
+    )
+}
+
+/// 列出当前系统可用终端 Shell（用于设置页下拉选择）。
+#[tauri::command]
+pub fn list_available_terminal_shells() -> Result<Vec<TerminalShellOption>, String> {
+    Ok(terminal_runtime::list_available_terminal_shells())
+}
+
+/// 向终端会话写入输入（真实终端键盘输入透传）。
+#[tauri::command]
+pub fn write_terminal_input(
+    state: State<'_, AppState>,
+    tab_id: String,
+    input: String,
+) -> Result<(), String> {
+    let normalized_tab_id = tab_id.trim();
+    if normalized_tab_id.is_empty() {
+        return Err("Tab ID 不能为空".to_string());
+    }
+    terminal_runtime::write_terminal_input(&state.terminal_sessions, normalized_tab_id, &input)
+}
+
+/// 调整终端会话尺寸（与 xterm cols/rows 同步）。
+#[tauri::command]
+pub fn resize_terminal_session(
+    state: State<'_, AppState>,
+    tab_id: String,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String> {
+    let normalized_tab_id = tab_id.trim();
+    if normalized_tab_id.is_empty() {
+        return Err("Tab ID 不能为空".to_string());
+    }
+    terminal_runtime::resize_terminal_session(&state.terminal_sessions, normalized_tab_id, cols, rows)
+}
+
+/// 关闭终端会话并终止对应进程。
+#[tauri::command]
+pub fn close_terminal_session(state: State<'_, AppState>, tab_id: String) -> Result<(), String> {
+    let normalized_tab_id = tab_id.trim();
+    if normalized_tab_id.is_empty() {
+        return Err("Tab ID 不能为空".to_string());
+    }
+    terminal_runtime::close_terminal_session(&state.terminal_sessions, normalized_tab_id)
+}
+
+/// 以管理员身份打开系统终端（仅 Windows）。
+/// 说明：管理员进程受 UAC 隔离，无法附着到当前 PTY Tab，因此以新窗口方式打开。
+#[tauri::command]
+pub fn open_elevated_terminal(_state: State<'_, AppState>) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        // 管理员终端同样遵循终端首选 shell 配置。
+        let elevated_program = read_terminal_shell_command(&_state)
+            .unwrap_or_else(|| "pwsh.exe".to_string());
+        let escaped_program = elevated_program.replace('\'', "''");
+        let elevate_command = format!(
+            "Start-Process -FilePath '{}' -Verb RunAs -ArgumentList '-NoExit','-NoLogo'",
+            escaped_program
+        );
+        let output = StdCommand::new("powershell.exe")
+            .arg("-NoProfile")
+            .arg("-ExecutionPolicy")
+            .arg("Bypass")
+            .arg("-Command")
+            .arg(elevate_command)
+            .output()
+            .map_err(|error| format!("拉起管理员终端失败: {error}"))?;
+
+        if output.status.success() {
+            return Ok(());
+        }
+
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        return Err(format!(
+            "拉起管理员终端失败，exit={:?}, stderr={stderr}, stdout={stdout}",
+            output.status.code()
+        ));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("当前平台不支持“以管理员身份打开终端”".to_string())
+    }
+}
+
+/// 读取终端 shell 命令配置；兼容旧版 `terminal.shell.preference`（pwsh/powershell）。
+fn read_terminal_shell_command(state: &State<'_, AppState>) -> Option<String> {
+    let connection = state.db.lock().ok()?;
+    // 优先读取新版完整命令配置。
+    let command = db::read_app_setting(&connection, TERMINAL_SHELL_COMMAND_KEY)
+        .ok()
+        .flatten()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    if command.is_some() {
+        return command;
+    }
+
+    // 回退读取旧版偏好配置，避免历史用户升级后失效。
+    let legacy = db::read_app_setting(&connection, LEGACY_TERMINAL_SHELL_PREFERENCE_KEY)
+        .ok()
+        .flatten()
+        .map(|value| value.trim().to_lowercase())
+        .filter(|value| !value.is_empty())?;
+    if legacy == "powershell" {
+        return Some("powershell.exe".to_string());
+    }
+    if legacy == "pwsh" {
+        return Some("pwsh.exe".to_string());
+    }
+    Some(legacy)
+}
 
 /// 读取 UI 持久化状态（通用键值）。
 #[tauri::command]

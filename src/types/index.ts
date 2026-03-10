@@ -270,3 +270,31 @@ export type AiCapabilities = {
   model: string;
   tools: string[];
 };
+
+// 终端会话信息：用于 Tab 悬浮显示 PID 与命令行。
+export type TerminalSessionInfo = {
+  shellName: string;
+  shellVersion: string;
+  pid: number;
+  commandLine: string;
+};
+
+// 终端输出事件负载：后端 PTY 输出分片事件。
+export type TerminalOutputEvent = {
+  tabId: string;
+  data: string;
+};
+
+// 终端关闭事件负载：进程退出后通知前端更新状态。
+export type TerminalClosedEvent = {
+  tabId: string;
+  exitCode: number | null;
+};
+
+// 终端 Shell 选项：由后端动态探测并提供给设置页选择。
+export type TerminalShellOption = {
+  label: string;
+  command: string;
+  shellName: string;
+  shellVersion: string;
+};
