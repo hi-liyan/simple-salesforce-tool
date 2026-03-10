@@ -163,12 +163,6 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
     [commandGroups, selectedGroupId]
   );
 
-  // 命令总量：用于头部统计。
-  const totalCommandCount = useMemo(
-    () => commandGroups.reduce((total, group) => total + group.commands.length, 0),
-    [commandGroups]
-  );
-
   // 过滤后的命令组：支持按组名、命令名、描述、命令正文检索。
   const filteredGroups = useMemo(() => {
     const keyword = searchKeyword.trim().toLowerCase();
@@ -711,56 +705,33 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
       <div className="flex min-h-0 flex-col border-r border-base-300 bg-base-100">
         {/* 顶部控制区：统计、搜索、操作。 */}
         <div className="border-b border-base-300 p-3">
-          {/* 头部卡片。 */}
-          <div className="rounded-xl border border-base-300 bg-base-100 p-3 shadow-sm">
-            {/* 标题与动作。 */}
-            <div className="flex items-start justify-between gap-2">
-              {/* 左侧标题。 */}
-              <div>
-                <p className="text-[10px] uppercase tracking-[0.16em] text-primary/70">Command Library</p>
-                <h3 className="mt-1 text-[15px] font-semibold text-neutral">终端命令库</h3>
-                <p className="mt-1 text-[11px] text-neutral/70">命令组与命令存储在 SQLite 独立表。</p>
-              </div>
-              {/* 右侧按钮组。 */}
-              <div className="flex items-center gap-1">
-                <button className="btn btn-ghost btn-square btn-sm" title="刷新命令库" onClick={() => void loadCommandLibrary({ keepSelection: true })}>
-                  <RefreshCw size={14} />
-                </button>
-                <button
-                  className="btn btn-ghost btn-square btn-sm"
-                  title="新建命令组"
-                  onClick={openCreateGroupPanel}
-                  disabled={commandLibrarySubmitting}
-                >
-                  <FolderPlus size={15} />
-                </button>
-                <button
-                  className="btn btn-ghost btn-square btn-sm"
-                  title="新建命令"
-                  onClick={() => openCreateCommandPanel()}
-                  disabled={commandGroups.length === 0 || commandLibrarySubmitting}
-                >
-                  <Plus size={15} />
-                </button>
-              </div>
-            </div>
-
-            {/* 指标区。 */}
-            <div className="mt-3 grid grid-cols-2 gap-2 text-[11px]">
-              {/* 命令组数量。 */}
-              <div className="rounded-lg border border-base-300 bg-base-200/60 px-2 py-1.5">
-                <p className="text-neutral/60">命令组</p>
-                <p className="mt-0.5 text-[14px] font-semibold">{commandGroups.length}</p>
-              </div>
-              {/* 命令总量。 */}
-              <div className="rounded-lg border border-base-300 bg-base-200/60 px-2 py-1.5">
-                <p className="text-neutral/60">命令条数</p>
-                <p className="mt-0.5 text-[14px] font-semibold">{totalCommandCount}</p>
-              </div>
+          {/* 头部工具区：仅保留按钮栏与搜索栏。 */}
+          <div>
+            {/* 顶部按钮栏。 */}
+            <div className="flex items-center justify-end gap-1">
+              <button className="btn btn-ghost btn-square btn-sm" title="刷新命令库" onClick={() => void loadCommandLibrary({ keepSelection: true })}>
+                <RefreshCw size={14} />
+              </button>
+              <button
+                className="btn btn-ghost btn-square btn-sm"
+                title="新建命令组"
+                onClick={openCreateGroupPanel}
+                disabled={commandLibrarySubmitting}
+              >
+                <FolderPlus size={15} />
+              </button>
+              <button
+                className="btn btn-ghost btn-square btn-sm"
+                title="新建命令"
+                onClick={() => openCreateCommandPanel()}
+                disabled={commandGroups.length === 0 || commandLibrarySubmitting}
+              >
+                <Plus size={15} />
+              </button>
             </div>
 
             {/* 搜索输入。 */}
-            <label className="input input-bordered input-sm mt-3 flex w-full items-center gap-2">
+            <label className="input input-bordered input-sm mt-2 flex w-full items-center gap-2">
               <Search size={14} className="text-neutral/60" />
               <input
                 type="text"
@@ -769,6 +740,17 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
                 value={searchKeyword}
                 onChange={(event) => setSearchKeyword(event.target.value)}
               />
+              {/* 清空按钮：有搜索关键字时允许一键清空。 */}
+              {searchKeyword && (
+                <button
+                  type="button"
+                  className="text-neutral/50 transition-colors hover:text-neutral"
+                  title="清空搜索"
+                  onClick={() => setSearchKeyword("")}
+                >
+                  <X size={14} />
+                </button>
+              )}
             </label>
           </div>
 
@@ -945,7 +927,6 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
                     }}
                   >
                     <span className="truncate text-[12px] font-medium">{group.name}</span>
-                    <span className="text-[11px] text-neutral/60">{group.commands.length}</span>
                   </button>
                   <button
                     className="btn btn-ghost btn-xs h-6 min-h-0 px-1"
@@ -1017,7 +998,7 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
                         </div>
 
                         {/* 命令正文。 */}
-                        <p className="mt-2 line-clamp-2 whitespace-pre-wrap break-all rounded-md bg-neutral/95 px-2 py-1 font-mono text-[11px] text-base-100">
+                        <p className="mt-2 whitespace-pre-wrap break-all rounded-md bg-neutral/95 px-2 py-1 font-mono text-[11px] text-base-100">
                           {commandItem.command}
                         </p>
                       </div>
@@ -1036,6 +1017,8 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
         <div className="flex items-center border-b border-base-300">
           {/* 终端 Tab 列表。 */}
           <div className="flex min-w-0 flex-1 overflow-x-auto">
+            {/* 空态提示：无终端 Tab 时引导用户创建终端。 */}
+            {tabs.length === 0 && <span className="px-2 py-1.5 text-[12px] text-neutral/70">请点击右侧 + 新建终端</span>}
             {tabs.map((tab) => {
               const active = tab.id === activeTab?.id;
               const processMeta = processMetaByTabId[tab.id];
@@ -1087,7 +1070,13 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
         </div>
 
         {/* 终端渲染区：使用 xterm 作为真实交互终端，不再使用底部输入框。 */}
-        <div className="relative min-h-0 flex-1 overflow-hidden bg-[#0f172a]">
+        <div className={`relative min-h-0 flex-1 overflow-hidden ${tabs.length === 0 ? "bg-base-100" : "bg-[#0f172a]"}`}>
+          {/* 空态内容：无终端 Tab 时显示引导文案，避免展示 xterm 蓝色背景。 */}
+          {tabs.length === 0 && (
+            <div className="flex h-full w-full items-center justify-center px-4">
+              <span className="text-[12px] text-neutral/70">暂无终端标签，请点击上方 + 创建终端</span>
+            </div>
+          )}
           {tabs.map((tab) => (
             // 每个 Tab 对应一个终端容器，非激活态仅隐藏不销毁。
             <div
