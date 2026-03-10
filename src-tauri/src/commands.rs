@@ -2508,9 +2508,11 @@ pub fn open_elevated_terminal(_state: State<'_, AppState>) -> Result<(), String>
         let elevated_program = read_terminal_shell_command(&_state)
             .unwrap_or_else(|| "pwsh.exe".to_string());
         let escaped_program = elevated_program.replace('\'', "''");
+        let guard_script = terminal_runtime::build_windows_parent_guard_script(std::process::id());
+        let escaped_guard_script = guard_script.replace('\'', "''");
         let elevate_command = format!(
-            "Start-Process -FilePath '{}' -Verb RunAs -ArgumentList '-NoExit','-NoLogo'",
-            escaped_program
+            "Start-Process -FilePath '{}' -Verb RunAs -ArgumentList '-NoExit','-NoLogo','-Command','{}'",
+            escaped_program, escaped_guard_script
         );
         let output = StdCommand::new("powershell.exe")
             .arg("-NoProfile")

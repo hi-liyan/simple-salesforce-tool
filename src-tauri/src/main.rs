@@ -21,7 +21,7 @@ use salesforce::SalesforceClient;
 use tauri::Manager;
 
 fn main() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         // 注册 opener 插件：统一使用官方跨平台打开 URL/文件能力。
         // 关闭链接点击注入脚本，避免对现有前端点击行为产生额外影响。
         .plugin(
@@ -99,6 +99,18 @@ fn main() {
             commands::close_terminal_session,
             commands::open_elevated_terminal
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    // 统一接管应用退出事件：主进程退出前主动清理全部终端子进程。
+    app.run(|app_handle, event| {
+        if matches!(
+            event,
+            tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+        ) {
+            if let Some(state) = app_handle.try_state::<AppState>() {
+                let _ = terminal::close_all_terminal_sessions(&state.terminal_sessions);
+            }
+        }
+    });
 }
