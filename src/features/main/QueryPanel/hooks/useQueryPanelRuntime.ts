@@ -59,11 +59,18 @@ type UseQueryPanelRuntimeInput = {
     records: Record<string, unknown>[];
   };
   // 构建基线记录快照。
-  buildBaselineRecords: (records: Record<string, unknown>[]) => Record<string, Record<string, unknown>>;
+  buildBaselineRecords: (
+    records: Record<string, unknown>[],
+    options?: { sourceType?: string; mysqlPrimaryKeyField?: string }
+  ) => Record<string, Record<string, unknown>>;
   // 判断是否存在未提交修改。
   hasPendingChanges: (tab: TabState) => boolean;
   // 获取记录唯一键。
-  getRecordKey: (record: Record<string, unknown>, rowIndex: number) => string;
+  getRecordKey: (
+    record: Record<string, unknown>,
+    rowIndex: number,
+    options?: { sourceType?: string; mysqlPrimaryKeyField?: string }
+  ) => string;
   // MySQL DDL 映射。
   mysqlDdlMap: MysqlDdlState;
   // 写入 MySQL DDL 映射。
@@ -189,6 +196,10 @@ export function useQueryPanelRuntime({
         const whereClause = (freshTab.whereClause ?? "").trim();
         const limit = Math.max(1, Math.min(2000, freshTab.limit ?? 200));
         const normalizedType = (selectedSourceType || "salesforce").toLowerCase();
+        // MySQL 恢复查询时补齐主键字段，确保基线键与表格高亮键一致。
+        const mysqlPrimaryKeyField = normalizedType === "mysql"
+          ? describe.fields.find((field) => String(field.metadata?.columnKey || "").toUpperCase() === "PRI")?.name || ""
+          : "";
         const sortableFieldSet = new Set(getSortableFieldNames(describe));
         const sortField = sortableFieldSet.has(freshTab.sortField) ? freshTab.sortField : "";
         const sortDirection = freshTab.sortDirection ?? "DESC";
@@ -228,7 +239,10 @@ export function useQueryPanelRuntime({
           currentSoql: soql,
           soqlDraft: soql,
           dirtyCellKeys: [],
-          baselineRecords: buildBaselineRecords(result.records),
+          baselineRecords: buildBaselineRecords(result.records, {
+            sourceType: normalizedType,
+            mysqlPrimaryKeyField
+          }),
           notice: { type: "success", message: `${tab.objectName} 查询成功，共 ${result.totalSize} 条。` }
         }));
         appendTabLog(tab.objectName, {
@@ -431,7 +445,10 @@ export function useQueryPanelRuntime({
     try {
       for (let rowIndex = 0; rowIndex < activeTab.result.records.length; rowIndex += 1) {
         const record = activeTab.result.records[rowIndex];
-        const recordKey = getRecordKey(record, rowIndex);
+        const recordKey = getRecordKey(record, rowIndex, {
+          sourceType: selectedSourceType,
+          mysqlPrimaryKeyField
+        });
         const isNewRow = Boolean(record.__isNew);
 
         if (isNewRow) {
@@ -529,10 +546,17 @@ export function useQueryPanelRuntime({
     const revertedDeleteCount = activeTab.pendingDeleteRecordIds.length;
 
     patchTab(activeTab.objectName, (item) => {
+      const isMysqlSource = (selectedSourceType || "salesforce").toLowerCase() === "mysql";
+      const mysqlPrimaryKeyField = isMysqlSource
+        ? item.describe?.fields.find((field) => String(field.metadata?.columnKey || "").toUpperCase() === "PRI")?.name || ""
+        : "";
       const revertedRecords = item.result.records
         .filter((record) => !record.__isNew)
         .map((record, index) => {
-          const key = getRecordKey(record, index);
+          const key = getRecordKey(record, index, {
+            sourceType: selectedSourceType,
+            mysqlPrimaryKeyField
+          });
           const baseline = item.baselineRecords[key];
           return baseline ? { ...baseline } : { ...record };
         });
@@ -552,7 +576,7 @@ export function useQueryPanelRuntime({
       request: `newRows=${revertedNewCount}, dirtyCells=${revertedDirtyCount}, pendingDeletes=${revertedDeleteCount}`,
       summary: `撤回成功，已撤销新增 ${revertedNewCount} 条、编辑 ${revertedDirtyCount} 个单元格、待删除 ${revertedDeleteCount} 条。`
     });
-  }, [activeTab, hasPendingChanges, patchTab, getRecordKey, appendTabLog]);
+  }, [activeTab, hasPendingChanges, selectedSourceType, patchTab, getRecordKey, appendTabLog]);
 
   return {
     openObjectTab,
