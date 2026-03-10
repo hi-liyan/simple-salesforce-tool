@@ -52,6 +52,35 @@ function collectMysqlMissingRequiredFields(
   return missingItems;
 }
 
+// 收集 Salesforce 新增行中“创建必填字段”的缺失字段。
+function collectSalesforceMissingRequiredFields(
+  records: Record<string, unknown>[],
+  describe: ObjectDescribe
+): MysqlMissingRequiredFieldItem[] {
+  // Salesforce 必填判定：可创建 + 不可空；并排除“系统默认赋值/自动编号/公式字段”。
+  const requiredFields = describe.fields.filter((field) => {
+    if (!field.createable || field.nillable) return false;
+    if (field.metadata?.defaultedOnCreate === true) return false;
+    if (field.metadata?.autoNumber === true) return false;
+    if (field.metadata?.calculated === true) return false;
+    return true;
+  });
+  if (requiredFields.length === 0) return [];
+
+  const missingItems: MysqlMissingRequiredFieldItem[] = [];
+  records.forEach((record, rowIndex) => {
+    // 仅校验本地新增行，避免影响普通更新场景。
+    if (!record.__isNew) return;
+    const missingFieldNames = requiredFields
+      .filter((field) => isBlankCellValue(record[field.name]))
+      .map((field) => field.name);
+    if (missingFieldNames.length > 0) {
+      missingItems.push({ row: rowIndex + 1, fields: missingFieldNames });
+    }
+  });
+  return missingItems;
+}
+
 type UseQueryPanelRuntimeInput = {
   // 当前选中数据源 ID。
   selectedSourceId: string;
@@ -494,6 +523,19 @@ export function useQueryPanelRuntime({
       const mysqlMissingRequiredItems = collectMysqlMissingRequiredFields(activeTab.result.records, activeTab.describe);
       if (mysqlMissingRequiredItems.length > 0) {
         const message = `MySQL 新增失败：存在 NOT NULL 且无默认值字段未填写。${mysqlMissingRequiredItems
+          .map((item) => `第 ${item.row} 行缺少 ${item.fields.join("、")}`)
+          .join("；")}。`;
+        patchTab(activeTab.objectName, (item) => ({
+          ...item,
+          notice: { type: "error", message }
+        }));
+        return;
+      }
+    } else {
+      // Salesforce 新增前置校验：创建必填字段缺失时直接提示并中断提交。
+      const salesforceMissingRequiredItems = collectSalesforceMissingRequiredFields(activeTab.result.records, activeTab.describe);
+      if (salesforceMissingRequiredItems.length > 0) {
+        const message = `Salesforce 新增失败：存在创建必填字段未填写。${salesforceMissingRequiredItems
           .map((item) => `第 ${item.row} 行缺少 ${item.fields.join("、")}`)
           .join("；")}。`;
         patchTab(activeTab.objectName, (item) => ({
