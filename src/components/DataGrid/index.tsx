@@ -40,6 +40,8 @@ export type DataGridProps = {
   showHeaderMetadata?: boolean;
   // 是否启用双击只读单元格时的提示逻辑。
   enableReadonlyCellHint?: boolean;
+  // 是否允许只读单元格双击打开 overlay（仅查看，不可编辑）。
+  allowReadonlyOverlay?: boolean;
   // 是否显示勾选列（首列 checkbox）。
   showSelectionColumn?: boolean;
 };
@@ -62,6 +64,7 @@ export function DataGrid({
   onShowMessage,
   showHeaderMetadata = true,
   enableReadonlyCellHint = true,
+  allowReadonlyOverlay = false,
   showSelectionColumn = true
 }: DataGridProps) {
   const records = result.records;
@@ -143,7 +146,8 @@ export function DataGrid({
         pendingDeleteRecordSet,
         effectiveSalesforceTimezone,
         selectedSourceType,
-        getRecordKey
+        getRecordKey,
+        allowReadonlyOverlay
       }),
     [
       columns,
@@ -154,7 +158,8 @@ export function DataGrid({
       pendingDeleteRecordSet,
       effectiveSalesforceTimezone,
       selectedSourceType,
-      getRecordKey
+      getRecordKey,
+      allowReadonlyOverlay
     ]
   );
 
