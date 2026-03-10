@@ -17,7 +17,9 @@ import {
   SalesforceObject,
   SalesforceSource,
   SourceUpsertPayload,
-  SystemLogPage
+  SystemLogPage,
+  TerminalSessionInfo,
+  TerminalShellOption
 } from "../types";
 
 // 统一调用封装，确保前后端错误在 UI 层可直接展示。
@@ -89,5 +91,24 @@ export const api = {
     invokeApi<void>("delete_record", { sourceId, objectName, recordId }),
   // UI 状态持久化：通用键值读写，供 Zustand persist adapter 使用。
   getUiState: (key: string) => invokeApi<string | null>("get_ui_state", { key }),
-  saveUiState: (key: string, value: string) => invokeApi<void>("save_ui_state", { key, value })
+  saveUiState: (key: string, value: string) => invokeApi<void>("save_ui_state", { key, value }),
+  // 打开终端会话：每个 Tab 对应一个系统 shell 进程。
+  openTerminalSession: (tabId: string, cols: number, rows: number, initialCommand?: string) =>
+    invokeApi<TerminalSessionInfo>("open_terminal_session", {
+      tabId,
+      cols,
+      rows,
+      initialCommand: initialCommand ?? null
+    }),
+  // 写入终端输入：xterm onData 透传字符流。
+  writeTerminalInput: (tabId: string, input: string) => invokeApi<void>("write_terminal_input", { tabId, input }),
+  // 调整终端窗口尺寸：xterm fit 后同步 cols/rows。
+  resizeTerminalSession: (tabId: string, cols: number, rows: number) =>
+    invokeApi<void>("resize_terminal_session", { tabId, cols, rows }),
+  // 关闭终端会话并终止对应进程。
+  closeTerminalSession: (tabId: string) => invokeApi<void>("close_terminal_session", { tabId }),
+  // 列出系统可用终端 Shell（动态探测，包含版本信息）。
+  listAvailableTerminalShells: () => invokeApi<TerminalShellOption[]>("list_available_terminal_shells"),
+  // 以管理员身份打开终端（仅 Windows）。
+  openElevatedTerminal: () => invokeApi<void>("open_elevated_terminal")
 };

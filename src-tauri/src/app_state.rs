@@ -9,6 +9,7 @@ use tauri::Manager;
 
 use crate::llm::LlmChatMessage;
 use crate::salesforce::SalesforceClient;
+use crate::terminal::TerminalSession;
 
 /// 全局应用状态：包含数据库连接和 HTTP 客户端。
 pub struct AppState {
@@ -22,6 +23,8 @@ pub struct AppState {
     pub llm_conversations: Mutex<HashMap<String, Vec<LlmChatMessage>>>,
     /// LLM 流式请求取消令牌（按 requestId 存储）。
     pub llm_stream_cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    /// 终端会话池（按前端 Tab ID 持有 PTY 进程句柄）。
+    pub terminal_sessions: Mutex<HashMap<String, TerminalSession>>,
 }
 
 /// 解析并创建应用数据目录，确保数据库可持久化。

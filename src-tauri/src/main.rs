@@ -10,6 +10,7 @@ mod models;
 mod providers;
 mod salesforce;
 mod sf_cli;
+mod terminal;
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -44,6 +45,7 @@ fn main() {
                 cli_login_cancel: Mutex::new(None),
                 llm_conversations: Mutex::new(HashMap::new()),
                 llm_stream_cancels: Mutex::new(HashMap::new()),
+                terminal_sessions: Mutex::new(HashMap::new()),
             });
 
             Ok(())
@@ -89,7 +91,13 @@ fn main() {
             commands::ai_stop_turn,
             commands::stop_llm_stream_generation,
             commands::get_ui_state,
-            commands::save_ui_state
+            commands::save_ui_state,
+            commands::open_terminal_session,
+            commands::list_available_terminal_shells,
+            commands::write_terminal_input,
+            commands::resize_terminal_session,
+            commands::close_terminal_session,
+            commands::open_elevated_terminal
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
