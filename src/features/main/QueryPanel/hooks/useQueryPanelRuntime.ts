@@ -461,6 +461,9 @@ export function useQueryPanelRuntime({
           sourceType: selectedSourceType,
           mysqlPrimaryKeyField
         });
+        // 稳定基线键：编辑主键列后仍使用初始键定位 dirty/baseline，避免更新丢失。
+        const baselineKeyFromRecord = typeof record.__baselineKey === "string" ? record.__baselineKey : "";
+        const stableRecordKey = baselineKeyFromRecord || recordKey;
         const isNewRow = Boolean(record.__isNew);
 
         if (isNewRow) {
@@ -478,15 +481,20 @@ export function useQueryPanelRuntime({
 
         const values: Record<string, unknown> = {};
         dirtyCellSet.forEach((cellKey) => {
-          const splitIndex = cellKey.indexOf(":");
+          // 记录键可能包含 ":"（例如时间字符串主键），因此按最后一个 ":" 分割字段名更安全。
+          const splitIndex = cellKey.lastIndexOf(":");
           if (splitIndex < 0) return;
           const key = cellKey.slice(0, splitIndex);
           const field = cellKey.slice(splitIndex + 1);
-          if (key !== recordKey || field === "Id" || !editableFields.has(field)) return;
+          if (key !== stableRecordKey || field === "Id" || !editableFields.has(field)) return;
           values[field] = record[field];
         });
 
-        const recordIdRaw = record.Id ?? (isMysqlSource && mysqlPrimaryKeyField ? record[mysqlPrimaryKeyField] : undefined);
+        const baselineRecord = activeTab.baselineRecords[stableRecordKey];
+        const recordIdRaw = baselineRecord?.Id
+          ?? (isMysqlSource && mysqlPrimaryKeyField ? baselineRecord?.[mysqlPrimaryKeyField] : undefined)
+          ?? record.Id
+          ?? (isMysqlSource && mysqlPrimaryKeyField ? record[mysqlPrimaryKeyField] : undefined);
         const recordId = recordIdRaw === null || recordIdRaw === undefined ? "" : String(recordIdRaw).trim();
         if (!recordId) {
           if (isMysqlSource && Object.keys(values).length > 0) {
@@ -562,16 +570,18 @@ export function useQueryPanelRuntime({
       const mysqlPrimaryKeyField = isMysqlSource
         ? item.describe?.fields.find((field) => String(field.metadata?.columnKey || "").toUpperCase() === "PRI")?.name || ""
         : "";
-      const revertedRecords = item.result.records
-        .filter((record) => !record.__isNew)
-        .map((record, index) => {
-          const key = getRecordKey(record, index, {
-            sourceType: selectedSourceType,
-            mysqlPrimaryKeyField
-          });
-          const baseline = item.baselineRecords[key];
-          return baseline ? { ...baseline } : { ...record };
+      const revertedRecords: Record<string, unknown>[] = [];
+      // 这里保留原始 rowIndex，避免先 filter 再 map 造成 row-索引键错位，导致回滚命中失败。
+      item.result.records.forEach((record, index) => {
+        if (record.__isNew) return;
+        const keyFromRecord = typeof record.__baselineKey === "string" ? record.__baselineKey : "";
+        const key = keyFromRecord || getRecordKey(record, index, {
+          sourceType: selectedSourceType,
+          mysqlPrimaryKeyField
         });
+        const baseline = item.baselineRecords[key];
+        revertedRecords.push(baseline ? { ...baseline } : { ...record });
+      });
 
       return {
         ...item,

@@ -232,6 +232,12 @@ export function DataQueryTabPane({
   objectNames,
   hideTabBar = false
 }: DataQueryTabPaneProps) {
+  // “执行更新”按钮是否可用：可用时使用绿色强调，强化“可提交”感知。
+  const canApplyPendingChanges = Boolean(activeTab && !activeTab.loading && hasPendingChanges);
+  // “执行更新”按钮样式：可用态使用蓝青渐变强调，贴合项目品牌色并提升可见性。
+  const applyButtonClassName = canApplyPendingChanges
+    ? "btn btn-sm h-10 border border-brand-600 bg-gradient-to-r from-brand-600 to-brand-500 text-white shadow-[0_6px_16px_rgba(18,158,242,0.25)] hover:from-brand-700 hover:to-brand-600"
+    : "btn btn-outline btn-sm h-10";
   // 字段搜索模式：支持“名称/标签”与“数据类型”两种过滤维度。
   const [fieldSearchMode, setFieldSearchMode] = useState<"nameOrLabel" | "dataType">("nameOrLabel");
   // 字段搜索关键词：用于过滤当前对象字段列表。
@@ -599,7 +605,11 @@ export function DataQueryTabPane({
                   <Trash2 size={14} />
                   删除勾选({activeTab.selectedRecordIds.length})
                 </button>
-                <button className="btn btn-outline btn-sm h-10" disabled={activeTab.loading || !hasPendingChanges} onClick={onApplyPendingChanges}>
+                <button
+                  className={applyButtonClassName}
+                  disabled={activeTab.loading || !hasPendingChanges}
+                  onClick={onApplyPendingChanges}
+                >
                   <Play size={14} />
                   执行更新
                 </button>

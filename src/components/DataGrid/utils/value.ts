@@ -48,6 +48,11 @@ export function stringifyCellValue(value: unknown): string {
   return String(value);
 }
 
+// 空值占位文案：按数据源区分 None/Null，避免与空字符串视觉混淆。
+export function getNullPlaceholderBySourceType(sourceType?: string): "None" | "Null" {
+  return (sourceType || "salesforce").toLowerCase() === "mysql" ? "Null" : "None";
+}
+
 // 抽取文本编辑值。
 export function extractEditableString(value: EditableGridCell): string {
   if (value.kind === GridCellKind.Text) return String(value.data ?? "");

@@ -68,10 +68,10 @@ export function useDataGridMenuActions({
     }
   }, [rowContextMenu, setRowContextMenu]);
 
-  // 右键菜单动作：将可空字段设置为 null（UI 文案显示为 None）。
-  const setCellNoneFromMenu = useCallback(() => {
+  // 右键菜单动作：将可空字段设置为 null（UI 文案按数据源显示 Set None/Set Null）。
+  const setCellNullishFromMenu = useCallback(() => {
     if (!rowContextMenu) return;
-    if (!rowContextMenu.canSetNone) return;
+    if (!rowContextMenu.canSetNullish) return;
     onEditCell(rowContextMenu.rowIndex, rowContextMenu.columnId, null);
     setRowContextMenu(null); // 执行后关闭菜单，避免重复点击。
   }, [rowContextMenu, onEditCell, setRowContextMenu]);
@@ -79,6 +79,6 @@ export function useDataGridMenuActions({
   return {
     openRecordPageFromMenu,
     copyCellValueFromMenu,
-    setCellNoneFromMenu
+    setCellNullishFromMenu
   };
 }

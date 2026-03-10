@@ -370,6 +370,10 @@ export function useMainPageQueryPanel({
         (acc, field) => ({
           ...acc,
           [field.name]: {
+            // 补齐顶层字段能力，避免仅依赖 metadata 时丢失 nillable/createable/updateable。
+            nillable: field.nillable,
+            createable: field.createable,
+            updateable: field.updateable,
             ...(field.metadata || {}),
             // 补齐统一 type：让 DataGrid 类型策略可识别 MySQL/Salesforce 字段类型。
             type: field.dataType || (field.metadata?.type as string) || ""

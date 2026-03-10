@@ -277,13 +277,19 @@ export function useQueryPanelActions({
           const target = nextRecords[rowIndex];
           if (!target) return item;
 
-          const nextRecord = { ...target, [columnName]: value };
-          // 统一记录键：MySQL 使用主键值，Salesforce 使用 Id，确保脏标记与渲染高亮一致。
-          const recordKey = getRecordKey(nextRecord, rowIndex, {
+          // 旧行编辑统一绑定基线键：避免主键字段被修改后，无法再定位 baseline。
+          const currentRecordKey = getRecordKey(target, rowIndex, {
             sourceType: selectedSourceType,
             mysqlPrimaryKeyField: getMysqlPrimaryKeyField(item.describe)
           });
-          const cellKey = `${recordKey}:${columnName}`;
+          const baselineKeyFromRecord = typeof target.__baselineKey === "string" ? target.__baselineKey : "";
+          const stableBaselineKey = baselineKeyFromRecord || currentRecordKey;
+          const isEditingNewRow = Boolean(target.__isNew);
+          const nextRecord = isEditingNewRow
+            ? { ...target, [columnName]: value }
+            : { ...target, __baselineKey: stableBaselineKey, [columnName]: value };
+          // 统一记录键：MySQL 使用主键值，Salesforce 使用 Id，确保脏标记与渲染高亮一致。
+          const cellKey = `${stableBaselineKey}:${columnName}`;
           const dirtySet = new Set(item.dirtyCellKeys);
           const isNewRow = Boolean(nextRecord.__isNew);
           if (isNewRow) {
@@ -299,7 +305,7 @@ export function useQueryPanelActions({
                 return String(input);
               }
             };
-            const baselineValue = stringify(item.baselineRecords[recordKey]?.[columnName]);
+            const baselineValue = stringify(item.baselineRecords[stableBaselineKey]?.[columnName]);
             const nextValue = stringify(value);
             if (baselineValue === nextValue) {
               dirtySet.delete(cellKey); // 改回原值则移除脏标记。

@@ -291,7 +291,7 @@ export function SoqlExecutorWorkspace({
     return extractVisibleColumns(gridResult.records, isMysqlSource);
   }, [activeTab, gridResult.records, isMysqlSource]);
 
-  // 当前标签字段元数据映射：优先使用 describe 的 label/type，再降级到值推断；执行器模式统一只读。
+  // 当前标签字段元数据映射：优先使用 describe 的 label/type，再降级到值推断。
   const fieldMetadataMap = useMemo(() => {
     const primaryObjectName = extractPrimaryObjectName(activeTab?.soqlDraft || "");
     return visibleColumns.reduce((acc, fieldName) => {
@@ -301,13 +301,7 @@ export function SoqlExecutorWorkspace({
         objectDescribeMap,
         gridResult.records
       );
-      acc[fieldName] = {
-        ...(resolvedMetadata || {}),
-        // 禁止更新：DataGrid 将据此禁用编辑。
-        updateable: false,
-        // 禁止创建：DataGrid 将据此禁用新建场景编辑。
-        createable: false
-      };
+      acc[fieldName] = resolvedMetadata || {};
       return acc;
     }, {} as Record<string, Record<string, unknown>>);
   }, [activeTab?.soqlDraft, visibleColumns, objectDescribeMap, gridResult.records]);
@@ -883,6 +877,7 @@ export function SoqlExecutorWorkspace({
                     result={gridResult}
                     visibleColumns={visibleColumns}
                     fieldMetadataMap={fieldMetadataMap}
+                    readOnlyMode={true}
                     dirtyCellKeys={[]}
                     selectedRecordIds={activeTab.selectedRecordIds}
                     salesforceTimezone={salesforceTimezone}
