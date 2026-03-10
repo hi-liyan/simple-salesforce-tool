@@ -69,6 +69,23 @@ pub struct TerminalSession {
     pub child: Box<dyn portable_pty::Child + Send>,
 }
 
+/// 关闭并回收全部终端会话：用于应用退出时兜底清理子进程。
+pub fn close_all_terminal_sessions(
+    sessions: &Mutex<HashMap<String, TerminalSession>>,
+) -> Result<(), String> {
+    let mut session_map = sessions
+        .lock()
+        .map_err(|error| format!("终端会话锁获取失败: {error}"))?;
+    let tab_ids = session_map.keys().cloned().collect::<Vec<_>>();
+    for tab_id in tab_ids {
+        if let Some(mut session) = session_map.remove(&tab_id) {
+            let _ = session.child.kill(); // 主进程退出前强制终止子终端。
+            let _ = session.child.wait(); // 等待回收，避免僵尸进程。
+        }
+    }
+    Ok(())
+}
+
 /// 打开终端会话并启动输出监听线程。
 pub fn open_terminal_session(
     app_handle: &AppHandle,
@@ -276,7 +293,7 @@ fn resolve_shell_command(preferred_shell_command: Option<&str>) -> (String, Vec<
             if let Some(matched) = options.iter().find(|item| item.command.eq_ignore_ascii_case(preferred)) {
                 return (
                     matched.command.clone(),
-                    vec!["-NoExit".to_string(), "-NoLogo".to_string()],
+                    windows_terminal_args(),
                     matched.shell_name.clone(),
                 );
             }
@@ -284,14 +301,14 @@ fn resolve_shell_command(preferred_shell_command: Option<&str>) -> (String, Vec<
         if let Some(first) = options.first() {
             return (
                 first.command.clone(),
-                vec!["-NoExit".to_string(), "-NoLogo".to_string()],
+                windows_terminal_args(),
                 first.shell_name.clone(),
             );
         }
         // 兜底回退：若探测失败，仍尽量使用系统默认 powershell。
         return (
             "powershell.exe".to_string(),
-            vec!["-NoExit".to_string(), "-NoLogo".to_string()],
+            windows_terminal_args(),
             "Windows PowerShell".to_string(),
         );
     }
@@ -304,6 +321,25 @@ fn resolve_shell_command(preferred_shell_command: Option<&str>) -> (String, Vec<
         .map(|item| item.to_string())
         .unwrap_or_else(|| "shell".to_string());
     (shell, vec!["-i".to_string()], shell_name)
+}
+
+/// Windows 终端参数：注入父进程守护任务，确保主进程异常退出后子终端自终止。
+fn windows_terminal_args() -> Vec<String> {
+    let parent_pid = std::process::id();
+    let guard_script = build_windows_parent_guard_script(parent_pid);
+    vec![
+        "-NoExit".to_string(),
+        "-NoLogo".to_string(),
+        "-Command".to_string(),
+        guard_script,
+    ]
+}
+
+/// 构建 PowerShell 父进程守护脚本：周期检测主进程是否存活，不存活则结束当前 shell。
+pub fn build_windows_parent_guard_script(parent_pid: u32) -> String {
+    format!(
+        "$__sstParentPid={parent_pid}; Start-Job -ScriptBlock {{ param($ppid,$selfPid) while($true) {{ if(-not (Get-Process -Id $ppid -ErrorAction SilentlyContinue)) {{ Stop-Process -Id $selfPid -Force; break }} Start-Sleep -Seconds 2 }} }} -ArgumentList $__sstParentPid,$PID | Out-Null"
+    )
 }
 
 /// 列出当前系统可用终端（Windows 动态探测 PowerShell，非 Windows 使用 SHELL）。
