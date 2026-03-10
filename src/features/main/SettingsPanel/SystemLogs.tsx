@@ -1,6 +1,6 @@
 import { RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useSystemLogsQuery } from "../../queries/salesforce";
+import { useSystemLogsQuery } from "../../../queries/salesforce";
 
 // 系统日志面板：展示后端持久化日志并支持分页。
 export function SystemLogsPanel() {

@@ -8,6 +8,21 @@ import { RowContextMenuState, HoveredHeaderMetaState } from "../types";
 import { isHeaderInfoIconHit } from "../renderers/drawHeader";
 import { buildDisplayMetadataFromRaw } from "../../../utils/fieldMetadata";
 
+// DataGrid 表头高度：与 DataEditor 的 headerHeight 配置保持一致。
+const DATA_GRID_HEADER_HEIGHT = 42;
+// DataGrid 数据行高度：与 DataEditor 的 rowHeight 配置保持一致。
+const DATA_GRID_ROW_HEIGHT = 30;
+
+// 可空性判定：兼容 Salesforce 的 nillable 与 MySQL 常见 nullable/isNullable 元数据键。
+function isNullableField(metadata: Record<string, unknown>): boolean {
+  if (metadata.nillable === true) return true;
+  if (metadata.nullable === true) return true;
+  if (metadata.isNullable === true) return true;
+  const rawIsNullable = metadata.IS_NULLABLE;
+  if (typeof rawIsNullable === "string" && rawIsNullable.trim().toUpperCase() === "YES") return true;
+  return false;
+}
+
 type DataGridSurfaceProps = {
   // 查询总数（展示在工具栏）。
   totalSize: number;
@@ -61,8 +76,8 @@ type DataGridSurfaceProps = {
   onToggleAll: (checked: boolean, recordIds: string[]) => void;
   // 右键菜单动作：复制。
   onCopyCell: () => void;
-  // 右键菜单动作：置空。
-  onSetNone: () => void;
+  // 右键菜单动作：置空（None/Null）。
+  onSetNullish: () => void;
   // 右键菜单动作：打开记录页。
   onOpenRecordPage: () => void;
   // 单元格读取函数。
@@ -107,7 +122,7 @@ export function DataGridSurface({
   showOpenRecordPage,
   onToggleAll,
   onCopyCell,
-  onSetNone,
+  onSetNullish,
   onOpenRecordPage,
   getCellContent,
   onCellEdited,
@@ -118,6 +133,15 @@ export function DataGridSurface({
 }: DataGridSurfaceProps) {
   // 受控选区状态：用于实现“点击 # 选整行”。
   const [gridSelection, setGridSelection] = React.useState<GridSelection | undefined>(undefined);
+  // 计算当前总列宽：用于绘制右侧空白区域遮罩（列较少时隐藏空白网格线）。
+  const totalColumnsWidth = React.useMemo(
+    () => columns.reduce((sum, column) => {
+      const rawWidth = (column as { width?: unknown }).width;
+      return sum + (typeof rawWidth === "number" ? rawWidth : 160);
+    }, 0),
+    [columns]
+  );
+
   // 统一处理选区变更：命中 # 序号列时，将默认单元格选区改写为整行选区。
   const handleGridSelectionChange = React.useCallback(
     (nextSelection: GridSelection) => {
@@ -210,12 +234,15 @@ export function DataGridSurface({
             const copyRecordId = String(copyRecord.Id ?? "").trim();
             const recordId = String(record.Id ?? "").trim();
             const isDataColumn = !columnId.startsWith("__");
+            // 空值动作按数据源切换：Salesforce=Set None，MySQL=Set Null。
+            const isMysqlSource = (selectedSourceType || "salesforce").toLowerCase() === "mysql";
             const metadata = isDataColumn ? (fieldMetadataMap[columnId] || {}) : {};
             const isNewRow = Boolean(record.__isNew);
-            const canSetNone =
+            const canSetNullish =
               isDataColumn &&
-              metadata.nillable === true &&
+              isNullableField(metadata) &&
               isCellEditableByMeta(metadata, isNewRow);
+            const nullishActionLabel = canSetNullish ? (isMysqlSource ? "Set Null" : "Set None") : "";
             // 复制文本：优先复制当前选区（支持多格/整行/多行），无选区时回退单元格。
             const cellText = buildCopyTextBySelection(
               gridSelection,
@@ -246,7 +273,8 @@ export function DataGridSurface({
               cellText,
               rowIndex: row,
               columnId,
-              canSetNone
+              canSetNullish,
+              nullishActionLabel
             });
           }}
           // 粘贴/批量编辑时的批处理入口。
@@ -340,8 +368,8 @@ export function DataGridSurface({
           minColumnWidth={44}
           maxColumnWidth={900}
           // 行高与表头高度：表头提高到双行，支持 Field Name/Label 分行显示。
-          rowHeight={30}
-          headerHeight={42}
+          rowHeight={DATA_GRID_ROW_HEIGHT}
+          headerHeight={DATA_GRID_HEADER_HEIGHT}
           // 平滑滚动：提升大数据量横向/纵向浏览体验。
           smoothScrollX
           smoothScrollY
@@ -353,6 +381,31 @@ export function DataGridSurface({
           // 启用二维粘贴（按行列拆分），行为与 Excel 类似。
           onPaste
         />
+        {/* 空白区遮罩：仅保留“有数据区域”的网格线，隐藏数据末行以下的网格背景。 */}
+        {records.length > 0 && (
+          <div
+            className="pointer-events-none absolute inset-x-0 bottom-0 z-[1] border-t border-base-300 bg-base-100"
+            style={{ top: DATA_GRID_HEADER_HEIGHT + records.length * DATA_GRID_ROW_HEIGHT }}
+          />
+        )}
+        {/* 右侧空白遮罩：当列总宽不足容器宽度时，隐藏右侧空白网格线。 */}
+        {records.length > 0 && (
+          <div
+            className="pointer-events-none absolute right-0 bottom-0 z-[1] bg-base-100"
+            style={{ top: DATA_GRID_HEADER_HEIGHT, left: totalColumnsWidth }}
+          />
+        )}
+        {/* 数据区右边界线：仅覆盖“有数据的行高”，无数据区域不显示该线。 */}
+        {records.length > 0 && (
+          <div
+            className="pointer-events-none absolute z-[2] w-0 border-l border-base-300"
+            style={{
+              top: DATA_GRID_HEADER_HEIGHT,
+              left: totalColumnsWidth,
+              height: records.length * DATA_GRID_ROW_HEIGHT
+            }}
+          />
+        )}
 
         {/* 表头字段元数据悬浮提示：仅在 hover 到 info icon 时显示。 */}
         {showHeaderMetadata && hoveredHeaderMeta && (
@@ -374,7 +427,7 @@ export function DataGridSurface({
           <RowContextMenu
             menuState={rowContextMenu}
             onCopyCell={onCopyCell}
-            onSetNone={onSetNone}
+            onSetNullish={onSetNullish}
             onOpenRecordPage={onOpenRecordPage}
             canOpenRecordPage={canOpenRecordPage}
             showOpenRecordPage={showOpenRecordPage}
@@ -478,8 +531,14 @@ function buildTsvByRange(
 // GridCell 转文本：优先 displayData，回退 data，统一用于复制输出。
 function gridCellToText(cell: GridCell): string {
   const displayData = (cell as { displayData?: unknown }).displayData;
-  if (typeof displayData === "string") return displayData;
   const data = (cell as { data?: unknown }).data;
+  // None/Null 为展示占位文案，复制时应回退为空文本，避免把占位词当真实值写入外部系统。
+  if (typeof displayData === "string" && (displayData === "None" || displayData === "Null")) {
+    if (data === null || data === undefined || (typeof data === "string" && data === "")) {
+      return "";
+    }
+  }
+  if (typeof displayData === "string") return displayData;
   if (data === null || data === undefined) return "";
   if (typeof data === "string" || typeof data === "number" || typeof data === "boolean") {
     return String(data);

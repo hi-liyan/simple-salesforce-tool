@@ -1,5 +1,8 @@
 use serde::Serialize;
+use serde_json::Value;
 use std::collections::{HashMap, HashSet};
+#[cfg(target_os = "windows")]
+use std::process::Command as StdCommand;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::Emitter;
@@ -14,11 +17,14 @@ use crate::error::AppError;
 use crate::models::{
     AiCapabilities, AiChatTurnV2Request, AiChatTurnV2Response, CliPathProbe, CliPathSettings,
     CliPathStatus, CurrentUserContext, LlmSettings, LlmSettingsView, ObjectDdl, ObjectDescribe,
-    QueryResult, RecordMutationPayload, RecordSavePayload, SalesforceObject, SalesforceSource,
-    SaveLlmSettingsPayload, SourceUpsertPayload, SystemLogPage,
+    QueryResult, RecordMutationPayload, RecordSavePayload, RecordUpdatePayload, SalesforceObject,
+    SalesforceSource, SaveLlmSettingsPayload, SourceUpsertPayload, SystemLogPage,
+    TerminalCommandGroup, TerminalCommandItem, TerminalCommandReorderPayload,
+    TerminalCommandUpsertPayload,
 };
 use crate::providers::provider_for_source;
 use crate::sf_cli;
+use crate::terminal::{self as terminal_runtime, TerminalSessionInfo, TerminalShellOption};
 
 /// 写系统日志的统一入口。
 /// 说明:日志写入失败不应影响主流程,因此这里吞掉错误。
@@ -50,6 +56,8 @@ fn write_system_log(
 
 const SF_CLI_PATH_SETTING_KEY: &str = "sf_cli_path";
 const LLM_SETTINGS_KEY: &str = "llm.settings.openai";
+const TERMINAL_SHELL_COMMAND_KEY: &str = "terminal.shell.command";
+const LEGACY_TERMINAL_SHELL_PREFERENCE_KEY: &str = "terminal.shell.preference";
 const METADATA_TYPE_OBJECT_DESCRIBE: &str = "object_describe";
 const METADATA_TYPE_OBJECT_DDL: &str = "object_ddl";
 
@@ -120,6 +128,207 @@ fn is_unauthorized_error(error: &AppError) -> bool {
                 || message.contains("status code 401")
                 || message.contains("401 Unauthorized")
     )
+}
+
+/// 按数据源类型返回系统日志分类。
+fn resolve_log_category(source: &SalesforceSource) -> &'static str {
+    if source.is_salesforce() {
+        "SALESFORCE_API"
+    } else {
+        "MYSQL_DB"
+    }
+}
+
+/// 转义 SQL 字符串字面量（用于日志展示，不参与实际执行）。
+fn escape_sql_literal(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('\'', "\\'")
+}
+
+/// 转义 SOQL 字符串字面量（用于日志展示，不参与实际执行）。
+fn escape_soql_literal(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('\'', "\\'")
+}
+
+/// 解析 MySQL 日志使用的主键字段名（优先读取 configJson.primaryKey）。
+fn resolve_mysql_primary_key_for_log(source: &SalesforceSource) -> String {
+    source
+        .config_json
+        .get("primaryKey")
+        .and_then(|value| value.as_str())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "Id".to_string())
+}
+
+/// 渲染 MySQL 可读值文本，便于系统日志白盒追踪。
+fn format_mysql_value_literal(value: &Value) -> String {
+    match value {
+        Value::Null => "NULL".to_string(),
+        Value::Bool(item) => {
+            if *item {
+                "TRUE".to_string()
+            } else {
+                "FALSE".to_string()
+            }
+        }
+        Value::Number(item) => item.to_string(),
+        Value::String(item) => format!("'{}'", escape_sql_literal(item)),
+        // 复杂 JSON 统一序列化为字符串字面量，便于观察真实写入内容。
+        other => {
+            let encoded = serde_json::to_string(other).unwrap_or_else(|_| "null".to_string());
+            format!("'{}'", escape_sql_literal(&encoded))
+        }
+    }
+}
+
+/// 构造 MySQL INSERT 日志语句。
+fn build_mysql_insert_sql(object_name: &str, values: &HashMap<String, Value>) -> String {
+    if values.is_empty() {
+        return format!("INSERT INTO `{object_name}` () VALUES ();");
+    }
+    let mut entries: Vec<(&String, &Value)> = values.iter().collect();
+    entries.sort_by(|a, b| a.0.cmp(b.0));
+    let columns = entries
+        .iter()
+        .map(|(key, _)| format!("`{key}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let values_sql = entries
+        .iter()
+        .map(|(_, value)| format_mysql_value_literal(value))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("INSERT INTO `{object_name}` ({columns}) VALUES ({values_sql});")
+}
+
+/// 构造 MySQL UPDATE 日志语句（主键列来自配置）。
+fn build_mysql_update_sql(
+    object_name: &str,
+    primary_key: &str,
+    record_id: &str,
+    values: &HashMap<String, Value>,
+) -> String {
+    let mut entries: Vec<(&String, &Value)> = values.iter().collect();
+    entries.sort_by(|a, b| a.0.cmp(b.0));
+    let set_clause = entries
+        .iter()
+        .map(|(key, value)| format!("`{key}` = {}", format_mysql_value_literal(value)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "UPDATE `{object_name}` SET {set_clause} WHERE `{primary_key}` = '{}';",
+        escape_sql_literal(record_id)
+    )
+}
+
+/// 构造 MySQL DELETE 日志语句（主键列来自配置）。
+fn build_mysql_delete_sql(object_name: &str, primary_key: &str, record_id: &str) -> String {
+    format!(
+        "DELETE FROM `{object_name}` WHERE `{primary_key}` = '{}';",
+        escape_sql_literal(record_id)
+    )
+}
+
+/// 构造 Salesforce 查询日志详情。
+fn build_salesforce_query_detail(soql: &str) -> String {
+    format!("raw_soql:\n{soql}")
+}
+
+/// 构造 MySQL 查询日志详情。
+fn build_mysql_query_detail(sql: &str) -> String {
+    format!("raw_sql:\n{sql}")
+}
+
+/// 构造 Salesforce 新增日志详情（包含 API 和追踪 SOQL）。
+fn build_salesforce_create_detail(object_name: &str, values: &HashMap<String, Value>) -> String {
+    let mut fields = values.keys().cloned().collect::<Vec<_>>();
+    fields.sort();
+    let projection = if fields.is_empty() {
+        "Id".to_string()
+    } else {
+        format!("Id, {}", fields.join(", "))
+    };
+    let payload = serde_json::to_string(values).unwrap_or_else(|_| "{}".to_string());
+    format!(
+        "api=POST /sobjects/{object_name}\npayload={payload}\ntrace_soql=SELECT {projection} FROM {object_name} WHERE Id = '<new_record_id>' LIMIT 1"
+    )
+}
+
+/// 构造 Salesforce 更新日志详情（包含 API 和追踪 SOQL）。
+fn build_salesforce_update_detail(
+    object_name: &str,
+    record_id: &str,
+    values: &HashMap<String, Value>,
+) -> String {
+    let mut fields = values.keys().cloned().collect::<Vec<_>>();
+    fields.sort();
+    let projection = if fields.is_empty() {
+        "Id".to_string()
+    } else {
+        format!("Id, {}", fields.join(", "))
+    };
+    let payload = serde_json::to_string(values).unwrap_or_else(|_| "{}".to_string());
+    format!(
+        "api=PATCH /sobjects/{object_name}/{record_id}\npayload={payload}\ntrace_soql=SELECT {projection} FROM {object_name} WHERE Id = '{}' LIMIT 1",
+        escape_soql_literal(record_id)
+    )
+}
+
+/// 构造 Salesforce 删除日志详情（包含 API 和追踪 SOQL）。
+fn build_salesforce_delete_detail(object_name: &str, record_id: &str) -> String {
+    format!(
+        "api=DELETE /sobjects/{object_name}/{record_id}\ntrace_soql=SELECT Id FROM {object_name} WHERE Id = '{}' LIMIT 1",
+        escape_soql_literal(record_id)
+    )
+}
+
+/// 构造 Salesforce 批量保存日志详情（逐条列出 API 与追踪 SOQL）。
+fn build_salesforce_save_detail(
+    object_name: &str,
+    creates: &[HashMap<String, Value>],
+    updates: &[RecordUpdatePayload],
+) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    // 新增记录逐条输出可追踪细节。
+    for (index, item) in creates.iter().enumerate() {
+        lines.push(format!(
+            "[create#{index}] {}",
+            build_salesforce_create_detail(object_name, item)
+        ));
+    }
+    // 更新记录逐条输出可追踪细节。
+    for (index, item) in updates.iter().enumerate() {
+        lines.push(format!(
+            "[update#{index}] {}",
+            build_salesforce_update_detail(object_name, &item.record_id, &item.values)
+        ));
+    }
+    lines.join("\n")
+}
+
+/// 构造 MySQL 批量保存日志详情（逐条列出原始 SQL）。
+fn build_mysql_save_detail(
+    object_name: &str,
+    primary_key: &str,
+    creates: &[HashMap<String, Value>],
+    updates: &[RecordUpdatePayload],
+) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    // 新增语句逐条展开，便于定位本番误操作。
+    for (index, item) in creates.iter().enumerate() {
+        lines.push(format!(
+            "[create#{index}] {}",
+            build_mysql_insert_sql(object_name, item)
+        ));
+    }
+    // 更新语句逐条展开，便于定位本番误操作。
+    for (index, item) in updates.iter().enumerate() {
+        lines.push(format!(
+            "[update#{index}] {}",
+            build_mysql_update_sql(object_name, primary_key, &item.record_id, &item.values)
+        ));
+    }
+    lines.join("\n")
 }
 
 /// 仅针对 CLI 数据源:发生 401 后通过 CLI 刷新 token,并回写本地数据源。
@@ -578,6 +787,19 @@ pub fn create_source(
     db::create_source(&connection, payload).map_err(AppError::to_string_error)
 }
 
+/// 按前端传入顺序重排数据源序号。
+#[tauri::command]
+pub fn reorder_sources(
+    state: State<'_, AppState>,
+    ordered_ids: Vec<String>,
+) -> Result<Vec<SalesforceSource>, String> {
+    let connection = state
+        .db
+        .lock()
+        .map_err(|error| format!("Database lock failed: {error}"))?;
+    db::reorder_sources(&connection, &ordered_ids).map_err(AppError::to_string_error)
+}
+
 /// 测试数据源连接可用性（不写库）。
 #[tauri::command]
 pub async fn test_source_connection(
@@ -588,6 +810,7 @@ pub async fn test_source_connection(
     let probe_source = SalesforceSource {
         id: "probe".to_string(),
         name: payload.name.clone(),
+        sort_order: 0,
         source_type: payload.source_type.clone(),
         config_json: payload.config_json.clone(),
         instance_url: payload.instance_url.clone(),
@@ -967,7 +1190,8 @@ pub async fn refresh_objects(
         // 强制刷新成功后覆盖对象列表缓存，并失效该数据源的对象级元数据缓存。
         db::write_object_cache(&connection, &source_id, &objects)
             .map_err(AppError::to_string_error)?;
-        db::clear_source_metadata_cache(&connection, &source_id).map_err(AppError::to_string_error)?;
+        db::clear_source_metadata_cache(&connection, &source_id)
+            .map_err(AppError::to_string_error)?;
     }
 
     write_system_log(
@@ -1453,8 +1677,13 @@ pub async fn get_object_ddl(
             .db
             .lock()
             .map_err(|error| format!("Database lock failed: {error}"))?;
-        db::read_source_metadata_cache(&connection, &source_id, METADATA_TYPE_OBJECT_DDL, Some(&object_name))
-            .map_err(AppError::to_string_error)?
+        db::read_source_metadata_cache(
+            &connection,
+            &source_id,
+            METADATA_TYPE_OBJECT_DDL,
+            Some(&object_name),
+        )
+        .map_err(AppError::to_string_error)?
     };
     if let Some(payload) = cached_ddl {
         if let Ok(ddl) = serde_json::from_str::<ObjectDdl>(&payload) {
@@ -1469,7 +1698,8 @@ pub async fn get_object_ddl(
             .map_err(|error| format!("Database lock failed: {error}"))?;
         db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
     };
-    let provider = provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
+    let provider =
+        provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
     let log_category = if source.is_salesforce() {
         "SALESFORCE_API"
     } else {
@@ -1630,6 +1860,7 @@ pub async fn query_records(
     if soql.trim().is_empty() {
         return Err("查询语句不能为空".to_string());
     }
+    let query_text = soql.trim().to_string();
 
     let source = {
         let connection = state
@@ -1640,8 +1871,14 @@ pub async fn query_records(
     };
     let provider =
         provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
+    let log_category = resolve_log_category(&source);
+    let query_detail = if source.is_salesforce() {
+        build_salesforce_query_detail(&query_text)
+    } else {
+        build_mysql_query_detail(&query_text)
+    };
 
-    let query_result = match provider.query_records(&source, &soql).await {
+    let query_result = match provider.query_records(&source, &query_text).await {
         Ok(result) => Ok(result),
         Err(error) if is_unauthorized_error(&error) && source_id.starts_with("cli-") => {
             let refreshed_source =
@@ -1651,7 +1888,7 @@ pub async fn query_records(
             let refreshed_provider = provider_for_source(state.inner(), &refreshed_source)
                 .map_err(AppError::to_string_error)?;
             refreshed_provider
-                .query_records(&refreshed_source, &soql)
+                .query_records(&refreshed_source, &query_text)
                 .await
         }
         Err(error) => Err(error),
@@ -1662,28 +1899,29 @@ pub async fn query_records(
             write_system_log(
                 &state,
                 "INFO",
-                "SALESFORCE_API",
+                log_category,
                 "query_records",
                 Some(&source_id),
                 None,
                 true,
                 &format!("执行查询成功,返回 {} 条。", result.total_size),
-                Some(&soql),
+                Some(&query_detail),
             );
             Ok(result)
         }
         Err(error) => {
             let message = AppError::to_string_error(error);
+            let detail = format!("{query_detail}\nerror={message}");
             write_system_log(
                 &state,
                 "ERROR",
-                "SALESFORCE_API",
+                log_category,
                 "query_records",
                 Some(&source_id),
                 None,
                 false,
                 "执行查询失败。",
-                Some(&message),
+                Some(&detail),
             );
             Err(message)
         }
@@ -1781,9 +2019,15 @@ pub async fn create_record(
     };
     let provider =
         provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
+    let log_category = resolve_log_category(&source);
 
     let object_name = payload.object_name.clone();
     let values = payload.values.clone();
+    let operation_detail = if source.is_salesforce() {
+        build_salesforce_create_detail(&object_name, &values)
+    } else {
+        build_mysql_insert_sql(&object_name, &values)
+    };
     let create_result = match provider
         .create_record(&source, &object_name, values.clone())
         .await
@@ -1813,28 +2057,29 @@ pub async fn create_record(
             write_system_log(
                 &state,
                 "INFO",
-                "SALESFORCE_API",
+                log_category,
                 "create_record",
                 Some(&payload.source_id),
                 Some(&payload.object_name),
                 true,
                 "新增记录成功。",
-                Some(&format!("recordId={record_id}")),
+                Some(&format!("recordId={record_id}\n{operation_detail}")),
             );
             Ok(record_id)
         }
         Err(error) => {
             let message = AppError::to_string_error(error);
+            let detail = format!("{operation_detail}\nerror={message}");
             write_system_log(
                 &state,
                 "ERROR",
-                "SALESFORCE_API",
+                log_category,
                 "create_record",
                 Some(&payload.source_id),
                 Some(&payload.object_name),
                 false,
                 "新增记录失败。",
-                Some(&message),
+                Some(&detail),
             );
             Err(message)
         }
@@ -1861,12 +2106,19 @@ pub async fn save_records(
     };
     let provider =
         provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
+    let log_category = resolve_log_category(&source);
+    let mysql_primary_key = resolve_mysql_primary_key_for_log(&source);
 
     let create_count = payload.creates.len();
     let update_count = payload.updates.len();
     let object_name = payload.object_name.clone();
     let creates = payload.creates.clone();
     let updates = payload.updates.clone();
+    let operation_detail = if source.is_salesforce() {
+        build_salesforce_save_detail(&object_name, &creates, &updates)
+    } else {
+        build_mysql_save_detail(&object_name, &mysql_primary_key, &creates, &updates)
+    };
     let save_result = match provider
         .save_records(&source, &object_name, creates.clone(), updates.clone())
         .await
@@ -1901,7 +2153,7 @@ pub async fn save_records(
             write_system_log(
                 &state,
                 "INFO",
-                "SALESFORCE_API",
+                log_category,
                 "save_records",
                 Some(&payload.source_id),
                 Some(&payload.object_name),
@@ -1910,22 +2162,23 @@ pub async fn save_records(
                     "批量保存成功,新增 {} 条,更新 {} 条。",
                     create_count, update_count
                 ),
-                None,
+                Some(&operation_detail),
             );
             Ok(())
         }
         Err(error) => {
             let message = AppError::to_string_error(error);
+            let detail = format!("{operation_detail}\nerror={message}");
             write_system_log(
                 &state,
                 "ERROR",
-                "SALESFORCE_API",
+                log_category,
                 "save_records",
                 Some(&payload.source_id),
                 Some(&payload.object_name),
                 false,
                 "批量保存失败。",
-                Some(&message),
+                Some(&detail),
             );
             Err(message)
         }
@@ -1951,6 +2204,13 @@ pub async fn update_record(
     };
     let provider =
         provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
+    let log_category = resolve_log_category(&source);
+    let mysql_primary_key = resolve_mysql_primary_key_for_log(&source);
+    let operation_detail = if source.is_salesforce() {
+        build_salesforce_update_detail(&object_name, &record_id, &values)
+    } else {
+        build_mysql_update_sql(&object_name, &mysql_primary_key, &record_id, &values)
+    };
 
     let update_result = match provider
         .update_record(&source, &object_name, &record_id, values.clone())
@@ -1981,28 +2241,29 @@ pub async fn update_record(
             write_system_log(
                 &state,
                 "INFO",
-                "SALESFORCE_API",
+                log_category,
                 "update_record",
                 Some(&source_id),
                 Some(&object_name),
                 true,
                 "更新记录成功。",
-                Some(&format!("recordId={record_id}")),
+                Some(&format!("recordId={record_id}\n{operation_detail}")),
             );
             Ok(())
         }
         Err(error) => {
             let message = AppError::to_string_error(error);
+            let detail = format!("{operation_detail}\nerror={message}");
             write_system_log(
                 &state,
                 "ERROR",
-                "SALESFORCE_API",
+                log_category,
                 "update_record",
                 Some(&source_id),
                 Some(&object_name),
                 false,
                 "更新记录失败。",
-                Some(&message),
+                Some(&detail),
             );
             Err(message)
         }
@@ -2027,6 +2288,13 @@ pub async fn delete_record(
     };
     let provider =
         provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
+    let log_category = resolve_log_category(&source);
+    let mysql_primary_key = resolve_mysql_primary_key_for_log(&source);
+    let operation_detail = if source.is_salesforce() {
+        build_salesforce_delete_detail(&object_name, &record_id)
+    } else {
+        build_mysql_delete_sql(&object_name, &mysql_primary_key, &record_id)
+    };
 
     let delete_result = match provider
         .delete_record(&source, &object_name, &record_id)
@@ -2057,28 +2325,29 @@ pub async fn delete_record(
             write_system_log(
                 &state,
                 "INFO",
-                "SALESFORCE_API",
+                log_category,
                 "delete_record",
                 Some(&source_id),
                 Some(&object_name),
                 true,
                 "删除记录成功。",
-                Some(&format!("recordId={record_id}")),
+                Some(&format!("recordId={record_id}\n{operation_detail}")),
             );
             Ok(())
         }
         Err(error) => {
             let message = AppError::to_string_error(error);
+            let detail = format!("{operation_detail}\nerror={message}");
             write_system_log(
                 &state,
                 "ERROR",
-                "SALESFORCE_API",
+                log_category,
                 "delete_record",
                 Some(&source_id),
                 Some(&object_name),
                 false,
                 "删除记录失败。",
-                Some(&message),
+                Some(&detail),
             );
             Err(message)
         }
@@ -2157,6 +2426,269 @@ const TOOL_SEARCH_OBJECT_FIELDS: &str = "search_salesforce_object_fields";
 const TOOL_GET_FIELD_METADATA: &str = "get_salesforce_field_metadata";
 /// LLM 工具:获取对象关系图。
 const TOOL_GET_OBJECT_RELATIONSHIP_GRAPH: &str = "get_salesforce_object_relationship_graph";
+
+/// 读取全局终端命令组（含命令列表）。
+#[tauri::command]
+pub fn list_terminal_command_groups(
+    state: State<'_, AppState>,
+) -> Result<Vec<TerminalCommandGroup>, String> {
+    let connection = state
+        .db
+        .lock()
+        .map_err(|error| format!("Database lock failed: {error}"))?;
+    db::list_terminal_command_groups(&connection).map_err(AppError::to_string_error)
+}
+
+/// 创建终端命令组。
+#[tauri::command]
+pub fn create_terminal_command_group(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<TerminalCommandGroup, String> {
+    let normalized_name = name.trim().to_string();
+    if normalized_name.is_empty() {
+        return Err("命令组名称不能为空".to_string());
+    }
+
+    let connection = state
+        .db
+        .lock()
+        .map_err(|error| format!("Database lock failed: {error}"))?;
+    db::create_terminal_command_group(&connection, &normalized_name)
+        .map_err(AppError::to_string_error)
+}
+
+/// 创建终端命令。
+#[tauri::command]
+pub fn create_terminal_command(
+    state: State<'_, AppState>,
+    payload: TerminalCommandUpsertPayload,
+) -> Result<TerminalCommandItem, String> {
+    let connection = state
+        .db
+        .lock()
+        .map_err(|error| format!("Database lock failed: {error}"))?;
+    db::create_terminal_command(&connection, &payload).map_err(AppError::to_string_error)
+}
+
+/// 更新终端命令。
+#[tauri::command]
+pub fn update_terminal_command(
+    state: State<'_, AppState>,
+    command_id: String,
+    payload: TerminalCommandUpsertPayload,
+) -> Result<TerminalCommandItem, String> {
+    let normalized_command_id = command_id.trim().to_string();
+    if normalized_command_id.is_empty() {
+        return Err("commandId 不能为空".to_string());
+    }
+
+    let connection = state
+        .db
+        .lock()
+        .map_err(|error| format!("Database lock failed: {error}"))?;
+    db::update_terminal_command(&connection, &normalized_command_id, &payload)
+        .map_err(AppError::to_string_error)
+}
+
+/// 删除终端命令。
+#[tauri::command]
+pub fn delete_terminal_command(
+    state: State<'_, AppState>,
+    group_id: String,
+    command_id: String,
+) -> Result<(), String> {
+    let normalized_group_id = group_id.trim().to_string();
+    let normalized_command_id = command_id.trim().to_string();
+    if normalized_group_id.is_empty() {
+        return Err("groupId 不能为空".to_string());
+    }
+    if normalized_command_id.is_empty() {
+        return Err("commandId 不能为空".to_string());
+    }
+
+    let connection = state
+        .db
+        .lock()
+        .map_err(|error| format!("Database lock failed: {error}"))?;
+    db::delete_terminal_command(
+        &connection,
+        &normalized_group_id,
+        &normalized_command_id,
+    )
+    .map_err(AppError::to_string_error)
+}
+
+/// 调整终端命令排序。
+#[tauri::command]
+pub fn reorder_terminal_commands(
+    state: State<'_, AppState>,
+    payload: TerminalCommandReorderPayload,
+) -> Result<(), String> {
+    let normalized_group_id = payload.group_id.trim().to_string();
+    if normalized_group_id.is_empty() {
+        return Err("groupId 不能为空".to_string());
+    }
+
+    if payload.command_ids.is_empty() {
+        return Err("commandIds 不能为空".to_string());
+    }
+
+    let connection = state
+        .db
+        .lock()
+        .map_err(|error| format!("Database lock failed: {error}"))?;
+    db::reorder_terminal_commands(&connection, &payload).map_err(AppError::to_string_error)
+}
+
+/// 打开终端会话：每个前端 Tab 对应一个系统终端进程。
+#[tauri::command]
+pub fn open_terminal_session(
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+    tab_id: String,
+    cols: Option<u16>,
+    rows: Option<u16>,
+    initial_command: Option<String>,
+) -> Result<TerminalSessionInfo, String> {
+    let normalized_tab_id = tab_id.trim();
+    if normalized_tab_id.is_empty() {
+        return Err("Tab ID 不能为空".to_string());
+    }
+    // 读取终端首选 shell 命令配置（动态路径，不限制固定版本）。
+    let preferred_shell_command = read_terminal_shell_command(&state);
+
+    terminal_runtime::open_terminal_session(
+        &app_handle,
+        &state.terminal_sessions,
+        normalized_tab_id,
+        cols.unwrap_or(120),
+        rows.unwrap_or(36),
+        preferred_shell_command.as_deref(),
+        initial_command.as_deref(),
+    )
+}
+
+/// 列出当前系统可用终端 Shell（用于设置页下拉选择）。
+#[tauri::command]
+pub fn list_available_terminal_shells() -> Result<Vec<TerminalShellOption>, String> {
+    Ok(terminal_runtime::list_available_terminal_shells())
+}
+
+/// 向终端会话写入输入（真实终端键盘输入透传）。
+#[tauri::command]
+pub fn write_terminal_input(
+    state: State<'_, AppState>,
+    tab_id: String,
+    input: String,
+) -> Result<(), String> {
+    let normalized_tab_id = tab_id.trim();
+    if normalized_tab_id.is_empty() {
+        return Err("Tab ID 不能为空".to_string());
+    }
+    terminal_runtime::write_terminal_input(&state.terminal_sessions, normalized_tab_id, &input)
+}
+
+/// 调整终端会话尺寸（与 xterm cols/rows 同步）。
+#[tauri::command]
+pub fn resize_terminal_session(
+    state: State<'_, AppState>,
+    tab_id: String,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String> {
+    let normalized_tab_id = tab_id.trim();
+    if normalized_tab_id.is_empty() {
+        return Err("Tab ID 不能为空".to_string());
+    }
+    terminal_runtime::resize_terminal_session(
+        &state.terminal_sessions,
+        normalized_tab_id,
+        cols,
+        rows,
+    )
+}
+
+/// 关闭终端会话并终止对应进程。
+#[tauri::command]
+pub fn close_terminal_session(state: State<'_, AppState>, tab_id: String) -> Result<(), String> {
+    let normalized_tab_id = tab_id.trim();
+    if normalized_tab_id.is_empty() {
+        return Err("Tab ID 不能为空".to_string());
+    }
+    terminal_runtime::close_terminal_session(&state.terminal_sessions, normalized_tab_id)
+}
+
+/// 以管理员身份打开系统终端（仅 Windows）。
+/// 说明：管理员进程受 UAC 隔离，无法附着到当前 PTY Tab，因此以新窗口方式打开。
+#[tauri::command]
+pub fn open_elevated_terminal(_state: State<'_, AppState>) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        // 管理员终端同样遵循终端首选 shell 配置。
+        let elevated_program =
+            read_terminal_shell_command(&_state).unwrap_or_else(|| "pwsh.exe".to_string());
+        let escaped_program = elevated_program.replace('\'', "''");
+        let guard_script = terminal_runtime::build_windows_parent_guard_script(std::process::id());
+        let escaped_guard_script = guard_script.replace('\'', "''");
+        let elevate_command = format!(
+            "Start-Process -FilePath '{}' -Verb RunAs -ArgumentList '-NoExit','-NoLogo','-Command','{}'",
+            escaped_program, escaped_guard_script
+        );
+        let output = StdCommand::new("powershell.exe")
+            .arg("-NoProfile")
+            .arg("-ExecutionPolicy")
+            .arg("Bypass")
+            .arg("-Command")
+            .arg(elevate_command)
+            .output()
+            .map_err(|error| format!("拉起管理员终端失败: {error}"))?;
+
+        if output.status.success() {
+            return Ok(());
+        }
+
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        return Err(format!(
+            "拉起管理员终端失败，exit={:?}, stderr={stderr}, stdout={stdout}",
+            output.status.code()
+        ));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("当前平台不支持“以管理员身份打开终端”".to_string())
+    }
+}
+
+/// 读取终端 shell 命令配置；兼容旧版 `terminal.shell.preference`（pwsh/powershell）。
+fn read_terminal_shell_command(state: &State<'_, AppState>) -> Option<String> {
+    let connection = state.db.lock().ok()?;
+    // 优先读取新版完整命令配置。
+    let command = db::read_app_setting(&connection, TERMINAL_SHELL_COMMAND_KEY)
+        .ok()
+        .flatten()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    if command.is_some() {
+        return command;
+    }
+
+    // 回退读取旧版偏好配置，避免历史用户升级后失效。
+    let legacy = db::read_app_setting(&connection, LEGACY_TERMINAL_SHELL_PREFERENCE_KEY)
+        .ok()
+        .flatten()
+        .map(|value| value.trim().to_lowercase())
+        .filter(|value| !value.is_empty())?;
+    if legacy == "powershell" {
+        return Some("powershell.exe".to_string());
+    }
+    if legacy == "pwsh" {
+        return Some("pwsh.exe".to_string());
+    }
+    Some(legacy)
+}
 
 /// 读取 UI 持久化状态（通用键值）。
 #[tauri::command]

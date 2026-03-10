@@ -5,6 +5,8 @@ export type DataSourceType = "salesforce" | "mysql";
 export type SalesforceSource = {
   id: string;
   name: string;
+  // 数据源序号：用于稳定排序与拖拽重排。
+  sortOrder: number;
   // 数据源类型：用于后续按类型路由不同 provider。
   sourceType: DataSourceType | string;
   // 通用配置 JSON：为未来关系型数据库扩展预留。
@@ -71,6 +73,9 @@ export type ObjectDdl = {
   indexDdls: string[];
   constraintDdls: string[];
 };
+
+// Query 右侧抽屉视图类型：按数据源区分 DDL、字段以及 Salesforce 复合抽屉。
+export type QueryDrawerView = "salesforce" | "mysql-ddl" | "mysql-fields";
 
 // 数据源新增/更新负载。
 export type SourceUpsertPayload = {
@@ -141,6 +146,8 @@ export type TabState = {
   soqlDraft: string;
   showQueryBar: boolean;
   showDrawer: boolean;
+  // 抽屉当前视图：MySQL 可在 DDL / 字段间切换，Salesforce 固定为复合抽屉。
+  drawerView: QueryDrawerView;
   showLogs: boolean;
   logs: TabLog[];
   columnVisibility: Record<string, boolean>;
@@ -262,4 +269,65 @@ export type AiCapabilities = {
   provider: string;
   model: string;
   tools: string[];
+};
+
+// 终端会话信息：用于 Tab 悬浮显示 PID 与命令行。
+export type TerminalSessionInfo = {
+  shellName: string;
+  shellVersion: string;
+  pid: number;
+  commandLine: string;
+};
+
+// 终端输出事件负载：后端 PTY 输出分片事件。
+export type TerminalOutputEvent = {
+  tabId: string;
+  data: string;
+};
+
+// 终端关闭事件负载：进程退出后通知前端更新状态。
+export type TerminalClosedEvent = {
+  tabId: string;
+  exitCode: number | null;
+};
+
+// 终端 Shell 选项：由后端动态探测并提供给设置页选择。
+export type TerminalShellOption = {
+  label: string;
+  command: string;
+  shellName: string;
+  shellVersion: string;
+};
+
+// 终端命令项：用于左侧命令库展示与执行。
+export type TerminalCommandItem = {
+  id: string;
+  name: string;
+  command: string;
+  description: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+// 终端命令组：全局存储（与数据源无关）。
+export type TerminalCommandGroup = {
+  id: string;
+  name: string;
+  commands: TerminalCommandItem[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+// 终端命令写入载荷：用于创建和更新命令。
+export type TerminalCommandUpsertPayload = {
+  groupId: string;
+  name: string;
+  command: string;
+  description: string;
+};
+
+// 终端命令排序载荷：按组内最新顺序提交命令 ID 列表。
+export type TerminalCommandReorderPayload = {
+  groupId: string;
+  commandIds: string[];
 };

@@ -9,6 +9,9 @@ pub struct SalesforceSource {
     pub id: String,
     /// 数据源显示名称（用于前端下拉与提示）。
     pub name: String,
+    /// 数据源序号（用于稳定排序与拖拽重排）。
+    #[serde(default)]
+    pub sort_order: i64,
     /// 数据源类型（如 salesforce/mysql）。
     #[serde(default = "default_source_type")]
     pub source_type: String,
@@ -185,6 +188,60 @@ pub struct RecordSavePayload {
     pub creates: Vec<HashMap<String, Value>>,
     /// 待更新记录列表。
     pub updates: Vec<RecordUpdatePayload>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalCommandItem {
+    /// 命令主键。
+    pub id: String,
+    /// 命令名称。
+    pub name: String,
+    /// 命令正文（执行时直接透传给终端会话）。
+    pub command: String,
+    /// 命令描述（可选）。
+    pub description: String,
+    /// 创建时间（RFC3339 字符串）。
+    pub created_at: String,
+    /// 最后更新时间（RFC3339 字符串）。
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalCommandGroup {
+    /// 命令组主键。
+    pub id: String,
+    /// 命令组名称。
+    pub name: String,
+    /// 组内命令列表（按 sort_order 升序）。
+    pub commands: Vec<TerminalCommandItem>,
+    /// 创建时间（RFC3339 字符串）。
+    pub created_at: String,
+    /// 最后更新时间（RFC3339 字符串）。
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalCommandUpsertPayload {
+    /// 所属命令组 ID。
+    pub group_id: String,
+    /// 命令名称。
+    pub name: String,
+    /// 命令正文。
+    pub command: String,
+    /// 命令描述（可空）。
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalCommandReorderPayload {
+    /// 命令组 ID。
+    pub group_id: String,
+    /// 组内命令 ID 顺序列表。
+    pub command_ids: Vec<String>,
 }
 
 /// 对象列表缓存行（SQLite 内部结构）。

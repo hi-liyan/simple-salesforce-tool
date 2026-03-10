@@ -6,7 +6,10 @@ export type RowContextMenuState = {
   cellText: string;
   rowIndex: number;
   columnId: string;
-  canSetNone: boolean;
+  // 当前右键命中的字段是否允许执行空值写入动作。
+  canSetNullish: boolean;
+  // 空值动作文案：按数据源区分 Set None / Set Null。
+  nullishActionLabel: "Set None" | "Set Null" | "";
 };
 
 // DataGrid 表头元数据浮层状态：记录字段名、格式化元数据和锚点坐标。

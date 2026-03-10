@@ -4,6 +4,7 @@ import { api } from "../../../../api";
 import { useObjectsQuery, useSourcesQuery, useSyncSourcesMutation } from "../../../../queries/salesforce";
 import { MainViewMode, useAppStore } from "../../../../store/useAppStore";
 import { useSoqlExecutorStore } from "../../../../store/useSoqlExecutorStore";
+import { useTerminalStore } from "../../../../store/useTerminalStore";
 import { Notice, ObjectDescribe, ObjectDdl, SalesforceObject, TabLog, TabState } from "../../../../types";
 import { useSourceActions } from "./useSourceActions";
 import { useQueryExecution } from "./useQueryExecution";
@@ -91,6 +92,9 @@ export function useMainPageQueryPanel({
   const activeSoqlTabId = useSoqlExecutorStore((state) => state.activeTabId);
   const setActiveSoqlTabId = useSoqlExecutorStore((state) => state.setActiveTabId);
   const closeSoqlTab = useSoqlExecutorStore((state) => state.closeTab);
+  const closeSoqlTabsByIds = useSoqlExecutorStore((state) => state.closeTabsByIds);
+  // Store：Terminal 工作区状态与行为。
+  const switchTerminalSource = useTerminalStore((state) => state.switchSource);
 
   // Objects 查询：随数据源变化拉取对象元数据。
   const { data: objects = [], isFetching: objectsFetching, error: objectsError } = useObjectsQuery(selectedSourceId);
@@ -366,6 +370,10 @@ export function useMainPageQueryPanel({
         (acc, field) => ({
           ...acc,
           [field.name]: {
+            // 补齐顶层字段能力，避免仅依赖 metadata 时丢失 nillable/createable/updateable。
+            nillable: field.nillable,
+            createable: field.createable,
+            updateable: field.updateable,
             ...(field.metadata || {}),
             // 补齐统一 type：让 DataGrid 类型策略可识别 MySQL/Salesforce 字段类型。
             type: field.dataType || (field.metadata?.type as string) || ""
@@ -380,6 +388,7 @@ export function useMainPageQueryPanel({
   const rawQueryPanelActions: QueryPanelActions = useQueryPanelActions({
     activeTab,
     selectedSourceId,
+    selectedSourceType: selectedSource?.sourceType || "salesforce",
     setViewMode,
     openAuthWindow,
     createSoqlConsoleTab,
@@ -389,12 +398,14 @@ export function useMainPageQueryPanel({
     setActiveTabObjectName,
     setActiveSoqlTabId,
     closeSoqlTab,
+    closeSoqlTabsByIds,
     refreshSources,
     handleSourceChange,
     buildDataWorkspaceTabId,
     openObjectTab,
     handleNotQueryableObjectClick,
     closeTab,
+    closeTabsByObjectNames,
     closeLeftTabs,
     closeRightTabs,
     closeOtherTabs,
@@ -459,7 +470,8 @@ export function useMainPageQueryPanel({
   useEffect(() => {
     if (!startupComplete) return;
     switchSoqlSource(selectedSourceId);
-  }, [startupComplete, selectedSourceId, switchSoqlSource]);
+    switchTerminalSource(selectedSourceId);
+  }, [startupComplete, selectedSourceId, switchSoqlSource, switchTerminalSource]);
 
   // 对象列表加载失败时给出明确提示，避免出现“空白但无错误”。
   useEffect(() => {

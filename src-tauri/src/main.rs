@@ -10,6 +10,7 @@ mod models;
 mod providers;
 mod salesforce;
 mod sf_cli;
+mod terminal;
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -20,7 +21,7 @@ use salesforce::SalesforceClient;
 use tauri::Manager;
 
 fn main() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         // 注册 opener 插件：统一使用官方跨平台打开 URL/文件能力。
         // 关闭链接点击注入脚本，避免对现有前端点击行为产生额外影响。
         .plugin(
@@ -44,6 +45,7 @@ fn main() {
                 cli_login_cancel: Mutex::new(None),
                 llm_conversations: Mutex::new(HashMap::new()),
                 llm_stream_cancels: Mutex::new(HashMap::new()),
+                terminal_sessions: Mutex::new(HashMap::new()),
             });
 
             Ok(())
@@ -62,6 +64,7 @@ fn main() {
             commands::open_external_url,
             commands::list_system_logs,
             commands::create_source,
+            commands::reorder_sources,
             commands::test_source_connection,
             commands::update_source,
             commands::delete_source,
@@ -88,8 +91,32 @@ fn main() {
             commands::ai_stop_turn,
             commands::stop_llm_stream_generation,
             commands::get_ui_state,
-            commands::save_ui_state
+            commands::save_ui_state,
+            commands::list_terminal_command_groups,
+            commands::create_terminal_command_group,
+            commands::create_terminal_command,
+            commands::update_terminal_command,
+            commands::delete_terminal_command,
+            commands::reorder_terminal_commands,
+            commands::open_terminal_session,
+            commands::list_available_terminal_shells,
+            commands::write_terminal_input,
+            commands::resize_terminal_session,
+            commands::close_terminal_session,
+            commands::open_elevated_terminal
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    // 统一接管应用退出事件：主进程退出前主动清理全部终端子进程。
+    app.run(|app_handle, event| {
+        if matches!(
+            event,
+            tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+        ) {
+            if let Some(state) = app_handle.try_state::<AppState>() {
+                let _ = terminal::close_all_terminal_sessions(&state.terminal_sessions);
+            }
+        }
+    });
 }

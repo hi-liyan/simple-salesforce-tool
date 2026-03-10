@@ -153,7 +153,7 @@ type DataQueryTabPaneProps = {
   onDeleteCheckedRecords: () => void;
   onApplyPendingChanges: () => void;
   onDiscardPendingChanges: () => void;
-  onToggleDrawer: () => void;
+  onToggleDrawer: (drawerView?: "salesforce" | "mysql-ddl" | "mysql-fields") => void;
   // 刷新当前对象 DDL：仅 MySQL 抽屉使用。
   onRefreshMysqlDdl: () => void;
   onToggleQueryBar: () => void;
@@ -232,8 +232,28 @@ export function DataQueryTabPane({
   objectNames,
   hideTabBar = false
 }: DataQueryTabPaneProps) {
+  // “执行更新”按钮是否可用：可用时使用绿色强调，强化“可提交”感知。
+  const canApplyPendingChanges = Boolean(activeTab && !activeTab.loading && hasPendingChanges);
+  // 工具栏按钮统一尺寸：使用 34px 中间档高度（介于 h-8 与 h-9 之间）。
+  const toolbarButtonClassName = "btn btn-outline btn-sm h-[34px] min-h-[34px]";
+  // “执行更新”按钮样式：可用态使用蓝青渐变强调，贴合项目品牌色并提升可见性。
+  const applyButtonClassName = canApplyPendingChanges
+    ? "btn btn-sm h-[34px] min-h-[34px] border border-brand-600 bg-gradient-to-r from-brand-600 to-brand-500 text-white shadow-[0_6px_16px_rgba(18,158,242,0.25)] hover:from-brand-700 hover:to-brand-600"
+    : toolbarButtonClassName;
+  // 字段搜索模式：支持“名称/标签”与“数据类型”两种过滤维度。
+  const [fieldSearchMode, setFieldSearchMode] = useState<"nameOrLabel" | "dataType">("nameOrLabel");
+  // 字段搜索关键词：用于过滤当前对象字段列表。
+  const [fieldSearchKeyword, setFieldSearchKeyword] = useState("");
+  // MySQL 字段抽屉搜索关键词：仅按字段名过滤。
+  const [mysqlFieldSearchKeyword, setMysqlFieldSearchKeyword] = useState("");
   // 根据数据源类型切换查询栏布局（MySQL 使用 SQL 手工排序表达式）。
   const isMysqlSource = (selectedSourceType || "salesforce").toLowerCase() === "mysql";
+  // 当前抽屉视图：MySQL 支持 DDL / 字段两种视图；Salesforce 固定复合抽屉。
+  const activeDrawerView = isMysqlSource
+    ? activeTab?.drawerView === "mysql-fields"
+      ? "mysql-fields"
+      : "mysql-ddl"
+    : "salesforce";
   // 日志面板高度状态。
   const [logPanelHeight, setLogPanelHeight] = useState(220);
   // 是否正在拖拽日志面板分隔条。
@@ -367,10 +387,38 @@ export function DataQueryTabPane({
     () => [...salesforceSortableFieldSuggestions, ...SOQL_ORDER_BY_SUGGESTIONS],
     [salesforceSortableFieldSuggestions]
   );
+  // 当前对象字段搜索结果：按搜索模式过滤名称/标签或数据类型。
+  const filteredDrawerFields = useMemo(() => {
+    const allFields = activeTab?.describe?.fields || [];
+    const trimmedKeyword = fieldSearchKeyword.trim().toLowerCase();
+    if (!trimmedKeyword) return allFields;
+    return allFields.filter((field) => {
+      if (fieldSearchMode === "dataType") {
+        return String(field.dataType || "").toLowerCase().includes(trimmedKeyword);
+      }
+      const normalizedName = String(field.name || "").toLowerCase();
+      const normalizedLabel = String(field.label || "").toLowerCase();
+      return normalizedName.includes(trimmedKeyword) || normalizedLabel.includes(trimmedKeyword);
+    });
+  }, [activeTab?.describe?.fields, fieldSearchKeyword, fieldSearchMode]);
+  // MySQL 字段搜索结果：只按字段名过滤，行为对齐“字段与SOQL”中的字段搜索体验。
+  const filteredMysqlDrawerFields = useMemo(() => {
+    const allFields = activeTab?.describe?.fields || [];
+    const trimmedKeyword = mysqlFieldSearchKeyword.trim().toLowerCase();
+    if (!trimmedKeyword) return allFields;
+    return allFields.filter((field) => String(field.name || "").toLowerCase().includes(trimmedKeyword));
+  }, [activeTab?.describe?.fields, mysqlFieldSearchKeyword]);
 
   useEffect(() => {
     setSoqlObjectFieldsMap({}); // 切换数据源后清空缓存，避免跨源字段污染。
   }, [selectedSourceId]);
+
+  // 切换对象 Tab 时重置字段搜索，避免跨对象保留旧关键词导致“空结果”误解。
+  useEffect(() => {
+    setFieldSearchKeyword("");
+    setFieldSearchMode("nameOrLabel");
+    setMysqlFieldSearchKeyword("");
+  }, [activeTab?.objectName]);
 
   // 抽屉 SOQL 自动格式化：把“单行长 SQL”转换为多行，提升可读性。
   useEffect(() => {
@@ -547,36 +595,63 @@ export function DataQueryTabPane({
           <div className="flex min-w-0 flex-1 flex-col">
             <div className="border-b border-base-300 px-3 py-1.5 overflow-x-auto">
               <div className="flex flex-row items-center gap-1 min-w-max">
-                <button className="btn btn-outline btn-sm h-10" disabled={activeTab.loading} onClick={onCreateRecord}>
-                  <Plus size={14} />
+                <button className={toolbarButtonClassName} disabled={activeTab.loading} onClick={onCreateRecord}>
+                  <Plus size={13} />
                   新建记录
                 </button>
                 <button
-                  className="btn btn-outline btn-error btn-sm h-10"
+                  className={`${toolbarButtonClassName} btn-error`}
                   disabled={activeTab.loading || activeTab.selectedRecordIds.length === 0}
                   onClick={onDeleteCheckedRecords}
                 >
-                  <Trash2 size={14} />
+                  <Trash2 size={13} />
                   删除勾选({activeTab.selectedRecordIds.length})
                 </button>
-                <button className="btn btn-outline btn-sm h-10" disabled={activeTab.loading || !hasPendingChanges} onClick={onApplyPendingChanges}>
-                  <Play size={14} />
+                <button
+                  className={applyButtonClassName}
+                  disabled={activeTab.loading || !hasPendingChanges}
+                  onClick={onApplyPendingChanges}
+                >
+                  <Play size={13} />
                   执行更新
                 </button>
-                <button className="btn btn-outline btn-sm h-10" disabled={activeTab.loading || !hasPendingChanges} onClick={onDiscardPendingChanges}>
-                  <RotateCcw size={14} />
+                <button className={toolbarButtonClassName} disabled={activeTab.loading || !hasPendingChanges} onClick={onDiscardPendingChanges}>
+                  <RotateCcw size={13} />
                   撤回修改
                 </button>
-                <button className="btn btn-outline btn-sm h-10" disabled={activeTab.loading} onClick={onToggleQueryBar}>
-                  <Search size={14} />
+                <button className={toolbarButtonClassName} disabled={activeTab.loading} onClick={onToggleQueryBar}>
+                  <Search size={13} />
                   {activeTab.showQueryBar ? "隐藏查询栏" : "显示查询栏"}
                 </button>
-                <button className="btn btn-outline btn-sm h-10" disabled={activeTab.loading} onClick={onToggleDrawer}>
-                  <PanelRightOpen size={14} />
-                  {isMysqlSource ? "DDL" : "字段与SOQL"}
-                </button>
-                <button className="btn btn-outline btn-sm h-10" disabled={activeTab.loading} onClick={onToggleLogs}>
-                  <ScrollText size={14} />
+                {isMysqlSource ? (
+                  <>
+                    {/* MySQL DDL 抽屉按钮：点击同按钮可关闭，再次点击可打开。 */}
+                    <button
+                      className={`${toolbarButtonClassName} ${activeTab.showDrawer && activeDrawerView === "mysql-ddl" ? "btn-active" : ""}`}
+                      disabled={activeTab.loading}
+                      onClick={() => onToggleDrawer("mysql-ddl")}
+                    >
+                      <PanelRightOpen size={13} />
+                      DDL
+                    </button>
+                    {/* MySQL 字段抽屉按钮：参考 Salesforce“字段与SOQL”中的字段勾选能力。 */}
+                    <button
+                      className={`${toolbarButtonClassName} ${activeTab.showDrawer && activeDrawerView === "mysql-fields" ? "btn-active" : ""}`}
+                      disabled={activeTab.loading}
+                      onClick={() => onToggleDrawer("mysql-fields")}
+                    >
+                      <PanelRightOpen size={13} />
+                      字段
+                    </button>
+                  </>
+                ) : (
+                  <button className={toolbarButtonClassName} disabled={activeTab.loading} onClick={() => onToggleDrawer("salesforce")}>
+                    <PanelRightOpen size={13} />
+                    字段与SOQL
+                  </button>
+                )}
+                <button className={toolbarButtonClassName} disabled={activeTab.loading} onClick={onToggleLogs}>
+                  <ScrollText size={13} />
                   日志
                 </button>
               </div>
@@ -750,7 +825,13 @@ export function DataQueryTabPane({
                 className="absolute -left-[3px] top-0 z-20 h-full w-[6px] cursor-col-resize"
                 role="separator"
                 aria-orientation="vertical"
-                aria-label={isMysqlSource ? "拖拽调整DDL抽屉宽度" : "拖拽调整字段与SOQL抽屉宽度"}
+                aria-label={
+                  isMysqlSource
+                    ? activeDrawerView === "mysql-fields"
+                      ? "拖拽调整字段抽屉宽度"
+                      : "拖拽调整DDL抽屉宽度"
+                    : "拖拽调整字段与SOQL抽屉宽度"
+                }
                 onMouseDown={(event) => {
                   event.preventDefault(); // 阻止拖拽起点触发文本选中。
                   drawerResizeStartXRef.current = event.clientX; // 记录本次拖拽起点 X。
@@ -758,7 +839,7 @@ export function DataQueryTabPane({
                   setDraggingDrawerResize(true); // 进入拖拽状态。
                 }}
               />
-              {isMysqlSource ? (
+              {isMysqlSource && activeDrawerView === "mysql-ddl" ? (
                 <div className="flex min-h-0 flex-1 flex-col bg-base-100">
                   <div className="flex items-center justify-between border-b border-base-300 px-3 py-2">
                     <span className="text-[12px] text-neutral/70">DDL</span>
@@ -766,7 +847,7 @@ export function DataQueryTabPane({
                       <button className="btn btn-ghost btn-xs" disabled={mysqlDdlLoading || activeTab.loading} onClick={onRefreshMysqlDdl}>
                         刷新
                       </button>
-                      <button className="btn btn-circle btn-ghost btn-xs" onClick={onToggleDrawer} aria-label="关闭DDL抽屉">
+                      <button className="btn btn-circle btn-ghost btn-xs" onClick={() => onToggleDrawer("mysql-ddl")} aria-label="关闭DDL抽屉">
                         <X size={14} />
                       </button>
                     </div>
@@ -812,6 +893,83 @@ export function DataQueryTabPane({
                     )}
                   </div>
                 </div>
+              ) : isMysqlSource && activeDrawerView === "mysql-fields" ? (
+                <div className="flex min-h-0 flex-1 flex-col bg-base-100">
+                  <div className="flex items-center justify-between border-b border-base-300 px-3 py-2">
+                    <span className="text-[12px] text-neutral/70">字段</span>
+                    <div className="flex flex-row items-center gap-1">
+                      <button className="btn btn-ghost btn-xs" disabled={activeTab.loading || !activeTab.describe} onClick={onToggleAllFields}>
+                        {activeTab.describe?.fields.every((field) => (activeTab.columnVisibility[field.name] ?? true) === true) ? "取消全选" : "全选"}
+                      </button>
+                      <button className="btn btn-circle btn-ghost btn-xs" onClick={() => onToggleDrawer("mysql-fields")} aria-label="关闭字段抽屉">
+                        <X size={14} />
+                      </button>
+                    </div>
+                  </div>
+                  {/* MySQL 字段搜索栏：仅按字段名搜索。 */}
+                  <div className="flex items-center gap-2 border-b border-base-300 px-3 py-2">
+                    <label className="input input-bordered input-xs flex h-7 flex-1 items-center gap-1">
+                      <Search size={12} className="text-neutral/60" />
+                      <input
+                        value={mysqlFieldSearchKeyword}
+                        onChange={(event) => setMysqlFieldSearchKeyword(event.target.value)}
+                        placeholder="搜索字段名，例如 created_at"
+                        className="w-full bg-transparent text-[12px]"
+                        disabled={!activeTab.describe || activeTab.describe.fields.length === 0}
+                      />
+                      {mysqlFieldSearchKeyword.trim().length > 0 && (
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-xs btn-circle"
+                          onClick={() => setMysqlFieldSearchKeyword("")}
+                          aria-label="清空字段搜索关键词"
+                          disabled={!activeTab.describe || activeTab.describe.fields.length === 0}
+                        >
+                          <X size={12} />
+                        </button>
+                      )}
+                    </label>
+                  </div>
+                  {/* MySQL 字段列表：通过勾选控制数据表列显示。 */}
+                  <div className="min-h-0 flex-1 overflow-auto">
+                    {!activeTab.describe && (
+                      <div className="px-3 py-2">
+                        <span className="text-[12px] text-neutral/70">正在加载字段元数据...</span>
+                      </div>
+                    )}
+                    {activeTab.describe && activeTab.describe.fields.length === 0 && (
+                      <div className="px-3 py-2">
+                        <span className="text-[12px] text-neutral/70">未获取到字段元数据。</span>
+                      </div>
+                    )}
+                    {activeTab.describe && activeTab.describe.fields.length > 0 && filteredMysqlDrawerFields.length === 0 && (
+                      <div className="px-3 py-2">
+                        <span className="text-[12px] text-neutral/70">未匹配到字段，请调整搜索条件。</span>
+                      </div>
+                    )}
+                    {filteredMysqlDrawerFields.map((field) => {
+                      const checked = activeTab.columnVisibility[field.name] ?? true;
+                      return (
+                        <div key={field.name} className="px-3 py-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="checkbox"
+                                className="checkbox checkbox-sm"
+                                checked={checked}
+                                disabled={activeTab.loading}
+                                onChange={(event) => onToggleFieldVisibility(field.name, event.target.checked)}
+                              />
+                              <span className="text-[12px]">{field.name}</span>
+                            </div>
+                            <span className="truncate text-[12px] text-neutral/70">{field.dataType}</span>
+                          </div>
+                          <div className="mt-2 border-b border-base-300" />
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
               ) : (
               <>
               <div className="flex min-h-0 flex-[1_1_50%] flex-col border-b border-base-300 bg-base-100">
@@ -821,10 +979,46 @@ export function DataQueryTabPane({
                     <button className="btn btn-ghost btn-xs" disabled={activeTab.loading || !activeTab.describe} onClick={onToggleAllFields}>
                       {activeTab.describe?.fields.every((field) => (activeTab.columnVisibility[field.name] ?? true) === true) ? "取消全选" : "全选"}
                     </button>
-                    <button className="btn btn-circle btn-ghost btn-xs" onClick={onToggleDrawer} aria-label="关闭字段与SOQL">
+                    <button className="btn btn-circle btn-ghost btn-xs" onClick={() => onToggleDrawer("salesforce")} aria-label="关闭字段与SOQL">
                       <X size={14} />
                     </button>
                   </div>
+                </div>
+                {/* 字段搜索栏：可按名称/标签或数据类型过滤当前对象字段。 */}
+                <div className="flex items-center gap-2 border-b border-base-300 px-3 py-2">
+                  {/* 搜索模式选择器。 */}
+                  <select
+                    className="select select-bordered select-xs w-[120px]"
+                    value={fieldSearchMode}
+                    onChange={(event) => setFieldSearchMode(event.target.value as "nameOrLabel" | "dataType")}
+                    disabled={!activeTab.describe || activeTab.describe.fields.length === 0}
+                  >
+                    <option value="nameOrLabel">名称/Label</option>
+                    <option value="dataType">数据类型</option>
+                  </select>
+                  {/* 搜索关键词输入框。 */}
+                  <label className="input input-bordered input-xs flex h-7 flex-1 items-center gap-1">
+                    <Search size={12} className="text-neutral/60" />
+                    <input
+                      value={fieldSearchKeyword}
+                      onChange={(event) => setFieldSearchKeyword(event.target.value)}
+                      placeholder={fieldSearchMode === "dataType" ? "搜索数据类型，例如 string" : "搜索字段名称或 Label"}
+                      className="w-full bg-transparent text-[12px]"
+                      disabled={!activeTab.describe || activeTab.describe.fields.length === 0}
+                    />
+                    {/* 清空按钮：仅在输入关键词时显示，支持一键清空。 */}
+                    {fieldSearchKeyword.trim().length > 0 && (
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-xs btn-circle"
+                        onClick={() => setFieldSearchKeyword("")}
+                        aria-label="清空字段搜索关键词"
+                        disabled={!activeTab.describe || activeTab.describe.fields.length === 0}
+                      >
+                        <X size={12} />
+                      </button>
+                    )}
+                  </label>
                 </div>
 
                 <div className="min-h-0 flex-1 overflow-auto">
@@ -838,8 +1032,13 @@ export function DataQueryTabPane({
                       <span className="text-[12px] text-neutral/70">未获取到字段元数据。</span>
                     </div>
                   )}
+                  {activeTab.describe && activeTab.describe.fields.length > 0 && filteredDrawerFields.length === 0 && (
+                    <div className="px-3 py-2">
+                      <span className="text-[12px] text-neutral/70">未匹配到字段，请调整搜索条件。</span>
+                    </div>
+                  )}
 
-                  {activeTab.describe?.fields.map((field) => {
+                  {filteredDrawerFields.map((field) => {
                     const checked = activeTab.columnVisibility[field.name] ?? true;
                     return (
                       <div key={field.name} className="px-3 py-2">

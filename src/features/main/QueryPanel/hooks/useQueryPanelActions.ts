@@ -2,12 +2,15 @@ import { useMemo } from "react";
 import { QueryPanelActions } from "../types";
 import { ObjectDescribe, SalesforceObject, TabState } from "../../../../types";
 import { MainViewMode } from "../../../../store/useAppStore";
+import { getMysqlPrimaryKeyField, getRecordKey } from "../logic/queryUtils";
 
 type UseQueryPanelActionsInput = {
   // 当前激活 Query Tab。
   activeTab: TabState | null;
   // 当前选中数据源 ID。
   selectedSourceId: string;
+  // 当前选中数据源类型：用于 MySQL 主键键值计算。
+  selectedSourceType: string;
   // 切换页面模式。
   setViewMode: (viewMode: MainViewMode) => void;
   // 打开认证窗口。
@@ -26,6 +29,8 @@ type UseQueryPanelActionsInput = {
   setActiveSoqlTabId: (tabId: string) => void;
   // 关闭控制台 Tab。
   closeSoqlTab: (tabId: string) => void;
+  // 批量关闭控制台 Tabs。
+  closeSoqlTabsByIds: (tabIds: string[]) => void;
   // 刷新数据源。
   refreshSources: (syncCli: boolean, preferredOrgId?: string, preferredSourceId?: string) => Promise<void>;
   // 切换数据源。
@@ -38,6 +43,8 @@ type UseQueryPanelActionsInput = {
   handleNotQueryableObjectClick: (item: SalesforceObject) => void;
   // 关闭对象 Tab。
   closeTab: (objectName: string) => void;
+  // 批量关闭对象 Tabs。
+  closeTabsByObjectNames: (objectNames: string[]) => void;
   // 关闭左侧对象 Tabs。
   closeLeftTabs: (objectName: string) => void;
   // 关闭右侧对象 Tabs。
@@ -55,7 +62,7 @@ type UseQueryPanelActionsInput = {
   // 撤销未提交修改。
   discardPendingChanges: () => void;
   // 切换字段/DDL 抽屉。
-  toggleDrawerForActiveTab: () => Promise<void>;
+  toggleDrawerForActiveTab: (drawerView?: "salesforce" | "mysql-ddl" | "mysql-fields") => Promise<void>;
   // 加载 MySQL DDL。
   loadMysqlDdl: (objectName: string) => Promise<void>;
   // 更新 Tab。
@@ -84,6 +91,7 @@ type UseQueryPanelActionsInput = {
 export function useQueryPanelActions({
   activeTab,
   selectedSourceId,
+  selectedSourceType,
   setViewMode,
   openAuthWindow,
   createSoqlConsoleTab,
@@ -93,12 +101,14 @@ export function useQueryPanelActions({
   setActiveTabObjectName,
   setActiveSoqlTabId,
   closeSoqlTab,
+  closeSoqlTabsByIds,
   refreshSources,
   handleSourceChange,
   buildDataWorkspaceTabId,
   openObjectTab,
   handleNotQueryableObjectClick,
   closeTab,
+  closeTabsByObjectNames,
   closeLeftTabs,
   closeRightTabs,
   closeOtherTabs,
@@ -144,6 +154,26 @@ export function useQueryPanelActions({
         }
         closeSoqlTab(parsed.targetId); // 关闭控制台 Tab。
       },
+      onCloseWorkspaceTabs: (workspaceTabIds) => {
+        if (workspaceTabIds.length === 0) return;
+        const dataObjectNames: string[] = [];
+        const consoleTabIds: string[] = [];
+        workspaceTabIds.forEach((workspaceTabId) => {
+          const parsed = parseWorkspaceTabId(workspaceTabId);
+          if (!parsed) return;
+          if (parsed.kind === "data") {
+            dataObjectNames.push(parsed.targetId); // 汇总 data tabs，走对象批量关闭。
+            return;
+          }
+          consoleTabIds.push(parsed.targetId); // 汇总 console tabs，走控制台批量关闭。
+        });
+        if (dataObjectNames.length > 0) {
+          closeTabsByObjectNames(dataObjectNames);
+        }
+        if (consoleTabIds.length > 0) {
+          closeSoqlTabsByIds(consoleTabIds);
+        }
+      },
       onChangeSource: (sourceId) => void handleSourceChange(sourceId),
       onRefreshSources: () => void refreshSources(true),
       onOpenObject: (item) => {
@@ -162,7 +192,7 @@ export function useQueryPanelActions({
       onDeleteCheckedRecords: () => void deleteCheckedRecords(),
       onApplyPendingChanges: () => void applyPendingChanges(),
       onDiscardPendingChanges: discardPendingChanges,
-      onToggleDrawer: () => void toggleDrawerForActiveTab(),
+      onToggleDrawer: (drawerView) => void toggleDrawerForActiveTab(drawerView),
       onRefreshMysqlDdl: () => {
         if (!activeTab) return;
         void loadMysqlDdl(activeTab.objectName);
@@ -247,9 +277,19 @@ export function useQueryPanelActions({
           const target = nextRecords[rowIndex];
           if (!target) return item;
 
-          const nextRecord = { ...target, [columnName]: value };
-          const recordKey = nextRecord.__localId ? String(nextRecord.__localId) : nextRecord.Id ? String(nextRecord.Id) : `row-${rowIndex}`;
-          const cellKey = `${recordKey}:${columnName}`;
+          // 旧行编辑统一绑定基线键：避免主键字段被修改后，无法再定位 baseline。
+          const currentRecordKey = getRecordKey(target, rowIndex, {
+            sourceType: selectedSourceType,
+            mysqlPrimaryKeyField: getMysqlPrimaryKeyField(item.describe)
+          });
+          const baselineKeyFromRecord = typeof target.__baselineKey === "string" ? target.__baselineKey : "";
+          const stableBaselineKey = baselineKeyFromRecord || currentRecordKey;
+          const isEditingNewRow = Boolean(target.__isNew);
+          const nextRecord = isEditingNewRow
+            ? { ...target, [columnName]: value }
+            : { ...target, __baselineKey: stableBaselineKey, [columnName]: value };
+          // 统一记录键：MySQL 使用主键值，Salesforce 使用 Id，确保脏标记与渲染高亮一致。
+          const cellKey = `${stableBaselineKey}:${columnName}`;
           const dirtySet = new Set(item.dirtyCellKeys);
           const isNewRow = Boolean(nextRecord.__isNew);
           if (isNewRow) {
@@ -265,7 +305,7 @@ export function useQueryPanelActions({
                 return String(input);
               }
             };
-            const baselineValue = stringify(item.baselineRecords[recordKey]?.[columnName]);
+            const baselineValue = stringify(item.baselineRecords[stableBaselineKey]?.[columnName]);
             const nextValue = stringify(value);
             if (baselineValue === nextValue) {
               dirtySet.delete(cellKey); // 改回原值则移除脏标记。
@@ -333,9 +373,12 @@ export function useQueryPanelActions({
       buildConsoleWorkspaceTabId,
       parseWorkspaceTabId,
       setActiveTabObjectName,
+      selectedSourceType,
       setActiveSoqlTabId,
       closeTab,
+      closeTabsByObjectNames,
       closeSoqlTab,
+      closeSoqlTabsByIds,
       handleSourceChange,
       refreshSources,
       buildDataWorkspaceTabId,

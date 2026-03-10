@@ -4,8 +4,9 @@ use std::time::Duration;
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sqlx::mysql::types::{MySqlTime, MySqlTimeSign};
 use sqlx::mysql::{MySqlPool, MySqlPoolOptions, MySqlRow};
-use sqlx::{Column, MySql, QueryBuilder, Row, TypeInfo};
+use sqlx::{types::Json, Column, MySql, QueryBuilder, Row, TypeInfo};
 
 use crate::error::AppError;
 use crate::models::{
@@ -811,6 +812,12 @@ fn row_try_get_json_value(row: &MySqlRow, column_name: &str, mysql_type: &str) -
     }
 
     if is_mysql_time_type(&normalized) {
+        if let Ok(value) = row.try_get::<Option<MySqlTime>, _>(column_name) {
+            return value
+                .map(format_mysql_time_value)
+                .map(Value::String)
+                .unwrap_or(Value::Null);
+        }
         if let Ok(value) = row.try_get::<Option<NaiveTime>, _>(column_name) {
             return value
                 .map(|item| Value::String(item.format("%H:%M:%S%.f").to_string()))
@@ -837,6 +844,12 @@ fn row_try_get_json_value(row: &MySqlRow, column_name: &str, mysql_type: &str) -
 
     if is_mysql_unsigned_integer_type(&normalized) {
         if let Ok(value) = row.try_get::<Option<u64>, _>(column_name) {
+            // BIGINT UNSIGNED 可能超过 JS Number 安全整数范围，统一按字符串返回避免前端精度丢失。
+            if normalized == "bigint unsigned" {
+                return value
+                    .map(|item| Value::String(item.to_string()))
+                    .unwrap_or(Value::Null);
+            }
             return value
                 .map(|item| Value::Number(serde_json::Number::from(item)))
                 .unwrap_or(Value::Null);
@@ -873,8 +886,11 @@ fn row_try_get_json_value(row: &MySqlRow, column_name: &str, mysql_type: &str) -
         }
     }
 
-    // JSON 原样保留字符串，前端可按需展开。
+    // JSON 优先解码为结构化值，前端可直接展示对象/数组内容。
     if is_mysql_json_type(&normalized) {
+        if let Ok(value) = row.try_get::<Option<Json<Value>>, _>(column_name) {
+            return value.map(|item| item.0).unwrap_or(Value::Null);
+        }
         if let Ok(value) = row.try_get::<Option<String>, _>(column_name) {
             return value.map(Value::String).unwrap_or(Value::Null);
         }
@@ -889,7 +905,15 @@ fn row_try_get_json_value(row: &MySqlRow, column_name: &str, mysql_type: &str) -
     if is_mysql_binary_type(&normalized) {
         if let Ok(value) = row.try_get::<Option<Vec<u8>>, _>(column_name) {
             return value
-                .map(|bytes| Value::String(String::from_utf8_lossy(&bytes).to_string()))
+                .map(|bytes| {
+                    if normalized == "bit" {
+                        return Value::String(format_mysql_bit_value(&bytes));
+                    }
+                    if is_mysql_geometry_type(&normalized) {
+                        return Value::String(format_mysql_geometry_value(&bytes));
+                    }
+                    Value::String(format_mysql_binary_value(&bytes))
+                })
                 .unwrap_or(Value::Null);
         }
     }
@@ -901,6 +925,7 @@ fn row_try_get_json_value(row: &MySqlRow, column_name: &str, mysql_type: &str) -
             .unwrap_or(Value::Null);
     }
     if let Ok(value) = row.try_get::<Option<u64>, _>(column_name) {
+        // 兜底分支无法准确获知 unsigned 具体位宽，保留数值语义避免影响普通整数字段。
         return value
             .map(|item| Value::Number(serde_json::Number::from(item)))
             .unwrap_or(Value::Null);
@@ -921,7 +946,7 @@ fn row_try_get_json_value(row: &MySqlRow, column_name: &str, mysql_type: &str) -
     }
     if let Ok(value) = row.try_get::<Option<Vec<u8>>, _>(column_name) {
         return value
-            .map(|bytes| Value::String(String::from_utf8_lossy(&bytes).to_string()))
+            .map(|bytes| Value::String(format_mysql_binary_value(&bytes)))
             .unwrap_or(Value::Null);
     }
     Value::Null
@@ -1027,6 +1052,145 @@ fn is_mysql_binary_type(mysql_type: &str) -> bool {
             | "multipolygon"
             | "geometrycollection"
     )
+}
+
+/// 判断是否为空间类型（几何对象）。
+fn is_mysql_geometry_type(mysql_type: &str) -> bool {
+    matches!(
+        mysql_type,
+        "geometry"
+            | "point"
+            | "linestring"
+            | "polygon"
+            | "multipoint"
+            | "multilinestring"
+            | "multipolygon"
+            | "geometrycollection"
+    )
+}
+
+/// MySQL TIME 文本格式化：支持负值与 24 小时以上区间。
+fn format_mysql_time_value(value: MySqlTime) -> String {
+    let sign = if value.sign() == MySqlTimeSign::Negative {
+        "-"
+    } else {
+        ""
+    };
+    let base = format!(
+        "{sign}{:02}:{:02}:{:02}",
+        value.hours(),
+        value.minutes(),
+        value.seconds()
+    );
+    let microseconds = value.microseconds();
+    if microseconds == 0 {
+        return base;
+    }
+    let fraction = format!("{microseconds:06}");
+    let trimmed = fraction.trim_end_matches('0');
+    format!("{base}.{trimmed}")
+}
+
+/// BIT 字段可视化：输出位串并附带十六进制，便于排查二进制位值。
+fn format_mysql_bit_value(bytes: &[u8]) -> String {
+    if bytes.is_empty() {
+        return "<BIT 0 bytes> b''".to_string();
+    }
+    let total_bytes = bytes.len();
+    let bits = bytes
+        .iter()
+        .map(|item| format!("{item:08b}"))
+        .collect::<Vec<_>>()
+        .join("");
+    format!(
+        "<BIT {total_bytes} bytes> b'{bits}' ({})",
+        format_hex_with_prefix(bytes, bytes.len())
+    )
+}
+
+/// Geometry 字段可视化：参考 Navicat/DataGrip，展示类型占位、长度与十六进制预览。
+fn format_mysql_geometry_value(bytes: &[u8]) -> String {
+    if bytes.is_empty() {
+        return "<GEOMETRY 0 bytes>".to_string();
+    }
+    let total_bytes = bytes.len();
+    // MySQL 内部 Geometry 二进制通常以 4 字节 SRID 开头，后续为 WKB。
+    let (srid, wkb_bytes) = parse_mysql_geometry_payload(bytes);
+    let geometry_type = detect_wkb_geometry_type(wkb_bytes).unwrap_or("UNKNOWN");
+    let preview = format_hex_with_prefix(wkb_bytes, 64);
+    match srid {
+        Some(value) => format!(
+            "<GEOMETRY({geometry_type}) SRID={value}, {total_bytes} bytes> {preview}"
+        ),
+        None => format!("<GEOMETRY({geometry_type}) {total_bytes} bytes> {preview}"),
+    }
+}
+
+/// 二进制字段可视化：参考 Navicat/DataGrip，展示类型占位、长度与十六进制预览。
+fn format_mysql_binary_value(bytes: &[u8]) -> String {
+    if bytes.is_empty() {
+        return "0x".to_string();
+    }
+    let total_bytes = bytes.len();
+    let preview = format_hex_with_prefix(bytes, 64);
+    if total_bytes > 64 {
+        return format!("<BINARY {total_bytes} bytes> {preview}");
+    }
+    preview
+}
+
+/// 将字节数组格式化为带 0x 前缀的十六进制字符串，并支持截断预览。
+fn format_hex_with_prefix(bytes: &[u8], max_bytes: usize) -> String {
+    if bytes.is_empty() {
+        return "0x".to_string();
+    }
+    let take = bytes.len().min(max_bytes);
+    let mut output = String::from("0x");
+    for byte in &bytes[..take] {
+        output.push_str(&format!("{byte:02X}"));
+    }
+    if bytes.len() > max_bytes {
+        output.push_str("...");
+    }
+    output
+}
+
+/// 解析 MySQL Geometry 负载：优先识别 SRID + WKB，失败时回退原始字节。
+fn parse_mysql_geometry_payload(bytes: &[u8]) -> (Option<u32>, &[u8]) {
+    if bytes.len() < 5 {
+        return (None, bytes);
+    }
+    // WKB 起始字节应为 0 或 1（字节序标记），若第 5 字节不满足则认为无 SRID 头。
+    if bytes[4] != 0 && bytes[4] != 1 {
+        return (None, bytes);
+    }
+    let srid = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+    (Some(srid), &bytes[4..])
+}
+
+/// 识别 WKB 几何类型名：用于显示 `<GEOMETRY(type)>` 头部标签。
+fn detect_wkb_geometry_type(wkb: &[u8]) -> Option<&'static str> {
+    if wkb.len() < 5 {
+        return None;
+    }
+    let byte_order = wkb[0];
+    let code = match byte_order {
+        0 => u32::from_be_bytes([wkb[1], wkb[2], wkb[3], wkb[4]]),
+        1 => u32::from_le_bytes([wkb[1], wkb[2], wkb[3], wkb[4]]),
+        _ => return None,
+    };
+    // 兼容常见 EWKB 扩展标志位，仅保留低 16 位基础类型码。
+    let base_code = code & 0xFFFF;
+    match base_code {
+        1 => Some("POINT"),
+        2 => Some("LINESTRING"),
+        3 => Some("POLYGON"),
+        4 => Some("MULTIPOINT"),
+        5 => Some("MULTILINESTRING"),
+        6 => Some("MULTIPOLYGON"),
+        7 => Some("GEOMETRYCOLLECTION"),
+        _ => None,
+    }
 }
 
 /// 将布尔值转换为 JSON 数字（false=0, true=1），与 MySQL tinyint 语义对齐。

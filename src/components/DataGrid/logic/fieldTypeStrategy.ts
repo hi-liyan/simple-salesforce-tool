@@ -4,7 +4,8 @@ import {
   isDateTimeType,
   isDateType,
   isNumberType,
-  isPicklistType
+  isPicklistType,
+  isPrecisionSensitiveIntegerType
 } from "../utils/field";
 
 // DataGrid 字段策略类型：统一映射不同字段到独立处理分支。
@@ -16,6 +17,8 @@ export function resolveFieldTypeStrategy(metadata: Record<string, unknown>): Fie
   if (isPicklistType(fieldType)) return "picklist";
   if (isDateType(fieldType)) return "date";
   if (isDateTimeType(fieldType)) return "datetime";
+  // BIGINT UNSIGNED 在 JS Number 中会有精度风险，统一按文本处理。
+  if (isPrecisionSensitiveIntegerType(metadata)) return "text";
   if (isNumberType(fieldType)) return "number";
   if (isBooleanType(fieldType)) return "boolean";
   return "text";

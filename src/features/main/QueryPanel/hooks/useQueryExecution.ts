@@ -41,7 +41,10 @@ type UseQueryExecutionInput = {
   // 从查询语句提取 where 子句。
   extractWhereClause: (soql: string, objectName: string) => string | null;
   // 构建基线记录快照。
-  buildBaselineRecords: (records: Record<string, unknown>[]) => Record<string, Record<string, unknown>>;
+  buildBaselineRecords: (
+    records: Record<string, unknown>[],
+    options?: { sourceType?: string; mysqlPrimaryKeyField?: string }
+  ) => Record<string, Record<string, unknown>>;
   // 获取可排序字段集合。
   getSortableFieldNames: (describe: ObjectDescribe) => string[];
 };
@@ -90,6 +93,10 @@ export function useQueryExecution({
       const sortField = sortableFieldSet.has(rawSortField) ? rawSortField : "";
       const sortDirection = directionOverride ?? tab?.sortDirection ?? "DESC";
       const sortClause = (sortClauseOverride ?? tab?.sortClause ?? "").trim();
+      // MySQL 主键字段：用于生成稳定记录键，避免脏标记与基线键不一致。
+      const mysqlPrimaryKeyField = normalizedType === "mysql"
+        ? describe.fields.find((field) => String(field.metadata?.columnKey || "").toUpperCase() === "PRI")?.name || ""
+        : "";
       const visibility = tab?.columnVisibility ?? {};
       const selectedFields = describe.fields
         .map((field) => field.name)
@@ -137,7 +144,10 @@ export function useQueryExecution({
           currentSoql: soql,
           soqlDraft: soql,
           dirtyCellKeys: [],
-          baselineRecords: buildBaselineRecords(result.records),
+          baselineRecords: buildBaselineRecords(result.records, {
+            sourceType: normalizedType,
+            mysqlPrimaryKeyField
+          }),
           notice: { type: "success", message: `${objectName} 查询成功，共 ${result.totalSize} 条。` }
         }));
         appendTabLog(objectName, {
@@ -186,6 +196,11 @@ export function useQueryExecution({
 
     patchTab(activeTab.objectName, (item) => ({ ...item, loading: true }));
     try {
+      const normalizedType = (selectedSourceType || "salesforce").toLowerCase();
+      // 自定义 SQL/SOQL 执行后仍需使用统一记录键策略，保证高亮与撤销一致。
+      const mysqlPrimaryKeyField = normalizedType === "mysql"
+        ? activeTab.describe?.fields.find((field) => String(field.metadata?.columnKey || "").toUpperCase() === "PRI")?.name || ""
+        : "";
       const rawResult = await api.queryRecords(selectedSourceId, activeTab.soqlDraft);
       const result = normalizeQueryResult(rawResult);
       const nextVisibility = buildVisibilityFromSoql(activeTab.soqlDraft, activeTab.describe, activeTab.columnVisibility);
@@ -199,7 +214,10 @@ export function useQueryExecution({
         currentSoql: activeTab.soqlDraft,
         columnVisibility: nextVisibility,
         dirtyCellKeys: [],
-        baselineRecords: buildBaselineRecords(result.records),
+        baselineRecords: buildBaselineRecords(result.records, {
+          sourceType: normalizedType,
+          mysqlPrimaryKeyField
+        }),
         whereClause: extractWhereClause(activeTab.soqlDraft, activeTab.objectName) ?? item.whereClause,
         notice: { type: "success", message: `${activeTab.objectName} 执行${queryLanguageLabel}成功，共 ${result.totalSize} 条。` }
       }));
@@ -233,6 +251,7 @@ export function useQueryExecution({
     buildVisibilityFromSoql,
     buildBaselineRecords,
     extractWhereClause,
+    selectedSourceType,
     appendTabLog,
     persistColumnVisibility
   ]);

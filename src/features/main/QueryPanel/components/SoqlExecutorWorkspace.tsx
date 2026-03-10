@@ -272,22 +272,26 @@ export function SoqlExecutorWorkspace({
     };
   }, [selectedSourceId, activeTab, objectNames, objectDescribeMap]);
 
-  // 结果表专用数据：关系字段扁平化 + 子查询展开为多行。
+  // 结果表专用数据：Salesforce 走关系字段扁平化；MySQL 保持原始列结构（JSON 不拆列）。
   const gridResult = useMemo<QueryResult>(() => {
     if (!activeTab) return { totalSize: 0, records: [] };
+    // MySQL 执行器结果与对象查询页保持一致：按后端返回原字段渲染。
+    if (isMysqlSource) {
+      return normalizeQueryResult(activeTab.result);
+    }
     return {
       totalSize: activeTab.result.totalSize,
       records: activeTab.result.records.flatMap((record) => expandRecordForGridRows(record))
     };
-  }, [activeTab]);
+  }, [activeTab, isMysqlSource]);
 
-  // 当前标签可见列：从扁平化后的结果记录动态抽取字段。
+  // 当前标签可见列：从结果记录动态抽取字段。
   const visibleColumns = useMemo(() => {
     if (!activeTab) return [];
-    return extractVisibleColumns(gridResult.records);
-  }, [activeTab, gridResult.records]);
+    return extractVisibleColumns(gridResult.records, isMysqlSource);
+  }, [activeTab, gridResult.records, isMysqlSource]);
 
-  // 当前标签字段元数据映射：优先使用 describe 的 label/type，再降级到值推断；执行器模式统一只读。
+  // 当前标签字段元数据映射：优先使用 describe 的 label/type，再降级到值推断。
   const fieldMetadataMap = useMemo(() => {
     const primaryObjectName = extractPrimaryObjectName(activeTab?.soqlDraft || "");
     return visibleColumns.reduce((acc, fieldName) => {
@@ -297,13 +301,7 @@ export function SoqlExecutorWorkspace({
         objectDescribeMap,
         gridResult.records
       );
-      acc[fieldName] = {
-        ...(resolvedMetadata || {}),
-        // 禁止更新：DataGrid 将据此禁用编辑。
-        updateable: false,
-        // 禁止创建：DataGrid 将据此禁用新建场景编辑。
-        createable: false
-      };
+      acc[fieldName] = resolvedMetadata || {};
       return acc;
     }, {} as Record<string, Record<string, unknown>>);
   }, [activeTab?.soqlDraft, visibleColumns, objectDescribeMap, gridResult.records]);
@@ -879,12 +877,14 @@ export function SoqlExecutorWorkspace({
                     result={gridResult}
                     visibleColumns={visibleColumns}
                     fieldMetadataMap={fieldMetadataMap}
+                    readOnlyMode={true}
                     dirtyCellKeys={[]}
                     selectedRecordIds={activeTab.selectedRecordIds}
                     salesforceTimezone={salesforceTimezone}
                     selectedSourceType={selectedSourceType}
                     pendingDeleteRecordIds={[]}
                     enableReadonlyCellHint={false}
+                    allowReadonlyOverlay={true}
                     showSelectionColumn={false}
                     onToggleRecord={(recordId, checked) => {
                       patchActiveTab((tab) => ({
@@ -1178,7 +1178,7 @@ function extractFromObjectNames(soql: string): string[] {
 }
 
 // 抽取可见列：合并所有记录的顶层键，并过滤 Salesforce attributes。
-function extractVisibleColumns(records: Record<string, unknown>[]): string[] {
+function extractVisibleColumns(records: Record<string, unknown>[], isMysqlSource = false): string[] {
   const columnSet = new Set<string>();
   records.forEach((record) => {
     Object.keys(record).forEach((key) => {
@@ -1198,6 +1198,8 @@ function extractVisibleColumns(records: Record<string, unknown>[]): string[] {
     if (key.endsWith(".records") || key.endsWith(".totalSize") || key.endsWith(".done")) {
       return false;
     }
+    // MySQL 查询结果不做关系列折叠，完整保留原始列名。
+    if (isMysqlSource) return true;
     // 若已存在 `Contact.Id` 这类列，则隐藏同名前缀占位列 `Contact`。
     if (!key.includes(".") && relationPrefixSet.has(key)) {
       return false;

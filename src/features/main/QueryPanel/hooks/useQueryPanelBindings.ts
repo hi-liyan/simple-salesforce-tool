@@ -3,7 +3,7 @@ import { Notice, ObjectDdl, SalesforceObject, SalesforceSource, TabState } from 
 import { MainViewMode } from "../../../../store/useAppStore";
 
 type UseQueryPanelBindingsInput = {
-  // 视图模式（query/settings）。
+  // 视图模式（query/terminal/settings）。
   viewMode: MainViewMode;
   // 控制台侧栏宽度。
   soqlSidebarWidth: number;

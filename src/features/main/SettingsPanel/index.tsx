@@ -1,16 +1,27 @@
-import { Cog, ExternalLink, RefreshCw, Save, Search, Trash2 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { Cog, ExternalLink, GripVertical, RefreshCw, Save, Search, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  closestCenter,
+  DndContext,
+  DragEndEvent,
+  DragStartEvent,
+  PointerSensor,
+  useSensor,
+  useSensors
+} from "@dnd-kit/core";
+import { arrayMove, SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { getVersion } from "@tauri-apps/api/app";
-import { api } from "../../api";
-import { CliPathProbe, CliPathSettings, CliPathStatus, LlmSettings, SalesforceSource } from "../../types";
-import { SystemLogsPanel } from "./SystemLogsPanel";
+import { api } from "../../../api";
+import { CliPathProbe, CliPathSettings, CliPathStatus, LlmSettings, SalesforceSource, TerminalShellOption } from "../../../types";
+import { SystemLogsPanel } from "./SystemLogs";
 
 // 设置面板：通过顶部 Tab 切换数据源、CLI 设置、LLM 设置、系统日志和关于与反馈页面。
 export function SettingsPanel() {
   // 反馈入口 URL：统一集中管理，便于后续替换反馈地址。
   const feedbackIssueUrl = "https://github.com/hi-liyan/simple-salesforce-tool/issues/new";
   // 顶部 Tab 状态：控制当前展示的设置分区。
-  const [activeTab, setActiveTab] = useState<"cli" | "llm" | "sources" | "systemLogs" | "about">("sources");
+  const [activeTab, setActiveTab] = useState<"cli" | "terminal" | "llm" | "sources" | "systemLogs" | "about">("sources");
   // CLI 路径设置：包含自定义路径、生效路径和探测信息。
   const [settings, setSettings] = useState<CliPathSettings | null>(null);
   // CLI 自定义路径输入值：支持手动输入和候选回填。
@@ -35,12 +46,24 @@ export function SettingsPanel() {
   const [llmApiKeyInput, setLlmApiKeyInput] = useState("");
   // LLM 保存加载状态：用于禁用保存按钮。
   const [llmSaving, setLlmSaving] = useState(false);
+  // 终端首选 Shell 命令：保存后用于新建终端进程。
+  const [terminalShellCommand, setTerminalShellCommand] = useState("");
+  // 终端可用 Shell 列表：由后端动态探测，不限制固定版本。
+  const [terminalShellOptions, setTerminalShellOptions] = useState<TerminalShellOption[]>([]);
+  // 终端配置加载状态。
+  const [terminalSettingsLoading, setTerminalSettingsLoading] = useState(false);
+  // 终端配置保存状态。
+  const [terminalSettingsSaving, setTerminalSettingsSaving] = useState(false);
+  // 平台标识：用于提示不同平台行为。
+  const isWindowsPlatform = useMemo(() => /Win/i.test(navigator.platform || navigator.userAgent), []);
   // 通用错误信息：保存/加载/探测失败时展示。
   const [error, setError] = useState("");
   // 应用版本号：通过 Tauri API 获取。
   const [appVersion, setAppVersion] = useState("-");
   // 数据源列表：用于“数据源”Tab 展示完整信息（含 token）。
   const [sources, setSources] = useState<SalesforceSource[]>([]);
+  // 当前拖拽中的数据源 ID：用于渲染拖拽态样式。
+  const [activeDragSourceId, setActiveDragSourceId] = useState("");
   // 数据源加载状态：用于刷新按钮与加载提示。
   const [sourcesLoading, setSourcesLoading] = useState(false);
   // Salesforce 编辑弹窗开关：仅用于设置页编辑非 CLI 的 Salesforce 数据源。
@@ -97,6 +120,9 @@ export function SettingsPanel() {
     if (activeTab === "cli" && !loadedTabs.current.cli) {
       loadedTabs.current.cli = true;
       void loadCurrentCliStatus(null);
+    } else if (activeTab === "terminal" && !loadedTabs.current.terminal) {
+      loadedTabs.current.terminal = true;
+      void loadTerminalSettings();
     } else if (activeTab === "llm" && !loadedTabs.current.llm) {
       loadedTabs.current.llm = true;
       void loadLlmSettings();
@@ -119,6 +145,63 @@ export function SettingsPanel() {
     } finally {
       setSourcesLoading(false);
     }
+  }
+
+  // 设置页数据源视图：按 sortOrder 升序展示，序号相同则按名称兜底。
+  const sortedSources = useMemo(
+    () =>
+      [...sources].sort((a, b) => {
+        const sortDiff = (a.sortOrder || 0) - (b.sortOrder || 0);
+        if (sortDiff !== 0) return sortDiff;
+        return a.name.localeCompare(b.name, "zh-CN");
+      }),
+    [sources]
+  );
+  // 排序上下文 IDs：供 dnd-kit 计算拖拽位置。
+  const sortedSourceIds = useMemo(() => sortedSources.map((item) => item.id), [sortedSources]);
+  // 鼠标拖拽传感器：设置激活距离，降低误触。
+  const dndSensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 6 }
+    })
+  );
+
+  // 持久化当前排序结果：失败时回滚到后端顺序。
+  async function persistSourceOrder(nextSources: SalesforceSource[]) {
+    try {
+      const orderedIds = nextSources.map((item) => item.id);
+      const persistedSources = await api.reorderSources(orderedIds);
+      setSources(persistedSources); // 使用后端归一化后的结果覆盖，保证序号绝对一致。
+    } catch (reorderError) {
+      setError(`拖拽排序失败：${String(reorderError)}`);
+      await loadSources(); // 失败后回滚为服务端顺序，避免前后端状态不一致。
+    }
+  }
+
+  // 拖拽开始：记录当前拖拽源，供 UI 高亮。
+  function onSourceDragStart(event: DragStartEvent) {
+    setActiveDragSourceId(String(event.active.id)); // 记录当前拖拽的数据源 ID。
+  }
+
+  // 拖拽结束：计算新顺序并落库。
+  function onSourceDragEnd(event: DragEndEvent) {
+    const activeId = String(event.active.id || "");
+    const overId = String(event.over?.id || "");
+    setActiveDragSourceId(""); // 无论成功与否都先清理拖拽态。
+    if (!activeId || !overId || activeId === overId) return;
+
+    const oldIndex = sortedSources.findIndex((item) => item.id === activeId);
+    const newIndex = sortedSources.findIndex((item) => item.id === overId);
+    if (oldIndex < 0 || newIndex < 0) return;
+
+    const nextSources = arrayMove(sortedSources, oldIndex, newIndex);
+    setSources(nextSources); // 先乐观更新，提升拖拽反馈即时性。
+    void persistSourceOrder(nextSources); // 异步持久化序号到后端。
+  }
+
+  // 拖拽取消：清理拖拽态标记。
+  function onSourceDragCancel() {
+    setActiveDragSourceId(""); // 用户取消拖拽时重置状态。
   }
 
   // 将数据源类型归一化为徽标文本。
@@ -311,6 +394,62 @@ export function SettingsPanel() {
     }
   }
 
+  // 加载终端设置：读取可用 Shell 列表和当前已保存命令。
+  async function loadTerminalSettings() {
+    setTerminalSettingsLoading(true);
+    setError("");
+    try {
+      const [options, commandValue, legacyPreference] = await Promise.all([
+        api.listAvailableTerminalShells(),
+        api.getUiState("terminal.shell.command"),
+        api.getUiState("terminal.shell.preference")
+      ]);
+      const normalizedOptions = Array.isArray(options) ? options : [];
+      setTerminalShellOptions(normalizedOptions);
+
+      const savedCommand = (commandValue || "").trim();
+      if (savedCommand) {
+        setTerminalShellCommand(savedCommand);
+        return;
+      }
+
+      // 兼容旧配置值（pwsh/powershell），自动映射到命令名。
+      const legacy = (legacyPreference || "").trim().toLowerCase();
+      if (legacy === "powershell") {
+        setTerminalShellCommand("powershell.exe");
+        return;
+      }
+      if (legacy === "pwsh") {
+        setTerminalShellCommand("pwsh.exe");
+        return;
+      }
+      // 无配置时默认选择首个可用项（通常是最高版本）。
+      setTerminalShellCommand(normalizedOptions[0]?.command || "");
+    } catch (loadError) {
+      setError(String(loadError));
+    } finally {
+      setTerminalSettingsLoading(false);
+    }
+  }
+
+  // 保存终端设置：后续新建终端 Tab 会按该命令创建进程。
+  async function saveTerminalSettings() {
+    setTerminalSettingsSaving(true);
+    setError("");
+    try {
+      const normalizedCommand = terminalShellCommand.trim();
+      if (!normalizedCommand) {
+        setError("请选择可用的终端 Shell。");
+        return;
+      }
+      await api.saveUiState("terminal.shell.command", normalizedCommand);
+    } catch (saveError) {
+      setError(String(saveError));
+    } finally {
+      setTerminalSettingsSaving(false);
+    }
+  }
+
   // 保存 LLM 配置：apiKey 为空时不覆盖，非空时执行覆盖保存。
   async function saveLlmSettings() {
     setLlmSaving(true);
@@ -437,6 +576,10 @@ export function SettingsPanel() {
           <button className={`tab ${activeTab === "cli" ? "tab-active" : ""}`} type="button" onClick={() => setActiveTab("cli")}>
             CLI设置
           </button>
+          {/* 终端设置 Tab 按钮。 */}
+          <button className={`tab ${activeTab === "terminal" ? "tab-active" : ""}`} type="button" onClick={() => setActiveTab("terminal")}>
+            终端设置
+          </button>
           {/* LLM 设置 Tab 按钮。 */}
           <button className={`tab ${activeTab === "llm" ? "tab-active" : ""}`} type="button" onClick={() => setActiveTab("llm")}>
             LLM设置
@@ -542,6 +685,65 @@ export function SettingsPanel() {
               </div>
             </div>
           </>
+        ) : activeTab === "terminal" ? (
+          <>
+            {/* 终端设置标题区：包含刷新配置入口。 */}
+            <div className="mb-3 flex items-center justify-between rounded border border-base-300 bg-base-100 px-3 py-2">
+              <div>
+                <h2 className="text-[14px] font-semibold">终端设置</h2>
+                <p className="text-[12px] text-neutral/70">可配置新建终端 Tab 的默认 Shell。保存后对新建终端生效。</p>
+              </div>
+              <button
+                className="btn btn-outline btn-sm"
+                disabled={terminalSettingsLoading || terminalSettingsSaving}
+                onClick={() => void loadTerminalSettings()}
+              >
+                <RefreshCw size={14} />
+                刷新配置
+              </button>
+            </div>
+
+            {/* 终端设置表单区。 */}
+            <div className="rounded border border-base-300 bg-base-100 p-3">
+              {isWindowsPlatform ? (
+                <>
+                  {/* Windows 终端版本选择器：动态展示可用版本。 */}
+                  <label className="mb-1 block text-[12px] font-semibold">Windows 默认 Shell</label>
+                  <select
+                    className="select select-bordered select-sm w-full"
+                    value={terminalShellCommand}
+                    disabled={terminalSettingsLoading || terminalSettingsSaving}
+                    onChange={(event) => setTerminalShellCommand(event.target.value)}
+                  >
+                    {terminalShellOptions.length === 0 && <option value="">未检测到可用终端</option>}
+                    {terminalShellOptions.map((option) => (
+                      <option key={option.command} value={option.command}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="mt-2 text-[12px] text-neutral/70">
+                    提示：列表来自系统动态探测；仅新建终端 Tab 使用新配置，已打开的终端不会自动切换。
+                  </p>
+                </>
+              ) : (
+                // 非 Windows 平台提示：当前版本仍使用系统 SHELL。
+                <p className="text-[12px] text-neutral/70">当前平台使用系统 SHELL 环境变量（如 /bin/bash），暂不支持图形化切换。</p>
+              )}
+
+              {/* 保存按钮。 */}
+              <div className="mt-3 flex flex-row gap-2">
+                <button
+                  className="btn btn-primary btn-sm"
+                  disabled={terminalSettingsLoading || terminalSettingsSaving || !isWindowsPlatform || !terminalShellCommand}
+                  onClick={() => void saveTerminalSettings()}
+                >
+                  <Save size={14} />
+                  保存
+                </button>
+              </div>
+            </div>
+          </>
         ) : activeTab === "llm" ? (
           <>
             {/* LLM 标题区：包含刷新配置入口。 */}
@@ -625,63 +827,32 @@ export function SettingsPanel() {
               )}
 
               {!sourcesLoading &&
-                sources.map((item) => (
-                  <div key={item.id} className="rounded border border-base-300 bg-base-100 p-3 text-[12px]">
-                    <div className="mb-2 border-b border-base-300 pb-2">
-                      {/* 卡片标题区：增加数据源类型徽标。 */}
-                      <div className="min-w-0">
-                        <p className="flex items-center gap-2 text-[13px] font-semibold">
-                          <span
-                            className={`inline-flex min-w-[52px] items-center justify-center rounded px-1.5 py-[1px] text-[10px] font-semibold ${getSourceBadgeClassName(item.sourceType)}`}
-                          >
-                            {getSourceTypeBadge(item.sourceType)}
-                          </span>
-                          <span className="truncate">{item.name || "-"}</span>
-                          {/* Salesforce 非 CLI 数据源支持编辑连接信息。 */}
-                          {(item.sourceType || "salesforce").toLowerCase() === "salesforce" && !item.id.startsWith("cli-") && (
-                            <button
-                              className="btn btn-ghost btn-xs"
-                              aria-label="编辑 Salesforce 数据源"
-                              onClick={() => openSalesforceEditModal(item)}
-                            >
-                              <Cog size={14} />
-                            </button>
-                          )}
-                          {/* MySQL 专属齿轮按钮：紧跟在名称后面。 */}
-                          {(item.sourceType || "salesforce").toLowerCase() === "mysql" && (
-                            <button
-                              className="btn btn-ghost btn-xs"
-                              aria-label="编辑 MySQL 数据源"
-                              onClick={() => openMySqlEditModal(item)}
-                            >
-                              <Cog size={14} />
-                            </button>
-                          )}
-                        </p>
+                sortedSources.length > 0 && (
+                  <DndContext
+                    sensors={dndSensors}
+                    collisionDetection={closestCenter}
+                    onDragStart={onSourceDragStart}
+                    onDragEnd={onSourceDragEnd}
+                    onDragCancel={onSourceDragCancel}
+                  >
+                    <SortableContext items={sortedSourceIds} strategy={verticalListSortingStrategy}>
+                      {/* 可排序卡片列表：使用 dnd-kit 提供稳定拖拽能力。 */}
+                      <div className="space-y-3">
+                        {sortedSources.map((item) => (
+                          <SortableSourceCard
+                            key={item.id}
+                            item={item}
+                            isActiveDrag={activeDragSourceId === item.id}
+                            getSourceBadgeClassName={getSourceBadgeClassName}
+                            getSourceTypeBadge={getSourceTypeBadge}
+                            onOpenSalesforceEdit={openSalesforceEditModal}
+                            onOpenMySqlEdit={openMySqlEditModal}
+                          />
+                        ))}
                       </div>
-                    </div>
-                    <div className="mb-2">
-                      <p className="mt-1 text-neutral/70">ID: {item.id}</p>
-                    </div>
-                    <div className="space-y-1 break-all">
-                      <p>
-                        <span className="font-semibold">instanceUrl:</span> {item.instanceUrl || "-"}
-                      </p>
-                      <p>
-                        <span className="font-semibold">apiVersion:</span> {item.apiVersion || "-"}
-                      </p>
-                      <p>
-                        <span className="font-semibold">accessToken:</span> {item.accessToken || "-"}
-                      </p>
-                      <p>
-                        <span className="font-semibold">createdAt:</span> {item.createdAt || "-"}
-                      </p>
-                      <p>
-                        <span className="font-semibold">updatedAt:</span> {item.updatedAt || "-"}
-                      </p>
-                    </div>
-                  </div>
-                ))}
+                    </SortableContext>
+                  </DndContext>
+                )}
             </div>
           </>
         ) : activeTab === "systemLogs" ? (
@@ -875,6 +1046,112 @@ export function SettingsPanel() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+type SortableSourceCardProps = {
+  // 当前卡片对应的数据源。
+  item: SalesforceSource;
+  // 当前卡片是否处于激活拖拽态。
+  isActiveDrag: boolean;
+  // 数据源类型徽标文案计算函数。
+  getSourceTypeBadge: (sourceType: string | undefined) => string;
+  // 数据源类型徽标样式计算函数。
+  getSourceBadgeClassName: (sourceType: string | undefined) => string;
+  // 打开 Salesforce 编辑弹窗回调。
+  onOpenSalesforceEdit: (source: SalesforceSource) => void;
+  // 打开 MySQL 编辑弹窗回调。
+  onOpenMySqlEdit: (source: SalesforceSource) => void;
+};
+
+// 可拖拽数据源卡片：封装 dnd-kit sortable 行为，避免主组件 JSX 过长。
+function SortableSourceCard({
+  item,
+  isActiveDrag,
+  getSourceTypeBadge,
+  getSourceBadgeClassName,
+  onOpenSalesforceEdit,
+  onOpenMySqlEdit
+}: SortableSourceCardProps) {
+  // 绑定 sortable：提供容器引用、拖拽 handle 监听和位移动画信息。
+  const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({
+    id: item.id
+  });
+  // 将 dnd-kit transform 映射为 CSS transform，驱动拖拽动画。
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition
+  };
+
+  return (
+    // 卡片容器：setNodeRef 必须绑定到可排序根节点。
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`rounded border bg-base-100 p-3 text-[12px] ${isDragging || isActiveDrag ? "border-primary opacity-80" : "border-base-300"}`}
+    >
+      <div className="mb-2 border-b border-base-300 pb-2">
+        {/* 卡片标题区：包含拖拽 handle、类型徽标、名称和编辑按钮。 */}
+        <div className="min-w-0">
+          <p className="flex items-center gap-2 text-[13px] font-semibold">
+            {/* 拖拽 icon：通过 listeners/attributes 绑定可拖拽手柄。 */}
+            <button
+              ref={setActivatorNodeRef}
+              type="button"
+              className="cursor-grab text-neutral/60 active:cursor-grabbing"
+              title="拖拽调整排序"
+              {...attributes}
+              {...listeners}
+            >
+              <GripVertical size={14} />
+            </button>
+            {/* 数据源类型徽标。 */}
+            <span
+              className={`inline-flex min-w-[52px] items-center justify-center rounded px-1.5 py-[1px] text-[10px] font-semibold ${getSourceBadgeClassName(item.sourceType)}`}
+            >
+              {getSourceTypeBadge(item.sourceType)}
+            </span>
+            {/* 数据源名称与序号。 */}
+            <span className="truncate">
+              [{item.sortOrder || 0}] {item.name || "-"}
+            </span>
+            {/* Salesforce 非 CLI 数据源支持编辑连接信息。 */}
+            {(item.sourceType || "salesforce").toLowerCase() === "salesforce" && !item.id.startsWith("cli-") && (
+              <button className="btn btn-ghost btn-xs" aria-label="编辑 Salesforce 数据源" onClick={() => onOpenSalesforceEdit(item)}>
+                <Cog size={14} />
+              </button>
+            )}
+            {/* MySQL 专属齿轮按钮：紧跟在名称后面。 */}
+            {(item.sourceType || "salesforce").toLowerCase() === "mysql" && (
+              <button className="btn btn-ghost btn-xs" aria-label="编辑 MySQL 数据源" onClick={() => onOpenMySqlEdit(item)}>
+                <Cog size={14} />
+              </button>
+            )}
+          </p>
+        </div>
+      </div>
+      <div className="mb-2">
+        <p className="mt-1 text-neutral/70">序号: {item.sortOrder || 0}</p>
+        <p className="mt-1 text-neutral/70">ID: {item.id}</p>
+      </div>
+      <div className="space-y-1 break-all">
+        <p>
+          <span className="font-semibold">instanceUrl:</span> {item.instanceUrl || "-"}
+        </p>
+        <p>
+          <span className="font-semibold">apiVersion:</span> {item.apiVersion || "-"}
+        </p>
+        <p>
+          <span className="font-semibold">accessToken:</span> {item.accessToken || "-"}
+        </p>
+        <p>
+          <span className="font-semibold">createdAt:</span> {item.createdAt || "-"}
+        </p>
+        <p>
+          <span className="font-semibold">updatedAt:</span> {item.updatedAt || "-"}
+        </p>
+      </div>
     </div>
   );
 }

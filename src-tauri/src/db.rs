@@ -1,12 +1,13 @@
 use chrono::Utc;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::error::AppError;
 use crate::models::{
     CachedObjects, SalesforceObject, SalesforceSource, SourceUpsertPayload, SystemLogEntry,
-    SystemLogPage,
+    SystemLogPage, TerminalCommandGroup, TerminalCommandItem, TerminalCommandReorderPayload,
+    TerminalCommandUpsertPayload,
 };
 
 /// 初始化数据库表结构。
@@ -16,6 +17,7 @@ pub fn init_schema(connection: &Connection) -> Result<(), AppError> {
         CREATE TABLE IF NOT EXISTS data_sources (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
             source_type TEXT NOT NULL,
             config_json TEXT NOT NULL,
             instance_url TEXT NOT NULL,
@@ -81,11 +83,38 @@ pub fn init_schema(connection: &Connection) -> Result<(), AppError> {
             value TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS terminal_command_groups (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS terminal_commands (
+            id TEXT PRIMARY KEY,
+            group_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            command_text TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(group_id) REFERENCES terminal_command_groups(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_terminal_command_groups_sort
+            ON terminal_command_groups(sort_order, id);
+        CREATE INDEX IF NOT EXISTS idx_terminal_commands_group
+            ON terminal_commands(group_id, sort_order, id);
         "#,
     )?;
 
     // 启动时将历史 Salesforce 表数据迁移到通用 data_sources，保证旧版本无缝升级。
     migrate_salesforce_sources_to_data_sources(connection)?;
+    // 兼容历史版本：补齐 sort_order 字段并完成初始化序号。
+    ensure_data_sources_sort_order_column(connection)?;
     // 兼容旧外键：将 data_sources 回填到 legacy salesforce_sources，避免缓存表外键失败。
     backfill_data_sources_to_legacy_salesforce_sources(connection)?;
 
@@ -127,9 +156,36 @@ fn migrate_salesforce_sources_to_data_sources(connection: &Connection) -> Result
     Ok(())
 }
 
+/// 确保 data_sources 存在 sort_order 字段，并为历史数据补齐连续序号。
+fn ensure_data_sources_sort_order_column(connection: &Connection) -> Result<(), AppError> {
+    let mut has_sort_order = false;
+    {
+        let mut statement = connection.prepare("PRAGMA table_info(data_sources)")?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
+        for row in rows {
+            if row?.eq_ignore_ascii_case("sort_order") {
+                has_sort_order = true;
+                break;
+            }
+        }
+    }
+
+    if !has_sort_order {
+        connection.execute(
+            "ALTER TABLE data_sources ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+
+    normalize_source_sort_orders(connection)?;
+    Ok(())
+}
+
 /// 将通用数据源回填到旧版 salesforce_sources（幂等执行）。
 /// 说明：object_metadata_cache/column_visibility_settings 目前仍引用该旧表。
-fn backfill_data_sources_to_legacy_salesforce_sources(connection: &Connection) -> Result<(), AppError> {
+fn backfill_data_sources_to_legacy_salesforce_sources(
+    connection: &Connection,
+) -> Result<(), AppError> {
     connection.execute_batch(
         r#"
         INSERT OR IGNORE INTO salesforce_sources (
@@ -211,21 +267,395 @@ pub fn delete_app_setting(connection: &Connection, key: &str) -> Result<(), AppE
     Ok(())
 }
 
-/// 查询所有数据源，按更新时间倒序返回。
-pub fn list_sources(connection: &Connection) -> Result<Vec<SalesforceSource>, AppError> {
+/// 计算命令组下一序号（全局维度）。
+fn next_terminal_group_sort_order(connection: &Connection) -> Result<i64, AppError> {
+    let max_sort_order: Option<i64> = connection.query_row(
+        "SELECT MAX(sort_order) FROM terminal_command_groups",
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(max_sort_order.unwrap_or(0) + 1)
+}
+
+/// 计算命令下一序号（按命令组维度）。
+fn next_terminal_command_sort_order(
+    connection: &Connection,
+    group_id: &str,
+) -> Result<i64, AppError> {
+    let max_sort_order: Option<i64> = connection.query_row(
+        "SELECT MAX(sort_order) FROM terminal_commands WHERE group_id = ?1",
+        [group_id],
+        |row| row.get(0),
+    )?;
+    Ok(max_sort_order.unwrap_or(0) + 1)
+}
+
+/// 归一化单个命令组内的命令序号，确保从 1 开始连续递增。
+fn normalize_terminal_command_sort_orders(
+    connection: &Connection,
+    group_id: &str,
+) -> Result<(), AppError> {
     let mut statement = connection.prepare(
-        "SELECT id, name, source_type, config_json, instance_url, access_token, api_version, created_at, updated_at FROM data_sources ORDER BY updated_at DESC",
+        "SELECT id, sort_order, created_at
+         FROM terminal_commands
+         WHERE group_id = ?1
+         ORDER BY sort_order ASC, created_at ASC, id ASC",
+    )?;
+
+    let rows = statement.query_map([group_id], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+
+    for (index, row) in rows.enumerate() {
+        let (command_id, current_sort_order, _) = row?;
+        let expected_sort_order = (index + 1) as i64;
+        if current_sort_order == expected_sort_order {
+            continue;
+        }
+
+        connection.execute(
+            "UPDATE terminal_commands SET sort_order = ?2 WHERE id = ?1 AND group_id = ?3",
+            params![command_id, expected_sort_order, group_id],
+        )?;
+    }
+
+    Ok(())
+}
+
+/// 读取全局终端命令组（含命令列表）。
+pub fn list_terminal_command_groups(connection: &Connection) -> Result<Vec<TerminalCommandGroup>, AppError> {
+    let mut group_statement = connection.prepare(
+        "SELECT id, name, created_at, updated_at
+         FROM terminal_command_groups
+         ORDER BY sort_order ASC, created_at ASC, id ASC",
+    )?;
+
+    let group_rows = group_statement.query_map([], |row| {
+        Ok(TerminalCommandGroup {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            commands: Vec::new(),
+            created_at: row.get(2)?,
+            updated_at: row.get(3)?,
+        })
+    })?;
+
+    let mut groups: Vec<TerminalCommandGroup> = Vec::new();
+    for row in group_rows {
+        groups.push(row?);
+    }
+    if groups.is_empty() {
+        return Ok(groups);
+    }
+
+    // 建立 group_id 到数组下标映射，便于后续批量装配命令列表。
+    let mut group_index_by_id: HashMap<String, usize> = HashMap::new();
+    for (index, group) in groups.iter().enumerate() {
+        group_index_by_id.insert(group.id.clone(), index);
+    }
+
+    let mut command_statement = connection.prepare(
+        "SELECT id, group_id, name, command_text, description, created_at, updated_at
+         FROM terminal_commands
+         ORDER BY sort_order ASC, created_at ASC, id ASC",
+    )?;
+
+    let command_rows = command_statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(1)?,
+            TerminalCommandItem {
+                id: row.get(0)?,
+                name: row.get(2)?,
+                command: row.get(3)?,
+                description: row.get(4)?,
+                created_at: row.get(5)?,
+                updated_at: row.get(6)?,
+            },
+        ))
+    })?;
+
+    for row in command_rows {
+        let (group_id, command) = row?;
+        if let Some(group_index) = group_index_by_id.get(&group_id) {
+            groups[*group_index].commands.push(command);
+        }
+    }
+
+    Ok(groups)
+}
+
+/// 新建终端命令组。
+pub fn create_terminal_command_group(
+    connection: &Connection,
+    name: &str,
+) -> Result<TerminalCommandGroup, AppError> {
+    let normalized_name = name.trim();
+    if normalized_name.is_empty() {
+        return Err(AppError::Biz("命令组名称不能为空".to_string()));
+    }
+
+    let now = Utc::now().to_rfc3339();
+    let id = uuid::Uuid::new_v4().to_string();
+    let sort_order = next_terminal_group_sort_order(connection)?;
+    connection.execute(
+        "INSERT INTO terminal_command_groups (id, name, sort_order, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![id, normalized_name, sort_order, now, now],
+    )?;
+
+    Ok(TerminalCommandGroup {
+        id,
+        name: normalized_name.to_string(),
+        commands: Vec::new(),
+        created_at: now.clone(),
+        updated_at: now,
+    })
+}
+
+/// 新建命令并返回最新记录。
+pub fn create_terminal_command(
+    connection: &Connection,
+    payload: &TerminalCommandUpsertPayload,
+) -> Result<TerminalCommandItem, AppError> {
+    let normalized_group_id = payload.group_id.trim();
+    let normalized_name = payload.name.trim();
+    let normalized_command = payload.command.trim();
+    let normalized_description = payload.description.trim();
+
+    if normalized_group_id.is_empty() {
+        return Err(AppError::Biz("groupId 不能为空".to_string()));
+    }
+    if normalized_name.is_empty() {
+        return Err(AppError::Biz("命令名称不能为空".to_string()));
+    }
+    if normalized_command.is_empty() {
+        return Err(AppError::Biz("命令内容不能为空".to_string()));
+    }
+
+    let group_exists: Option<i64> = connection
+        .query_row(
+            "SELECT 1 FROM terminal_command_groups WHERE id = ?1",
+            params![normalized_group_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if group_exists.is_none() {
+        return Err(AppError::Biz("命令组不存在".to_string()));
+    }
+
+    let now = Utc::now().to_rfc3339();
+    let id = uuid::Uuid::new_v4().to_string();
+    let sort_order = next_terminal_command_sort_order(connection, normalized_group_id)?;
+    connection.execute(
+        "INSERT INTO terminal_commands (id, group_id, name, command_text, description, sort_order, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            id,
+            normalized_group_id,
+            normalized_name,
+            normalized_command,
+            normalized_description,
+            sort_order,
+            now,
+            now
+        ],
+    )?;
+    connection.execute(
+        "UPDATE terminal_command_groups SET updated_at = ?2 WHERE id = ?1",
+        params![normalized_group_id, now],
+    )?;
+
+    Ok(TerminalCommandItem {
+        id,
+        name: normalized_name.to_string(),
+        command: normalized_command.to_string(),
+        description: normalized_description.to_string(),
+        created_at: now.clone(),
+        updated_at: now,
+    })
+}
+
+/// 更新命令并返回最新记录。
+pub fn update_terminal_command(
+    connection: &Connection,
+    command_id: &str,
+    payload: &TerminalCommandUpsertPayload,
+) -> Result<TerminalCommandItem, AppError> {
+    let normalized_command_id = command_id.trim();
+    let normalized_group_id = payload.group_id.trim();
+    let normalized_name = payload.name.trim();
+    let normalized_command = payload.command.trim();
+    let normalized_description = payload.description.trim();
+
+    if normalized_command_id.is_empty() {
+        return Err(AppError::Biz("commandId 不能为空".to_string()));
+    }
+    if normalized_group_id.is_empty() {
+        return Err(AppError::Biz("groupId 不能为空".to_string()));
+    }
+    if normalized_name.is_empty() {
+        return Err(AppError::Biz("命令名称不能为空".to_string()));
+    }
+    if normalized_command.is_empty() {
+        return Err(AppError::Biz("命令内容不能为空".to_string()));
+    }
+
+    let created_at: Option<String> = connection
+        .query_row(
+            "SELECT created_at FROM terminal_commands WHERE id = ?1 AND group_id = ?2",
+            params![normalized_command_id, normalized_group_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if created_at.is_none() {
+        return Err(AppError::Biz("命令不存在或不属于当前分组".to_string()));
+    }
+
+    let now = Utc::now().to_rfc3339();
+    let affected_rows = connection.execute(
+        "UPDATE terminal_commands
+         SET name = ?3, command_text = ?4, description = ?5, updated_at = ?6
+         WHERE id = ?1 AND group_id = ?2",
+        params![
+            normalized_command_id,
+            normalized_group_id,
+            normalized_name,
+            normalized_command,
+            normalized_description,
+            now
+        ],
+    )?;
+    if affected_rows == 0 {
+        return Err(AppError::Biz("命令不存在或不属于当前分组".to_string()));
+    }
+
+    connection.execute(
+        "UPDATE terminal_command_groups SET updated_at = ?2 WHERE id = ?1",
+        params![normalized_group_id, now],
+    )?;
+
+    Ok(TerminalCommandItem {
+        id: normalized_command_id.to_string(),
+        name: normalized_name.to_string(),
+        command: normalized_command.to_string(),
+        description: normalized_description.to_string(),
+        created_at: created_at.unwrap_or_else(|| now.clone()),
+        updated_at: now,
+    })
+}
+
+/// 删除命令。
+pub fn delete_terminal_command(
+    connection: &Connection,
+    group_id: &str,
+    command_id: &str,
+) -> Result<(), AppError> {
+    let normalized_group_id = group_id.trim();
+    let normalized_command_id = command_id.trim();
+    if normalized_group_id.is_empty() {
+        return Err(AppError::Biz("groupId 不能为空".to_string()));
+    }
+    if normalized_command_id.is_empty() {
+        return Err(AppError::Biz("commandId 不能为空".to_string()));
+    }
+
+    let now = Utc::now().to_rfc3339();
+    let affected_rows = connection.execute(
+        "DELETE FROM terminal_commands WHERE id = ?1 AND group_id = ?2",
+        params![normalized_command_id, normalized_group_id],
+    )?;
+    if affected_rows == 0 {
+        return Err(AppError::Biz("命令不存在或已删除".to_string()));
+    }
+    connection.execute(
+        "UPDATE terminal_command_groups SET updated_at = ?2 WHERE id = ?1",
+        params![normalized_group_id, now],
+    )?;
+    normalize_terminal_command_sort_orders(connection, normalized_group_id)?;
+    Ok(())
+}
+
+/// 调整单个命令组内的命令排序。
+pub fn reorder_terminal_commands(
+    connection: &Connection,
+    payload: &TerminalCommandReorderPayload,
+) -> Result<(), AppError> {
+    let normalized_group_id = payload.group_id.trim();
+    if normalized_group_id.is_empty() {
+        return Err(AppError::Biz("groupId 不能为空".to_string()));
+    }
+
+    let normalized_command_ids: Vec<String> = payload
+        .command_ids
+        .iter()
+        .map(|command_id| command_id.trim().to_string())
+        .filter(|command_id| !command_id.is_empty())
+        .collect();
+    if normalized_command_ids.is_empty() {
+        return Err(AppError::Biz("commandIds 不能为空".to_string()));
+    }
+
+    let mut statement = connection.prepare(
+        "SELECT id
+         FROM terminal_commands
+         WHERE group_id = ?1
+         ORDER BY sort_order ASC, created_at ASC, id ASC",
+    )?;
+    let existing_command_ids: Vec<String> = statement
+        .query_map([normalized_group_id], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    if existing_command_ids.len() != normalized_command_ids.len() {
+        return Err(AppError::Biz("命令排序列表与当前分组命令数量不一致".to_string()));
+    }
+
+    let existing_command_id_set: HashSet<String> = existing_command_ids.into_iter().collect();
+    let submitted_command_id_set: HashSet<String> = normalized_command_ids.iter().cloned().collect();
+    if existing_command_id_set.len() != normalized_command_ids.len()
+        || submitted_command_id_set.len() != normalized_command_ids.len()
+        || existing_command_id_set != submitted_command_id_set
+    {
+        return Err(AppError::Biz("命令排序列表无效或包含非当前分组命令".to_string()));
+    }
+
+    for (index, command_id) in normalized_command_ids.iter().enumerate() {
+        connection.execute(
+            "UPDATE terminal_commands SET sort_order = ?3 WHERE id = ?1 AND group_id = ?2",
+            params![command_id, normalized_group_id, (index + 1) as i64],
+        )?;
+    }
+
+    let now = Utc::now().to_rfc3339();
+    connection.execute(
+        "UPDATE terminal_command_groups SET updated_at = ?2 WHERE id = ?1",
+        params![normalized_group_id, now],
+    )?;
+    normalize_terminal_command_sort_orders(connection, normalized_group_id)?;
+    Ok(())
+}
+
+/// 查询所有数据源，按序号升序返回。
+pub fn list_sources(connection: &Connection) -> Result<Vec<SalesforceSource>, AppError> {
+    // 每次读取前执行一次归一化，自动修复重复/缺失/乱序序号。
+    normalize_source_sort_orders(connection)?;
+    let mut statement = connection.prepare(
+        "SELECT id, name, sort_order, source_type, config_json, instance_url, access_token, api_version, created_at, updated_at FROM data_sources ORDER BY sort_order ASC, id ASC",
     )?;
 
     let rows = statement.query_map([], |row| {
-        let source_type: Option<String> = row.get(2)?;
-        let config_json_raw: Option<String> = row.get(3)?;
-        let instance_url: String = row.get(4)?;
-        let access_token: String = row.get(5)?;
-        let api_version: String = row.get(6)?;
+        let source_type: Option<String> = row.get(3)?;
+        let config_json_raw: Option<String> = row.get(4)?;
+        let instance_url: String = row.get(5)?;
+        let access_token: String = row.get(6)?;
+        let api_version: String = row.get(7)?;
         Ok(SalesforceSource {
             id: row.get(0)?,
             name: row.get(1)?,
+            sort_order: row.get(2)?,
             source_type: source_type.unwrap_or_else(|| "salesforce".to_string()),
             config_json: parse_or_build_source_config(
                 config_json_raw.as_deref(),
@@ -236,8 +666,8 @@ pub fn list_sources(connection: &Connection) -> Result<Vec<SalesforceSource>, Ap
             instance_url,
             access_token,
             api_version,
-            created_at: row.get(7)?,
-            updated_at: row.get(8)?,
+            created_at: row.get(8)?,
+            updated_at: row.get(9)?,
         })
     })?;
 
@@ -251,19 +681,20 @@ pub fn list_sources(connection: &Connection) -> Result<Vec<SalesforceSource>, Ap
 /// 按 ID 查询单个数据源，不存在时返回业务错误。
 pub fn get_source(connection: &Connection, id: &str) -> Result<SalesforceSource, AppError> {
     let mut statement = connection.prepare(
-        "SELECT id, name, source_type, config_json, instance_url, access_token, api_version, created_at, updated_at FROM data_sources WHERE id = ?1",
+        "SELECT id, name, sort_order, source_type, config_json, instance_url, access_token, api_version, created_at, updated_at FROM data_sources WHERE id = ?1",
     )?;
 
     let item = statement
         .query_row([id], |row| {
-            let source_type: Option<String> = row.get(2)?;
-            let config_json_raw: Option<String> = row.get(3)?;
-            let instance_url: String = row.get(4)?;
-            let access_token: String = row.get(5)?;
-            let api_version: String = row.get(6)?;
+            let source_type: Option<String> = row.get(3)?;
+            let config_json_raw: Option<String> = row.get(4)?;
+            let instance_url: String = row.get(5)?;
+            let access_token: String = row.get(6)?;
+            let api_version: String = row.get(7)?;
             Ok(SalesforceSource {
                 id: row.get(0)?,
                 name: row.get(1)?,
+                sort_order: row.get(2)?,
                 source_type: source_type.unwrap_or_else(|| "salesforce".to_string()),
                 config_json: parse_or_build_source_config(
                     config_json_raw.as_deref(),
@@ -274,8 +705,8 @@ pub fn get_source(connection: &Connection, id: &str) -> Result<SalesforceSource,
                 instance_url,
                 access_token,
                 api_version,
-                created_at: row.get(7)?,
-                updated_at: row.get(8)?,
+                created_at: row.get(8)?,
+                updated_at: row.get(9)?,
             })
         })
         .optional()?;
@@ -288,6 +719,8 @@ pub fn create_source(
     connection: &Connection,
     payload: SourceUpsertPayload,
 ) -> Result<SalesforceSource, AppError> {
+    // 先归一化历史序号，再给新数据源分配“当前最大序号 + 1”。
+    normalize_source_sort_orders(connection)?;
     let now = Utc::now().to_rfc3339();
     let source_type = normalize_source_type(Some(&payload.source_type));
     let config_json = build_source_config_json(
@@ -300,6 +733,7 @@ pub fn create_source(
     let item = SalesforceSource {
         id: uuid::Uuid::new_v4().to_string(),
         name: payload.name,
+        sort_order: next_source_sort_order(connection)?,
         source_type,
         config_json,
         instance_url: payload.instance_url.trim_end_matches('/').to_string(),
@@ -310,10 +744,11 @@ pub fn create_source(
     };
 
     connection.execute(
-        "INSERT INTO data_sources (id, name, source_type, config_json, instance_url, access_token, api_version, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        "INSERT INTO data_sources (id, name, sort_order, source_type, config_json, instance_url, access_token, api_version, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         params![
             item.id,
             item.name,
+            item.sort_order,
             item.source_type,
             item.config_json.to_string(),
             item.instance_url,
@@ -372,6 +807,8 @@ pub fn upsert_source_with_id(
     id: &str,
     payload: SourceUpsertPayload,
 ) -> Result<SalesforceSource, AppError> {
+    // CLI 同步前先归一化，避免历史脏序号持续扩散。
+    normalize_source_sort_orders(connection)?;
     let now = Utc::now().to_rfc3339();
     let source_type = normalize_source_type(Some(&payload.source_type));
     let normalized_instance_url = payload.instance_url.trim_end_matches('/').to_string();
@@ -382,19 +819,27 @@ pub fn upsert_source_with_id(
         &payload.access_token,
         &payload.api_version,
     );
-    let created_at: Option<String> = connection
+    let created_and_sort: Option<(String, i64)> = connection
         .query_row(
-            "SELECT created_at FROM data_sources WHERE id = ?1",
+            "SELECT created_at, sort_order FROM data_sources WHERE id = ?1",
             [id],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()?;
+    let sort_order = created_and_sort
+        .as_ref()
+        .map(|(_, sort_order)| *sort_order)
+        .unwrap_or(next_source_sort_order(connection)?);
+    let created_at = created_and_sort
+        .map(|(created_at, _)| created_at)
+        .unwrap_or_else(|| now.clone());
 
     connection.execute(
-        "INSERT INTO data_sources (id, name, source_type, config_json, instance_url, access_token, api_version, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+        "INSERT INTO data_sources (id, name, sort_order, source_type, config_json, instance_url, access_token, api_version, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
          ON CONFLICT(id) DO UPDATE SET
            name = excluded.name,
+           sort_order = excluded.sort_order,
            source_type = excluded.source_type,
            config_json = excluded.config_json,
            instance_url = excluded.instance_url,
@@ -404,12 +849,13 @@ pub fn upsert_source_with_id(
         params![
             id,
             payload.name,
+            sort_order,
             source_type,
             config_json.to_string(),
             normalized_instance_url,
             payload.access_token,
             payload.api_version,
-            created_at.unwrap_or_else(|| now.clone()),
+            created_at,
             now,
         ],
     )?;
@@ -418,6 +864,47 @@ pub fn upsert_source_with_id(
     // UPSERT 后同步 legacy 镜像，保证旧外键链路始终可用。
     upsert_legacy_salesforce_source(connection, &item)?;
     Ok(item)
+}
+
+/// 按给定 ID 顺序重排数据源序号，并返回最新列表。
+pub fn reorder_sources(
+    connection: &Connection,
+    ordered_ids: &[String],
+) -> Result<Vec<SalesforceSource>, AppError> {
+    if ordered_ids.is_empty() {
+        return list_sources(connection);
+    }
+
+    // 拖拽重排必须传入完整且不重复的 ID 列表，避免局部更新造成序号冲突。
+    let mut id_set = std::collections::HashSet::new();
+    for id in ordered_ids {
+        if !id_set.insert(id) {
+            return Err(AppError::Biz("重排失败：存在重复的数据源 ID。".to_string()));
+        }
+    }
+
+    let mut statement = connection.prepare("SELECT id FROM data_sources")?;
+    let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+    let mut all_ids = std::collections::HashSet::new();
+    for row in rows {
+        all_ids.insert(row?);
+    }
+    if all_ids.len() != ordered_ids.len() || !ordered_ids.iter().all(|id| all_ids.contains(id)) {
+        return Err(AppError::Biz(
+            "重排失败：传入的数据源集合与当前库中数据不一致，请刷新后重试。".to_string(),
+        ));
+    }
+
+    for (index, source_id) in ordered_ids.iter().enumerate() {
+        connection.execute(
+            "UPDATE data_sources SET sort_order = ?2 WHERE id = ?1",
+            params![source_id, (index + 1) as i64],
+        )?;
+    }
+
+    // 重排后再次归一化，兜底修复潜在并发写入造成的空洞/重复。
+    normalize_source_sort_orders(connection)?;
+    list_sources(connection)
 }
 
 /// 清理本次 CLI 同步中不存在的旧 CLI 数据源，避免脏数据堆积。
@@ -494,7 +981,10 @@ pub fn delete_source(connection: &Connection, id: &str) -> Result<(), AppError> 
         "DELETE FROM column_visibility_settings WHERE source_id = ?1",
         [id],
     )?;
-    connection.execute("DELETE FROM source_metadata_cache WHERE source_id = ?1", [id])?;
+    connection.execute(
+        "DELETE FROM source_metadata_cache WHERE source_id = ?1",
+        [id],
+    )?;
     Ok(())
 }
 
@@ -508,6 +998,45 @@ fn normalize_source_type(source_type: Option<&str>) -> String {
     } else {
         normalized
     }
+}
+
+/// 计算下一个可用序号（当前最大序号 + 1）。
+fn next_source_sort_order(connection: &Connection) -> Result<i64, AppError> {
+    let max_sort_order: Option<i64> =
+        connection.query_row("SELECT MAX(sort_order) FROM data_sources", [], |row| {
+            row.get(0)
+        })?;
+    Ok(max_sort_order.unwrap_or(0) + 1)
+}
+
+/// 归一化全部数据源序号：按当前顺序重排为 1..N，修复重复、空洞和乱序。
+fn normalize_source_sort_orders(connection: &Connection) -> Result<(), AppError> {
+    let mut statement = connection.prepare(
+        "SELECT id, sort_order, updated_at, created_at
+         FROM data_sources
+         ORDER BY sort_order ASC, updated_at DESC, created_at DESC, id ASC",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+        ))
+    })?;
+
+    for (index, row) in rows.enumerate() {
+        let (id, current_sort_order, _, _) = row?;
+        let expected_sort_order = (index + 1) as i64;
+        // 仅在序号不一致时写库，避免无意义更新。
+        if current_sort_order != expected_sort_order {
+            connection.execute(
+                "UPDATE data_sources SET sort_order = ?2 WHERE id = ?1",
+                params![id, expected_sort_order],
+            )?;
+        }
+    }
+    Ok(())
 }
 
 /// 构建最终入库配置：优先使用外部传入 config_json，并对 Salesforce 自动补齐关键字段。
@@ -597,8 +1126,8 @@ pub fn read_object_cache(
     connection: &Connection,
     source_id: &str,
 ) -> Result<Option<Vec<SalesforceObject>>, AppError> {
-    let mut statement = connection
-        .prepare("SELECT payload FROM object_metadata_cache WHERE source_id = ?1")?;
+    let mut statement =
+        connection.prepare("SELECT payload FROM object_metadata_cache WHERE source_id = ?1")?;
 
     let cache = statement
         .query_row([source_id], |row| {
@@ -653,7 +1182,10 @@ pub fn write_source_metadata_cache(
 }
 
 /// 删除指定数据源的全部元数据缓存（用于刷新数据源时失效旧元数据）。
-pub fn clear_source_metadata_cache(connection: &Connection, source_id: &str) -> Result<(), AppError> {
+pub fn clear_source_metadata_cache(
+    connection: &Connection,
+    source_id: &str,
+) -> Result<(), AppError> {
     connection.execute(
         "DELETE FROM source_metadata_cache WHERE source_id = ?1",
         [source_id],

@@ -1,9 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
+import { Settings, SquareTerminal, Table2 } from "lucide-react";
 import { api } from "../api";
 import { QueryPanel } from "../features/main/QueryPanel";
 import { useMainPageQueryPanel } from "../features/main/QueryPanel/hooks/useMainPageQueryPanel";
+import { SettingsPanel } from "../features/main/SettingsPanel";
+import { TerminalPanel } from "../features/main/TerminalPanel";
+import { MainLayout } from "../layouts/MainLayout";
 import { useAppStore } from "../store/useAppStore";
 import { useSoqlExecutorStore } from "../store/useSoqlExecutorStore";
 import { enableStorageWrite } from "../store/tauriStorage";
@@ -29,6 +33,8 @@ export function MainPage() {
   const [startupComplete, setStartupComplete] = useState(false);
   // 新版本提示模态框状态：有值时显示升级弹窗。
   const [versionUpdateModal, setVersionUpdateModal] = useState<VersionUpdateModalState | null>(null);
+  // Terminal 面板是否已初始化：首次进入 Terminal 后保持挂载，避免切页时重建会话。
+  const [terminalPanelMounted, setTerminalPanelMounted] = useState(viewMode === "terminal");
 
   // 认证凭证刷新计数器：用于处理并发 API 请求下的开始/结束配对。
   const tokenRefreshingCountRef = useRef(0);
@@ -112,6 +118,12 @@ export function MainPage() {
     };
   }, []);
 
+  // 记录 Terminal 是否访问过：一旦访问即常驻挂载，仅通过显示/隐藏切换。
+  useEffect(() => {
+    if (viewMode !== "terminal") return;
+    setTerminalPanelMounted(true);
+  }, [viewMode]);
+
   // 监听登录成功事件：自动刷新数据源并切换到新登录的 org。
   useEffect(() => {
     let active = true;
@@ -169,8 +181,52 @@ export function MainPage() {
   return (
     // 页面容器：用于承载主布局与启动遮罩层。
     <div className="relative h-full w-full">
-      {/* QueryPanel 壳层：统一承载 Query/SOQL/设置视图编排。 */}
-      <QueryPanel viewState={queryPanelViewState} actions={queryPanelActions} />
+      {/* 主布局：MainPage 统一承接导航 rail 与三视图编排。 */}
+      <MainLayout
+        navRail={
+          // 导航栏按钮区。
+          <div className="flex flex-col items-center gap-1 py-2">
+            {/* Query 工作区入口。 */}
+            <button
+              className={`tool-rail-btn ${viewMode === "query" ? "tool-rail-btn--active" : ""}`}
+              title="Query 布局"
+              onClick={() => queryPanelActions.onSetViewMode("query")}
+            >
+              <Table2 size={16} />
+            </button>
+            {/* Terminal 工作区入口。 */}
+            <button
+              className={`tool-rail-btn ${viewMode === "terminal" ? "tool-rail-btn--active" : ""}`}
+              title="Terminal 布局"
+              onClick={() => queryPanelActions.onSetViewMode("terminal")}
+            >
+              <SquareTerminal size={16} />
+            </button>
+            {/* 设置入口。 */}
+            <button
+              className={`tool-rail-btn ${viewMode === "settings" ? "tool-rail-btn--active" : ""}`}
+              title="设置"
+              onClick={() => queryPanelActions.onSetViewMode("settings")}
+            >
+              <Settings size={16} />
+            </button>
+          </div>
+        }
+        content={
+          <>
+            {/* Query 工作区：对象树 + 数据/控制台统一 Tab。 */}
+            {viewMode === "query" && <QueryPanel viewState={queryPanelViewState} actions={queryPanelActions} />}
+            {/* Terminal 工作区：首次进入后常驻挂载，切换视图仅隐藏，避免终端进程重建。 */}
+            {terminalPanelMounted && (
+              <div className={viewMode === "terminal" ? "h-full w-full" : "hidden h-full w-full"}>
+                <TerminalPanel visible={viewMode === "terminal"} />
+              </div>
+            )}
+            {/* 设置视图。 */}
+            {viewMode === "settings" && <SettingsPanel />}
+          </>
+        }
+      />
       {versionUpdateModal && (
         // 新版本提示模态框：统一替代 confirm + 通知的双提示流程。
         <div className="fixed inset-0 z-[130] flex items-center justify-center bg-base-300/45 p-4 backdrop-blur-[2px]">

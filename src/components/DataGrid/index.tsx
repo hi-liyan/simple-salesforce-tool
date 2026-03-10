@@ -22,6 +22,8 @@ export type DataGridProps = {
   fieldMetadataMap: Record<string, Record<string, unknown>>;
   dirtyCellKeys: string[];
   selectedRecordIds: string[];
+  // 只读模式：开启后强制禁用单元格编辑（用于 SOQL 工作空间结果表）。
+  readOnlyMode?: boolean;
   // Salesforce 当前用户时区（IANA），用于 datetime 与 Salesforce Web 行为对齐。
   salesforceTimezone?: string | null;
   // 当前选中的数据源 ID：用于打开 Salesforce 记录页（可选）。
@@ -40,6 +42,8 @@ export type DataGridProps = {
   showHeaderMetadata?: boolean;
   // 是否启用双击只读单元格时的提示逻辑。
   enableReadonlyCellHint?: boolean;
+  // 是否允许只读单元格双击打开 overlay（仅查看，不可编辑）。
+  allowReadonlyOverlay?: boolean;
   // 是否显示勾选列（首列 checkbox）。
   showSelectionColumn?: boolean;
 };
@@ -51,6 +55,7 @@ export function DataGrid({
   fieldMetadataMap,
   dirtyCellKeys,
   selectedRecordIds,
+  readOnlyMode = false,
   salesforceTimezone,
   sourceId,
   selectedSourceType,
@@ -62,9 +67,23 @@ export function DataGrid({
   onShowMessage,
   showHeaderMetadata = true,
   enableReadonlyCellHint = true,
+  allowReadonlyOverlay = false,
   showSelectionColumn = true
 }: DataGridProps) {
   const records = result.records;
+  // 生效元数据：只读模式下统一覆写 createable/updateable，避免误触发编辑链路。
+  const effectiveFieldMetadataMap = useMemo(() => {
+    if (!readOnlyMode) return fieldMetadataMap;
+    return Object.entries(fieldMetadataMap).reduce((acc, [fieldName, metadata]) => {
+      acc[fieldName] = {
+        ...(metadata || {}),
+        createable: false,
+        updateable: false
+      };
+      return acc;
+    }, {} as Record<string, Record<string, unknown>>);
+  }, [fieldMetadataMap, readOnlyMode]);
+
   // 仅在时区字符串合法时启用 Salesforce 用户时区；非法值自动回退浏览器本地时区。
   const effectiveSalesforceTimezone = useMemo(
     () => resolveSalesforceTimezone(salesforceTimezone),
@@ -73,11 +92,11 @@ export function DataGrid({
   // MySQL 主键列名：当查询结果无 Id 时，用主键值作为记录键与勾选键。
   const mysqlPrimaryKeyField = useMemo(() => {
     if ((selectedSourceType || "salesforce").toLowerCase() !== "mysql") return "";
-    const field = Object.entries(fieldMetadataMap).find(
+    const field = Object.entries(effectiveFieldMetadataMap).find(
       ([, metadata]) => String(metadata?.columnKey || "").toUpperCase() === "PRI"
     )?.[0];
     return field || "";
-  }, [fieldMetadataMap, selectedSourceType]);
+  }, [effectiveFieldMetadataMap, selectedSourceType]);
 
   const {
     columns,
@@ -90,7 +109,7 @@ export function DataGrid({
     showSelectionColumn,
     records,
     selectedRecordIds,
-    fieldMetadataMap,
+    fieldMetadataMap: effectiveFieldMetadataMap,
     selectedSourceType
   });
 
@@ -110,7 +129,7 @@ export function DataGrid({
   const [activeEditorCell, setActiveEditorCell] = useState<Item | null>(null);
   const activeEditorCellRef = useRef<Item | null>(null);
 
-  const { openRecordPageFromMenu, copyCellValueFromMenu, setCellNoneFromMenu } = useDataGridMenuActions({
+  const { openRecordPageFromMenu, copyCellValueFromMenu, setCellNullishFromMenu } = useDataGridMenuActions({
     rowContextMenu,
     setRowContextMenu,
     sourceId,
@@ -137,24 +156,26 @@ export function DataGrid({
       createGetCellContent({
         columns,
         records,
-        fieldMetadataMap,
+        fieldMetadataMap: effectiveFieldMetadataMap,
         selectedRecordIds,
         dirtyCellSet,
         pendingDeleteRecordSet,
         effectiveSalesforceTimezone,
         selectedSourceType,
-        getRecordKey
+        getRecordKey,
+        allowReadonlyOverlay
       }),
     [
       columns,
       records,
-      fieldMetadataMap,
+      effectiveFieldMetadataMap,
       selectedRecordIds,
       dirtyCellSet,
       pendingDeleteRecordSet,
       effectiveSalesforceTimezone,
       selectedSourceType,
-      getRecordKey
+      getRecordKey,
+      allowReadonlyOverlay
     ]
   );
 
@@ -163,7 +184,7 @@ export function DataGrid({
       createCellEditedHandler({
         columns,
         records,
-        fieldMetadataMap,
+        fieldMetadataMap: effectiveFieldMetadataMap,
         effectiveSalesforceTimezone,
         selectedSourceType,
         getRecordKey,
@@ -174,7 +195,7 @@ export function DataGrid({
     [
       columns,
       records,
-      fieldMetadataMap,
+      effectiveFieldMetadataMap,
       effectiveSalesforceTimezone,
       selectedSourceType,
       getRecordKey,
@@ -189,11 +210,11 @@ export function DataGrid({
       createCellClickedHandler({
         columns,
         records,
-        fieldMetadataMap,
+        fieldMetadataMap: effectiveFieldMetadataMap,
         enableReadonlyCellHint,
         onShowMessage
       }),
-    [columns, records, fieldMetadataMap, enableReadonlyCellHint, onShowMessage]
+    [columns, records, effectiveFieldMetadataMap, enableReadonlyCellHint, onShowMessage]
   );
 
   const handleCellsEdited = useCallback((newValues: readonly EditListItem[]) => {
@@ -206,14 +227,14 @@ export function DataGrid({
         activeEditorCell,
         activeEditorCellRef,
         columns,
-        fieldMetadataMap,
+        fieldMetadataMap: effectiveFieldMetadataMap,
         effectiveSalesforceTimezone,
         onShowMessage
       }),
     [
       activeEditorCell,
       columns,
-      fieldMetadataMap,
+      effectiveFieldMetadataMap,
       effectiveSalesforceTimezone,
       onShowMessage
     ]
@@ -222,12 +243,12 @@ export function DataGrid({
   const drawHeader = useMemo(
     () =>
       createDrawHeader({
-        fieldMetadataMap,
+        fieldMetadataMap: effectiveFieldMetadataMap,
         showHeaderMetadata,
         allChecked,
         hasAnyChecked
       }),
-    [fieldMetadataMap, showHeaderMetadata, allChecked, hasAnyChecked]
+    [effectiveFieldMetadataMap, showHeaderMetadata, allChecked, hasAnyChecked]
   );
 
   if (records.length === 0) {
@@ -247,7 +268,7 @@ export function DataGrid({
       totalSize={result.totalSize}
       records={records}
       columns={columns}
-      fieldMetadataMap={fieldMetadataMap}
+      fieldMetadataMap={effectiveFieldMetadataMap}
       selectedSourceType={selectedSourceType}
       selectedRecordIds={selectedRecordIds}
       showHeaderMetadata={showHeaderMetadata}
@@ -272,7 +293,7 @@ export function DataGrid({
       onCopyCell={() => {
         void copyCellValueFromMenu();
       }}
-      onSetNone={setCellNoneFromMenu}
+      onSetNullish={setCellNullishFromMenu}
       onOpenRecordPage={() => {
         void openRecordPageFromMenu();
       }}
