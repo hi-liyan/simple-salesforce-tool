@@ -10,10 +10,12 @@ const objectsKey = (sourceId: string) => ["objects", sourceId] as const;
 const systemLogsKey = (page: number, pageSize: number) => ["system-logs", page, pageSize] as const;
 
 // 数据源列表查询（普通刷新）。
-export function useSourcesQuery() {
+export function useSourcesQuery(enabled = true) {
   return useQuery<SalesforceSource[]>({
     queryKey: sourcesKey,
-    queryFn: () => api.listSources()
+    queryFn: () => api.listSources(),
+    // 启动阶段允许由外层手动注入首屏数据，避免 Query 再次重复拉本地列表。
+    enabled
   });
 }
 

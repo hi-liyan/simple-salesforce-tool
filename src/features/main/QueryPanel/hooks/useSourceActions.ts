@@ -3,6 +3,14 @@ import { QueryClient } from "@tanstack/react-query";
 import { api } from "../../../../api";
 import { Notice, SalesforceSource } from "../../../../types";
 
+// 数据源刷新控制项：用于区分首屏本地恢复、后台静默同步与用户手动刷新。
+type RefreshSourcesOptions = {
+  // 是否在刷新数据源后强制回源刷新对象列表。
+  forceObjectRefresh?: boolean;
+  // 是否展示页面级 loading。
+  showLoading?: boolean;
+};
+
 type UseSourceActionsInput = {
   // 当前数据源列表。
   sources: SalesforceSource[];
@@ -41,8 +49,12 @@ export function useSourceActions({
 }: UseSourceActionsInput) {
   // 刷新数据源：支持同步 CLI 或直接拉取本地列表，并在必要时刷新对象列表。
   const refreshSources = useCallback(
-    async (syncCli: boolean, preferredOrgId?: string, preferredSourceId?: string) => {
-      setLoading(true);
+    async (syncCli: boolean, preferredOrgId?: string, preferredSourceId?: string, options?: RefreshSourcesOptions) => {
+      // 默认保持原行为：既展示 loading，也在有选中数据源时强制刷新对象列表。
+      const { forceObjectRefresh = true, showLoading = true } = options || {};
+      if (showLoading) {
+        setLoading(true);
+      }
       try {
         let list = sources;
         if (syncCli) {
@@ -68,8 +80,8 @@ export function useSourceActions({
         }
         setSelectedSourceId(nextSelectedSourceId);
 
-        // 刷新按钮行为增强：若当前仍有选中数据源，则立即重新拉取 Objects 列表。
-        if (nextSelectedSourceId) {
+        // 非首屏恢复场景下，若当前仍有选中数据源，则立即重新拉取 Objects 列表。
+        if (forceObjectRefresh && nextSelectedSourceId) {
           await queryClient.fetchQuery({
             queryKey: ["objects", nextSelectedSourceId],
             queryFn: () => api.refreshObjects(nextSelectedSourceId)
@@ -78,7 +90,10 @@ export function useSourceActions({
       } catch (error) {
         patchActiveTabNotice({ type: "error", message: `加载数据源失败：${String(error)}` });
       } finally {
-        setLoading(false);
+        // 静默刷新时不改动页面级 loading，避免后台同步打断用户操作。
+        if (showLoading) {
+          setLoading(false);
+        }
       }
     },
     [setLoading, sources, syncSources, queryClient, selectedSourceId, setSelectedSourceId, patchActiveTabNotice]

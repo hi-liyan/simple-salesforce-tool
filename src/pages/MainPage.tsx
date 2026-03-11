@@ -51,7 +51,7 @@ export function MainPage() {
     tokenRefreshing
   });
 
-  // 初始化加载：手动触发 Zustand rehydrate，等待完成后再同步数据源列表。
+  // 初始化加载：先恢复本地持久化状态，再将 CLI 同步放到后台静默执行。
   useEffect(() => {
     let active = true;
 
@@ -65,8 +65,10 @@ export function MainPage() {
 
       // hydration 完成后从 store 读取持久化的数据源 ID。
       const persistedSourceId = useAppStore.getState().selectedSourceId;
-      // 触发 CLI 同步刷新数据源。
-      await refreshSources(true, undefined, persistedSourceId);
+      // 首屏只恢复本地数据源与上次选择，避免 CLI 同步和对象强刷阻塞启动遮罩。
+      await refreshSources(false, undefined, persistedSourceId, {
+        forceObjectRefresh: false
+      });
       if (!active) return;
 
       // 首次初始化结束后关闭启动遮罩，并标记启动完成。
@@ -76,6 +78,12 @@ export function MainPage() {
       // 异步重新拉取恢复的 Tab 数据（describe + query），不阻塞主界面。
       const finalSelectedSourceId = useAppStore.getState().selectedSourceId;
       void reloadRestoredTabs(finalSelectedSourceId);
+
+      // 启动后在后台静默同步 CLI 数据源，不再影响首屏可交互时间。
+      void refreshSources(true, undefined, finalSelectedSourceId, {
+        forceObjectRefresh: false,
+        showLoading: false
+      });
 
       if (!startupVersionCheckTriggered) {
         startupVersionCheckTriggered = true;
