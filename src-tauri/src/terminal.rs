@@ -119,7 +119,7 @@ pub fn open_terminal_session(
         .openpty(pty_size)
         .map_err(|error| format!("创建 PTY 失败: {error}"))?;
 
-    let (program, args, shell_name) = resolve_shell_command(preferred_shell_command);
+    let (program, args, shell_name) = resolve_shell_command(preferred_shell_command)?;
     let mut command_builder = CommandBuilder::new(program.clone());
     for arg in &args {
         command_builder.arg(arg);
@@ -294,33 +294,23 @@ pub fn close_terminal_session(
 }
 
 /// 平台化解析默认 shell 启动命令。
-fn resolve_shell_command(preferred_shell_command: Option<&str>) -> (String, Vec<String>, String) {
+/// 说明：Windows 仅使用用户已保存的绝对路径，不再在创建终端时重新探测。
+fn resolve_shell_command(preferred_shell_command: Option<&str>) -> Result<(String, Vec<String>, String), String> {
     if cfg!(target_os = "windows") {
-        if let Some(preferred) = preferred_shell_command.map(|item| item.trim()).filter(|item| !item.is_empty()) {
-            // 优先尊重已保存的 shell 命令：只要当前进程可直接执行，就无需依赖 where 命中。
-            if let Some((shell_name, _shell_version)) = detect_windows_shell_meta(preferred) {
-                return (
-                    preferred.to_string(),
-                    windows_terminal_args(),
-                    shell_name,
-                );
-            }
-        }
-        // Windows：动态探测可用终端列表，不限制特定版本。
-        let options = list_available_terminal_shells();
-        if let Some(first) = options.first() {
-            return (
-                first.command.clone(),
-                windows_terminal_args(),
-                first.shell_name.clone(),
-            );
-        }
-        // 兜底回退：若探测失败，仍尽量使用系统默认 powershell。
-        return (
-            "powershell.exe".to_string(),
+        let preferred = preferred_shell_command
+            .map(|item| item.trim())
+            .filter(|item| !item.is_empty())
+            .ok_or_else(|| "未配置终端 Shell，请到“设置-终端设置”中重新选择 Shell。".to_string())?;
+
+        // 使用数据库中保存的 shell 绝对路径直接创建终端；若配置已失效则直接报错，由前端提示用户重新选择。
+        let (shell_name, _shell_version) = detect_windows_shell_meta(preferred)
+            .ok_or_else(|| format!("当前保存的终端 Shell 不可用：{preferred}。请到“设置-终端设置”中重新选择 Shell。"))?;
+
+        return Ok((
+            preferred.to_string(),
             windows_terminal_args(),
-            "Windows PowerShell".to_string(),
-        );
+            shell_name,
+        ));
     }
 
     // Unix 默认取 SHELL 环境变量，未配置时回退 /bin/bash。
@@ -330,7 +320,7 @@ fn resolve_shell_command(preferred_shell_command: Option<&str>) -> (String, Vec<
         .next()
         .map(|item| item.to_string())
         .unwrap_or_else(|| "shell".to_string());
-    (shell, vec!["-i".to_string()], shell_name)
+    Ok((shell, vec!["-i".to_string()], shell_name))
 }
 
 /// Windows 终端参数：注入父进程守护任务，确保主进程异常退出后子终端自终止。
@@ -358,11 +348,6 @@ pub fn list_available_terminal_shells() -> Vec<TerminalShellOption> {
         let mut candidates = Vec::<String>::new();
         candidates.extend(discover_windows_shell_paths("pwsh.exe"));
         candidates.extend(discover_windows_shell_paths("powershell.exe"));
-
-        if candidates.is_empty() {
-            // 兜底保留系统 PowerShell 命令，避免极端环境下列表完全为空。
-            candidates.push("powershell.exe".to_string());
-        }
 
         let mut options: Vec<TerminalShellOption> = candidates
             .into_iter()

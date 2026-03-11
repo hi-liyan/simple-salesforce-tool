@@ -39,6 +39,7 @@ import {
   TerminalCommandUpsertPayload,
   TerminalOutputEvent
 } from "../../../types";
+import { NoticeAlert } from "../../../components/NoticeAlert";
 import { TerminalTab, useTerminalStore } from "../../../store/useTerminalStore";
 
 type TerminalPanelProps = {
@@ -286,6 +287,8 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
   const [commandLibraryLoading, setCommandLibraryLoading] = useState(false);
   // 命令库错误文本。
   const [commandLibraryError, setCommandLibraryError] = useState("");
+  // 终端会话通知：用于提示 Shell 配置失效等创建失败场景。
+  const [terminalSessionNotice, setTerminalSessionNotice] = useState("");
   // 命令写入提交态。
   const [commandLibrarySubmitting, setCommandLibrarySubmitting] = useState(false);
   // 搜索关键字：支持组名、命令名、描述、命令文本匹配。
@@ -557,6 +560,7 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
       try {
         const sessionInfo = await api.openTerminalSession(tab.id, cols, rows);
         openedSessionTabIdRef.current.add(tab.id);
+        setTerminalSessionNotice("");
         setProcessMetaByTabId((state) => ({
           ...state,
           [tab.id]: {
@@ -576,6 +580,8 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
           delete pendingPasteCommandByTabIdRef.current[tab.id];
         }
       } catch (error) {
+        // 终端创建失败时统一提示用户回到终端设置重新选择 Shell。
+        setTerminalSessionNotice(`终端创建失败，请到“设置-终端设置”中重新选择 Shell 后重试。详情：${String(error)}`);
         setProcessMetaByTabId((state) => ({
           ...state,
           [tab.id]: {
@@ -964,6 +970,16 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
   return (
     // Terminal 主体布局：左侧命令库 + 右侧终端工作区。
     <div className="grid h-full w-full grid-cols-[380px_1fr] overflow-hidden">
+      {/* 终端创建全局通知：用于展示 Shell 配置失效等错误。 */}
+      {terminalSessionNotice && (
+        <NoticeAlert
+          tone="error"
+          message={terminalSessionNotice}
+          onClose={() => setTerminalSessionNotice("")}
+          className="fixed right-4 top-4 z-[60] max-w-[420px] shadow-lg"
+        />
+      )}
+
       {/* 左侧命令库面板。 */}
       <div className="flex min-h-0 flex-col border-r border-base-300 bg-base-100">
         {/* 顶部控制区：统计、搜索、操作。 */}
