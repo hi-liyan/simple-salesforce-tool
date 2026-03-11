@@ -1,5 +1,4 @@
 import type * as Monaco from "monaco-editor";
-import { parseQuery } from "soql-parser-js";
 import type { MonacoLanguageModule, RuntimeCompletions } from "../types";
 import { buildSuggestions, dedupeByLowerCase, dedupeSuggestionsByLabel, normalizeObjectFieldsMap, normalizeQuerySpaces } from "../utils";
 
@@ -88,40 +87,70 @@ function setGlobalDisposable(disposable: Monaco.IDisposable) {
   (globalThis as Record<string, unknown>)[SOQL_COMPLETION_DISPOSABLE_KEY] = disposable;
 }
 
-// 从解析结果中尝试提取主查询对象名。
-function extractMainFromParsedQuery(parsed: unknown): string | null {
-  if (!parsed || typeof parsed !== "object") return null;
-  const parsedMap = parsed as Record<string, unknown>;
-  const fromNode = parsedMap.from;
-  if (typeof fromNode === "string") return fromNode;
-  if (fromNode && typeof fromNode === "object") {
-    const fromMap = fromNode as Record<string, unknown>;
-    const objectName = fromMap.object || fromMap.sObject || fromMap.table;
-    if (typeof objectName === "string" && objectName.trim()) {
-      return objectName.trim();
+// 将引号中的内容替换为空格，避免字符串字面量里的 FROM 干扰主查询识别。
+function maskQuotedContent(soql: string): string {
+  let masked = "";
+  let quoteOpened = false;
+
+  for (let index = 0; index < soql.length; index += 1) {
+    const currentChar = soql[index];
+    const previousChar = soql[index - 1] || "";
+    if (currentChar === "'" && previousChar !== "\\") {
+      quoteOpened = !quoteOpened;
+      masked += " "; // 引号本身也替换掉，保证后续边界判断简单稳定。
+      continue;
     }
+    masked += quoteOpened ? " " : currentChar;
   }
+
+  return masked;
+}
+
+// 判断指定位置是否为关键字边界，避免把字段名中的 from 误判成子句关键字。
+function isKeywordBoundary(source: string, index: number): boolean {
+  if (index < 0 || index >= source.length) return true;
+  return !/[A-Za-z0-9_]/.test(source[index]);
+}
+
+// 提取顶层 FROM 后的对象名：忽略子查询、括号和字符串字面量。
+export function extractMainFromObjectName(soql: string): string | null {
+  const maskedSoql = maskQuotedContent(soql);
+  let bracketDepth = 0;
+
+  for (let index = 0; index < maskedSoql.length; index += 1) {
+    const currentChar = maskedSoql[index];
+    if (currentChar === "(") {
+      bracketDepth += 1;
+      continue;
+    }
+    if (currentChar === ")") {
+      bracketDepth = Math.max(0, bracketDepth - 1);
+      continue;
+    }
+    if (bracketDepth !== 0) {
+      continue; // 子查询内部的 FROM 不作为主查询对象来源。
+    }
+
+    const fromKeyword = maskedSoql.slice(index, index + 4).toLowerCase();
+    if (fromKeyword !== "from") {
+      continue;
+    }
+    if (!isKeywordBoundary(maskedSoql, index - 1) || !isKeywordBoundary(maskedSoql, index + 4)) {
+      continue;
+    }
+
+    let objectStart = index + 4;
+    while (objectStart < maskedSoql.length && /\s/.test(maskedSoql[objectStart])) {
+      objectStart += 1; // 跳过 FROM 与对象名之间的空白。
+    }
+    const objectNameMatch = maskedSoql.slice(objectStart).match(/^[A-Za-z_][\w]*/);
+    if (!objectNameMatch) {
+      return null;
+    }
+    return objectNameMatch[0];
+  }
+
   return null;
-}
-
-// 使用 soql-parser-js 尝试解析语句并推断对象名。
-function extractMainFromObjectNameWithParser(soql: string): string | null {
-  const candidate = soql.trim();
-  if (!candidate) return null;
-  try {
-    const parsed = parseQuery(candidate.endsWith(" ") ? candidate : `${candidate} `);
-    return extractMainFromParsedQuery(parsed);
-  } catch {
-    return null;
-  }
-}
-
-// 提取主查询 FROM 对象名：优先 parser，失败时回退正则。
-function extractMainFromObjectName(soql: string): string | null {
-  const parsedObjectName = extractMainFromObjectNameWithParser(soql);
-  if (parsedObjectName) return parsedObjectName;
-  const match = soql.match(/\bfrom\s+([A-Za-z_][\w]*)/i);
-  return match?.[1] || null;
 }
 
 // 判断是否正在输入 FROM 对象名。
