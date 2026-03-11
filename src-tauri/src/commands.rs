@@ -19,7 +19,7 @@ use crate::models::{
     CliPathStatus, CurrentUserContext, LlmSettings, LlmSettingsView, ObjectDdl, ObjectDescribe,
     QueryResult, RecordMutationPayload, RecordSavePayload, RecordUpdatePayload, SalesforceObject,
     SalesforceSource, SaveLlmSettingsPayload, SourceUpsertPayload, SystemLogPage,
-    TerminalCommandGroup, TerminalCommandItem, TerminalCommandReorderPayload,
+    TerminalCommandGroup, TerminalCommandGroupUpsertPayload, TerminalCommandItem, TerminalCommandReorderPayload,
     TerminalCommandUpsertPayload,
 };
 use crate::providers::provider_for_source;
@@ -2458,6 +2458,26 @@ pub fn create_terminal_command_group(
         .map_err(AppError::to_string_error)
 }
 
+/// 更新终端命令组名称。
+#[tauri::command]
+pub fn update_terminal_command_group(
+    state: State<'_, AppState>,
+    group_id: String,
+    payload: TerminalCommandGroupUpsertPayload,
+) -> Result<TerminalCommandGroup, String> {
+    let normalized_group_id = group_id.trim().to_string();
+    if normalized_group_id.is_empty() {
+        return Err("groupId 不能为空".to_string());
+    }
+
+    let connection = state
+        .db
+        .lock()
+        .map_err(|error| format!("Database lock failed: {error}"))?;
+    db::update_terminal_command_group(&connection, &normalized_group_id, &payload.name)
+        .map_err(AppError::to_string_error)
+}
+
 /// 创建终端命令。
 #[tauri::command]
 pub fn create_terminal_command(
@@ -2517,6 +2537,25 @@ pub fn delete_terminal_command(
         &normalized_command_id,
     )
     .map_err(AppError::to_string_error)
+}
+
+/// 删除终端命令组。
+#[tauri::command]
+pub fn delete_terminal_command_group(
+    state: State<'_, AppState>,
+    group_id: String,
+) -> Result<(), String> {
+    let normalized_group_id = group_id.trim().to_string();
+    if normalized_group_id.is_empty() {
+        return Err("groupId 不能为空".to_string());
+    }
+
+    let connection = state
+        .db
+        .lock()
+        .map_err(|error| format!("Database lock failed: {error}"))?;
+    db::delete_terminal_command_group(&connection, &normalized_group_id)
+        .map_err(AppError::to_string_error)
 }
 
 /// 调整终端命令排序。
