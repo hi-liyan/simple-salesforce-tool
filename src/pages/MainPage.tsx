@@ -1,12 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { Settings, SquareTerminal, Table2 } from "lucide-react";
 import { api } from "../api";
-import { QueryPanel } from "../features/main/QueryPanel";
 import { useMainPageQueryPanel } from "../features/main/QueryPanel/hooks/useMainPageQueryPanel";
-import { SettingsPanel } from "../features/main/SettingsPanel";
-import { TerminalPanel } from "../features/main/TerminalPanel";
 import { MainLayout } from "../layouts/MainLayout";
 import { useAppStore } from "../store/useAppStore";
 import { useSoqlExecutorStore } from "../store/useSoqlExecutorStore";
@@ -60,6 +57,52 @@ const STARTUP_STAGES: StartupStage[] = [
 
 // 启动阶段索引：按 key 快速获取阶段配置，避免重复查找。
 const STARTUP_STAGE_MAP = Object.fromEntries(STARTUP_STAGES.map((stage) => [stage.key, stage])) as Record<StartupStageKey, StartupStage>;
+
+// 懒加载 Query 工作区：将 DataGrid / 控制台等较重 UI 拆出首包。
+const LazyQueryPanel = lazy(async () => {
+  const module = await import("../features/main/QueryPanel");
+  return {
+    default: module.QueryPanel
+  };
+});
+
+// 懒加载 Terminal 工作区：将 xterm 与 Monaco 等重模块延后到首次进入时再加载。
+const LazyTerminalPanel = lazy(async () => {
+  const module = await import("../features/main/TerminalPanel");
+  return {
+    default: module.TerminalPanel
+  };
+});
+
+// 懒加载设置页：避免首屏加载非当前视图所需表单与管理逻辑。
+const LazySettingsPanel = lazy(async () => {
+  const module = await import("../features/main/SettingsPanel");
+  return {
+    default: module.SettingsPanel
+  };
+});
+
+// 工作区懒加载占位：用于展示面板代码分片加载中的状态。
+function WorkspaceLoadingFallback({ title }: { title: string }) {
+  return (
+    // 占位容器：保持主区域完整尺寸，避免切视图时闪动。
+    <div className="flex h-full w-full items-center justify-center bg-base-200/35">
+      {/* 占位卡片：展示当前正在加载的工作区名称。 */}
+      <div className="rounded-xl border border-base-300 bg-base-100 px-5 py-4 shadow-sm">
+        <div className="flex items-center gap-3">
+          {/* 旋转指示器：提示代码分片正在加载。 */}
+          <span className="loading loading-spinner text-primary" style={{ width: 22, height: 22 }} />
+          <div>
+            {/* 标题文案：说明当前正在加载哪个工作区。 */}
+            <p className="text-[13px] font-medium">{title}</p>
+            {/* 补充说明：提示为首次按需加载。 */}
+            <p className="mt-1 text-[12px] text-neutral/70">首次进入时正在按需加载相关模块...</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // 主页面：对象列表 + 结果面板 + SOQL 抽屉。
 export function MainPage() {
@@ -294,16 +337,29 @@ export function MainPage() {
         }
         content={
           <>
-            {/* Query 工作区：对象树 + 数据/控制台统一 Tab。 */}
-            {viewMode === "query" && <QueryPanel viewState={queryPanelViewState} actions={queryPanelActions} />}
+            {/* Query 工作区：对象树 + 数据/控制台统一 Tab，首次进入时按需加载。 */}
+            {viewMode === "query" && (
+              <Suspense fallback={<WorkspaceLoadingFallback title="正在加载 Query 工作区" />}>
+                {/* Query 工作区主体。 */}
+                <LazyQueryPanel viewState={queryPanelViewState} actions={queryPanelActions} />
+              </Suspense>
+            )}
             {/* Terminal 工作区：首次进入后常驻挂载，切换视图仅隐藏，避免终端进程重建。 */}
             {terminalPanelMounted && (
               <div className={viewMode === "terminal" ? "h-full w-full" : "hidden h-full w-full"}>
-                <TerminalPanel visible={viewMode === "terminal"} />
+                <Suspense fallback={<WorkspaceLoadingFallback title="正在加载 Terminal 工作区" />}>
+                  {/* Terminal 工作区主体。 */}
+                  <LazyTerminalPanel visible={viewMode === "terminal"} />
+                </Suspense>
               </div>
             )}
-            {/* 设置视图。 */}
-            {viewMode === "settings" && <SettingsPanel />}
+            {/* 设置视图：首次进入时按需加载。 */}
+            {viewMode === "settings" && (
+              <Suspense fallback={<WorkspaceLoadingFallback title="正在加载设置页" />}>
+                {/* 设置页主体。 */}
+                <LazySettingsPanel />
+              </Suspense>
+            )}
           </>
         }
       />
