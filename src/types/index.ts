@@ -326,6 +326,11 @@ export type TerminalCommandUpsertPayload = {
   description: string;
 };
 
+// 终端命令组写入载荷：用于创建和重命名命令组。
+export type TerminalCommandGroupUpsertPayload = {
+  name: string;
+};
+
 // 终端命令排序载荷：按组内最新顺序提交命令 ID 列表。
 export type TerminalCommandReorderPayload = {
   groupId: string;

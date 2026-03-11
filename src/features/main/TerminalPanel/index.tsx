@@ -35,10 +35,12 @@ import { api } from "../../../api";
 import {
   TerminalClosedEvent,
   TerminalCommandGroup,
+  TerminalCommandGroupUpsertPayload,
   TerminalCommandItem,
   TerminalCommandUpsertPayload,
   TerminalOutputEvent
 } from "../../../types";
+import { NoticeAlert } from "../../../components/NoticeAlert";
 import { TerminalTab, useTerminalStore } from "../../../store/useTerminalStore";
 
 type TerminalPanelProps = {
@@ -71,7 +73,7 @@ type TerminalProcessMeta = {
 };
 
 // 左侧编辑器模式。
-type CommandEditorMode = "closed" | "group" | "create" | "edit";
+type CommandEditorMode = "closed" | "group" | "groupEdit" | "create" | "edit";
 
 // 编辑命令目标。
 type EditingCommandTarget = {
@@ -87,6 +89,12 @@ type DeleteCommandTarget = {
   groupId: string;
   // 待删除命令实体。
   command: TerminalCommandItem;
+};
+
+// 待确认删除的命令组目标。
+type DeleteGroupTarget = {
+  // 待删除命令组实体。
+  group: TerminalCommandGroup;
 };
 
 // 拖拽快照：用于 Overlay 固定尺寸与内容展示。
@@ -286,6 +294,8 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
   const [commandLibraryLoading, setCommandLibraryLoading] = useState(false);
   // 命令库错误文本。
   const [commandLibraryError, setCommandLibraryError] = useState("");
+  // 终端会话通知：用于提示 Shell 配置失效等创建失败场景。
+  const [terminalSessionNotice, setTerminalSessionNotice] = useState("");
   // 命令写入提交态。
   const [commandLibrarySubmitting, setCommandLibrarySubmitting] = useState(false);
   // 搜索关键字：支持组名、命令名、描述、命令文本匹配。
@@ -308,7 +318,11 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
   const [activeDragCommandSnapshot, setActiveDragCommandSnapshot] = useState<ActiveDragCommandSnapshot | null>(null);
   // 删除确认弹窗目标。
   const [deleteCommandTarget, setDeleteCommandTarget] = useState<DeleteCommandTarget | null>(null);
-  // 新命令组名称输入值。
+  // 删除命令组确认弹窗目标。
+  const [deleteGroupTarget, setDeleteGroupTarget] = useState<DeleteGroupTarget | null>(null);
+  // 当前正在编辑的命令组。
+  const [editingGroup, setEditingGroup] = useState<TerminalCommandGroup | null>(null);
+  // 命令组名称输入值：用于新建与重命名命令组。
   const [newGroupName, setNewGroupName] = useState("");
   // 命令编辑表单。
   const [commandForm, setCommandForm] = useState<CommandEditorForm>(() => createEmptyCommandForm(""));
@@ -321,6 +335,8 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
   const terminalRuntimeByTabIdRef = useRef<Record<string, TerminalRuntime>>({});
   // 已经打开后端会话的 Tab 集合。
   const openedSessionTabIdRef = useRef<Set<string>>(new Set());
+  // 正在打开中的后端会话 Promise 映射：用于合并同一 Tab 的并发建连请求。
+  const openingSessionPromiseByTabIdRef = useRef<Record<string, Promise<void>>>({});
   // 等待会话建立后自动粘贴的命令（用于“粘贴到当前终端”兜底）。
   const pendingPasteCommandByTabIdRef = useRef<Record<string, string>>({});
   // 上一次渲染时的 Tab ID 集合：用于回收已关闭 Tab 资源。
@@ -329,6 +345,8 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
   const commandLibraryRequestSeqRef = useRef(0);
   // 命令卡片元素映射：用于拖拽开始时读取真实尺寸。
   const commandCardElementByIdRef = useRef<Record<string, HTMLDivElement | null>>({});
+  // xterm 视口同步调度帧：用于合并连续 fit，减少窗口缩放和切页时的抖动。
+  const terminalFitFrameRef = useRef<number | null>(null);
 
   // 激活终端 Tab 派生值。
   const activeTab = useMemo(() => tabs.find((item) => item.id === activeTabId) || tabs[0] || null, [tabs, activeTabId]);
@@ -517,7 +535,7 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
     return runtime;
   }, []);
 
-  // 将 xterm 挂载到容器并执行 fit。
+  // 将 xterm 挂载到容器：仅负责 open，不在这里直接 fit，避免隐藏态和过渡态重复重排。
   const mountRuntimeToContainer = useCallback(
     (tab: TerminalTab) => {
       const container = terminalContainerByTabIdRef.current[tab.id];
@@ -528,66 +546,109 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
       if (container.childElementCount === 0) {
         runtime.terminal.open(container);
       }
-      runtime.fitAddon.fit(); // 每次挂载后重新 fit。
     },
     [ensureTerminalRuntime]
   );
 
+  // 取消已排队的终端视口同步，避免多个 fit 连续执行时互相覆盖。
+  const cancelScheduledTerminalFit = useCallback(() => {
+    if (terminalFitFrameRef.current === null) return;
+    window.cancelAnimationFrame(terminalFitFrameRef.current);
+    terminalFitFrameRef.current = null;
+  }, []);
+
+  // 延后一帧同步终端视口尺寸：用于规避切换 Tab、显示隐藏和窗口缩放时的瞬时错误尺寸。
+  const scheduleTerminalViewportSync = useCallback(
+    (tab: TerminalTab, options?: { focus?: boolean }) => {
+      cancelScheduledTerminalFit();
+      terminalFitFrameRef.current = window.requestAnimationFrame(() => {
+        terminalFitFrameRef.current = null;
+        const container = terminalContainerByTabIdRef.current[tab.id];
+        const runtime = terminalRuntimeByTabIdRef.current[tab.id];
+        if (!container || !runtime) return;
+
+        const rect = container.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return; // 隐藏态或未完成布局时跳过本次同步。
+
+        runtime.fitAddon.fit(); // 先按容器最终尺寸执行 fit。
+        if (options?.focus) {
+          runtime.terminal.focus(); // 仅在激活切换时恢复焦点，避免 resize 抢焦点。
+        }
+        if (!openedSessionTabIdRef.current.has(tab.id)) return;
+        void api.resizeTerminalSession(tab.id, runtime.terminal.cols || 120, runtime.terminal.rows || 36);
+      });
+    },
+    [cancelScheduledTerminalFit]
+  );
+
   // 打开后端终端会话（每个 Tab 一个系统进程）。
   const ensureBackendSession = useCallback(
-    async (tab: TerminalTab) => {
+    (tab: TerminalTab) => {
       if (openedSessionTabIdRef.current.has(tab.id)) return;
+      const openingSessionPromise = openingSessionPromiseByTabIdRef.current[tab.id];
+      if (openingSessionPromise) return openingSessionPromise;
 
-      const runtime = ensureTerminalRuntime(tab);
-      const cols = runtime.terminal.cols || 120;
-      const rows = runtime.terminal.rows || 36;
+      const nextOpeningPromise = (async () => {
+        const runtime = ensureTerminalRuntime(tab);
+        const cols = runtime.terminal.cols || 120;
+        const rows = runtime.terminal.rows || 36;
 
-      setProcessMetaByTabId((state) => ({
-        ...state,
-        [tab.id]: {
-          pid: state[tab.id]?.pid || null,
-          commandLine: state[tab.id]?.commandLine || "",
-          shellName: state[tab.id]?.shellName || "",
-          shellVersion: state[tab.id]?.shellVersion || "",
-          connected: false,
-          opening: true
-        }
-      }));
-
-      try {
-        const sessionInfo = await api.openTerminalSession(tab.id, cols, rows);
-        openedSessionTabIdRef.current.add(tab.id);
         setProcessMetaByTabId((state) => ({
           ...state,
           [tab.id]: {
-            pid: sessionInfo.pid,
-            commandLine: sessionInfo.commandLine,
-            shellName: sessionInfo.shellName,
-            shellVersion: sessionInfo.shellVersion,
-            connected: true,
-            opening: false
-          }
-        }));
-
-        // 若该 Tab 有待粘贴命令，会话建立后立即写入终端输入区。
-        const pending = pendingPasteCommandByTabIdRef.current[tab.id];
-        if (pending) {
-          await api.writeTerminalInput(tab.id, pending);
-          delete pendingPasteCommandByTabIdRef.current[tab.id];
-        }
-      } catch (error) {
-        setProcessMetaByTabId((state) => ({
-          ...state,
-          [tab.id]: {
-            pid: null,
-            commandLine: `会话创建失败: ${String(error)}`,
-            shellName: "",
-            shellVersion: "",
+            pid: state[tab.id]?.pid || null,
+            commandLine: state[tab.id]?.commandLine || "",
+            shellName: state[tab.id]?.shellName || "",
+            shellVersion: state[tab.id]?.shellVersion || "",
             connected: false,
-            opening: false
+            opening: true
           }
         }));
-      }
+
+        try {
+          const sessionInfo = await api.openTerminalSession(tab.id, cols, rows);
+          openedSessionTabIdRef.current.add(tab.id);
+          setTerminalSessionNotice("");
+          setProcessMetaByTabId((state) => ({
+            ...state,
+            [tab.id]: {
+              pid: sessionInfo.pid,
+              commandLine: sessionInfo.commandLine,
+              shellName: sessionInfo.shellName,
+              shellVersion: sessionInfo.shellVersion,
+              connected: true,
+              opening: false
+            }
+          }));
+
+          // 若该 Tab 有待粘贴命令，会话建立后立即写入终端输入区。
+          const pending = pendingPasteCommandByTabIdRef.current[tab.id];
+          if (pending) {
+            await api.writeTerminalInput(tab.id, pending);
+            delete pendingPasteCommandByTabIdRef.current[tab.id];
+          }
+        } catch (error) {
+          // 终端创建失败时统一提示用户回到终端设置重新选择 Shell。
+          setTerminalSessionNotice(`终端创建失败，请到“设置-终端设置”中重新选择 Shell 后重试。详情：${String(error)}`);
+          setProcessMetaByTabId((state) => ({
+            ...state,
+            [tab.id]: {
+              pid: null,
+              commandLine: `会话创建失败: ${String(error)}`,
+              shellName: "",
+              shellVersion: "",
+              connected: false,
+              opening: false
+            }
+          }));
+        } finally {
+          // 无论成功还是失败，都要清理打开中的标记，避免后续重试被卡住。
+          delete openingSessionPromiseByTabIdRef.current[tab.id];
+        }
+      })();
+
+      openingSessionPromiseByTabIdRef.current[tab.id] = nextOpeningPromise;
+      return nextOpeningPromise;
     },
     [ensureTerminalRuntime]
   );
@@ -606,6 +667,7 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
         delete terminalRuntimeByTabIdRef.current[tabId];
       }
       openedSessionTabIdRef.current.delete(tabId);
+      delete openingSessionPromiseByTabIdRef.current[tabId];
       delete terminalContainerByTabIdRef.current[tabId];
       delete pendingPasteCommandByTabIdRef.current[tabId];
       setProcessMetaByTabId((state) => {
@@ -671,52 +733,44 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
     };
   }, []);
 
-  // 激活 Tab 切换时：聚焦终端并同步 resize。
+  // 激活 Tab 切换或 Terminal 视图重新显示时：挂载当前终端并延后一帧执行 fit。
   useEffect(() => {
     if (!visible) return;
     if (!activeTab) return;
-    const runtime = terminalRuntimeByTabIdRef.current[activeTab.id];
-    if (!runtime) return;
 
     mountRuntimeToContainer(activeTab);
-    runtime.fitAddon.fit();
-    runtime.terminal.focus(); // 切换 Tab 后直接可输入。
+    scheduleTerminalViewportSync(activeTab, { focus: true });
+  }, [visible, activeTab, mountRuntimeToContainer, scheduleTerminalViewportSync]);
 
-    const cols = runtime.terminal.cols || 120;
-    const rows = runtime.terminal.rows || 36;
-    if (openedSessionTabIdRef.current.has(activeTab.id)) {
-      void api.resizeTerminalSession(activeTab.id, cols, rows);
-    }
-  }, [visible, activeTab, mountRuntimeToContainer]);
-
-  // 监听窗口 resize：实时调整当前激活终端尺寸。
+  // 监听激活终端容器尺寸变化：统一处理窗口缩放和布局变化，减少重复 fit 带来的抖动。
   useEffect(() => {
     if (!visible) return;
     if (!activeTab) return;
 
-    const onResize = () => {
-      const runtime = terminalRuntimeByTabIdRef.current[activeTab.id];
-      if (!runtime) return;
-      runtime.fitAddon.fit();
-      if (!openedSessionTabIdRef.current.has(activeTab.id)) return;
-      void api.resizeTerminalSession(activeTab.id, runtime.terminal.cols || 120, runtime.terminal.rows || 36);
-    };
+    const container = terminalContainerByTabIdRef.current[activeTab.id];
+    if (!container) return;
 
-    window.addEventListener("resize", onResize);
+    const resizeObserver = new ResizeObserver(() => {
+      scheduleTerminalViewportSync(activeTab); // 尺寸变化后合并到下一帧统一同步。
+    });
+    resizeObserver.observe(container);
+
     return () => {
-      window.removeEventListener("resize", onResize);
+      resizeObserver.disconnect();
+      cancelScheduledTerminalFit(); // 切换 Tab 或隐藏面板时取消上一帧任务，避免旧尺寸回写。
     };
-  }, [visible, activeTab]);
+  }, [visible, activeTab, scheduleTerminalViewportSync, cancelScheduledTerminalFit]);
 
   // 组件卸载时，兜底销毁全部 xterm 实例。
   useEffect(() => {
     return () => {
+      cancelScheduledTerminalFit(); // 卸载前取消所有待执行 fit，避免异步回调访问已销毁实例。
       Object.values(terminalRuntimeByTabIdRef.current).forEach((runtime) => {
         runtime.terminal.dispose();
       });
       terminalRuntimeByTabIdRef.current = {};
     };
-  }, []);
+  }, [cancelScheduledTerminalFit]);
 
   // 更新命令表单字段。
   function patchCommandForm(patch: Partial<CommandEditorForm>) {
@@ -730,7 +784,18 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
   function openCreateGroupPanel() {
     setEditorMode("group");
     setEditingTarget(null);
+    setEditingGroup(null);
     setNewGroupName("");
+  }
+
+  // 打开“重命名命令组”面板。
+  function openRenameGroupPanel(group: TerminalCommandGroup) {
+    setEditorMode("groupEdit");
+    setEditingTarget(null);
+    setEditingGroup(group);
+    setNewGroupName(group.name);
+    setSelectedGroupId(group.id);
+    setExpandedByGroupId((state) => ({ ...state, [group.id]: true }));
   }
 
   // 打开“创建命令”面板。
@@ -738,6 +803,7 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
     const nextGroupId = seedGroupId || selectedGroup?.id || commandGroups[0]?.id || "";
     setEditorMode("create");
     setEditingTarget(null);
+    setEditingGroup(null);
     setCommandForm(createEmptyCommandForm(nextGroupId));
   }
 
@@ -745,6 +811,7 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
   function openEditCommandPanel(groupId: string, command: TerminalCommandItem) {
     setEditorMode("edit");
     setEditingTarget({ groupId, commandId: command.id });
+    setEditingGroup(null);
     setCommandForm(createFormFromCommand(groupId, command));
     setSelectedGroupId(groupId);
     setExpandedByGroupId((state) => ({ ...state, [groupId]: true }));
@@ -754,23 +821,37 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
   function closeEditorPanel() {
     setEditorMode("closed");
     setEditingTarget(null);
+    setEditingGroup(null);
+    setNewGroupName("");
   }
 
-  // 创建命令组。
-  async function handleCreateGroup() {
+  // 创建或重命名命令组。
+  async function handleSubmitGroup() {
     const normalizedName = newGroupName.trim();
     if (!normalizedName) return;
 
+    const payload: TerminalCommandGroupUpsertPayload = {
+      name: normalizedName
+    };
+
     setCommandLibrarySubmitting(true);
     try {
-      const created = await api.createTerminalCommandGroup(normalizedName);
-      setSelectedGroupId(created.id);
-      setExpandedByGroupId((state) => ({ ...state, [created.id]: true }));
+      if (editorMode === "groupEdit" && editingGroup) {
+        const updated = await api.updateTerminalCommandGroup(editingGroup.id, payload);
+        setSelectedGroupId(updated.id);
+        setExpandedByGroupId((state) => ({ ...state, [updated.id]: true }));
+      } else {
+        const created = await api.createTerminalCommandGroup(normalizedName);
+        setSelectedGroupId(created.id);
+        setExpandedByGroupId((state) => ({ ...state, [created.id]: true }));
+      }
+
       setNewGroupName("");
       closeEditorPanel();
       await loadCommandLibrary({ keepSelection: true });
     } catch (error) {
-      window.alert(`创建命令组失败：${String(error)}`); // 即时反馈失败原因，避免用户误以为提交无效。
+      const actionLabel = editorMode === "groupEdit" ? "重命名命令组" : "创建命令组";
+      window.alert(`${actionLabel}失败：${String(error)}`); // 即时反馈失败原因，避免用户误以为提交无效。
     } finally {
       setCommandLibrarySubmitting(false);
     }
@@ -833,6 +914,17 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
     setDeleteCommandTarget(null);
   }
 
+  // 打开删除命令组确认弹窗。
+  function openDeleteGroupDialog(group: TerminalCommandGroup) {
+    setDeleteGroupTarget({ group });
+    setCommandContextMenu(null);
+  }
+
+  // 关闭删除命令组确认弹窗。
+  function closeDeleteGroupDialog() {
+    setDeleteGroupTarget(null);
+  }
+
   // 确认删除命令。
   async function handleConfirmDeleteCommand() {
     if (!deleteCommandTarget) return;
@@ -844,6 +936,23 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
       await loadCommandLibrary({ keepSelection: true });
     } catch (error) {
       window.alert(`删除命令失败：${String(error)}`); // 避免删除失败后 UI 与数据库状态不一致。
+    } finally {
+      setCommandLibrarySubmitting(false);
+    }
+  }
+
+  // 确认删除命令组。
+  async function handleConfirmDeleteGroup() {
+    if (!deleteGroupTarget) return;
+
+    setCommandLibrarySubmitting(true);
+    try {
+      await api.deleteTerminalCommandGroup(deleteGroupTarget.group.id);
+      closeDeleteGroupDialog();
+      closeEditorPanel();
+      await loadCommandLibrary();
+    } catch (error) {
+      window.alert(`删除命令组失败：${String(error)}`); // 避免级联删除失败后前后端状态不一致。
     } finally {
       setCommandLibrarySubmitting(false);
     }
@@ -964,6 +1073,16 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
   return (
     // Terminal 主体布局：左侧命令库 + 右侧终端工作区。
     <div className="grid h-full w-full grid-cols-[380px_1fr] overflow-hidden">
+      {/* 终端创建全局通知：用于展示 Shell 配置失效等错误。 */}
+      {terminalSessionNotice && (
+        <NoticeAlert
+          tone="error"
+          message={terminalSessionNotice}
+          onClose={() => setTerminalSessionNotice("")}
+          className="fixed right-4 top-4 z-[60] max-w-[420px] shadow-lg"
+        />
+      )}
+
       {/* 左侧命令库面板。 */}
       <div className="flex min-h-0 flex-col border-r border-base-300 bg-base-100">
         {/* 顶部控制区：统计、搜索、操作。 */}
@@ -1020,11 +1139,11 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
           {/* 错误提示。 */}
           {commandLibraryError && <p className="mt-2 text-[12px] text-error">{commandLibraryError}</p>}
 
-          {/* 创建命令组面板。 */}
-          {editorMode === "group" && (
+          {/* 创建/重命名命令组面板。 */}
+          {(editorMode === "group" || editorMode === "groupEdit") && (
             <div className="mt-3 rounded-xl border border-base-300 bg-base-100 p-3 shadow-sm">
               {/* 面板标题。 */}
-              <h4 className="text-[13px] font-semibold text-neutral">新建命令组</h4>
+              <h4 className="text-[13px] font-semibold text-neutral">{editorMode === "groupEdit" ? "重命名命令组" : "新建命令组"}</h4>
               {/* 分组名输入。 */}
               <input
                 type="text"
@@ -1034,7 +1153,7 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
                 onChange={(event) => setNewGroupName(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key !== "Enter") return;
-                  void handleCreateGroup(); // 回车快速创建命令组。
+                  void handleSubmitGroup(); // 回车快速提交命令组创建或重命名。
                 }}
               />
               {/* 操作按钮。 */}
@@ -1042,8 +1161,8 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
                 <button className="btn btn-ghost btn-sm" onClick={closeEditorPanel} disabled={commandLibrarySubmitting}>
                   取消
                 </button>
-                <button className="btn btn-primary btn-sm" onClick={() => void handleCreateGroup()} disabled={commandLibrarySubmitting}>
-                  创建分组
+                <button className="btn btn-primary btn-sm" onClick={() => void handleSubmitGroup()} disabled={commandLibrarySubmitting}>
+                  {editorMode === "groupEdit" ? "保存重命名" : "创建分组"}
                 </button>
               </div>
             </div>
@@ -1198,6 +1317,22 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
                     disabled={commandLibrarySubmitting}
                   >
                     <Plus size={12} />
+                  </button>
+                  <button
+                    className="btn btn-ghost btn-xs h-6 min-h-0 px-1"
+                    title="重命名命令组"
+                    onClick={() => openRenameGroupPanel(group)}
+                    disabled={commandLibrarySubmitting}
+                  >
+                    <PencilLine size={12} />
+                  </button>
+                  <button
+                    className="btn btn-ghost btn-xs h-6 min-h-0 px-1 text-error"
+                    title="删除命令组"
+                    onClick={() => openDeleteGroupDialog(group)}
+                    disabled={commandLibrarySubmitting}
+                  >
+                    <Trash2 size={12} />
                   </button>
                 </div>
 
@@ -1363,16 +1498,21 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
             </div>
           )}
           {tabs.map((tab) => (
-            // 每个 Tab 对应一个终端容器，非激活态仅隐藏不销毁。
-            <div
-              key={tab.id}
-              className={`h-full w-full p-2 ${activeTab?.id === tab.id ? "block" : "hidden"}`}
-              ref={(element) => {
-                terminalContainerByTabIdRef.current[tab.id] = element;
-                if (!element) return;
-                mountRuntimeToContainer(tab); // 容器挂载后立即初始化 xterm。
-              }}
-            />
+            // 每个 Tab 对应一个终端视口外壳，非激活态仅隐藏不销毁。
+            <div key={tab.id} className={`h-full w-full p-2 ${activeTab?.id === tab.id ? "block" : "hidden"}`}>
+              {/*
+                真正的 xterm 挂载容器：保持无 padding，避免 FitAddon 将父容器内边距误算进可用高度，
+                从而导致底部多塞一行、最后一行被裁切。
+              */}
+              <div
+                className="h-full w-full"
+                ref={(element) => {
+                  terminalContainerByTabIdRef.current[tab.id] = element;
+                  if (!element) return;
+                  mountRuntimeToContainer(tab); // 容器挂载后立即初始化 xterm。
+                }}
+              />
+            </div>
           ))}
         </div>
       </div>
@@ -1415,6 +1555,34 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
             <Trash2 size={12} />
             删除命令
           </button>
+        </div>
+      )}
+
+      {/* 删除命令组确认弹窗。 */}
+      {deleteGroupTarget && (
+        <div className="modal modal-open">
+          <div className="modal-box">
+            {/* 弹窗标题。 */}
+            <h3 className="text-base font-semibold">确认删除命令组</h3>
+            {/* 删除说明。 */}
+            <p className="mt-2 text-sm text-neutral/70">
+              确定删除命令组“{deleteGroupTarget.group.name}”吗？该分组下的 {deleteGroupTarget.group.commands.length} 条命令会一并删除，且无法恢复。
+            </p>
+            {/* 命令组摘要。 */}
+            <div className="mt-3 rounded-lg bg-base-200/70 px-3 py-2 text-[12px] text-neutral/75">
+              <p className="font-medium text-neutral">{deleteGroupTarget.group.name}</p>
+              <p className="mt-1">命令数量：{deleteGroupTarget.group.commands.length}</p>
+            </div>
+            {/* 弹窗底部操作。 */}
+            <div className="modal-action">
+              <button className="btn btn-outline" onClick={closeDeleteGroupDialog} disabled={commandLibrarySubmitting}>
+                取消
+              </button>
+              <button className="btn btn-error" onClick={() => void handleConfirmDeleteGroup()} disabled={commandLibrarySubmitting}>
+                {commandLibrarySubmitting ? "删除中..." : "确认删除"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

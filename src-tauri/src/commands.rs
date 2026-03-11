@@ -19,7 +19,7 @@ use crate::models::{
     CliPathStatus, CurrentUserContext, LlmSettings, LlmSettingsView, ObjectDdl, ObjectDescribe,
     QueryResult, RecordMutationPayload, RecordSavePayload, RecordUpdatePayload, SalesforceObject,
     SalesforceSource, SaveLlmSettingsPayload, SourceUpsertPayload, SystemLogPage,
-    TerminalCommandGroup, TerminalCommandItem, TerminalCommandReorderPayload,
+    TerminalCommandGroup, TerminalCommandGroupUpsertPayload, TerminalCommandItem, TerminalCommandReorderPayload,
     TerminalCommandUpsertPayload,
 };
 use crate::providers::provider_for_source;
@@ -2458,6 +2458,26 @@ pub fn create_terminal_command_group(
         .map_err(AppError::to_string_error)
 }
 
+/// 更新终端命令组名称。
+#[tauri::command]
+pub fn update_terminal_command_group(
+    state: State<'_, AppState>,
+    group_id: String,
+    payload: TerminalCommandGroupUpsertPayload,
+) -> Result<TerminalCommandGroup, String> {
+    let normalized_group_id = group_id.trim().to_string();
+    if normalized_group_id.is_empty() {
+        return Err("groupId 不能为空".to_string());
+    }
+
+    let connection = state
+        .db
+        .lock()
+        .map_err(|error| format!("Database lock failed: {error}"))?;
+    db::update_terminal_command_group(&connection, &normalized_group_id, &payload.name)
+        .map_err(AppError::to_string_error)
+}
+
 /// 创建终端命令。
 #[tauri::command]
 pub fn create_terminal_command(
@@ -2517,6 +2537,25 @@ pub fn delete_terminal_command(
         &normalized_command_id,
     )
     .map_err(AppError::to_string_error)
+}
+
+/// 删除终端命令组。
+#[tauri::command]
+pub fn delete_terminal_command_group(
+    state: State<'_, AppState>,
+    group_id: String,
+) -> Result<(), String> {
+    let normalized_group_id = group_id.trim().to_string();
+    if normalized_group_id.is_empty() {
+        return Err("groupId 不能为空".to_string());
+    }
+
+    let connection = state
+        .db
+        .lock()
+        .map_err(|error| format!("Database lock failed: {error}"))?;
+    db::delete_terminal_command_group(&connection, &normalized_group_id)
+        .map_err(AppError::to_string_error)
 }
 
 /// 调整终端命令排序。
@@ -2625,9 +2664,9 @@ pub fn close_terminal_session(state: State<'_, AppState>, tab_id: String) -> Res
 pub fn open_elevated_terminal(_state: State<'_, AppState>) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        // 管理员终端同样遵循终端首选 shell 配置。
-        let elevated_program =
-            read_terminal_shell_command(&_state).unwrap_or_else(|| "pwsh.exe".to_string());
+        // 管理员终端同样遵循数据库中保存的终端 Shell 配置。
+        let elevated_program = read_terminal_shell_command(&_state)
+            .ok_or_else(|| "未配置终端 Shell，请到“设置-终端设置”中重新选择 Shell。".to_string())?;
         let escaped_program = elevated_program.replace('\'', "''");
         let guard_script = terminal_runtime::build_windows_parent_guard_script(std::process::id());
         let escaped_guard_script = guard_script.replace('\'', "''");

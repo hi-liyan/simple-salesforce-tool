@@ -4,9 +4,141 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Simple Salesforce Tool</title>
+    <style>
+      /* 首屏原生启动遮罩：在 React 与业务脚本加载前立即渲染，避免窗口先黑屏。 */
+      html,
+      body,
+      #root {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+      }
+
+      /* 页面基础背景：确保 WebView 刚打开时就不是黑底。 */
+      body {
+        overflow: hidden;
+        background: #eef4ff;
+        color: #16325c;
+        font-family: "Noto Sans CJK SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+      }
+
+      /* 原生启动层：React 挂载前先显示的占位加载态。 */
+      .bootstrap-splash {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(238, 244, 255, 0.96);
+      }
+
+      /* 启动卡片：与 React 内正式遮罩保持相近视觉。 */
+      .bootstrap-splash__card {
+        width: 420px;
+        box-sizing: border-box;
+        border: 1px solid #d8dde6;
+        border-radius: 16px;
+        background: #ffffff;
+        padding: 24px;
+        box-shadow: 0 20px 45px rgba(22, 50, 92, 0.12);
+      }
+
+      /* 顶部布局：显示旋转动画与标题文案。 */
+      .bootstrap-splash__header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      /* 旋转指示器：纯 CSS 实现，避免依赖业务样式。 */
+      .bootstrap-splash__spinner {
+        width: 26px;
+        height: 26px;
+        border: 3px solid rgba(1, 118, 211, 0.18);
+        border-top-color: #0176d3;
+        border-radius: 50%;
+        animation: bootstrap-spin 0.8s linear infinite;
+      }
+
+      /* 标题区：展示启动中说明。 */
+      .bootstrap-splash__title {
+        margin: 0;
+        font-size: 14px;
+        font-weight: 600;
+      }
+
+      /* 描述文案：提示正在等待应用完成挂载。 */
+      .bootstrap-splash__desc {
+        margin: 4px 0 0;
+        font-size: 12px;
+        color: rgba(22, 50, 92, 0.7);
+      }
+
+      /* 进度轨道：提供稳定的首屏视觉反馈。 */
+      .bootstrap-splash__progress {
+        margin-top: 20px;
+        height: 8px;
+        overflow: hidden;
+        border-radius: 999px;
+        background: #d8dde6;
+      }
+
+      /* 进度条：使用轻量动画模拟启动过程。 */
+      .bootstrap-splash__progress-bar {
+        width: 35%;
+        height: 100%;
+        border-radius: 999px;
+        background: linear-gradient(90deg, #0176d3 0%, #2ea2ff 100%);
+        animation: bootstrap-progress 1.4s ease-in-out infinite;
+        transform-origin: left center;
+      }
+
+      @keyframes bootstrap-spin {
+        from {
+          transform: rotate(0deg);
+        }
+
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      @keyframes bootstrap-progress {
+        0% {
+          transform: translateX(-15%) scaleX(0.8);
+        }
+
+        50% {
+          transform: translateX(90%) scaleX(1.1);
+        }
+
+        100% {
+          transform: translateX(220%) scaleX(0.8);
+        }
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <!-- 原生首屏占位：在 React 应用真正挂载前避免出现黑屏。 -->
+      <div class="bootstrap-splash">
+        <!-- 启动卡片：首帧立即提供可见反馈。 -->
+        <div class="bootstrap-splash__card">
+          <!-- 头部信息：提示应用正在启动。 -->
+          <div class="bootstrap-splash__header">
+            <span class="bootstrap-splash__spinner"></span>
+            <div>
+              <p class="bootstrap-splash__title">正在启动应用</p>
+              <p class="bootstrap-splash__desc">正在加载界面资源，请稍候...</p>
+            </div>
+          </div>
+          <!-- 进度条：在业务脚本执行前维持稳定视觉反馈。 -->
+          <div class="bootstrap-splash__progress">
+            <div class="bootstrap-splash__progress-bar"></div>
+          </div>
+        </div>
+      </div>
+    </div>
     <!-- Glide Data Grid 编辑器浮层挂载点：用于单元格编辑弹层渲染 -->
     <div id="portal" style="position: fixed; left: 0; top: 0; z-index: 9999"></div>
     <script type="module" src="/src/main.tsx"></script>

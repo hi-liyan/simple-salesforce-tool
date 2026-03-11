@@ -19,6 +19,7 @@ import {
   SourceUpsertPayload,
   SystemLogPage,
   TerminalCommandGroup,
+  TerminalCommandGroupUpsertPayload,
   TerminalCommandItem,
   TerminalCommandReorderPayload,
   TerminalCommandUpsertPayload,
@@ -102,6 +103,9 @@ export const api = {
   // 创建终端命令组。
   createTerminalCommandGroup: (name: string) =>
     invokeApi<TerminalCommandGroup>("create_terminal_command_group", { name }),
+  // 更新终端命令组。
+  updateTerminalCommandGroup: (groupId: string, payload: TerminalCommandGroupUpsertPayload) =>
+    invokeApi<TerminalCommandGroup>("update_terminal_command_group", { groupId, payload }),
   // 创建终端命令。
   createTerminalCommand: (payload: TerminalCommandUpsertPayload) =>
     invokeApi<TerminalCommandItem>("create_terminal_command", { payload }),
@@ -111,6 +115,9 @@ export const api = {
   // 删除终端命令。
   deleteTerminalCommand: (groupId: string, commandId: string) =>
     invokeApi<void>("delete_terminal_command", { groupId, commandId }),
+  // 删除终端命令组。
+  deleteTerminalCommandGroup: (groupId: string) =>
+    invokeApi<void>("delete_terminal_command_group", { groupId }),
   // 调整终端命令排序。
   reorderTerminalCommands: (payload: TerminalCommandReorderPayload) =>
     invokeApi<void>("reorder_terminal_commands", { payload }),

@@ -1,10 +1,19 @@
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use serde::Serialize;
 use std::collections::HashMap;
+use std::fs;
 use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter};
+
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
+/// Windows 无窗创建进程标记：用于后台探测 shell，避免打包版闪出控制台窗口。
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 /// 终端输出事件名：后端读取 PTY 输出后统一发给前端。
 pub const TERMINAL_OUTPUT_EVENT: &str = "terminal://output";
@@ -110,7 +119,7 @@ pub fn open_terminal_session(
         .openpty(pty_size)
         .map_err(|error| format!("创建 PTY 失败: {error}"))?;
 
-    let (program, args, shell_name) = resolve_shell_command(preferred_shell_command);
+    let (program, args, shell_name) = resolve_shell_command(preferred_shell_command)?;
     let mut command_builder = CommandBuilder::new(program.clone());
     for arg in &args {
         command_builder.arg(arg);
@@ -285,32 +294,23 @@ pub fn close_terminal_session(
 }
 
 /// 平台化解析默认 shell 启动命令。
-fn resolve_shell_command(preferred_shell_command: Option<&str>) -> (String, Vec<String>, String) {
+/// 说明：Windows 仅使用用户已保存的绝对路径，不再在创建终端时重新探测。
+fn resolve_shell_command(preferred_shell_command: Option<&str>) -> Result<(String, Vec<String>, String), String> {
     if cfg!(target_os = "windows") {
-        // Windows：动态探测可用终端列表，不限制特定版本。
-        let options = list_available_terminal_shells();
-        if let Some(preferred) = preferred_shell_command.map(|item| item.trim()).filter(|item| !item.is_empty()) {
-            if let Some(matched) = options.iter().find(|item| item.command.eq_ignore_ascii_case(preferred)) {
-                return (
-                    matched.command.clone(),
-                    windows_terminal_args(),
-                    matched.shell_name.clone(),
-                );
-            }
-        }
-        if let Some(first) = options.first() {
-            return (
-                first.command.clone(),
-                windows_terminal_args(),
-                first.shell_name.clone(),
-            );
-        }
-        // 兜底回退：若探测失败，仍尽量使用系统默认 powershell。
-        return (
-            "powershell.exe".to_string(),
+        let preferred = preferred_shell_command
+            .map(|item| item.trim())
+            .filter(|item| !item.is_empty())
+            .ok_or_else(|| "未配置终端 Shell，请到“设置-终端设置”中重新选择 Shell。".to_string())?;
+
+        // 使用数据库中保存的 shell 绝对路径直接创建终端；若配置已失效则直接报错，由前端提示用户重新选择。
+        let (shell_name, _shell_version) = detect_windows_shell_meta(preferred)
+            .ok_or_else(|| format!("当前保存的终端 Shell 不可用：{preferred}。请到“设置-终端设置”中重新选择 Shell。"))?;
+
+        return Ok((
+            preferred.to_string(),
             windows_terminal_args(),
-            "Windows PowerShell".to_string(),
-        );
+            shell_name,
+        ));
     }
 
     // Unix 默认取 SHELL 环境变量，未配置时回退 /bin/bash。
@@ -320,7 +320,7 @@ fn resolve_shell_command(preferred_shell_command: Option<&str>) -> (String, Vec<
         .next()
         .map(|item| item.to_string())
         .unwrap_or_else(|| "shell".to_string());
-    (shell, vec!["-i".to_string()], shell_name)
+    Ok((shell, vec!["-i".to_string()], shell_name))
 }
 
 /// Windows 终端参数：注入父进程守护任务，确保主进程异常退出后子终端自终止。
@@ -349,17 +349,10 @@ pub fn list_available_terminal_shells() -> Vec<TerminalShellOption> {
         candidates.extend(discover_windows_shell_paths("pwsh.exe"));
         candidates.extend(discover_windows_shell_paths("powershell.exe"));
 
-        if candidates.is_empty() {
-            candidates.push("powershell.exe".to_string());
-        }
-
         let mut options: Vec<TerminalShellOption> = candidates
             .into_iter()
             .filter_map(|command| {
-                let (shell_name, shell_version) = detect_windows_shell_meta(&command);
-                if shell_version.is_empty() {
-                    return None;
-                }
+                let (shell_name, shell_version) = detect_windows_shell_meta(&command)?;
                 Some(TerminalShellOption {
                     label: format!("{shell_name} {shell_version} ({command})"),
                     command,
@@ -395,9 +388,9 @@ fn discover_windows_shell_paths(program: &str) -> Vec<String> {
     if !cfg!(target_os = "windows") {
         return Vec::new();
     }
-    let output = StdCommand::new("where").arg(program).output();
+
     let mut paths = Vec::<String>::new();
-    if let Ok(result) = output {
+    if let Ok(result) = run_hidden_command_output("where", &[program]) {
         let text = String::from_utf8_lossy(&result.stdout).to_string();
         for line in text.lines() {
             let trimmed = line.trim();
@@ -407,14 +400,25 @@ fn discover_windows_shell_paths(program: &str) -> Vec<String> {
             paths.push(trimmed.to_string());
         }
     }
-    if paths.is_empty() {
-        paths.push(program.to_string());
+
+    // PowerShell 7 在打包版中可能不在 PATH；补充常见安装目录兜底。
+    if program.eq_ignore_ascii_case("pwsh.exe") {
+        paths.extend(discover_windows_pwsh_install_paths());
     }
+
+    // Windows PowerShell 为系统组件，补充系统目录绝对路径兜底。
+    if program.eq_ignore_ascii_case("powershell.exe") {
+        if let Some(system_path) = discover_windows_powershell_install_path() {
+            paths.push(system_path);
+        }
+    }
+
+    dedup_case_insensitive_paths(&mut paths);
     paths
 }
 
 /// 检测 Windows shell 元信息（名称 + 版本）。
-fn detect_windows_shell_meta(command: &str) -> (String, String) {
+fn detect_windows_shell_meta(command: &str) -> Option<(String, String)> {
     let lower = command.to_lowercase();
     let shell_name = if lower.contains("pwsh") {
         "PowerShell".to_string()
@@ -422,7 +426,10 @@ fn detect_windows_shell_meta(command: &str) -> (String, String) {
         "Windows PowerShell".to_string()
     };
     let version = detect_shell_version(command, &shell_name);
-    (shell_name, version)
+    if version.is_empty() || version == "unknown" {
+        return None;
+    }
+    Some((shell_name, version))
 }
 
 /// 对版本号做降序比较（仅处理数值段，不可解析时降级为字符串比较）。
@@ -442,13 +449,10 @@ fn compare_version_desc(a: &str, b: &str) -> std::cmp::Ordering {
 fn detect_shell_version(program: &str, shell_name: &str) -> String {
     // Windows：优先读取 PowerShell 的 PSVersion。
     if cfg!(target_os = "windows") {
-        let output = StdCommand::new(program)
-            .args([
-                "-NoProfile",
-                "-Command",
-                "$PSVersionTable.PSVersion.ToString()",
-            ])
-            .output();
+        let output = run_hidden_command_output(
+            program,
+            &["-NoProfile", "-Command", "$PSVersionTable.PSVersion.ToString()"],
+        );
         if let Ok(result) = output {
             let version = String::from_utf8_lossy(&result.stdout).trim().to_string();
             if !version.is_empty() {
@@ -472,4 +476,110 @@ fn detect_shell_version(program: &str, shell_name: &str) -> String {
 
     // fallback：返回终端名称，避免 tooltip 空值。
     format!("{shell_name} unknown")
+}
+
+/// 统一执行一次子进程输出采集：Windows 下使用无窗模式，避免探测时闪出控制台。
+fn run_hidden_command_output(program: &str, args: &[&str]) -> std::io::Result<std::process::Output> {
+    let mut command = StdCommand::new(program);
+    command.args(args);
+    #[cfg(target_os = "windows")]
+    {
+        command.creation_flags(CREATE_NO_WINDOW); // Windows 探测命令全部后台执行，避免 GUI 版弹窗。
+    }
+    command.output()
+}
+
+/// Windows：补充 PowerShell 7 的常见安装目录，覆盖 Program Files 等标准位置。
+fn discover_windows_pwsh_install_paths() -> Vec<String> {
+    if !cfg!(target_os = "windows") {
+        return Vec::new();
+    }
+
+    let mut paths = Vec::<String>::new();
+    for base_dir in collect_existing_windows_power_shell_roots() {
+        if let Ok(entries) = fs::read_dir(&base_dir) {
+            for entry in entries.flatten() {
+                let candidate = entry.path().join("pwsh.exe");
+                if candidate.is_file() {
+                    paths.push(candidate.to_string_lossy().to_string());
+                }
+            }
+        }
+    }
+    dedup_case_insensitive_paths(&mut paths);
+    paths
+}
+
+/// Windows：补充系统自带 Windows PowerShell 绝对路径兜底。
+fn discover_windows_powershell_install_path() -> Option<String> {
+    if !cfg!(target_os = "windows") {
+        return None;
+    }
+
+    let windows_dir = std::env::var_os("WINDIR")?;
+    let candidate = PathBuf::from(windows_dir)
+        .join("System32")
+        .join("WindowsPowerShell")
+        .join("v1.0")
+        .join("powershell.exe");
+    if candidate.is_file() {
+        return Some(candidate.to_string_lossy().to_string());
+    }
+    None
+}
+
+/// 收集 Windows PowerShell 目录根路径：仅保留当前机器上真实存在的目录。
+fn collect_existing_windows_power_shell_roots() -> Vec<PathBuf> {
+    if !cfg!(target_os = "windows") {
+        return Vec::new();
+    }
+
+    let mut roots = Vec::<PathBuf>::new();
+    for env_name in ["ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"] {
+        if let Some(base_dir) = std::env::var_os(env_name) {
+            let candidate = PathBuf::from(base_dir).join("PowerShell");
+            if candidate.is_dir() {
+                roots.push(candidate);
+            }
+        }
+    }
+    dedup_case_insensitive_pathbufs(&mut roots);
+    roots
+}
+
+/// 对字符串路径做大小写不敏感去重，避免 PATH 与绝对目录扫描结果重复。
+fn dedup_case_insensitive_paths(paths: &mut Vec<String>) {
+    let mut deduped = Vec::<String>::new();
+    for path in paths.drain(..) {
+        let normalized = normalize_windows_path_key(Path::new(&path));
+        if deduped
+            .iter()
+            .any(|existing| normalize_windows_path_key(Path::new(existing)) == normalized)
+        {
+            continue;
+        }
+        deduped.push(path);
+    }
+    *paths = deduped;
+}
+
+/// 对 PathBuf 集合做大小写不敏感去重，避免重复枚举相同安装根目录。
+fn dedup_case_insensitive_pathbufs(paths: &mut Vec<PathBuf>) {
+    let mut deduped = Vec::<PathBuf>::new();
+    for path in paths.drain(..) {
+        let normalized = normalize_windows_path_key(&path);
+        if deduped
+            .iter()
+            .any(|existing| normalize_windows_path_key(existing) == normalized)
+        {
+            continue;
+        }
+        deduped.push(path);
+    }
+    *paths = deduped;
+}
+
+/// 生成 Windows 路径的大小写不敏感比较键，统一用于去重。
+fn normalize_windows_path_key(path: &Path) -> String {
+    path.to_string_lossy().trim().to_lowercase()
 }

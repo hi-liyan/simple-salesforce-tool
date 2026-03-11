@@ -32,7 +32,15 @@ type UseQueryPanelActionsInput = {
   // 批量关闭控制台 Tabs。
   closeSoqlTabsByIds: (tabIds: string[]) => void;
   // 刷新数据源。
-  refreshSources: (syncCli: boolean, preferredOrgId?: string, preferredSourceId?: string) => Promise<void>;
+  refreshSources: (
+    syncCli: boolean,
+    preferredOrgId?: string,
+    preferredSourceId?: string,
+    options?: {
+      forceObjectRefresh?: boolean;
+      showLoading?: boolean;
+    }
+  ) => Promise<void>;
   // 切换数据源。
   handleSourceChange: (sourceId: string) => Promise<void>;
   // 构建 data 工作区 Tab ID。

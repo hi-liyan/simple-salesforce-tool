@@ -326,6 +326,38 @@ fn normalize_terminal_command_sort_orders(
     Ok(())
 }
 
+/// 归一化命令组序号，确保从 1 开始连续递增。
+fn normalize_terminal_group_sort_orders(connection: &Connection) -> Result<(), AppError> {
+    let mut statement = connection.prepare(
+        "SELECT id, sort_order, created_at
+         FROM terminal_command_groups
+         ORDER BY sort_order ASC, created_at ASC, id ASC",
+    )?;
+
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+
+    for (index, row) in rows.enumerate() {
+        let (group_id, current_sort_order, _) = row?;
+        let expected_sort_order = (index + 1) as i64;
+        if current_sort_order == expected_sort_order {
+            continue;
+        }
+
+        connection.execute(
+            "UPDATE terminal_command_groups SET sort_order = ?2 WHERE id = ?1",
+            params![group_id, expected_sort_order],
+        )?;
+    }
+
+    Ok(())
+}
+
 /// 读取全局终端命令组（含命令列表）。
 pub fn list_terminal_command_groups(connection: &Connection) -> Result<Vec<TerminalCommandGroup>, AppError> {
     let mut group_statement = connection.prepare(
@@ -412,6 +444,50 @@ pub fn create_terminal_command_group(
         name: normalized_name.to_string(),
         commands: Vec::new(),
         created_at: now.clone(),
+        updated_at: now,
+    })
+}
+
+/// 更新终端命令组名称。
+pub fn update_terminal_command_group(
+    connection: &Connection,
+    group_id: &str,
+    name: &str,
+) -> Result<TerminalCommandGroup, AppError> {
+    let normalized_group_id = group_id.trim();
+    let normalized_name = name.trim();
+    if normalized_group_id.is_empty() {
+        return Err(AppError::Biz("groupId 不能为空".to_string()));
+    }
+    if normalized_name.is_empty() {
+        return Err(AppError::Biz("命令组名称不能为空".to_string()));
+    }
+
+    let created_at: Option<String> = connection
+        .query_row(
+            "SELECT created_at FROM terminal_command_groups WHERE id = ?1",
+            params![normalized_group_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if created_at.is_none() {
+        return Err(AppError::Biz("命令组不存在或已删除".to_string()));
+    }
+
+    let now = Utc::now().to_rfc3339();
+    let affected_rows = connection.execute(
+        "UPDATE terminal_command_groups SET name = ?2, updated_at = ?3 WHERE id = ?1",
+        params![normalized_group_id, normalized_name, now],
+    )?;
+    if affected_rows == 0 {
+        return Err(AppError::Biz("命令组不存在或已删除".to_string()));
+    }
+
+    Ok(TerminalCommandGroup {
+        id: normalized_group_id.to_string(),
+        name: normalized_name.to_string(),
+        commands: Vec::new(),
+        created_at: created_at.unwrap_or_else(|| now.clone()),
         updated_at: now,
     })
 }
@@ -576,6 +652,28 @@ pub fn delete_terminal_command(
         params![normalized_group_id, now],
     )?;
     normalize_terminal_command_sort_orders(connection, normalized_group_id)?;
+    Ok(())
+}
+
+/// 删除终端命令组，并级联清理组内命令。
+pub fn delete_terminal_command_group(
+    connection: &Connection,
+    group_id: &str,
+) -> Result<(), AppError> {
+    let normalized_group_id = group_id.trim();
+    if normalized_group_id.is_empty() {
+        return Err(AppError::Biz("groupId 不能为空".to_string()));
+    }
+
+    let affected_rows = connection.execute(
+        "DELETE FROM terminal_command_groups WHERE id = ?1",
+        params![normalized_group_id],
+    )?;
+    if affected_rows == 0 {
+        return Err(AppError::Biz("命令组不存在或已删除".to_string()));
+    }
+
+    normalize_terminal_group_sort_orders(connection)?;
     Ok(())
 }
 

@@ -53,7 +53,15 @@ type UseMainPageQueryPanelResult = {
   // QueryPanel 交互动作。
   queryPanelActions: QueryPanelActions;
   // 刷新数据源。
-  refreshSources: (syncCli: boolean, preferredOrgId?: string, preferredSourceId?: string) => Promise<void>;
+  refreshSources: (
+    syncCli: boolean,
+    preferredOrgId?: string,
+    preferredSourceId?: string,
+    options?: {
+      forceObjectRefresh?: boolean;
+      showLoading?: boolean;
+    }
+  ) => Promise<void>;
   // 重新加载恢复的 Tab。
   reloadRestoredTabs: (sourceId: string) => Promise<void>;
   // 显示工作区提示。
@@ -71,7 +79,7 @@ export function useMainPageQueryPanel({
 }: UseMainPageQueryPanelInput): UseMainPageQueryPanelResult {
   // React Query：数据源与对象列表。
   const queryClient = useQueryClient();
-  const { data: sources = [], isFetching: sourcesFetching } = useSourcesQuery();
+  const { data: sources = [], isFetching: sourcesFetching } = useSourcesQuery(startupComplete);
   const syncSourcesMutation = useSyncSourcesMutation();
 
   // Store：Query Tab 相关状态与写入能力。
@@ -487,6 +495,8 @@ export function useMainPageQueryPanel({
 
   // 当当前数据源被删除或失效时，清空当前选择。
   useEffect(() => {
+    // 启动阶段由 MainPage 手动恢复 selectedSourceId，避免 Query 尚未接管前被空列表误清空。
+    if (!startupComplete) return;
     if (!selectedSourceId) return;
     if (sources.length === 0) {
       setSelectedSourceId("");
@@ -495,10 +505,12 @@ export function useMainPageQueryPanel({
     if (!sources.some((item) => item.id === selectedSourceId)) {
       setSelectedSourceId("");
     }
-  }, [sources, selectedSourceId, setSelectedSourceId]);
+  }, [startupComplete, sources, selectedSourceId, setSelectedSourceId]);
 
   // 数据源切换后拉取当前用户上下文（时区/地区），用于 datetime 展示对齐。
   useEffect(() => {
+    // 首屏阶段优先保证 UI 可交互，用户上下文放到启动完成后再异步拉取。
+    if (!startupComplete) return;
     if (!selectedSourceId) {
       setSalesforceTimezone(null);
       setMysqlDdlMap({});
@@ -526,7 +538,7 @@ export function useMainPageQueryPanel({
     return () => {
       cancelled = true;
     };
-  }, [selectedSourceId]);
+  }, [startupComplete, selectedSourceId]);
 
   return {
     queryPanelViewState,
