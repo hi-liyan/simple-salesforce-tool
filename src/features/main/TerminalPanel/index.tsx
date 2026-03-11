@@ -332,6 +332,8 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
   const commandLibraryRequestSeqRef = useRef(0);
   // 命令卡片元素映射：用于拖拽开始时读取真实尺寸。
   const commandCardElementByIdRef = useRef<Record<string, HTMLDivElement | null>>({});
+  // xterm 视口同步调度帧：用于合并连续 fit，减少窗口缩放和切页时的抖动。
+  const terminalFitFrameRef = useRef<number | null>(null);
 
   // 激活终端 Tab 派生值。
   const activeTab = useMemo(() => tabs.find((item) => item.id === activeTabId) || tabs[0] || null, [tabs, activeTabId]);
@@ -520,7 +522,7 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
     return runtime;
   }, []);
 
-  // 将 xterm 挂载到容器并执行 fit。
+  // 将 xterm 挂载到容器：仅负责 open，不在这里直接 fit，避免隐藏态和过渡态重复重排。
   const mountRuntimeToContainer = useCallback(
     (tab: TerminalTab) => {
       const container = terminalContainerByTabIdRef.current[tab.id];
@@ -531,9 +533,39 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
       if (container.childElementCount === 0) {
         runtime.terminal.open(container);
       }
-      runtime.fitAddon.fit(); // 每次挂载后重新 fit。
     },
     [ensureTerminalRuntime]
+  );
+
+  // 取消已排队的终端视口同步，避免多个 fit 连续执行时互相覆盖。
+  const cancelScheduledTerminalFit = useCallback(() => {
+    if (terminalFitFrameRef.current === null) return;
+    window.cancelAnimationFrame(terminalFitFrameRef.current);
+    terminalFitFrameRef.current = null;
+  }, []);
+
+  // 延后一帧同步终端视口尺寸：用于规避切换 Tab、显示隐藏和窗口缩放时的瞬时错误尺寸。
+  const scheduleTerminalViewportSync = useCallback(
+    (tab: TerminalTab, options?: { focus?: boolean }) => {
+      cancelScheduledTerminalFit();
+      terminalFitFrameRef.current = window.requestAnimationFrame(() => {
+        terminalFitFrameRef.current = null;
+        const container = terminalContainerByTabIdRef.current[tab.id];
+        const runtime = terminalRuntimeByTabIdRef.current[tab.id];
+        if (!container || !runtime) return;
+
+        const rect = container.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return; // 隐藏态或未完成布局时跳过本次同步。
+
+        runtime.fitAddon.fit(); // 先按容器最终尺寸执行 fit。
+        if (options?.focus) {
+          runtime.terminal.focus(); // 仅在激活切换时恢复焦点，避免 resize 抢焦点。
+        }
+        if (!openedSessionTabIdRef.current.has(tab.id)) return;
+        void api.resizeTerminalSession(tab.id, runtime.terminal.cols || 120, runtime.terminal.rows || 36);
+      });
+    },
+    [cancelScheduledTerminalFit]
   );
 
   // 打开后端终端会话（每个 Tab 一个系统进程）。
@@ -677,52 +709,44 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
     };
   }, []);
 
-  // 激活 Tab 切换时：聚焦终端并同步 resize。
+  // 激活 Tab 切换或 Terminal 视图重新显示时：挂载当前终端并延后一帧执行 fit。
   useEffect(() => {
     if (!visible) return;
     if (!activeTab) return;
-    const runtime = terminalRuntimeByTabIdRef.current[activeTab.id];
-    if (!runtime) return;
 
     mountRuntimeToContainer(activeTab);
-    runtime.fitAddon.fit();
-    runtime.terminal.focus(); // 切换 Tab 后直接可输入。
+    scheduleTerminalViewportSync(activeTab, { focus: true });
+  }, [visible, activeTab, mountRuntimeToContainer, scheduleTerminalViewportSync]);
 
-    const cols = runtime.terminal.cols || 120;
-    const rows = runtime.terminal.rows || 36;
-    if (openedSessionTabIdRef.current.has(activeTab.id)) {
-      void api.resizeTerminalSession(activeTab.id, cols, rows);
-    }
-  }, [visible, activeTab, mountRuntimeToContainer]);
-
-  // 监听窗口 resize：实时调整当前激活终端尺寸。
+  // 监听激活终端容器尺寸变化：统一处理窗口缩放和布局变化，减少重复 fit 带来的抖动。
   useEffect(() => {
     if (!visible) return;
     if (!activeTab) return;
 
-    const onResize = () => {
-      const runtime = terminalRuntimeByTabIdRef.current[activeTab.id];
-      if (!runtime) return;
-      runtime.fitAddon.fit();
-      if (!openedSessionTabIdRef.current.has(activeTab.id)) return;
-      void api.resizeTerminalSession(activeTab.id, runtime.terminal.cols || 120, runtime.terminal.rows || 36);
-    };
+    const container = terminalContainerByTabIdRef.current[activeTab.id];
+    if (!container) return;
 
-    window.addEventListener("resize", onResize);
+    const resizeObserver = new ResizeObserver(() => {
+      scheduleTerminalViewportSync(activeTab); // 尺寸变化后合并到下一帧统一同步。
+    });
+    resizeObserver.observe(container);
+
     return () => {
-      window.removeEventListener("resize", onResize);
+      resizeObserver.disconnect();
+      cancelScheduledTerminalFit(); // 切换 Tab 或隐藏面板时取消上一帧任务，避免旧尺寸回写。
     };
-  }, [visible, activeTab]);
+  }, [visible, activeTab, scheduleTerminalViewportSync, cancelScheduledTerminalFit]);
 
   // 组件卸载时，兜底销毁全部 xterm 实例。
   useEffect(() => {
     return () => {
+      cancelScheduledTerminalFit(); // 卸载前取消所有待执行 fit，避免异步回调访问已销毁实例。
       Object.values(terminalRuntimeByTabIdRef.current).forEach((runtime) => {
         runtime.terminal.dispose();
       });
       terminalRuntimeByTabIdRef.current = {};
     };
-  }, []);
+  }, [cancelScheduledTerminalFit]);
 
   // 更新命令表单字段。
   function patchCommandForm(patch: Partial<CommandEditorForm>) {
@@ -1379,16 +1403,21 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
             </div>
           )}
           {tabs.map((tab) => (
-            // 每个 Tab 对应一个终端容器，非激活态仅隐藏不销毁。
-            <div
-              key={tab.id}
-              className={`h-full w-full p-2 ${activeTab?.id === tab.id ? "block" : "hidden"}`}
-              ref={(element) => {
-                terminalContainerByTabIdRef.current[tab.id] = element;
-                if (!element) return;
-                mountRuntimeToContainer(tab); // 容器挂载后立即初始化 xterm。
-              }}
-            />
+            // 每个 Tab 对应一个终端视口外壳，非激活态仅隐藏不销毁。
+            <div key={tab.id} className={`h-full w-full p-2 ${activeTab?.id === tab.id ? "block" : "hidden"}`}>
+              {/*
+                真正的 xterm 挂载容器：保持无 padding，避免 FitAddon 将父容器内边距误算进可用高度，
+                从而导致底部多塞一行、最后一行被裁切。
+              */}
+              <div
+                className="h-full w-full"
+                ref={(element) => {
+                  terminalContainerByTabIdRef.current[tab.id] = element;
+                  if (!element) return;
+                  mountRuntimeToContainer(tab); // 容器挂载后立即初始化 xterm。
+                }}
+              />
+            </div>
           ))}
         </div>
       </div>
