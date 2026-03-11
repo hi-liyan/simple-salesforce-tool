@@ -16,6 +16,33 @@ import { api } from "../../../api";
 import { CliPathProbe, CliPathSettings, CliPathStatus, LlmSettings, SalesforceSource, TerminalShellOption } from "../../../types";
 import { SystemLogsPanel } from "./SystemLogs";
 
+// 判断当前 Shell 路径是否为绝对路径：Windows 支持盘符路径与 UNC 路径，Unix 支持 `/` 开头路径。
+function isAbsoluteShellPath(shellPath: string): boolean {
+  const normalizedShellPath = shellPath.trim();
+  return /^[a-zA-Z]:[\\/]/.test(normalizedShellPath) || normalizedShellPath.startsWith("\\\\") || normalizedShellPath.startsWith("/");
+}
+
+// 根据保存值或旧版偏好值匹配当前探测到的 Shell 选项。
+function findTerminalShellOption(options: TerminalShellOption[], commandValue: string): TerminalShellOption | null {
+  const normalizedCommandValue = commandValue.trim().toLowerCase();
+  if (!normalizedCommandValue) return null;
+
+  // 先按完整路径精确匹配，确保已保存的绝对路径优先回显。
+  const exactMatchedOption = options.find((option) => option.command.trim().toLowerCase() === normalizedCommandValue);
+  if (exactMatchedOption) return exactMatchedOption;
+
+  // 兼容旧值（如 `pwsh.exe` / `powershell.exe`），通过命令名后缀映射到当前绝对路径。
+  return (
+    options.find((option) => {
+      const normalizedOptionCommand = option.command.trim().toLowerCase();
+      return (
+        normalizedOptionCommand.endsWith(`\\${normalizedCommandValue}`) ||
+        normalizedOptionCommand.endsWith(`/${normalizedCommandValue}`)
+      );
+    }) || null
+  );
+}
+
 // 设置面板：通过顶部 Tab 切换数据源、CLI 设置、LLM 设置、系统日志和关于与反馈页面。
 export function SettingsPanel() {
   // 反馈入口 URL：统一集中管理，便于后续替换反馈地址。
@@ -409,18 +436,22 @@ export function SettingsPanel() {
 
       const savedCommand = (commandValue || "").trim();
       if (savedCommand) {
-        setTerminalShellCommand(savedCommand);
+        // 优先将数据库中的保存值映射到本次探测到的绝对路径选项，失效配置则清空以引导用户重新选择。
+        const matchedSavedOption = findTerminalShellOption(normalizedOptions, savedCommand);
+        setTerminalShellCommand(matchedSavedOption?.command || "");
         return;
       }
 
       // 兼容旧配置值（pwsh/powershell），自动映射到命令名。
       const legacy = (legacyPreference || "").trim().toLowerCase();
       if (legacy === "powershell") {
-        setTerminalShellCommand("powershell.exe");
+        const matchedLegacyOption = findTerminalShellOption(normalizedOptions, "powershell.exe");
+        setTerminalShellCommand(matchedLegacyOption?.command || "");
         return;
       }
       if (legacy === "pwsh") {
-        setTerminalShellCommand("pwsh.exe");
+        const matchedLegacyOption = findTerminalShellOption(normalizedOptions, "pwsh.exe");
+        setTerminalShellCommand(matchedLegacyOption?.command || "");
         return;
       }
       // 无配置时默认选择首个可用项（通常是最高版本）。
@@ -442,7 +473,19 @@ export function SettingsPanel() {
         setError("请选择可用的终端 Shell。");
         return;
       }
-      await api.saveUiState("terminal.shell.command", normalizedCommand);
+      // 仅允许保存系统探测到的 Shell 绝对路径，确保后续创建终端时不再二次探测。
+      const selectedShellOption = findTerminalShellOption(terminalShellOptions, normalizedCommand);
+      if (!selectedShellOption) {
+        setError("请选择系统探测到的可用终端 Shell。");
+        return;
+      }
+      const absoluteShellPath = selectedShellOption.command.trim();
+      if (!isAbsoluteShellPath(absoluteShellPath)) {
+        setError("当前终端 Shell 不是绝对路径，请重新选择。");
+        return;
+      }
+      await api.saveUiState("terminal.shell.command", absoluteShellPath);
+      setTerminalShellCommand(absoluteShellPath);
     } catch (saveError) {
       setError(String(saveError));
     } finally {
@@ -723,7 +766,7 @@ export function SettingsPanel() {
                     ))}
                   </select>
                   <p className="mt-2 text-[12px] text-neutral/70">
-                    提示：列表来自系统动态探测；仅新建终端 Tab 使用新配置，已打开的终端不会自动切换。
+                    提示：列表来自系统动态探测；保存时会写入 Shell 绝对路径，后续新建终端 Tab 将直接使用该路径创建。
                   </p>
                 </>
               ) : (

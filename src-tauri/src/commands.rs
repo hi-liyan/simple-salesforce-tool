@@ -2625,9 +2625,9 @@ pub fn close_terminal_session(state: State<'_, AppState>, tab_id: String) -> Res
 pub fn open_elevated_terminal(_state: State<'_, AppState>) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        // 管理员终端同样遵循终端首选 shell 配置。
-        let elevated_program =
-            read_terminal_shell_command(&_state).unwrap_or_else(|| "pwsh.exe".to_string());
+        // 管理员终端同样遵循数据库中保存的终端 Shell 配置。
+        let elevated_program = read_terminal_shell_command(&_state)
+            .ok_or_else(|| "未配置终端 Shell，请到“设置-终端设置”中重新选择 Shell。".to_string())?;
         let escaped_program = elevated_program.replace('\'', "''");
         let guard_script = terminal_runtime::build_windows_parent_guard_script(std::process::id());
         let escaped_guard_script = guard_script.replace('\'', "''");
