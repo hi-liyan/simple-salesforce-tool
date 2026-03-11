@@ -35,6 +35,7 @@ import { api } from "../../../api";
 import {
   TerminalClosedEvent,
   TerminalCommandGroup,
+  TerminalCommandGroupUpsertPayload,
   TerminalCommandItem,
   TerminalCommandUpsertPayload,
   TerminalOutputEvent
@@ -72,7 +73,7 @@ type TerminalProcessMeta = {
 };
 
 // 左侧编辑器模式。
-type CommandEditorMode = "closed" | "group" | "create" | "edit";
+type CommandEditorMode = "closed" | "group" | "groupEdit" | "create" | "edit";
 
 // 编辑命令目标。
 type EditingCommandTarget = {
@@ -88,6 +89,12 @@ type DeleteCommandTarget = {
   groupId: string;
   // 待删除命令实体。
   command: TerminalCommandItem;
+};
+
+// 待确认删除的命令组目标。
+type DeleteGroupTarget = {
+  // 待删除命令组实体。
+  group: TerminalCommandGroup;
 };
 
 // 拖拽快照：用于 Overlay 固定尺寸与内容展示。
@@ -311,7 +318,11 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
   const [activeDragCommandSnapshot, setActiveDragCommandSnapshot] = useState<ActiveDragCommandSnapshot | null>(null);
   // 删除确认弹窗目标。
   const [deleteCommandTarget, setDeleteCommandTarget] = useState<DeleteCommandTarget | null>(null);
-  // 新命令组名称输入值。
+  // 删除命令组确认弹窗目标。
+  const [deleteGroupTarget, setDeleteGroupTarget] = useState<DeleteGroupTarget | null>(null);
+  // 当前正在编辑的命令组。
+  const [editingGroup, setEditingGroup] = useState<TerminalCommandGroup | null>(null);
+  // 命令组名称输入值：用于新建与重命名命令组。
   const [newGroupName, setNewGroupName] = useState("");
   // 命令编辑表单。
   const [commandForm, setCommandForm] = useState<CommandEditorForm>(() => createEmptyCommandForm(""));
@@ -324,6 +335,8 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
   const terminalRuntimeByTabIdRef = useRef<Record<string, TerminalRuntime>>({});
   // 已经打开后端会话的 Tab 集合。
   const openedSessionTabIdRef = useRef<Set<string>>(new Set());
+  // 正在打开中的后端会话 Promise 映射：用于合并同一 Tab 的并发建连请求。
+  const openingSessionPromiseByTabIdRef = useRef<Record<string, Promise<void>>>({});
   // 等待会话建立后自动粘贴的命令（用于“粘贴到当前终端”兜底）。
   const pendingPasteCommandByTabIdRef = useRef<Record<string, string>>({});
   // 上一次渲染时的 Tab ID 集合：用于回收已关闭 Tab 资源。
@@ -570,62 +583,72 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
 
   // 打开后端终端会话（每个 Tab 一个系统进程）。
   const ensureBackendSession = useCallback(
-    async (tab: TerminalTab) => {
+    (tab: TerminalTab) => {
       if (openedSessionTabIdRef.current.has(tab.id)) return;
+      const openingSessionPromise = openingSessionPromiseByTabIdRef.current[tab.id];
+      if (openingSessionPromise) return openingSessionPromise;
 
-      const runtime = ensureTerminalRuntime(tab);
-      const cols = runtime.terminal.cols || 120;
-      const rows = runtime.terminal.rows || 36;
+      const nextOpeningPromise = (async () => {
+        const runtime = ensureTerminalRuntime(tab);
+        const cols = runtime.terminal.cols || 120;
+        const rows = runtime.terminal.rows || 36;
 
-      setProcessMetaByTabId((state) => ({
-        ...state,
-        [tab.id]: {
-          pid: state[tab.id]?.pid || null,
-          commandLine: state[tab.id]?.commandLine || "",
-          shellName: state[tab.id]?.shellName || "",
-          shellVersion: state[tab.id]?.shellVersion || "",
-          connected: false,
-          opening: true
-        }
-      }));
-
-      try {
-        const sessionInfo = await api.openTerminalSession(tab.id, cols, rows);
-        openedSessionTabIdRef.current.add(tab.id);
-        setTerminalSessionNotice("");
         setProcessMetaByTabId((state) => ({
           ...state,
           [tab.id]: {
-            pid: sessionInfo.pid,
-            commandLine: sessionInfo.commandLine,
-            shellName: sessionInfo.shellName,
-            shellVersion: sessionInfo.shellVersion,
-            connected: true,
-            opening: false
-          }
-        }));
-
-        // 若该 Tab 有待粘贴命令，会话建立后立即写入终端输入区。
-        const pending = pendingPasteCommandByTabIdRef.current[tab.id];
-        if (pending) {
-          await api.writeTerminalInput(tab.id, pending);
-          delete pendingPasteCommandByTabIdRef.current[tab.id];
-        }
-      } catch (error) {
-        // 终端创建失败时统一提示用户回到终端设置重新选择 Shell。
-        setTerminalSessionNotice(`终端创建失败，请到“设置-终端设置”中重新选择 Shell 后重试。详情：${String(error)}`);
-        setProcessMetaByTabId((state) => ({
-          ...state,
-          [tab.id]: {
-            pid: null,
-            commandLine: `会话创建失败: ${String(error)}`,
-            shellName: "",
-            shellVersion: "",
+            pid: state[tab.id]?.pid || null,
+            commandLine: state[tab.id]?.commandLine || "",
+            shellName: state[tab.id]?.shellName || "",
+            shellVersion: state[tab.id]?.shellVersion || "",
             connected: false,
-            opening: false
+            opening: true
           }
         }));
-      }
+
+        try {
+          const sessionInfo = await api.openTerminalSession(tab.id, cols, rows);
+          openedSessionTabIdRef.current.add(tab.id);
+          setTerminalSessionNotice("");
+          setProcessMetaByTabId((state) => ({
+            ...state,
+            [tab.id]: {
+              pid: sessionInfo.pid,
+              commandLine: sessionInfo.commandLine,
+              shellName: sessionInfo.shellName,
+              shellVersion: sessionInfo.shellVersion,
+              connected: true,
+              opening: false
+            }
+          }));
+
+          // 若该 Tab 有待粘贴命令，会话建立后立即写入终端输入区。
+          const pending = pendingPasteCommandByTabIdRef.current[tab.id];
+          if (pending) {
+            await api.writeTerminalInput(tab.id, pending);
+            delete pendingPasteCommandByTabIdRef.current[tab.id];
+          }
+        } catch (error) {
+          // 终端创建失败时统一提示用户回到终端设置重新选择 Shell。
+          setTerminalSessionNotice(`终端创建失败，请到“设置-终端设置”中重新选择 Shell 后重试。详情：${String(error)}`);
+          setProcessMetaByTabId((state) => ({
+            ...state,
+            [tab.id]: {
+              pid: null,
+              commandLine: `会话创建失败: ${String(error)}`,
+              shellName: "",
+              shellVersion: "",
+              connected: false,
+              opening: false
+            }
+          }));
+        } finally {
+          // 无论成功还是失败，都要清理打开中的标记，避免后续重试被卡住。
+          delete openingSessionPromiseByTabIdRef.current[tab.id];
+        }
+      })();
+
+      openingSessionPromiseByTabIdRef.current[tab.id] = nextOpeningPromise;
+      return nextOpeningPromise;
     },
     [ensureTerminalRuntime]
   );
@@ -644,6 +667,7 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
         delete terminalRuntimeByTabIdRef.current[tabId];
       }
       openedSessionTabIdRef.current.delete(tabId);
+      delete openingSessionPromiseByTabIdRef.current[tabId];
       delete terminalContainerByTabIdRef.current[tabId];
       delete pendingPasteCommandByTabIdRef.current[tabId];
       setProcessMetaByTabId((state) => {
@@ -760,7 +784,18 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
   function openCreateGroupPanel() {
     setEditorMode("group");
     setEditingTarget(null);
+    setEditingGroup(null);
     setNewGroupName("");
+  }
+
+  // 打开“重命名命令组”面板。
+  function openRenameGroupPanel(group: TerminalCommandGroup) {
+    setEditorMode("groupEdit");
+    setEditingTarget(null);
+    setEditingGroup(group);
+    setNewGroupName(group.name);
+    setSelectedGroupId(group.id);
+    setExpandedByGroupId((state) => ({ ...state, [group.id]: true }));
   }
 
   // 打开“创建命令”面板。
@@ -768,6 +803,7 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
     const nextGroupId = seedGroupId || selectedGroup?.id || commandGroups[0]?.id || "";
     setEditorMode("create");
     setEditingTarget(null);
+    setEditingGroup(null);
     setCommandForm(createEmptyCommandForm(nextGroupId));
   }
 
@@ -775,6 +811,7 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
   function openEditCommandPanel(groupId: string, command: TerminalCommandItem) {
     setEditorMode("edit");
     setEditingTarget({ groupId, commandId: command.id });
+    setEditingGroup(null);
     setCommandForm(createFormFromCommand(groupId, command));
     setSelectedGroupId(groupId);
     setExpandedByGroupId((state) => ({ ...state, [groupId]: true }));
@@ -784,23 +821,37 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
   function closeEditorPanel() {
     setEditorMode("closed");
     setEditingTarget(null);
+    setEditingGroup(null);
+    setNewGroupName("");
   }
 
-  // 创建命令组。
-  async function handleCreateGroup() {
+  // 创建或重命名命令组。
+  async function handleSubmitGroup() {
     const normalizedName = newGroupName.trim();
     if (!normalizedName) return;
 
+    const payload: TerminalCommandGroupUpsertPayload = {
+      name: normalizedName
+    };
+
     setCommandLibrarySubmitting(true);
     try {
-      const created = await api.createTerminalCommandGroup(normalizedName);
-      setSelectedGroupId(created.id);
-      setExpandedByGroupId((state) => ({ ...state, [created.id]: true }));
+      if (editorMode === "groupEdit" && editingGroup) {
+        const updated = await api.updateTerminalCommandGroup(editingGroup.id, payload);
+        setSelectedGroupId(updated.id);
+        setExpandedByGroupId((state) => ({ ...state, [updated.id]: true }));
+      } else {
+        const created = await api.createTerminalCommandGroup(normalizedName);
+        setSelectedGroupId(created.id);
+        setExpandedByGroupId((state) => ({ ...state, [created.id]: true }));
+      }
+
       setNewGroupName("");
       closeEditorPanel();
       await loadCommandLibrary({ keepSelection: true });
     } catch (error) {
-      window.alert(`创建命令组失败：${String(error)}`); // 即时反馈失败原因，避免用户误以为提交无效。
+      const actionLabel = editorMode === "groupEdit" ? "重命名命令组" : "创建命令组";
+      window.alert(`${actionLabel}失败：${String(error)}`); // 即时反馈失败原因，避免用户误以为提交无效。
     } finally {
       setCommandLibrarySubmitting(false);
     }
@@ -863,6 +914,17 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
     setDeleteCommandTarget(null);
   }
 
+  // 打开删除命令组确认弹窗。
+  function openDeleteGroupDialog(group: TerminalCommandGroup) {
+    setDeleteGroupTarget({ group });
+    setCommandContextMenu(null);
+  }
+
+  // 关闭删除命令组确认弹窗。
+  function closeDeleteGroupDialog() {
+    setDeleteGroupTarget(null);
+  }
+
   // 确认删除命令。
   async function handleConfirmDeleteCommand() {
     if (!deleteCommandTarget) return;
@@ -874,6 +936,23 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
       await loadCommandLibrary({ keepSelection: true });
     } catch (error) {
       window.alert(`删除命令失败：${String(error)}`); // 避免删除失败后 UI 与数据库状态不一致。
+    } finally {
+      setCommandLibrarySubmitting(false);
+    }
+  }
+
+  // 确认删除命令组。
+  async function handleConfirmDeleteGroup() {
+    if (!deleteGroupTarget) return;
+
+    setCommandLibrarySubmitting(true);
+    try {
+      await api.deleteTerminalCommandGroup(deleteGroupTarget.group.id);
+      closeDeleteGroupDialog();
+      closeEditorPanel();
+      await loadCommandLibrary();
+    } catch (error) {
+      window.alert(`删除命令组失败：${String(error)}`); // 避免级联删除失败后前后端状态不一致。
     } finally {
       setCommandLibrarySubmitting(false);
     }
@@ -1060,11 +1139,11 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
           {/* 错误提示。 */}
           {commandLibraryError && <p className="mt-2 text-[12px] text-error">{commandLibraryError}</p>}
 
-          {/* 创建命令组面板。 */}
-          {editorMode === "group" && (
+          {/* 创建/重命名命令组面板。 */}
+          {(editorMode === "group" || editorMode === "groupEdit") && (
             <div className="mt-3 rounded-xl border border-base-300 bg-base-100 p-3 shadow-sm">
               {/* 面板标题。 */}
-              <h4 className="text-[13px] font-semibold text-neutral">新建命令组</h4>
+              <h4 className="text-[13px] font-semibold text-neutral">{editorMode === "groupEdit" ? "重命名命令组" : "新建命令组"}</h4>
               {/* 分组名输入。 */}
               <input
                 type="text"
@@ -1074,7 +1153,7 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
                 onChange={(event) => setNewGroupName(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key !== "Enter") return;
-                  void handleCreateGroup(); // 回车快速创建命令组。
+                  void handleSubmitGroup(); // 回车快速提交命令组创建或重命名。
                 }}
               />
               {/* 操作按钮。 */}
@@ -1082,8 +1161,8 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
                 <button className="btn btn-ghost btn-sm" onClick={closeEditorPanel} disabled={commandLibrarySubmitting}>
                   取消
                 </button>
-                <button className="btn btn-primary btn-sm" onClick={() => void handleCreateGroup()} disabled={commandLibrarySubmitting}>
-                  创建分组
+                <button className="btn btn-primary btn-sm" onClick={() => void handleSubmitGroup()} disabled={commandLibrarySubmitting}>
+                  {editorMode === "groupEdit" ? "保存重命名" : "创建分组"}
                 </button>
               </div>
             </div>
@@ -1238,6 +1317,22 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
                     disabled={commandLibrarySubmitting}
                   >
                     <Plus size={12} />
+                  </button>
+                  <button
+                    className="btn btn-ghost btn-xs h-6 min-h-0 px-1"
+                    title="重命名命令组"
+                    onClick={() => openRenameGroupPanel(group)}
+                    disabled={commandLibrarySubmitting}
+                  >
+                    <PencilLine size={12} />
+                  </button>
+                  <button
+                    className="btn btn-ghost btn-xs h-6 min-h-0 px-1 text-error"
+                    title="删除命令组"
+                    onClick={() => openDeleteGroupDialog(group)}
+                    disabled={commandLibrarySubmitting}
+                  >
+                    <Trash2 size={12} />
                   </button>
                 </div>
 
@@ -1460,6 +1555,34 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
             <Trash2 size={12} />
             删除命令
           </button>
+        </div>
+      )}
+
+      {/* 删除命令组确认弹窗。 */}
+      {deleteGroupTarget && (
+        <div className="modal modal-open">
+          <div className="modal-box">
+            {/* 弹窗标题。 */}
+            <h3 className="text-base font-semibold">确认删除命令组</h3>
+            {/* 删除说明。 */}
+            <p className="mt-2 text-sm text-neutral/70">
+              确定删除命令组“{deleteGroupTarget.group.name}”吗？该分组下的 {deleteGroupTarget.group.commands.length} 条命令会一并删除，且无法恢复。
+            </p>
+            {/* 命令组摘要。 */}
+            <div className="mt-3 rounded-lg bg-base-200/70 px-3 py-2 text-[12px] text-neutral/75">
+              <p className="font-medium text-neutral">{deleteGroupTarget.group.name}</p>
+              <p className="mt-1">命令数量：{deleteGroupTarget.group.commands.length}</p>
+            </div>
+            {/* 弹窗底部操作。 */}
+            <div className="modal-action">
+              <button className="btn btn-outline" onClick={closeDeleteGroupDialog} disabled={commandLibrarySubmitting}>
+                取消
+              </button>
+              <button className="btn btn-error" onClick={() => void handleConfirmDeleteGroup()} disabled={commandLibrarySubmitting}>
+                {commandLibrarySubmitting ? "删除中..." : "确认删除"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
