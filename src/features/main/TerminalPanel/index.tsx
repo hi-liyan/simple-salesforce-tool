@@ -1435,52 +1435,55 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
       <div className="flex min-h-0 min-w-0 flex-col overflow-hidden bg-base-100">
         {/* 顶部终端 Tab 栏。 */}
         <div className="flex items-center border-b border-base-300">
-          {/* 终端 Tab 列表。 */}
-          <div className="flex min-w-0 flex-1 overflow-x-auto">
-            {/* 空态提示：无终端 Tab 时引导用户创建终端。 */}
-            {tabs.length === 0 && <span className="px-2 py-1.5 text-[12px] text-neutral/70">请点击右侧 + 新建终端</span>}
-            {tabs.map((tab) => {
-              const active = tab.id === activeTab?.id;
-              const processMeta = processMetaByTabId[tab.id];
-              const pidText = processMeta?.pid !== null && processMeta?.pid !== undefined ? String(processMeta.pid) : "-";
-              const commandText = processMeta?.commandLine || "-";
-              const terminalVersionText = processMeta?.shellVersion
-                ? `${processMeta.shellName || "Terminal"} ${processMeta.shellVersion}`
-                : "-";
-              const tooltipText = `进程 ID (PID): ${pidText}\n命令行: ${commandText}\n终端版本: ${terminalVersionText}`;
+          {/* 终端 Tab 滚动区域：保持新增按钮始终紧跟在最后一个 Tab 后。 */}
+          <div className="min-w-0 flex-1 overflow-x-auto">
+            {/* 横向内容容器：承载空态提示、Tab 列表与新增按钮。 */}
+            <div className="flex min-w-max items-center">
+              {/* 空态提示：无终端 Tab 时引导用户就近创建终端。 */}
+              {tabs.length === 0 && <span className="px-2 py-1.5 text-[12px] text-neutral/70">请点击 + 新建终端</span>}
+              {tabs.map((tab) => {
+                const active = tab.id === activeTab?.id;
+                const processMeta = processMetaByTabId[tab.id];
+                const pidText = processMeta?.pid !== null && processMeta?.pid !== undefined ? String(processMeta.pid) : "-";
+                const commandText = processMeta?.commandLine || "-";
+                const terminalVersionText = processMeta?.shellVersion
+                  ? `${processMeta.shellName || "Terminal"} ${processMeta.shellVersion}`
+                  : "-";
+                const tooltipText = `进程 ID (PID): ${pidText}\n命令行: ${commandText}\n终端版本: ${terminalVersionText}`;
 
-              return (
-                // 单个终端 Tab。
-                <div key={tab.id} className={`flex items-center border-r border-base-300 ${active ? "bg-base-100" : "bg-base-200/50"}`}>
-                  {/* 激活终端按钮。 */}
-                  <button
-                    className={`min-w-0 max-w-[240px] truncate px-3 py-2 text-[12px] ${active ? "text-primary" : "text-neutral/70"}`}
-                    onClick={() => setActiveTabId(tab.id)}
-                    title={tooltipText}
-                  >
-                    {/* Tab 标题。 */}
-                    <span>{tab.name}</span>
-                    {/* 会话状态提示点。 */}
-                    {processMeta?.connected && <span className="ml-2 inline-block h-2 w-2 rounded-full bg-success" />}
-                    {processMeta?.opening && <span className="ml-2 inline-block h-2 w-2 animate-pulse rounded-full bg-warning" />}
-                  </button>
-                  {/* 关闭终端按钮。 */}
-                  <button
-                    className="btn btn-circle btn-ghost btn-xs mr-1"
-                    onClick={() => {
-                      void handleCloseTerminalTab(tab.id);
-                    }}
-                  >
-                    <X size={12} />
-                  </button>
-                </div>
-              );
-            })}
+                return (
+                  // 单个终端 Tab。
+                  <div key={tab.id} className={`flex items-center border-r border-base-300 ${active ? "bg-base-100" : "bg-base-200/50"}`}>
+                    {/* 激活终端按钮。 */}
+                    <button
+                      className={`min-w-0 max-w-[240px] truncate px-3 py-2 text-[12px] ${active ? "text-primary" : "text-neutral/70"}`}
+                      onClick={() => setActiveTabId(tab.id)}
+                      title={tooltipText}
+                    >
+                      {/* Tab 标题。 */}
+                      <span>{tab.name}</span>
+                      {/* 会话状态提示点。 */}
+                      {processMeta?.connected && <span className="ml-2 inline-block h-2 w-2 rounded-full bg-success" />}
+                      {processMeta?.opening && <span className="ml-2 inline-block h-2 w-2 animate-pulse rounded-full bg-warning" />}
+                    </button>
+                    {/* 关闭终端按钮。 */}
+                    <button
+                      className="btn btn-circle btn-ghost btn-xs mr-1"
+                      onClick={() => {
+                        void handleCloseTerminalTab(tab.id);
+                      }}
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                );
+              })}
+              {/* 新建终端按钮：始终显示在最后一个 Tab 后面。 */}
+              <button className="btn btn-ghost btn-sm mx-2 shrink-0" onClick={handleCreateTerminalTab} title="新建终端">
+                <Plus size={14} />
+              </button>
+            </div>
           </div>
-          {/* 新建终端按钮。 */}
-          <button className="btn btn-ghost btn-sm mx-2" onClick={handleCreateTerminalTab} title="新建终端">
-            <Plus size={14} />
-          </button>
           {/* Windows 管理员终端入口：管理员权限会在新窗口中打开。 */}
           {isWindowsPlatform && (
             <button className="btn btn-ghost btn-sm mr-2" onClick={() => void handleOpenElevatedTerminal()} title="以管理员身份打开终端">
