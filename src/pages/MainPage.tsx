@@ -19,6 +19,48 @@ const GITHUB_LATEST_RELEASE_API_URL = "https://api.github.com/repos/hi-liyan/sim
 // 启动版本检查标志：避免 React StrictMode 在开发环境重复触发弹窗。
 let startupVersionCheckTriggered = false;
 
+// 启动阶段标识：用于驱动遮罩进度条与当前动作文案。
+type StartupStageKey = "rehydrate" | "enable-storage" | "restore-sources" | "ready";
+
+// 启动阶段配置：定义每个阶段的进度百分比与展示文案。
+type StartupStage = {
+  key: StartupStageKey;
+  progress: number;
+  label: string;
+  detail: string;
+};
+
+// 启动阶段顺序：与实际初始化流程保持一致，便于展示“已完成/进行中/待开始”。
+const STARTUP_STAGES: StartupStage[] = [
+  {
+    key: "rehydrate",
+    progress: 20,
+    label: "恢复本地工作区状态",
+    detail: "正在从数据库恢复界面、控制台与查询工作区快照..."
+  },
+  {
+    key: "enable-storage",
+    progress: 45,
+    label: "启用本地状态写入",
+    detail: "正在开启启动后的持久化写入门控..."
+  },
+  {
+    key: "restore-sources",
+    progress: 80,
+    label: "恢复最近使用的数据源",
+    detail: "正在加载本地数据源并恢复上次选择..."
+  },
+  {
+    key: "ready",
+    progress: 100,
+    label: "准备进入主界面",
+    detail: "正在完成启动收尾并进入工作区..."
+  }
+];
+
+// 启动阶段索引：按 key 快速获取阶段配置，避免重复查找。
+const STARTUP_STAGE_MAP = Object.fromEntries(STARTUP_STAGES.map((stage) => [stage.key, stage])) as Record<StartupStageKey, StartupStage>;
+
 // 主页面：对象列表 + 结果面板 + SOQL 抽屉。
 export function MainPage() {
   // Store：视图模式与侧栏宽度（已通过 Zustand persist 自动持久化到 SQLite）。
@@ -29,6 +71,8 @@ export function MainPage() {
 
   // 启动画面状态：首次初始化完成前显示全屏遮罩，避免用户误以为卡死。
   const [startupLoading, setStartupLoading] = useState(true);
+  // 当前启动阶段：用于驱动遮罩中的进度条与动作文案。
+  const [startupStage, setStartupStage] = useState<StartupStage>(STARTUP_STAGE_MAP.rehydrate);
   // 启动完成标记：用于在 QueryPanel 聚合层触发“数据源切换重置 Tab”逻辑。
   const [startupComplete, setStartupComplete] = useState(false);
   // 新版本提示模态框状态：有值时显示升级弹窗。
@@ -56,13 +100,19 @@ export function MainPage() {
     let active = true;
 
     const setup = async () => {
+      // 启动第一阶段：恢复持久化工作区快照。
+      setStartupStage(STARTUP_STAGE_MAP.rehydrate);
       // 手动触发 rehydrate（skipHydration: true），从 SQLite 恢复持久化状态。
       await Promise.all([useAppStore.persist.rehydrate(), useSoqlExecutorStore.persist.rehydrate()]);
       if (!active) return;
 
+      // 启动第二阶段：允许后续状态重新写回本地存储。
+      setStartupStage(STARTUP_STAGE_MAP["enable-storage"]);
       // rehydrate 完成且确认组件仍存活后，才开启写入门控。
       enableStorageWrite();
 
+      // 启动第三阶段：恢复本地数据源与上次选择结果。
+      setStartupStage(STARTUP_STAGE_MAP["restore-sources"]);
       // hydration 完成后从 store 读取持久化的数据源 ID。
       const persistedSourceId = useAppStore.getState().selectedSourceId;
       // 首屏只恢复本地数据源与上次选择，避免 CLI 同步和对象强刷阻塞启动遮罩。
@@ -71,18 +121,26 @@ export function MainPage() {
       });
       if (!active) return;
 
+      // 启动最后阶段：主界面已具备可交互条件，准备收起启动遮罩。
+      setStartupStage(STARTUP_STAGE_MAP.ready);
       // 首次初始化结束后关闭启动遮罩，并标记启动完成。
-      setStartupLoading(false);
       setStartupComplete(true);
+      setStartupLoading(false);
 
       // 异步重新拉取恢复的 Tab 数据（describe + query），不阻塞主界面。
       const finalSelectedSourceId = useAppStore.getState().selectedSourceId;
       void reloadRestoredTabs(finalSelectedSourceId);
 
       // 启动后在后台静默同步 CLI 数据源，不再影响首屏可交互时间。
-      void refreshSources(true, undefined, finalSelectedSourceId, {
+      // 这里继续沿用持久化的数据源 ID，避免“首屏本地列表未命中 -> 选中被清空”后无法恢复 CLI 数据源。
+      void refreshSources(true, undefined, persistedSourceId, {
         forceObjectRefresh: false,
         showLoading: false
+      }).then(() => {
+        // 后台同步后若恢复出了不同于首屏的目标数据源，则补做一次恢复 Tab 数据。
+        const syncedSelectedSourceId = useAppStore.getState().selectedSourceId;
+        if (!syncedSelectedSourceId || syncedSelectedSourceId === finalSelectedSourceId) return;
+        void reloadRestoredTabs(syncedSelectedSourceId);
       });
 
       if (!startupVersionCheckTriggered) {
@@ -131,6 +189,20 @@ export function MainPage() {
     if (viewMode !== "terminal") return;
     setTerminalPanelMounted(true);
   }, [viewMode]);
+
+  // 启动步骤列表：用于在遮罩中展示每个阶段的完成状态。
+  const startupStageItems = STARTUP_STAGES.map((stage) => {
+    const isCurrentStage = stage.key === startupStage.key;
+    const isCompletedStage = stage.progress < startupStage.progress;
+    // 根据当前阶段进度，推导遮罩中的步骤状态文案。
+    const statusText = isCompletedStage ? "已完成" : isCurrentStage ? "进行中" : "待开始";
+    return {
+      ...stage,
+      isCurrentStage,
+      isCompletedStage,
+      statusText
+    };
+  });
 
   // 监听登录成功事件：自动刷新数据源并切换到新登录的 org。
   useEffect(() => {
@@ -272,14 +344,47 @@ export function MainPage() {
       {startupLoading && (
         // 启动遮罩：初始化期间覆盖全屏并拦截鼠标事件。
         <div className="fixed inset-0 z-[120] flex items-center justify-center bg-base-200/95 backdrop-blur-sm">
-          {/* 启动卡片：展示加载状态与提示文案。 */}
-          <div className="w-[380px] rounded-xl border border-base-300 bg-base-100 p-6 shadow-xl">
+          {/* 启动卡片：展示加载状态、进度条与当前动作。 */}
+          <div className="w-[420px] rounded-xl border border-base-300 bg-base-100 p-6 shadow-xl">
             <div className="flex items-center gap-3">
               <span className="loading loading-spinner text-primary" style={{ width: 26, height: 26 }} />
               <div className="min-w-0">
                 <p className="text-[14px] font-semibold">正在启动应用</p>
-                <p className="mt-1 text-[12px] text-neutral/70">正在加载数据源与对象元数据，请稍候...</p>
+                <p className="mt-1 text-[12px] text-neutral/70">{startupStage.detail}</p>
               </div>
+            </div>
+            {/* 进度条：显示当前启动进度与动作名称。 */}
+            <div className="mt-5">
+              <div className="mb-2 flex items-center justify-between text-[12px] text-neutral/70">
+                <span>{startupStage.label}</span>
+                <span>{startupStage.progress}%</span>
+              </div>
+              <div className="h-2 overflow-hidden rounded-full bg-base-300">
+                <div
+                  className="h-full rounded-full bg-primary transition-all duration-300 ease-out"
+                  style={{ width: `${startupStage.progress}%` }}
+                />
+              </div>
+            </div>
+            {/* 启动步骤清单：帮助用户理解遮罩阶段当前做了哪些动作。 */}
+            <div className="mt-4 space-y-2">
+              {startupStageItems.map((stage) => (
+                <div
+                  key={stage.key}
+                  className={`flex items-center justify-between rounded-lg px-3 py-2 text-[12px] ${
+                    stage.isCurrentStage
+                      ? "bg-primary/10 text-primary"
+                      : stage.isCompletedStage
+                        ? "bg-success/10 text-success"
+                        : "bg-base-200/70 text-neutral/60"
+                  }`}
+                >
+                  {/* 步骤名称：说明当前启动流程的具体动作。 */}
+                  <span>{stage.label}</span>
+                  {/* 步骤状态：标记已完成、进行中或待开始。 */}
+                  <span>{stage.statusText}</span>
+                </div>
+              ))}
             </div>
           </div>
         </div>

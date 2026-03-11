@@ -495,6 +495,8 @@ export function useMainPageQueryPanel({
 
   // 当当前数据源被删除或失效时，清空当前选择。
   useEffect(() => {
+    // 启动阶段由 MainPage 手动恢复 selectedSourceId，避免 Query 尚未接管前被空列表误清空。
+    if (!startupComplete) return;
     if (!selectedSourceId) return;
     if (sources.length === 0) {
       setSelectedSourceId("");
@@ -503,7 +505,7 @@ export function useMainPageQueryPanel({
     if (!sources.some((item) => item.id === selectedSourceId)) {
       setSelectedSourceId("");
     }
-  }, [sources, selectedSourceId, setSelectedSourceId]);
+  }, [startupComplete, sources, selectedSourceId, setSelectedSourceId]);
 
   // 数据源切换后拉取当前用户上下文（时区/地区），用于 datetime 展示对齐。
   useEffect(() => {
