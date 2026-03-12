@@ -395,14 +395,21 @@ export function DataGridSurface({
             style={{ top: DATA_GRID_HEADER_HEIGHT, left: totalColumnsWidth }}
           />
         )}
-        {/* 数据区右边界线：仅覆盖“有数据的行高”，无数据区域不显示该线。 */}
+        {/* 表头右侧空白遮罩：复用同样的覆盖方式，隐藏无数据区域的表头背景与分隔线。 */}
+        {records.length > 0 && (
+          <div
+            className="pointer-events-none absolute right-0 top-0 z-[1] bg-base-100"
+            style={{ left: totalColumnsWidth, height: DATA_GRID_HEADER_HEIGHT }}
+          />
+        )}
+        {/* 数据区右边界线：向上延伸覆盖表头，保留数据区与空白区之间的分界线。 */}
         {records.length > 0 && (
           <div
             className="pointer-events-none absolute z-[2] w-0 border-l border-base-300"
             style={{
-              top: DATA_GRID_HEADER_HEIGHT,
+              top: 0,
               left: totalColumnsWidth,
-              height: records.length * DATA_GRID_ROW_HEIGHT
+              height: DATA_GRID_HEADER_HEIGHT + records.length * DATA_GRID_ROW_HEIGHT
             }}
           />
         )}
