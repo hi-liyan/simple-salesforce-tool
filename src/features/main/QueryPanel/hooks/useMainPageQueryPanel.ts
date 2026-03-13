@@ -4,7 +4,6 @@ import { api } from "../../../../api";
 import { useObjectsQuery, useSourcesQuery, useSyncSourcesMutation } from "../../../../queries/salesforce";
 import { MainViewMode, useAppStore } from "../../../../store/useAppStore";
 import { useSoqlExecutorStore } from "../../../../store/useSoqlExecutorStore";
-import { useTerminalStore } from "../../../../store/useTerminalStore";
 import { Notice, ObjectDescribe, ObjectDdl, SalesforceObject, TabLog, TabState } from "../../../../types";
 import { useSourceActions } from "./useSourceActions";
 import { useQueryExecution } from "./useQueryExecution";
@@ -101,8 +100,6 @@ export function useMainPageQueryPanel({
   const setActiveSoqlTabId = useSoqlExecutorStore((state) => state.setActiveTabId);
   const closeSoqlTab = useSoqlExecutorStore((state) => state.closeTab);
   const closeSoqlTabsByIds = useSoqlExecutorStore((state) => state.closeTabsByIds);
-  // Store：Terminal 工作区状态与行为。
-  const switchTerminalSource = useTerminalStore((state) => state.switchSource);
 
   // Objects 查询：随数据源变化拉取对象元数据。
   const { data: objects = [], isFetching: objectsFetching, error: objectsError } = useObjectsQuery(selectedSourceId);
@@ -474,12 +471,12 @@ export function useMainPageQueryPanel({
     };
   }, []);
 
-  // 数据源切换时：切换控制台 source 上下文，恢复该数据源下的控制台 Tabs。
+  // 数据源切换时：仅切换 SOQL 控制台 source 上下文。
+  // TerminalPanel 作为独立工作区，不再跟随 QueryPanel 数据源切换。
   useEffect(() => {
     if (!startupComplete) return;
     switchSoqlSource(selectedSourceId);
-    switchTerminalSource(selectedSourceId);
-  }, [startupComplete, selectedSourceId, switchSoqlSource, switchTerminalSource]);
+  }, [startupComplete, selectedSourceId, switchSoqlSource]);
 
   // 对象列表加载失败时给出明确提示，避免出现“空白但无错误”。
   useEffect(() => {
