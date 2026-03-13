@@ -47,10 +47,10 @@ export function useSourceActions({
   clearWorkspaceNotice,
   patchActiveTabNotice
 }: UseSourceActionsInput) {
-  // 刷新数据源：支持同步 CLI 或直接拉取本地列表，并在必要时刷新对象列表。
+  // 刷新数据源：支持同步 CLI 或直接拉取本地列表，并在显式刷新时强制更新当前 Objects 缓存。
   const refreshSources = useCallback(
     async (syncCli: boolean, preferredOrgId?: string, preferredSourceId?: string, options?: RefreshSourcesOptions) => {
-      // 默认保持原行为：既展示 loading，也在有选中数据源时强制刷新对象列表。
+      // 默认保持“用户主动刷新”的行为：展示 loading，并同步刷新当前数据源的 Objects 本地缓存。
       const { forceObjectRefresh = true, showLoading = true } = options || {};
       if (showLoading) {
         setLoading(true);
@@ -84,6 +84,8 @@ export function useSourceActions({
         if (forceObjectRefresh && nextSelectedSourceId) {
           await queryClient.fetchQuery({
             queryKey: ["objects", nextSelectedSourceId],
+            // 显式刷新时强制请求后端远端拉取接口，并回写数据库缓存。
+            staleTime: 0,
             queryFn: () => api.refreshObjects(nextSelectedSourceId)
           });
         }
@@ -99,7 +101,7 @@ export function useSourceActions({
     [setLoading, sources, syncSources, queryClient, selectedSourceId, setSelectedSourceId, patchActiveTabNotice]
   );
 
-  // 切换数据源：先乐观切换，再以强制刷新对象列表作为成功判定，失败则回滚。
+  // 切换数据源：仅切换当前上下文，Objects 列表由缓存优先链路接管，不再切换即强制远端刷新。
   const handleSourceChange = useCallback(
     async (sourceId: string) => {
       // 切回“未选择数据源”属于本地状态切换，不需要远端校验。
@@ -109,51 +111,21 @@ export function useSourceActions({
         return;
       }
 
-      // 记录切换前数据源，失败时用于回滚。
-      const previousSourceId = selectedSourceId;
-      // 切换前数据源展示名：用于失败回滚提示文案。
-      const previousSourceDisplayName =
-        sources.find((item) => item.id === previousSourceId)?.name || (previousSourceId ? previousSourceId : "未选择数据源");
-      // 生成本次切换请求序号，后续用于识别过期请求。
-      const switchSeq = sourceSwitchSeqRef.current + 1;
-      sourceSwitchSeqRef.current = switchSeq;
-      const selectedSource = sources.find((item) => item.id === sourceId);
-      const sourceDisplayName = selectedSource?.name || sourceId;
+      // 递增切换序号：保留并发语义，便于后续扩展更多切换副作用。
+      sourceSwitchSeqRef.current += 1;
 
       // UX 优化：先切换到目标数据源，让用户立刻感知选择变化。
       setSelectedSourceId(sourceId);
-      setLoading(true);
-      try {
-        // 再强制拉取远端 Objects 作为“切换成功”判定，避免命中缓存造成假成功提示。
-        await queryClient.fetchQuery({
-          queryKey: ["objects", sourceId],
-          queryFn: () => api.refreshObjects(sourceId)
-        });
-        // 若当前请求已过期（用户又切换了其他数据源），忽略本次结果。
-        if (sourceSwitchSeqRef.current !== switchSeq) return;
-        showWorkspaceNotice({
-          type: "success",
-          message: `已切换到数据源：${sourceDisplayName}`
-        });
-      } catch (error) {
-        // 若当前请求已过期（用户又切换了其他数据源），忽略本次结果。
-        if (sourceSwitchSeqRef.current !== switchSeq) return;
-        // 切换失败时回滚到切换前状态，并明确给出失败提示。
-        setSelectedSourceId(previousSourceId);
-        showWorkspaceNotice(
-          {
-            type: "error",
-            message: `切换数据源失败，已恢复到原数据源（${previousSourceDisplayName}）：${String(error)}`
-          },
-          5000
-        );
-      } finally {
-        // 仅由最新切换请求结束 loading，避免并发下被过期请求提前关闭。
-        if (sourceSwitchSeqRef.current !== switchSeq) return;
-        setLoading(false);
-      }
+      clearWorkspaceNotice();
+
+      // 预热当前数据源的 Objects 查询：优先命中 React Query/本地数据库缓存，避免首次渲染再补发请求。
+      void queryClient.prefetchQuery({
+        queryKey: ["objects", sourceId],
+        queryFn: () => api.listObjects(sourceId),
+        staleTime: Number.POSITIVE_INFINITY
+      });
     },
-    [setSelectedSourceId, clearWorkspaceNotice, selectedSourceId, sources, sourceSwitchSeqRef, setLoading, queryClient, showWorkspaceNotice]
+    [setSelectedSourceId, clearWorkspaceNotice, sourceSwitchSeqRef, queryClient]
   );
 
   return {

@@ -102,7 +102,7 @@ export function useMainPageQueryPanel({
   const closeSoqlTabsByIds = useSoqlExecutorStore((state) => state.closeTabsByIds);
 
   // Objects 查询：随数据源变化拉取对象元数据。
-  const { data: objects = [], isFetching: objectsFetching, error: objectsError } = useObjectsQuery(selectedSourceId);
+  const { data: objects = [], isFetching: objectsFetching, isPending: objectsPending, error: objectsError } = useObjectsQuery(selectedSourceId);
 
   // 当前选中数据源：用于按 sourceType 切换 SQL/SOQL 行为。
   const selectedSource = useMemo(
@@ -437,7 +437,8 @@ export function useMainPageQueryPanel({
     selectedSourceType: selectedSource?.sourceType || "salesforce",
     salesforceTimezone,
     pageLoading,
-    objectsLoading: Boolean(selectedSourceId) && objectsFetching,
+    // 仅在当前数据源尚无可用 Objects 数据时显示 loading，避免切换到已缓存数据源时闪烁。
+    objectsLoading: Boolean(selectedSourceId) && (objectsPending || (objectsFetching && objects.length === 0)),
     tabs,
     activeTabObjectName,
     activeTab,

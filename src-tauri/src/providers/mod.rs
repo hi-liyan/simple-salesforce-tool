@@ -8,10 +8,14 @@ use serde_json::Value;
 use crate::app_state::AppState;
 use crate::error::AppError;
 use crate::models::{
-    CurrentUserContext, ObjectDdl, ObjectDescribe, QueryResult, RecordUpdatePayload, SalesforceObject,
-    SalesforceSource,
+    CurrentUserContext, ObjectDdl, ObjectDescribe, QueryResult, RecordUpdatePayload,
+    SalesforceObject, SalesforceSource,
 };
 use mysql_provider::MySqlProvider;
+pub use mysql_provider::{
+    preview_create_record_sql, preview_delete_record_sql, preview_save_records_sql,
+    preview_update_record_sql,
+};
 use salesforce_provider::SalesforceProvider;
 
 /// Provider 路由枚举：按数据源类型分发到具体实现。

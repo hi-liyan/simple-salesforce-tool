@@ -35,7 +35,9 @@ export function useObjectsQuery(sourceId: string) {
   return useQuery<SalesforceObject[]>({
     queryKey: objectsKey(sourceId),
     queryFn: () => api.listObjects(sourceId),
-    enabled: Boolean(sourceId)
+    enabled: Boolean(sourceId),
+    // Objects 列表改为“手动刷新”模式：会话内命中后不再自动判旧，切换数据源时优先复用本地缓存。
+    staleTime: Number.POSITIVE_INFINITY
   });
 }
 
