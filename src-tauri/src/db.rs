@@ -359,7 +359,9 @@ fn normalize_terminal_group_sort_orders(connection: &Connection) -> Result<(), A
 }
 
 /// 读取全局终端命令组（含命令列表）。
-pub fn list_terminal_command_groups(connection: &Connection) -> Result<Vec<TerminalCommandGroup>, AppError> {
+pub fn list_terminal_command_groups(
+    connection: &Connection,
+) -> Result<Vec<TerminalCommandGroup>, AppError> {
     let mut group_statement = connection.prepare(
         "SELECT id, name, created_at, updated_at
          FROM terminal_command_groups
@@ -708,16 +710,21 @@ pub fn reorder_terminal_commands(
         .collect::<Result<Vec<_>, _>>()?;
 
     if existing_command_ids.len() != normalized_command_ids.len() {
-        return Err(AppError::Biz("命令排序列表与当前分组命令数量不一致".to_string()));
+        return Err(AppError::Biz(
+            "命令排序列表与当前分组命令数量不一致".to_string(),
+        ));
     }
 
     let existing_command_id_set: HashSet<String> = existing_command_ids.into_iter().collect();
-    let submitted_command_id_set: HashSet<String> = normalized_command_ids.iter().cloned().collect();
+    let submitted_command_id_set: HashSet<String> =
+        normalized_command_ids.iter().cloned().collect();
     if existing_command_id_set.len() != normalized_command_ids.len()
         || submitted_command_id_set.len() != normalized_command_ids.len()
         || existing_command_id_set != submitted_command_id_set
     {
-        return Err(AppError::Biz("命令排序列表无效或包含非当前分组命令".to_string()));
+        return Err(AppError::Biz(
+            "命令排序列表无效或包含非当前分组命令".to_string(),
+        ));
     }
 
     for (index, command_id) in normalized_command_ids.iter().enumerate() {

@@ -295,7 +295,9 @@ pub fn close_terminal_session(
 
 /// 平台化解析默认 shell 启动命令。
 /// 说明：Windows 仅使用用户已保存的绝对路径，不再在创建终端时重新探测。
-fn resolve_shell_command(preferred_shell_command: Option<&str>) -> Result<(String, Vec<String>, String), String> {
+fn resolve_shell_command(
+    preferred_shell_command: Option<&str>,
+) -> Result<(String, Vec<String>, String), String> {
     if cfg!(target_os = "windows") {
         let preferred = preferred_shell_command
             .map(|item| item.trim())
@@ -306,11 +308,7 @@ fn resolve_shell_command(preferred_shell_command: Option<&str>) -> Result<(Strin
         let (shell_name, _shell_version) = detect_windows_shell_meta(preferred)
             .ok_or_else(|| format!("当前保存的终端 Shell 不可用：{preferred}。请到“设置-终端设置”中重新选择 Shell。"))?;
 
-        return Ok((
-            preferred.to_string(),
-            windows_terminal_args(),
-            shell_name,
-        ));
+        return Ok((preferred.to_string(), windows_terminal_args(), shell_name));
     }
 
     // Unix 默认取 SHELL 环境变量，未配置时回退 /bin/bash。
@@ -451,7 +449,11 @@ fn detect_shell_version(program: &str, shell_name: &str) -> String {
     if cfg!(target_os = "windows") {
         let output = run_hidden_command_output(
             program,
-            &["-NoProfile", "-Command", "$PSVersionTable.PSVersion.ToString()"],
+            &[
+                "-NoProfile",
+                "-Command",
+                "$PSVersionTable.PSVersion.ToString()",
+            ],
         );
         if let Ok(result) = output {
             let version = String::from_utf8_lossy(&result.stdout).trim().to_string();
@@ -479,7 +481,10 @@ fn detect_shell_version(program: &str, shell_name: &str) -> String {
 }
 
 /// 统一执行一次子进程输出采集：Windows 下使用无窗模式，避免探测时闪出控制台。
-fn run_hidden_command_output(program: &str, args: &[&str]) -> std::io::Result<std::process::Output> {
+fn run_hidden_command_output(
+    program: &str,
+    args: &[&str],
+) -> std::io::Result<std::process::Output> {
     let mut command = StdCommand::new(program);
     command.args(args);
     #[cfg(target_os = "windows")]
