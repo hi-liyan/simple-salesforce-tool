@@ -4,8 +4,8 @@ use serde_json::Value;
 
 use crate::error::AppError;
 use crate::models::{
-    CurrentUserContext, ObjectDdl, ObjectDescribe, QueryResult, RecordUpdatePayload, SalesforceObject,
-    SalesforceSource,
+    CurrentUserContext, ObjectDdl, ObjectDescribe, QueryResult, RecordUpdatePayload,
+    SalesforceObject, SalesforceSource,
 };
 use crate::salesforce::SalesforceClient;
 

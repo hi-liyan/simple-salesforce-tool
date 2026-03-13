@@ -57,6 +57,84 @@ fn default_mysql_charset() -> String {
 /// MySQL Provider：提供表/字段/查询/CRUD/事务能力。
 pub struct MySqlProvider;
 
+/// 构建 MySQL 新增日志 SQL：与真实执行共用主键解析和字段归一化逻辑。
+pub async fn preview_create_record_sql(
+    source: &SalesforceSource,
+    object_name: &str,
+    values: HashMap<String, Value>,
+) -> Result<String, AppError> {
+    let (safe_table, primary_key) = resolve_table_and_primary_key(source, object_name).await?;
+    let normalized_values = normalize_create_values(values, &primary_key);
+    build_insert_preview_sql(&safe_table, normalized_values)
+}
+
+/// 构建 MySQL 批量保存日志 SQL：逐条复用真实执行前的数据归一化逻辑。
+pub async fn preview_save_records_sql(
+    source: &SalesforceSource,
+    object_name: &str,
+    creates: Vec<HashMap<String, Value>>,
+    updates: Vec<RecordUpdatePayload>,
+) -> Result<String, AppError> {
+    let (safe_table, primary_key) = resolve_table_and_primary_key(source, object_name).await?;
+    let mut lines: Vec<String> = Vec::new();
+
+    // 新增记录逐条展开，保持与真实执行顺序一致。
+    for (index, item) in creates.into_iter().enumerate() {
+        let normalized_values = normalize_create_values(item, &primary_key);
+        let sql = build_insert_preview_sql(&safe_table, normalized_values)?;
+        lines.push(format!("[create#{index}] {sql}"));
+    }
+
+    // 更新记录逐条展开；没有可更新字段时显式标记为未执行 SQL。
+    for (index, item) in updates.into_iter().enumerate() {
+        let normalized_values = normalize_update_values(item.values, &primary_key);
+        if let Some(sql) = build_update_preview_sql(
+            &safe_table,
+            &primary_key,
+            &item.record_id,
+            normalized_values,
+        )? {
+            lines.push(format!("[update#{index}] {sql}"));
+        } else {
+            lines.push(format!("[update#{index}] -- SQL 未执行：没有可更新字段。"));
+        }
+    }
+
+    Ok(lines.join("\n"))
+}
+
+/// 构建 MySQL 更新日志 SQL：与真实执行共用主键解析和字段归一化逻辑。
+pub async fn preview_update_record_sql(
+    source: &SalesforceSource,
+    object_name: &str,
+    record_id: &str,
+    values: HashMap<String, Value>,
+) -> Result<String, AppError> {
+    let (safe_table, primary_key) = resolve_table_and_primary_key(source, object_name).await?;
+    let normalized_values = normalize_update_values(values, &primary_key);
+    if let Some(sql) =
+        build_update_preview_sql(&safe_table, &primary_key, record_id, normalized_values)?
+    {
+        Ok(sql)
+    } else {
+        Ok("-- SQL 未执行：没有可更新字段。".to_string())
+    }
+}
+
+/// 构建 MySQL 删除日志 SQL：与真实执行共用主键解析逻辑。
+pub async fn preview_delete_record_sql(
+    source: &SalesforceSource,
+    object_name: &str,
+    record_id: &str,
+) -> Result<String, AppError> {
+    let (safe_table, primary_key) = resolve_table_and_primary_key(source, object_name).await?;
+    Ok(build_delete_preview_sql(
+        &safe_table,
+        &primary_key,
+        record_id,
+    ))
+}
+
 impl MySqlProvider {
     /// 创建 MySQL Provider 实例。
     pub fn new() -> Self {
@@ -268,7 +346,7 @@ impl MySqlProvider {
         &self,
         source: &SalesforceSource,
         object_name: &str,
-        mut values: HashMap<String, Value>,
+        values: HashMap<String, Value>,
     ) -> Result<String, AppError> {
         let safe_table = ensure_safe_identifier(object_name, "表名")?;
         let config = MySqlSourceConfig::from_source(source)?;
@@ -276,13 +354,7 @@ impl MySqlProvider {
         let primary_key = resolve_primary_key_column(&pool, &config, &safe_table).await?;
 
         // 与前端现有约定兼容：若仅有 Id 字段，则映射到真实主键列。
-        if !values.contains_key(&primary_key) {
-            if let Some(id_value) = values.get("Id").cloned() {
-                values.insert(primary_key.clone(), id_value);
-            }
-        }
-        values.remove("Id");
-
+        let values = normalize_create_values(values, &primary_key);
         let provided_primary = values.get(&primary_key).cloned();
         execute_insert(&pool, &safe_table, values).await?;
 
@@ -314,20 +386,13 @@ impl MySqlProvider {
             .await
             .map_err(|error| AppError::Db(format!("开启 MySQL 事务失败: {error}")))?;
 
-        for mut create_item in creates {
-            if !create_item.contains_key(&primary_key) {
-                if let Some(id_value) = create_item.get("Id").cloned() {
-                    create_item.insert(primary_key.clone(), id_value);
-                }
-            }
-            create_item.remove("Id");
+        for create_item in creates {
+            let create_item = normalize_create_values(create_item, &primary_key);
             execute_insert(&mut *transaction, &safe_table, create_item).await?;
         }
 
         for update_item in updates {
-            let mut values = update_item.values;
-            values.remove("Id");
-            values.remove(&primary_key);
+            let values = normalize_update_values(update_item.values, &primary_key);
             if values.is_empty() {
                 continue;
             }
@@ -354,15 +419,14 @@ impl MySqlProvider {
         source: &SalesforceSource,
         object_name: &str,
         record_id: &str,
-        mut values: HashMap<String, Value>,
+        values: HashMap<String, Value>,
     ) -> Result<(), AppError> {
         let safe_table = ensure_safe_identifier(object_name, "表名")?;
         let config = MySqlSourceConfig::from_source(source)?;
         let pool = build_mysql_pool(&config).await?;
         let primary_key = resolve_primary_key_column(&pool, &config, &safe_table).await?;
 
-        values.remove("Id");
-        values.remove(&primary_key);
+        let values = normalize_update_values(values, &primary_key);
         if values.is_empty() {
             return Ok(());
         }
@@ -447,8 +511,7 @@ impl MySqlProvider {
                 .try_get::<i64, _>(1usize)
                 .map_err(|error| AppError::Db(format!("读取索引唯一性失败: {error}")))?;
             let index_type = decode_row_string(&row, 2usize, "索引类型")?;
-            let indexed_columns =
-                decode_optional_row_string(&row, 3usize).unwrap_or_default();
+            let indexed_columns = decode_optional_row_string(&row, 3usize).unwrap_or_default();
             if indexed_columns.trim().is_empty() {
                 continue;
             }
@@ -511,8 +574,7 @@ impl MySqlProvider {
             }
 
             if constraint_type.eq_ignore_ascii_case("FOREIGN KEY") {
-                let referenced_table =
-                    decode_optional_row_string(&row, 3usize).unwrap_or_default();
+                let referenced_table = decode_optional_row_string(&row, 3usize).unwrap_or_default();
                 let referenced_columns =
                     decode_optional_row_string(&row, 4usize).unwrap_or_default();
                 let update_rule = decode_optional_row_string(&row, 5usize)
@@ -578,6 +640,18 @@ impl MySqlSourceConfig {
             charset = self.charset
         )
     }
+}
+
+/// 解析日志/执行共用的安全表名与真实主键列名。
+async fn resolve_table_and_primary_key(
+    source: &SalesforceSource,
+    object_name: &str,
+) -> Result<(String, String), AppError> {
+    let safe_table = ensure_safe_identifier(object_name, "表名")?;
+    let config = MySqlSourceConfig::from_source(source)?;
+    let pool = build_mysql_pool(&config).await?;
+    let primary_key = resolve_primary_key_column(&pool, &config, &safe_table).await?;
+    Ok((safe_table, primary_key))
 }
 
 /// 建立 MySQL 连接池。
@@ -664,6 +738,124 @@ async fn resolve_primary_key_column(
     ensure_safe_identifier(&primary_key, "主键列名")
 }
 
+/// 归一化新增字段：兼容前端传入 Id，并映射到真实主键列。
+fn normalize_create_values(
+    mut values: HashMap<String, Value>,
+    primary_key: &str,
+) -> HashMap<String, Value> {
+    if !values.contains_key(primary_key) {
+        if let Some(id_value) = values.get("Id").cloned() {
+            values.insert(primary_key.to_string(), id_value);
+        }
+    }
+    values.remove("Id");
+    values
+}
+
+/// 归一化更新字段：移除前端兼容字段 Id 和主键本身。
+fn normalize_update_values(
+    mut values: HashMap<String, Value>,
+    primary_key: &str,
+) -> HashMap<String, Value> {
+    values.remove("Id");
+    values.remove(primary_key);
+    values
+}
+
+/// 收集并排序安全字段列表，保证日志 SQL 与真实执行字段顺序一致。
+fn collect_sorted_entries(
+    values: HashMap<String, Value>,
+) -> Result<Vec<(String, Value)>, AppError> {
+    let mut entries = values
+        .into_iter()
+        .map(|(key, value)| {
+            ensure_safe_identifier(&key, "字段名").map(|safe_key| (safe_key, value))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(entries)
+}
+
+/// 转义 SQL 字符串字面量，仅用于日志 SQL 展示。
+fn escape_sql_literal(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('\'', "\\'")
+}
+
+/// 渲染 MySQL 可读值文本，便于系统日志白盒追踪。
+fn format_mysql_value_literal(value: &Value) -> String {
+    match value {
+        Value::Null => "NULL".to_string(),
+        Value::Bool(item) => {
+            if *item {
+                "TRUE".to_string()
+            } else {
+                "FALSE".to_string()
+            }
+        }
+        Value::Number(item) => item.to_string(),
+        Value::String(item) => format!("'{}'", escape_sql_literal(item)),
+        // 复杂 JSON 统一序列化为字符串字面量，便于观察真实写入内容。
+        other => {
+            let encoded = serde_json::to_string(other).unwrap_or_else(|_| "null".to_string());
+            format!("'{}'", escape_sql_literal(&encoded))
+        }
+    }
+}
+
+/// 构建 MySQL INSERT 日志 SQL。
+fn build_insert_preview_sql(
+    table_name: &str,
+    values: HashMap<String, Value>,
+) -> Result<String, AppError> {
+    if values.is_empty() {
+        return Err(AppError::Biz("新增记录字段不能为空".to_string()));
+    }
+    let entries = collect_sorted_entries(values)?;
+    let columns = entries
+        .iter()
+        .map(|(key, _)| format!("`{key}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let values_sql = entries
+        .iter()
+        .map(|(_, value)| format_mysql_value_literal(value))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Ok(format!(
+        "INSERT INTO `{table_name}` ({columns}) VALUES ({values_sql});"
+    ))
+}
+
+/// 构建 MySQL UPDATE 日志 SQL。
+fn build_update_preview_sql(
+    table_name: &str,
+    primary_key: &str,
+    record_id: &str,
+    values: HashMap<String, Value>,
+) -> Result<Option<String>, AppError> {
+    if values.is_empty() {
+        return Ok(None);
+    }
+    let entries = collect_sorted_entries(values)?;
+    let set_clause = entries
+        .iter()
+        .map(|(key, value)| format!("`{key}` = {}", format_mysql_value_literal(value)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Ok(Some(format!(
+        "UPDATE `{table_name}` SET {set_clause} WHERE `{primary_key}` = '{}';",
+        escape_sql_literal(record_id)
+    )))
+}
+
+/// 构建 MySQL DELETE 日志 SQL。
+fn build_delete_preview_sql(table_name: &str, primary_key: &str, record_id: &str) -> String {
+    format!(
+        "DELETE FROM `{table_name}` WHERE `{primary_key}` = '{}';",
+        escape_sql_literal(record_id)
+    )
+}
+
 /// 执行 INSERT 语句（支持 pool 或 transaction 执行器）。
 async fn execute_insert<'a, E>(
     executor: E,
@@ -676,13 +868,7 @@ where
     if values.is_empty() {
         return Err(AppError::Biz("新增记录字段不能为空".to_string()));
     }
-    let mut entries: Vec<(String, Value)> = values
-        .into_iter()
-        .map(|(key, value)| {
-            ensure_safe_identifier(&key, "字段名").map(|safe_key| (safe_key, value))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    let entries = collect_sorted_entries(values)?;
 
     let mut builder = QueryBuilder::<MySql>::new(format!("INSERT INTO `{table_name}` ("));
     for (index, (key, _)) in entries.iter().enumerate() {
@@ -722,13 +908,7 @@ where
     if values.is_empty() {
         return Ok(());
     }
-    let mut entries: Vec<(String, Value)> = values
-        .into_iter()
-        .map(|(key, value)| {
-            ensure_safe_identifier(&key, "字段名").map(|safe_key| (safe_key, value))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    let entries = collect_sorted_entries(values)?;
 
     let mut builder = QueryBuilder::<MySql>::new(format!("UPDATE `{table_name}` SET "));
     for (index, (key, value)) in entries.iter().enumerate() {
@@ -1021,14 +1201,7 @@ fn is_mysql_json_type(mysql_type: &str) -> bool {
 fn is_mysql_textual_type(mysql_type: &str) -> bool {
     matches!(
         mysql_type,
-        "char"
-            | "varchar"
-            | "tinytext"
-            | "text"
-            | "mediumtext"
-            | "longtext"
-            | "enum"
-            | "set"
+        "char" | "varchar" | "tinytext" | "text" | "mediumtext" | "longtext" | "enum" | "set"
     )
 }
 
@@ -1119,9 +1292,9 @@ fn format_mysql_geometry_value(bytes: &[u8]) -> String {
     let geometry_type = detect_wkb_geometry_type(wkb_bytes).unwrap_or("UNKNOWN");
     let preview = format_hex_with_prefix(wkb_bytes, 64);
     match srid {
-        Some(value) => format!(
-            "<GEOMETRY({geometry_type}) SRID={value}, {total_bytes} bytes> {preview}"
-        ),
+        Some(value) => {
+            format!("<GEOMETRY({geometry_type}) SRID={value}, {total_bytes} bytes> {preview}")
+        }
         None => format!("<GEOMETRY({geometry_type}) {total_bytes} bytes> {preview}"),
     }
 }
@@ -1246,4 +1419,86 @@ fn decode_optional_row_string(row: &MySqlRow, index: usize) -> Option<String> {
         return value.map(|bytes| String::from_utf8_lossy(&bytes).to_string());
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        build_delete_preview_sql, build_insert_preview_sql, build_update_preview_sql,
+        normalize_create_values, normalize_update_values,
+    };
+    use serde_json::{json, Value};
+    use std::collections::HashMap;
+
+    /// 构造测试用字段映射，减少样板代码。
+    fn build_values(entries: &[(&str, Value)]) -> HashMap<String, Value> {
+        entries
+            .iter()
+            .map(|(key, value)| ((*key).to_string(), value.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn normalize_create_values_maps_id_to_real_primary_key() {
+        let normalized = normalize_create_values(
+            build_values(&[("Id", json!("A-100")), ("name", json!("订单A"))]),
+            "order_id",
+        );
+
+        assert_eq!(normalized.get("order_id"), Some(&json!("A-100")));
+        assert_eq!(normalized.get("Id"), None);
+        assert_eq!(normalized.get("name"), Some(&json!("订单A")));
+    }
+
+    #[test]
+    fn build_update_preview_sql_skips_primary_key_and_id_fields() {
+        let normalized = normalize_update_values(
+            build_values(&[
+                ("Id", json!("A-100")),
+                ("order_id", json!("A-100")),
+                ("status", json!("DONE")),
+            ]),
+            "order_id",
+        );
+        let sql = build_update_preview_sql("orders", "order_id", "A-100", normalized)
+            .expect("更新日志 SQL 应该构造成功")
+            .expect("存在可更新字段时应该生成 SQL");
+
+        assert_eq!(
+            sql,
+            "UPDATE `orders` SET `status` = 'DONE' WHERE `order_id` = 'A-100';"
+        );
+    }
+
+    #[test]
+    fn build_update_preview_sql_returns_none_when_no_mutable_fields() {
+        let normalized = normalize_update_values(
+            build_values(&[("Id", json!("A-100")), ("order_id", json!("A-100"))]),
+            "order_id",
+        );
+        let sql = build_update_preview_sql("orders", "order_id", "A-100", normalized)
+            .expect("无可更新字段时也不应报错");
+
+        assert!(sql.is_none());
+    }
+
+    #[test]
+    fn preview_sql_uses_resolved_primary_key_name() {
+        let normalized = normalize_create_values(
+            build_values(&[("Id", json!("A-100")), ("status", json!("NEW"))]),
+            "order_id",
+        );
+        let insert_sql =
+            build_insert_preview_sql("orders", normalized).expect("新增日志 SQL 应该构造成功");
+        let delete_sql = build_delete_preview_sql("orders", "order_id", "A-100");
+
+        assert_eq!(
+            insert_sql,
+            "INSERT INTO `orders` (`order_id`, `status`) VALUES ('A-100', 'NEW');"
+        );
+        assert_eq!(
+            delete_sql,
+            "DELETE FROM `orders` WHERE `order_id` = 'A-100';"
+        );
+    }
 }

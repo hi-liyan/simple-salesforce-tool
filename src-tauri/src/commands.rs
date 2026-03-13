@@ -19,10 +19,13 @@ use crate::models::{
     CliPathStatus, CurrentUserContext, LlmSettings, LlmSettingsView, ObjectDdl, ObjectDescribe,
     QueryResult, RecordMutationPayload, RecordSavePayload, RecordUpdatePayload, SalesforceObject,
     SalesforceSource, SaveLlmSettingsPayload, SourceUpsertPayload, SystemLogPage,
-    TerminalCommandGroup, TerminalCommandGroupUpsertPayload, TerminalCommandItem, TerminalCommandReorderPayload,
-    TerminalCommandUpsertPayload,
+    TerminalCommandGroup, TerminalCommandGroupUpsertPayload, TerminalCommandItem,
+    TerminalCommandReorderPayload, TerminalCommandUpsertPayload,
 };
-use crate::providers::provider_for_source;
+use crate::providers::{
+    preview_create_record_sql, preview_delete_record_sql, preview_save_records_sql,
+    preview_update_record_sql, provider_for_source,
+};
 use crate::sf_cli;
 use crate::terminal::{self as terminal_runtime, TerminalSessionInfo, TerminalShellOption};
 
@@ -139,99 +142,14 @@ fn resolve_log_category(source: &SalesforceSource) -> &'static str {
     }
 }
 
-/// 转义 SQL 字符串字面量（用于日志展示，不参与实际执行）。
-fn escape_sql_literal(value: &str) -> String {
-    value.replace('\\', "\\\\").replace('\'', "\\'")
-}
-
-/// 转义 SOQL 字符串字面量（用于日志展示，不参与实际执行）。
-fn escape_soql_literal(value: &str) -> String {
-    value.replace('\\', "\\\\").replace('\'', "\\'")
-}
-
-/// 解析 MySQL 日志使用的主键字段名（优先读取 configJson.primaryKey）。
-fn resolve_mysql_primary_key_for_log(source: &SalesforceSource) -> String {
-    source
-        .config_json
-        .get("primaryKey")
-        .and_then(|value| value.as_str())
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "Id".to_string())
-}
-
-/// 渲染 MySQL 可读值文本，便于系统日志白盒追踪。
-fn format_mysql_value_literal(value: &Value) -> String {
-    match value {
-        Value::Null => "NULL".to_string(),
-        Value::Bool(item) => {
-            if *item {
-                "TRUE".to_string()
-            } else {
-                "FALSE".to_string()
-            }
-        }
-        Value::Number(item) => item.to_string(),
-        Value::String(item) => format!("'{}'", escape_sql_literal(item)),
-        // 复杂 JSON 统一序列化为字符串字面量，便于观察真实写入内容。
-        other => {
-            let encoded = serde_json::to_string(other).unwrap_or_else(|_| "null".to_string());
-            format!("'{}'", escape_sql_literal(&encoded))
-        }
-    }
-}
-
-/// 构造 MySQL INSERT 日志语句。
-fn build_mysql_insert_sql(object_name: &str, values: &HashMap<String, Value>) -> String {
-    if values.is_empty() {
-        return format!("INSERT INTO `{object_name}` () VALUES ();");
-    }
-    let mut entries: Vec<(&String, &Value)> = values.iter().collect();
-    entries.sort_by(|a, b| a.0.cmp(b.0));
-    let columns = entries
-        .iter()
-        .map(|(key, _)| format!("`{key}`"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let values_sql = entries
-        .iter()
-        .map(|(_, value)| format_mysql_value_literal(value))
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("INSERT INTO `{object_name}` ({columns}) VALUES ({values_sql});")
-}
-
-/// 构造 MySQL UPDATE 日志语句（主键列来自配置）。
-fn build_mysql_update_sql(
-    object_name: &str,
-    primary_key: &str,
-    record_id: &str,
-    values: &HashMap<String, Value>,
-) -> String {
-    let mut entries: Vec<(&String, &Value)> = values.iter().collect();
-    entries.sort_by(|a, b| a.0.cmp(b.0));
-    let set_clause = entries
-        .iter()
-        .map(|(key, value)| format!("`{key}` = {}", format_mysql_value_literal(value)))
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!(
-        "UPDATE `{object_name}` SET {set_clause} WHERE `{primary_key}` = '{}';",
-        escape_sql_literal(record_id)
-    )
-}
-
-/// 构造 MySQL DELETE 日志语句（主键列来自配置）。
-fn build_mysql_delete_sql(object_name: &str, primary_key: &str, record_id: &str) -> String {
-    format!(
-        "DELETE FROM `{object_name}` WHERE `{primary_key}` = '{}';",
-        escape_sql_literal(record_id)
-    )
+/// MySQL 原始 SQL 预览失败时的兜底文案，避免日志构造影响主流程。
+fn fallback_mysql_log_detail(error: &AppError) -> String {
+    format!("-- 原始 SQL 预览失败：{error}")
 }
 
 /// 构造 Salesforce 查询日志详情。
-fn build_salesforce_query_detail(soql: &str) -> String {
-    format!("raw_soql:\n{soql}")
+fn build_salesforce_query_detail(api_version: &str, soql: &str) -> String {
+    format!("api=GET /services/data/{api_version}/query\nsoql={soql}")
 }
 
 /// 构造 MySQL 查询日志详情。
@@ -239,96 +157,108 @@ fn build_mysql_query_detail(sql: &str) -> String {
     format!("raw_sql:\n{sql}")
 }
 
-/// 构造 Salesforce 新增日志详情（包含 API 和追踪 SOQL）。
-fn build_salesforce_create_detail(object_name: &str, values: &HashMap<String, Value>) -> String {
-    let mut fields = values.keys().cloned().collect::<Vec<_>>();
-    fields.sort();
-    let projection = if fields.is_empty() {
-        "Id".to_string()
-    } else {
-        format!("Id, {}", fields.join(", "))
-    };
-    let payload = serde_json::to_string(values).unwrap_or_else(|_| "{}".to_string());
-    format!(
-        "api=POST /sobjects/{object_name}\npayload={payload}\ntrace_soql=SELECT {projection} FROM {object_name} WHERE Id = '<new_record_id>' LIMIT 1"
-    )
+/// 构造 Salesforce 可选 trace_soql 附加信息，明确标记其仅用于辅助排查。
+fn build_salesforce_optional_trace_detail(trace_soql: Option<String>) -> Option<String> {
+    trace_soql.map(|item| {
+        format!("optional_trace_soql={item}\ntrace_soql_note=辅助排查语句，非实际执行请求")
+    })
 }
 
-/// 构造 Salesforce 更新日志详情（包含 API 和追踪 SOQL）。
+/// 构造 Salesforce 新增日志详情：仅记录真实执行的 API 请求，trace_soql 为可选辅助信息。
+fn build_salesforce_create_detail(
+    api_version: &str,
+    object_name: &str,
+    values: &HashMap<String, Value>,
+    trace_soql: Option<String>,
+) -> String {
+    let payload = serde_json::to_string(values).unwrap_or_else(|_| "{}".to_string());
+    let mut detail =
+        format!("api=POST /services/data/{api_version}/sobjects/{object_name}\npayload={payload}");
+    // 仅在显式需要白盒追踪时附加辅助语句，避免与真实执行请求混淆。
+    if let Some(trace_detail) = build_salesforce_optional_trace_detail(trace_soql) {
+        detail.push('\n');
+        detail.push_str(&trace_detail);
+    }
+    detail
+}
+
+/// 构造 Salesforce 更新日志详情：仅记录真实执行的 API 请求，trace_soql 为可选辅助信息。
 fn build_salesforce_update_detail(
+    api_version: &str,
     object_name: &str,
     record_id: &str,
     values: &HashMap<String, Value>,
+    trace_soql: Option<String>,
 ) -> String {
-    let mut fields = values.keys().cloned().collect::<Vec<_>>();
-    fields.sort();
-    let projection = if fields.is_empty() {
-        "Id".to_string()
-    } else {
-        format!("Id, {}", fields.join(", "))
-    };
     let payload = serde_json::to_string(values).unwrap_or_else(|_| "{}".to_string());
-    format!(
-        "api=PATCH /sobjects/{object_name}/{record_id}\npayload={payload}\ntrace_soql=SELECT {projection} FROM {object_name} WHERE Id = '{}' LIMIT 1",
-        escape_soql_literal(record_id)
-    )
+    let mut detail = format!(
+        "api=PATCH /services/data/{api_version}/sobjects/{object_name}/{record_id}\npayload={payload}"
+    );
+    // 仅在显式需要白盒追踪时附加辅助语句，避免与真实执行请求混淆。
+    if let Some(trace_detail) = build_salesforce_optional_trace_detail(trace_soql) {
+        detail.push('\n');
+        detail.push_str(&trace_detail);
+    }
+    detail
 }
 
-/// 构造 Salesforce 删除日志详情（包含 API 和追踪 SOQL）。
-fn build_salesforce_delete_detail(object_name: &str, record_id: &str) -> String {
-    format!(
-        "api=DELETE /sobjects/{object_name}/{record_id}\ntrace_soql=SELECT Id FROM {object_name} WHERE Id = '{}' LIMIT 1",
-        escape_soql_literal(record_id)
-    )
+/// 构造 Salesforce 删除日志详情：仅记录真实执行的 API 请求，trace_soql 为可选辅助信息。
+fn build_salesforce_delete_detail(
+    api_version: &str,
+    object_name: &str,
+    record_id: &str,
+    trace_soql: Option<String>,
+) -> String {
+    let mut detail =
+        format!("api=DELETE /services/data/{api_version}/sobjects/{object_name}/{record_id}");
+    // 仅在显式需要白盒追踪时附加辅助语句，避免与真实执行请求混淆。
+    if let Some(trace_detail) = build_salesforce_optional_trace_detail(trace_soql) {
+        detail.push('\n');
+        detail.push_str(&trace_detail);
+    }
+    detail
 }
 
-/// 构造 Salesforce 批量保存日志详情（逐条列出 API 与追踪 SOQL）。
+/// 构造 Salesforce 批量保存日志详情：记录真实执行的 Composite API 请求体。
 fn build_salesforce_save_detail(
+    api_version: &str,
     object_name: &str,
     creates: &[HashMap<String, Value>],
     updates: &[RecordUpdatePayload],
+    trace_soql: Option<String>,
 ) -> String {
-    let mut lines: Vec<String> = Vec::new();
-    // 新增记录逐条输出可追踪细节。
+    let mut composite_request: Vec<Value> = Vec::with_capacity(creates.len() + updates.len());
+    // 新增请求逐条映射为实际 Composite 子请求。
     for (index, item) in creates.iter().enumerate() {
-        lines.push(format!(
-            "[create#{index}] {}",
-            build_salesforce_create_detail(object_name, item)
-        ));
+        composite_request.push(serde_json::json!({
+            "method": "POST",
+            "url": format!("/services/data/{api_version}/sobjects/{object_name}"),
+            "referenceId": format!("create_{index}"),
+            "body": item,
+        }));
     }
-    // 更新记录逐条输出可追踪细节。
+    // 更新请求逐条映射为实际 Composite 子请求。
     for (index, item) in updates.iter().enumerate() {
-        lines.push(format!(
-            "[update#{index}] {}",
-            build_salesforce_update_detail(object_name, &item.record_id, &item.values)
-        ));
+        composite_request.push(serde_json::json!({
+            "method": "PATCH",
+            "url": format!("/services/data/{api_version}/sobjects/{object_name}/{}", item.record_id),
+            "referenceId": format!("update_{index}"),
+            "body": item.values,
+        }));
     }
-    lines.join("\n")
-}
-
-/// 构造 MySQL 批量保存日志详情（逐条列出原始 SQL）。
-fn build_mysql_save_detail(
-    object_name: &str,
-    primary_key: &str,
-    creates: &[HashMap<String, Value>],
-    updates: &[RecordUpdatePayload],
-) -> String {
-    let mut lines: Vec<String> = Vec::new();
-    // 新增语句逐条展开，便于定位本番误操作。
-    for (index, item) in creates.iter().enumerate() {
-        lines.push(format!(
-            "[create#{index}] {}",
-            build_mysql_insert_sql(object_name, item)
-        ));
+    let payload = serde_json::json!({
+        "allOrNone": true,
+        "compositeRequest": composite_request,
+    });
+    let payload_text = serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string());
+    let mut detail =
+        format!("api=POST /services/data/{api_version}/composite\npayload={payload_text}");
+    // 仅在显式需要白盒追踪时附加辅助语句，避免与真实执行请求混淆。
+    if let Some(trace_detail) = build_salesforce_optional_trace_detail(trace_soql) {
+        detail.push('\n');
+        detail.push_str(&trace_detail);
     }
-    // 更新语句逐条展开，便于定位本番误操作。
-    for (index, item) in updates.iter().enumerate() {
-        lines.push(format!(
-            "[update#{index}] {}",
-            build_mysql_update_sql(object_name, primary_key, &item.record_id, &item.values)
-        ));
-    }
-    lines.join("\n")
+    detail
 }
 
 /// 仅针对 CLI 数据源:发生 401 后通过 CLI 刷新 token,并回写本地数据源。
@@ -1873,7 +1803,7 @@ pub async fn query_records(
         provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
     let log_category = resolve_log_category(&source);
     let query_detail = if source.is_salesforce() {
-        build_salesforce_query_detail(&query_text)
+        build_salesforce_query_detail(&source.api_version, &query_text)
     } else {
         build_mysql_query_detail(&query_text)
     };
@@ -2024,9 +1954,12 @@ pub async fn create_record(
     let object_name = payload.object_name.clone();
     let values = payload.values.clone();
     let operation_detail = if source.is_salesforce() {
-        build_salesforce_create_detail(&object_name, &values)
+        build_salesforce_create_detail(&source.api_version, &object_name, &values, None)
     } else {
-        build_mysql_insert_sql(&object_name, &values)
+        match preview_create_record_sql(&source, &object_name, values.clone()).await {
+            Ok(detail) => detail,
+            Err(error) => fallback_mysql_log_detail(&error),
+        }
     };
     let create_result = match provider
         .create_record(&source, &object_name, values.clone())
@@ -2107,7 +2040,6 @@ pub async fn save_records(
     let provider =
         provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
     let log_category = resolve_log_category(&source);
-    let mysql_primary_key = resolve_mysql_primary_key_for_log(&source);
 
     let create_count = payload.creates.len();
     let update_count = payload.updates.len();
@@ -2115,9 +2047,14 @@ pub async fn save_records(
     let creates = payload.creates.clone();
     let updates = payload.updates.clone();
     let operation_detail = if source.is_salesforce() {
-        build_salesforce_save_detail(&object_name, &creates, &updates)
+        build_salesforce_save_detail(&source.api_version, &object_name, &creates, &updates, None)
     } else {
-        build_mysql_save_detail(&object_name, &mysql_primary_key, &creates, &updates)
+        match preview_save_records_sql(&source, &object_name, creates.clone(), updates.clone())
+            .await
+        {
+            Ok(detail) => detail,
+            Err(error) => fallback_mysql_log_detail(&error),
+        }
     };
     let save_result = match provider
         .save_records(&source, &object_name, creates.clone(), updates.clone())
@@ -2205,11 +2142,13 @@ pub async fn update_record(
     let provider =
         provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
     let log_category = resolve_log_category(&source);
-    let mysql_primary_key = resolve_mysql_primary_key_for_log(&source);
     let operation_detail = if source.is_salesforce() {
-        build_salesforce_update_detail(&object_name, &record_id, &values)
+        build_salesforce_update_detail(&source.api_version, &object_name, &record_id, &values, None)
     } else {
-        build_mysql_update_sql(&object_name, &mysql_primary_key, &record_id, &values)
+        match preview_update_record_sql(&source, &object_name, &record_id, values.clone()).await {
+            Ok(detail) => detail,
+            Err(error) => fallback_mysql_log_detail(&error),
+        }
     };
 
     let update_result = match provider
@@ -2289,11 +2228,13 @@ pub async fn delete_record(
     let provider =
         provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
     let log_category = resolve_log_category(&source);
-    let mysql_primary_key = resolve_mysql_primary_key_for_log(&source);
     let operation_detail = if source.is_salesforce() {
-        build_salesforce_delete_detail(&object_name, &record_id)
+        build_salesforce_delete_detail(&source.api_version, &object_name, &record_id, None)
     } else {
-        build_mysql_delete_sql(&object_name, &mysql_primary_key, &record_id)
+        match preview_delete_record_sql(&source, &object_name, &record_id).await {
+            Ok(detail) => detail,
+            Err(error) => fallback_mysql_log_detail(&error),
+        }
     };
 
     let delete_result = match provider
@@ -2531,12 +2472,8 @@ pub fn delete_terminal_command(
         .db
         .lock()
         .map_err(|error| format!("Database lock failed: {error}"))?;
-    db::delete_terminal_command(
-        &connection,
-        &normalized_group_id,
-        &normalized_command_id,
-    )
-    .map_err(AppError::to_string_error)
+    db::delete_terminal_command(&connection, &normalized_group_id, &normalized_command_id)
+        .map_err(AppError::to_string_error)
 }
 
 /// 删除终端命令组。
@@ -2747,6 +2684,66 @@ pub fn save_ui_state(state: State<'_, AppState>, key: String, value: String) -> 
         .lock()
         .map_err(|error| format!("Database lock failed: {error}"))?;
     db::write_app_setting(&connection, &key, &value).map_err(AppError::to_string_error)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        build_salesforce_create_detail, build_salesforce_query_detail, build_salesforce_save_detail,
+    };
+    use crate::models::RecordUpdatePayload;
+    use serde_json::json;
+    use std::collections::HashMap;
+
+    /// 构造测试用字段映射，减少重复样板代码。
+    fn build_values(entries: &[(&str, serde_json::Value)]) -> HashMap<String, serde_json::Value> {
+        entries
+            .iter()
+            .map(|(key, value)| ((*key).to_string(), value.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn salesforce_query_detail_logs_real_query_api_path() {
+        let detail = build_salesforce_query_detail("v61.0", "SELECT Id FROM Account LIMIT 1");
+
+        assert_eq!(
+            detail,
+            "api=GET /services/data/v61.0/query\nsoql=SELECT Id FROM Account LIMIT 1"
+        );
+    }
+
+    #[test]
+    fn salesforce_create_detail_omits_trace_soql_by_default() {
+        let detail = build_salesforce_create_detail(
+            "v61.0",
+            "Account",
+            &build_values(&[("Name", json!("Acme"))]),
+            None,
+        );
+
+        assert!(detail.contains("api=POST /services/data/v61.0/sobjects/Account"));
+        assert!(detail.contains("payload={\"Name\":\"Acme\"}"));
+        assert!(!detail.contains("trace_soql"));
+    }
+
+    #[test]
+    fn salesforce_save_detail_logs_real_composite_request_payload() {
+        let creates = vec![build_values(&[("Name", json!("Acme"))])];
+        let updates = vec![RecordUpdatePayload {
+            record_id: "001xx000003DHP0AAO".to_string(),
+            values: build_values(&[("Name", json!("Acme Updated"))]),
+        }];
+        let detail = build_salesforce_save_detail("v61.0", "Account", &creates, &updates, None);
+
+        assert!(detail.contains("api=POST /services/data/v61.0/composite"));
+        assert!(detail.contains("\"allOrNone\":true"));
+        assert!(detail.contains("\"referenceId\":\"create_0\""));
+        assert!(detail.contains("\"referenceId\":\"update_0\""));
+        assert!(detail.contains("/services/data/v61.0/sobjects/Account"));
+        assert!(detail.contains("/services/data/v61.0/sobjects/Account/001xx000003DHP0AAO"));
+        assert!(!detail.contains("trace_soql"));
+    }
 }
 
 /// 校验数据源写入参数,避免保存明显非法值。
