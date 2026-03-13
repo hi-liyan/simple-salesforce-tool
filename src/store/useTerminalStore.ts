@@ -24,26 +24,12 @@ export type TerminalTab = {
   outputs: TerminalOutputLine[];
 };
 
-// 每个数据源下的终端工作区快照（仅保存终端 Tab，不保存命令库）。
-type PersistedSourceTerminalState = {
-  // 当前数据源的终端 Tabs。
-  tabs: TerminalTab[];
-  // 当前激活终端 Tab。
-  activeTabId: string;
-};
-
 // 终端状态 Store。
 type TerminalState = {
-  // 当前终端状态所属数据源 ID。
-  sourceId: string;
-  // 按数据源分桶存储终端 Tab 状态。
-  sourceStateBySourceId: Record<string, PersistedSourceTerminalState>;
-  // 当前可见终端 Tabs。
+  // 当前终端 Tabs：与 QueryPanel 数据源彻底解耦，全局只维护一份运行态。
   tabs: TerminalTab[];
   // 当前激活终端 Tab ID。
   activeTabId: string;
-  // 切换数据源并恢复终端 Tab 状态。
-  switchSource: (sourceId: string) => void;
   // 新建终端 Tab。
   createTerminalTab: (seedCommand?: string, seedTitle?: string) => string;
   // 激活终端 Tab。
@@ -89,59 +75,10 @@ function createDefaultTerminalTab(index = 1): TerminalTab {
   };
 }
 
-// 将当前 source 运行态写回快照。
-function upsertSourceState(
-  sourceStateBySourceId: Record<string, PersistedSourceTerminalState>,
-  sourceId: string,
-  tabs: TerminalTab[],
-  activeTabId: string
-): Record<string, PersistedSourceTerminalState> {
-  if (!sourceId) return sourceStateBySourceId;
-  return {
-    ...sourceStateBySourceId,
-    [sourceId]: {
-      tabs,
-      activeTabId
-    }
-  };
-}
-
-// 恢复指定 source 的终端 Tab 状态。
-function restoreSourceState(
-  sourceStateBySourceId: Record<string, PersistedSourceTerminalState>,
-  sourceId: string
-): { tabs: TerminalTab[]; activeTabId: string } {
-  if (!sourceId) return { tabs: [], activeTabId: "" };
-
-  const sourceState = sourceStateBySourceId[sourceId];
-  if (!sourceState || !Array.isArray(sourceState.tabs) || sourceState.tabs.length === 0) return { tabs: [], activeTabId: "" };
-
-  const activeExists = sourceState.tabs.some((tab) => tab.id === sourceState.activeTabId);
-  return {
-    tabs: sourceState.tabs,
-    activeTabId: activeExists ? sourceState.activeTabId : sourceState.tabs[0]?.id || ""
-  };
-}
-
-// 终端 Store：仅维护进程运行期内的终端 Tab 状态（不持久化到 SQLite）。
+// 终端 Store：仅维护进程运行期内的全局终端 Tab 状态（不持久化到 SQLite）。
 export const useTerminalStore = create<TerminalState>()((set, get) => ({
-  sourceId: "",
-  sourceStateBySourceId: {},
   tabs: [],
   activeTabId: "",
-
-  switchSource: (nextSourceId) =>
-    set((state) => {
-      if (state.sourceId === nextSourceId) return state;
-      const nextMap = upsertSourceState(state.sourceStateBySourceId, state.sourceId, state.tabs, state.activeTabId);
-      const restored = restoreSourceState(nextMap, nextSourceId);
-      return {
-        sourceId: nextSourceId,
-        sourceStateBySourceId: nextMap,
-        tabs: restored.tabs,
-        activeTabId: restored.activeTabId
-      };
-    }),
 
   createTerminalTab: (seedCommand, seedTitle) => {
     const { tabs } = get();
@@ -156,8 +93,7 @@ export const useTerminalStore = create<TerminalState>()((set, get) => ({
       const nextTabs = [...state.tabs, finalTab];
       return {
         tabs: nextTabs,
-        activeTabId: finalTab.id,
-        sourceStateBySourceId: upsertSourceState(state.sourceStateBySourceId, state.sourceId, nextTabs, finalTab.id)
+        activeTabId: finalTab.id
       };
     });
 
@@ -165,9 +101,8 @@ export const useTerminalStore = create<TerminalState>()((set, get) => ({
   },
 
   setActiveTabId: (tabId) => {
-    set((state) => ({
-      activeTabId: tabId,
-      sourceStateBySourceId: upsertSourceState(state.sourceStateBySourceId, state.sourceId, state.tabs, tabId)
+    set(() => ({
+      activeTabId: tabId
     }));
   },
 
@@ -186,8 +121,7 @@ export const useTerminalStore = create<TerminalState>()((set, get) => ({
 
       return {
         tabs: nextTabs,
-        activeTabId: nextActiveId,
-        sourceStateBySourceId: upsertSourceState(state.sourceStateBySourceId, state.sourceId, nextTabs, nextActiveId)
+        activeTabId: nextActiveId
       };
     });
   },
@@ -202,8 +136,7 @@ export const useTerminalStore = create<TerminalState>()((set, get) => ({
         };
       });
       return {
-        tabs: nextTabs,
-        sourceStateBySourceId: upsertSourceState(state.sourceStateBySourceId, state.sourceId, nextTabs, state.activeTabId)
+        tabs: nextTabs
       };
     });
   },
@@ -225,8 +158,7 @@ export const useTerminalStore = create<TerminalState>()((set, get) => ({
         };
       });
       return {
-        tabs: nextTabs,
-        sourceStateBySourceId: upsertSourceState(state.sourceStateBySourceId, state.sourceId, nextTabs, state.activeTabId)
+        tabs: nextTabs
       };
     });
   },
@@ -248,8 +180,7 @@ export const useTerminalStore = create<TerminalState>()((set, get) => ({
       });
 
       return {
-        tabs: nextTabs,
-        sourceStateBySourceId: upsertSourceState(state.sourceStateBySourceId, state.sourceId, nextTabs, activeId)
+        tabs: nextTabs
       };
     });
   },
