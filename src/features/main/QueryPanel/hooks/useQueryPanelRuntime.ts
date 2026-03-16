@@ -622,16 +622,30 @@ export function useQueryPanelRuntime({
         );
       }
 
-      if (creates.length > 0 || updates.length > 0) {
-        await api.saveRecords({
+      if (isMysqlSource) {
+        // MySQL 下统一走单事务命令，确保新增/更新/删除原子提交。
+        await api.saveRecordsWithDeletes({
           sourceId: selectedSourceId,
           objectName: activeTab.objectName,
           creates,
-          updates
+          updates,
+          deletes
         });
-      }
-      if (deletes.length > 0) {
-        await Promise.all(deletes.map((recordId) => api.deleteRecord(selectedSourceId, activeTab.objectName, recordId)));
+      } else {
+        // Salesforce 仍使用现有拆分逻辑：新增/更新批量提交，删除逐条提交。
+        if (creates.length > 0 || updates.length > 0) {
+          await api.saveRecords({
+            sourceId: selectedSourceId,
+            objectName: activeTab.objectName,
+            creates,
+            updates
+          });
+        }
+        if (deletes.length > 0) {
+          await Promise.all(
+            deletes.map((recordId) => api.deleteRecord(selectedSourceId, activeTab.objectName, recordId))
+          );
+        }
       }
       appendTabLog(activeTab.objectName, {
         action: "UPSERT",

@@ -82,6 +82,7 @@ fn main() {
             commands::get_current_user_context,
             commands::create_record,
             commands::save_records,
+            commands::save_records_with_deletes,
             commands::update_record,
             commands::delete_record,
             commands::get_llm_settings,

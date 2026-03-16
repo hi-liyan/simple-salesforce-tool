@@ -110,6 +110,15 @@ export type RecordSavePayload = {
   updates: RecordUpdatePayload[];
 };
 
+// 记录批量保存负载：同时包含新增、更新与删除（同事务提交）。
+export type RecordSaveWithDeletePayload = {
+  sourceId: string;
+  objectName: string;
+  creates: Record<string, unknown>[];
+  updates: RecordUpdatePayload[];
+  deletes: string[];
+};
+
 // 页面提示消息。
 export type Notice = {
   type: "error" | "success";

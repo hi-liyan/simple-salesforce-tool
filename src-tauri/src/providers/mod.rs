@@ -14,7 +14,7 @@ use crate::models::{
 use mysql_provider::MySqlProvider;
 pub use mysql_provider::{
     preview_create_record_sql, preview_delete_record_sql, preview_save_records_sql,
-    preview_update_record_sql,
+    preview_save_records_with_deletes_sql, preview_update_record_sql,
 };
 use salesforce_provider::SalesforceProvider;
 
@@ -157,6 +157,27 @@ impl DataProvider<'_> {
             DataProvider::MySql(provider) => {
                 provider
                     .save_records(source, object_name, creates, updates)
+                    .await
+            }
+        }
+    }
+
+    /// 批量保存记录（新增+更新+删除），仅 MySQL 支持单事务。
+    pub async fn save_records_with_deletes(
+        &self,
+        source: &SalesforceSource,
+        object_name: &str,
+        creates: Vec<HashMap<String, Value>>,
+        updates: Vec<RecordUpdatePayload>,
+        deletes: Vec<String>,
+    ) -> Result<(), AppError> {
+        match self {
+            DataProvider::Salesforce(_) => Err(AppError::Biz(
+                "Salesforce 暂不支持单事务批量提交（含删除）。".to_string(),
+            )),
+            DataProvider::MySql(provider) => {
+                provider
+                    .save_records_with_deletes(source, object_name, creates, updates, deletes)
                     .await
             }
         }

@@ -14,6 +14,7 @@ import {
   QueryResult,
   RecordMutationPayload,
   RecordSavePayload,
+  RecordSaveWithDeletePayload,
   SalesforceObject,
   SalesforceSource,
   SourceUpsertPayload,
@@ -90,6 +91,9 @@ export const api = {
     invokeApi<CurrentUserContext>("get_current_user_context", { sourceId }),
   createRecord: (payload: RecordMutationPayload) => invokeApi<string>("create_record", { payload }),
   saveRecords: (payload: RecordSavePayload) => invokeApi<void>("save_records", { payload }),
+  // MySQL 单事务提交新增/更新/删除。
+  saveRecordsWithDeletes: (payload: RecordSaveWithDeletePayload) =>
+    invokeApi<void>("save_records_with_deletes", { payload }),
   updateRecord: (sourceId: string, objectName: string, recordId: string, values: Record<string, unknown>) =>
     invokeApi<void>("update_record", { sourceId, objectName, recordId, values }),
   deleteRecord: (sourceId: string, objectName: string, recordId: string) =>
