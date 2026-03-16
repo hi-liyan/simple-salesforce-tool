@@ -192,6 +192,21 @@ pub struct RecordSavePayload {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct RecordSaveWithDeletePayload {
+    /// 数据源 ID。
+    pub source_id: String,
+    /// 目标对象名称。
+    pub object_name: String,
+    /// 待新增记录列表。
+    pub creates: Vec<HashMap<String, Value>>,
+    /// 待更新记录列表。
+    pub updates: Vec<RecordUpdatePayload>,
+    /// 待删除记录 Id 列表。
+    pub deletes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TerminalCommandItem {
     /// 命令主键。
     pub id: String,
