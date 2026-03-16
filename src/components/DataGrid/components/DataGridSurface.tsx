@@ -12,6 +12,23 @@ import { buildDisplayMetadataFromRaw } from "../../../utils/fieldMetadata";
 const DATA_GRID_HEADER_HEIGHT = 42;
 // DataGrid 数据行高度：与 DataEditor 的 rowHeight 配置保持一致。
 const DATA_GRID_ROW_HEIGHT = 30;
+// DataGrid 横向滚动条预留高度：在需要时才保留，避免无滚动条时留白。
+const DEFAULT_SCROLLBAR_GUTTER = 14;
+
+// 计算滚动条尺寸：用于动态预留滚动条高度（Windows/macOS/自定义滚动条尺寸不同）。
+function getScrollbarSize(): number {
+  // 通过创建临时元素测量，避免依赖固定值。
+  const measure = document.createElement("div");
+  measure.style.width = "100px";
+  measure.style.height = "100px";
+  measure.style.overflow = "scroll";
+  measure.style.position = "absolute";
+  measure.style.top = "-9999px";
+  document.body.appendChild(measure);
+  const size = measure.offsetHeight - measure.clientHeight;
+  document.body.removeChild(measure);
+  return size;
+}
 
 // 可空性判定：兼容 Salesforce 的 nillable 与 MySQL 常见 nullable/isNullable 元数据键。
 function isNullableField(metadata: Record<string, unknown>): boolean {
@@ -133,6 +150,8 @@ export function DataGridSurface({
 }: DataGridSurfaceProps) {
   // 受控选区状态：用于实现“点击 # 选整行”。
   const [gridSelection, setGridSelection] = React.useState<GridSelection | undefined>(undefined);
+  // 横向滚动条预留高度：仅在需要显示横向滚动条时才保留。
+  const [scrollbarGutter, setScrollbarGutter] = React.useState(0);
   // 计算当前总列宽：用于绘制右侧空白区域遮罩（列较少时隐藏空白网格线）。
   const totalColumnsWidth = React.useMemo(
     () => columns.reduce((sum, column) => {
@@ -141,6 +160,34 @@ export function DataGridSurface({
     }, 0),
     [columns]
   );
+
+  // 动态判断是否需要横向滚动条，避免无滚动条时出现底部空白区网格线。
+  React.useLayoutEffect(() => {
+    const container = gridBodyRef.current;
+    if (!container) return;
+
+    const updateGutter = () => {
+      const containerWidth = container.clientWidth;
+      const hasHorizontalOverflow = totalColumnsWidth > containerWidth;
+      if (!hasHorizontalOverflow) {
+        setScrollbarGutter(0);
+        return;
+      }
+      const measuredSize = getScrollbarSize();
+      setScrollbarGutter(Math.max(measuredSize, DEFAULT_SCROLLBAR_GUTTER));
+    };
+
+    updateGutter(); // 初始化时先测一次。
+
+    const observer = new ResizeObserver(() => {
+      updateGutter(); // 容器尺寸变化时重新计算。
+    });
+    observer.observe(container);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [gridBodyRef, totalColumnsWidth]);
 
   // 统一处理选区变更：命中 # 序号列时，将默认单元格选区改写为整行选区。
   const handleGridSelectionChange = React.useCallback(
@@ -384,15 +431,22 @@ export function DataGridSurface({
         {/* 空白区遮罩：仅保留“有数据区域”的网格线，隐藏数据末行以下的网格背景。 */}
         {records.length > 0 && (
           <div
-            className="pointer-events-none absolute inset-x-0 bottom-0 z-[1] border-t border-base-300 bg-base-100"
-            style={{ top: DATA_GRID_HEADER_HEIGHT + records.length * DATA_GRID_ROW_HEIGHT }}
+            className="pointer-events-none absolute inset-x-0 z-[1] border-t border-base-300 bg-base-100"
+            style={{
+              top: DATA_GRID_HEADER_HEIGHT + records.length * DATA_GRID_ROW_HEIGHT,
+              bottom: scrollbarGutter
+            }}
           />
         )}
         {/* 右侧空白遮罩：当列总宽不足容器宽度时，隐藏右侧空白网格线。 */}
         {records.length > 0 && (
           <div
-            className="pointer-events-none absolute right-0 bottom-0 z-[1] bg-base-100"
-            style={{ top: DATA_GRID_HEADER_HEIGHT, left: totalColumnsWidth }}
+            className="pointer-events-none absolute right-0 z-[1] bg-base-100"
+            style={{
+              top: DATA_GRID_HEADER_HEIGHT,
+              left: totalColumnsWidth,
+              bottom: scrollbarGutter
+            }}
           />
         )}
         {/* 表头右侧空白遮罩：复用同样的覆盖方式，隐藏无数据区域的表头背景与分隔线。 */}
