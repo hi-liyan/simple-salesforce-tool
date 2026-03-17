@@ -253,16 +253,22 @@ export function useQueryPanelActions({
           };
         });
       },
-      onQuery: () => {
+      onQuery: (overrides) => {
         if (!activeTab) return;
+        // 查询触发支持覆盖草稿参数：用于 UI 在防抖回写之前直接执行最新输入。
+        const whereClauseOverride = overrides?.whereClause;
+        const limitOverride = overrides?.limit;
+        const sortClauseOverride = overrides?.sortClause;
+        const sortFieldOverride = overrides?.sortField;
+        const sortDirectionOverride = overrides?.sortDirection;
         void queryTabData(
           activeTab.objectName,
           activeTab.describe || undefined,
-          activeTab.whereClause,
-          activeTab.sortField,
-          activeTab.limit,
-          activeTab.sortDirection,
-          activeTab.sortClause
+          whereClauseOverride ?? activeTab.whereClause,
+          sortFieldOverride ?? activeTab.sortField,
+          limitOverride ?? activeTab.limit,
+          sortDirectionOverride ?? activeTab.sortDirection,
+          sortClauseOverride ?? activeTab.sortClause
         );
       },
       onToggleRecord: (recordId, checked) => {

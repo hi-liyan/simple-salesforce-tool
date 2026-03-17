@@ -1,6 +1,20 @@
 import { Notice, ObjectDdl, SalesforceObject, SalesforceSource, TabState } from "../../../types";
 import { MainViewMode } from "../../../store/useAppStore";
 
+// 查询参数覆盖：用于在 UI 草稿态下直接触发查询，避免依赖“已回写到 store 的值”。
+export type QueryOverrides = {
+  // WHERE 子句（不含 WHERE 关键字）。
+  whereClause?: string;
+  // LIMIT 条数。
+  limit?: number;
+  // 排序字段（仅 Salesforce 且未提供 sortClause 时生效）。
+  sortField?: string;
+  // 排序方向（仅 Salesforce 且未提供 sortClause 时生效）。
+  sortDirection?: "ASC" | "DESC";
+  // 排序表达式（不含 ORDER BY 关键字），支持多字段/函数。
+  sortClause?: string;
+};
+
 // 统一工作区 Tab 项：用于在 Query 视图中同时承载 data 与 console。
 export type QueryWorkspaceTabItem = {
   // 唯一 ID（例如 data:Account / console:soql-tab-xxx）。
@@ -126,7 +140,7 @@ export type QueryPanelActions = {
   // 修改 MySQL 排序表达式。
   onSortClauseChange: (value: string) => void;
   // 执行查询。
-  onQuery: () => void;
+  onQuery: (overrides?: QueryOverrides) => void;
   // 勾选单条记录。
   onToggleRecord: (recordId: string, checked: boolean) => void;
   // 勾选全部记录。
