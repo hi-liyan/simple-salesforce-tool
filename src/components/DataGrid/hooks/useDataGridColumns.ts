@@ -1,11 +1,14 @@
 import { useMemo, useState } from "react";
 import { GridColumn } from "@glideapps/glide-data-grid";
+import { buildHeaderDisplayLines } from "../renderers/drawHeader";
 
 type UseDataGridColumnsParams = {
   // 当前可见字段列表。
   visibleColumns: string[];
   // 是否展示首列选择列。
   showSelectionColumn: boolean;
+  // 是否展示表头元数据 icon：影响表头右侧预留空间，从而影响最小列宽计算。
+  showHeaderMetadata: boolean;
   // 当前记录列表：用于推导可选记录 Id。
   records: Record<string, unknown>[];
   // 当前已选记录 Id。
@@ -20,6 +23,7 @@ type UseDataGridColumnsParams = {
 export function useDataGridColumns({
   visibleColumns,
   showSelectionColumn,
+  showHeaderMetadata,
   records,
   selectedRecordIds,
   fieldMetadataMap,
@@ -38,20 +42,70 @@ export function useDataGridColumns({
     [visibleColumns]
   );
 
+  // 表头最小列宽：使用 Canvas 测量表头文案宽度，保证表头不会因列过窄被“缩放压扁”。
+  const headerMinWidths = useMemo(() => {
+    const widths: Record<string, number> = {
+      // 特殊列：固定最小宽度（与 DataEditor minColumnWidth 保持一致的下限）。
+      __select: 44,
+      __index: 56
+    };
+
+    // 在浏览器环境下使用 Canvas 精确测量；非浏览器环境（如测试运行时）回退到字符宽度估算。
+    const ctx =
+      typeof document !== "undefined"
+        ? document.createElement("canvas").getContext("2d")
+        : null;
+
+    const measureTextWidth = (text: string, font: string): number => {
+      if (ctx) {
+        ctx.font = font; // 关键：与 drawHeader 中使用的字体保持一致，确保测量可信。
+        return ctx.measureText(text).width;
+      }
+      // 估算：按字符数 * 平均宽度（ASCII/中文混排时取一个保守值）。
+      return Array.from(text).length * 8;
+    };
+
+    for (const column of displayColumns) {
+      const metadata = fieldMetadataMap[column] || {};
+      const lines = buildHeaderDisplayLines(column, metadata);
+      const primaryWidth = measureTextWidth(lines.primary, "600 12px sans-serif");
+      const secondaryWidth = lines.secondary
+        ? measureTextWidth(lines.secondary, "500 11px sans-serif")
+        : 0;
+
+      // 左侧 8px + 文案最大宽度 + 右侧预留（含 info icon 空间）= 列的最小宽度。
+      const rightPadding = showHeaderMetadata ? 24 : 8;
+      const minWidth = Math.ceil(8 + Math.max(primaryWidth, secondaryWidth) + rightPadding);
+
+      // 约束边界：与 DataEditor maxColumnWidth 对齐，避免极端长字段名导致不可控布局。
+      widths[column] = Math.min(900, Math.max(44, minWidth));
+    }
+
+    return widths;
+  }, [displayColumns, fieldMetadataMap, showHeaderMetadata]);
+
   const columns = useMemo<GridColumn[]>(() => {
     const dataColumns: GridColumn[] = displayColumns.map((column) => ({
       id: column,
       // 数据列标题由 drawHeader 自定义双行绘制，这里留空避免默认文案覆盖。
       title: "",
-      width: columnWidths[column] ?? (column === "Id" ? 280 : 180)
+      width: Math.max(headerMinWidths[column] ?? 44, columnWidths[column] ?? (column === "Id" ? 280 : 180))
     }));
 
     return [
-      ...(showSelectionColumn ? [{ id: "__select", title: "", width: columnWidths.__select ?? 44 }] : []),
-      { id: "__index", title: "#", width: columnWidths.__index ?? 56 },
+      ...(showSelectionColumn
+        ? [
+            {
+              id: "__select",
+              title: "",
+              width: Math.max(headerMinWidths.__select ?? 44, columnWidths.__select ?? 44)
+            }
+          ]
+        : []),
+      { id: "__index", title: "#", width: Math.max(headerMinWidths.__index ?? 56, columnWidths.__index ?? 56) },
       ...dataColumns
     ];
-  }, [displayColumns, columnWidths, showSelectionColumn]);
+  }, [displayColumns, columnWidths, showSelectionColumn, headerMinWidths]);
 
   // MySQL 主键列：用于缺失 Id 时的勾选回退键。
   const mysqlPrimaryKeyField = useMemo(() => {
@@ -87,6 +141,7 @@ export function useDataGridColumns({
     columns,
     columnWidths,
     setColumnWidths,
+    headerMinWidths,
     allChecked,
     hasAnyChecked,
     selectableIds

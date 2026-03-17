@@ -101,12 +101,14 @@ export function DataGrid({
   const {
     columns,
     setColumnWidths,
+    headerMinWidths,
     allChecked,
     hasAnyChecked,
     selectableIds
   } = useDataGridColumns({
     visibleColumns,
     showSelectionColumn,
+    showHeaderMetadata,
     records,
     selectedRecordIds,
     fieldMetadataMap: effectiveFieldMetadataMap,
@@ -285,6 +287,7 @@ export function DataGrid({
       setRowContextMenu={setRowContextMenu}
       setHoveredHeaderMeta={setHoveredHeaderMeta}
       setColumnWidths={setColumnWidths}
+      headerMinWidths={headerMinWidths}
       activeEditorCellRef={activeEditorCellRef}
       setActiveEditorCell={setActiveEditorCell}
       canOpenRecordPage={Boolean(sourceId && objectName && rowContextMenu?.recordId)}

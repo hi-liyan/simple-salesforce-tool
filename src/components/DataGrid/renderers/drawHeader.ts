@@ -135,7 +135,6 @@ function drawFieldHeaderText(
   const hasSecondLine = Boolean(headerLines.secondary);
   const textLeft = rect.x + 8;
   const textRightPadding = showHeaderMetadata ? 24 : 8; // 预留 info icon 空间，避免文本重叠。
-  const maxWidth = Math.max(16, rect.width - textRightPadding - 8);
 
   ctx.save();
   ctx.beginPath();
@@ -147,17 +146,18 @@ function drawFieldHeaderText(
     ctx.textBaseline = "middle";
     ctx.fillStyle = "#2f3a4a";
     ctx.font = "600 12px sans-serif";
-    ctx.fillText(headerLines.primary, textLeft, rect.y + 14, maxWidth);
+    // 不传 maxWidth：避免 Canvas 为适配窄列而“横向缩放文本”，导致表头出现压缩效果。
+    ctx.fillText(headerLines.primary, textLeft, rect.y + 14);
 
     ctx.fillStyle = "#8b97a6";
     ctx.font = "500 11px sans-serif";
-    ctx.fillText(headerLines.secondary || "", textLeft, rect.y + 30, maxWidth);
+    ctx.fillText(headerLines.secondary || "", textLeft, rect.y + 30);
   } else {
     ctx.textAlign = "left";
     ctx.textBaseline = "middle";
     ctx.fillStyle = "#2f3a4a";
     ctx.font = "600 12px sans-serif";
-    ctx.fillText(headerLines.primary, textLeft, rect.y + rect.height / 2, maxWidth);
+    ctx.fillText(headerLines.primary, textLeft, rect.y + rect.height / 2);
   }
 
   ctx.restore();
