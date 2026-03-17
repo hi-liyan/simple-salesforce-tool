@@ -17,14 +17,15 @@ use crate::error::AppError;
 use crate::models::{
     AiCapabilities, AiChatTurnV2Request, AiChatTurnV2Response, CliPathProbe, CliPathSettings,
     CliPathStatus, CurrentUserContext, LlmSettings, LlmSettingsView, ObjectDdl, ObjectDescribe,
-    QueryResult, RecordMutationPayload, RecordSavePayload, RecordUpdatePayload, SalesforceObject,
-    SalesforceSource, SaveLlmSettingsPayload, SourceUpsertPayload, SystemLogPage,
+    QueryResult, RecordMutationPayload, RecordSavePayload, RecordSaveWithDeletePayload,
+    RecordUpdatePayload, SalesforceObject, SalesforceSource, SaveLlmSettingsPayload,
+    SourceUpsertPayload, SystemLogPage,
     TerminalCommandGroup, TerminalCommandGroupUpsertPayload, TerminalCommandItem,
     TerminalCommandReorderPayload, TerminalCommandUpsertPayload,
 };
 use crate::providers::{
     preview_create_record_sql, preview_delete_record_sql, preview_save_records_sql,
-    preview_update_record_sql, provider_for_source,
+    preview_save_records_with_deletes_sql, preview_update_record_sql, provider_for_source,
 };
 use crate::sf_cli;
 use crate::terminal::{self as terminal_runtime, TerminalSessionInfo, TerminalShellOption};
@@ -2111,6 +2112,117 @@ pub async fn save_records(
                 "ERROR",
                 log_category,
                 "save_records",
+                Some(&payload.source_id),
+                Some(&payload.object_name),
+                false,
+                "批量保存失败。",
+                Some(&detail),
+            );
+            Err(message)
+        }
+    }
+}
+
+/// 批量保存记录（新增+更新+删除，单事务）。
+#[tauri::command]
+pub async fn save_records_with_deletes(
+    _app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    payload: RecordSaveWithDeletePayload,
+) -> Result<(), String> {
+    if payload.creates.is_empty() && payload.updates.is_empty() && payload.deletes.is_empty() {
+        return Ok(());
+    }
+
+    let source = {
+        let connection = state
+            .db
+            .lock()
+            .map_err(|error| format!("Database lock failed: {error}"))?;
+        db::get_source(&connection, &payload.source_id).map_err(AppError::to_string_error)?
+    };
+    let provider =
+        provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
+    let log_category = resolve_log_category(&source);
+
+    if source.is_salesforce() {
+        // Salesforce 暂不支持单事务批量提交，直接返回错误并落日志。
+        let message = "Salesforce 暂不支持单事务批量提交（含删除）。".to_string();
+        write_system_log(
+            &state,
+            "ERROR",
+            log_category,
+            "save_records_with_deletes",
+            Some(&payload.source_id),
+            Some(&payload.object_name),
+            false,
+            "批量保存失败。",
+            Some(&message),
+        );
+        return Err(message);
+    }
+
+    let create_count = payload.creates.len();
+    let update_count = payload.updates.len();
+    let delete_count = payload.deletes.len();
+    let object_name = payload.object_name.clone();
+    let creates = payload.creates.clone();
+    let updates = payload.updates.clone();
+    let deletes = payload.deletes.clone();
+    let operation_detail = match preview_save_records_with_deletes_sql(
+        &source,
+        &object_name,
+        creates.clone(),
+        updates.clone(),
+        deletes.clone(),
+    )
+    .await
+    {
+        Ok(detail) => detail,
+        Err(error) => fallback_mysql_log_detail(&error),
+    };
+
+    // MySQL 下执行单事务提交，失败时直接返回错误信息。
+    let save_result = match provider
+        .save_records_with_deletes(
+            &source,
+            &object_name,
+            creates.clone(),
+            updates.clone(),
+            deletes.clone(),
+        )
+        .await
+    {
+        Ok(()) => Ok(()),
+        Err(error) => Err(error),
+    };
+
+    match save_result {
+        Ok(()) => {
+            write_system_log(
+                &state,
+                "INFO",
+                log_category,
+                "save_records_with_deletes",
+                Some(&payload.source_id),
+                Some(&payload.object_name),
+                true,
+                &format!(
+                    "批量保存成功,新增 {} 条,更新 {} 条,删除 {} 条。",
+                    create_count, update_count, delete_count
+                ),
+                Some(&operation_detail),
+            );
+            Ok(())
+        }
+        Err(error) => {
+            let message = AppError::to_string_error(error);
+            let detail = format!("{operation_detail}\nerror={message}");
+            write_system_log(
+                &state,
+                "ERROR",
+                log_category,
+                "save_records_with_deletes",
                 Some(&payload.source_id),
                 Some(&payload.object_name),
                 false,

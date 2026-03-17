@@ -103,6 +103,48 @@ pub async fn preview_save_records_sql(
     Ok(lines.join("\n"))
 }
 
+/// 构建 MySQL 批量保存+删除日志 SQL：逐条复用真实执行前的数据归一化逻辑。
+pub async fn preview_save_records_with_deletes_sql(
+    source: &SalesforceSource,
+    object_name: &str,
+    creates: Vec<HashMap<String, Value>>,
+    updates: Vec<RecordUpdatePayload>,
+    deletes: Vec<String>,
+) -> Result<String, AppError> {
+    let (safe_table, primary_key) = resolve_table_and_primary_key(source, object_name).await?;
+    let mut lines: Vec<String> = Vec::new();
+
+    // 新增记录逐条展开，保持与真实执行顺序一致。
+    for (index, item) in creates.into_iter().enumerate() {
+        let normalized_values = normalize_create_values(item, &primary_key);
+        let sql = build_insert_preview_sql(&safe_table, normalized_values)?;
+        lines.push(format!("[create#{index}] {sql}"));
+    }
+
+    // 更新记录逐条展开；没有可更新字段时显式标记为未执行 SQL。
+    for (index, item) in updates.into_iter().enumerate() {
+        let normalized_values = normalize_update_values(item.values, &primary_key);
+        if let Some(sql) = build_update_preview_sql(
+            &safe_table,
+            &primary_key,
+            &item.record_id,
+            normalized_values,
+        )? {
+            lines.push(format!("[update#{index}] {sql}"));
+        } else {
+            lines.push(format!("[update#{index}] -- SQL 未执行：没有可更新字段。"));
+        }
+    }
+
+    // 删除记录逐条展开，便于定位回滚前的操作明细。
+    for (index, record_id) in deletes.into_iter().enumerate() {
+        let sql = build_delete_preview_sql(&safe_table, &primary_key, &record_id);
+        lines.push(format!("[delete#{index}] {sql}"));
+    }
+
+    Ok(lines.join("\n"))
+}
+
 /// 构建 MySQL 更新日志 SQL：与真实执行共用主键解析和字段归一化逻辑。
 pub async fn preview_update_record_sql(
     source: &SalesforceSource,
@@ -404,6 +446,59 @@ impl MySqlProvider {
                 values,
             )
             .await?;
+        }
+
+        transaction
+            .commit()
+            .await
+            .map_err(|error| AppError::Db(format!("提交 MySQL 事务失败: {error}")))?;
+        Ok(())
+    }
+
+    /// 批量保存记录（新增+更新+删除），全部成功后提交事务。
+    pub async fn save_records_with_deletes(
+        &self,
+        source: &SalesforceSource,
+        object_name: &str,
+        creates: Vec<HashMap<String, Value>>,
+        updates: Vec<RecordUpdatePayload>,
+        deletes: Vec<String>,
+    ) -> Result<(), AppError> {
+        let safe_table = ensure_safe_identifier(object_name, "表名")?;
+        let config = MySqlSourceConfig::from_source(source)?;
+        let pool = build_mysql_pool(&config).await?;
+        let primary_key = resolve_primary_key_column(&pool, &config, &safe_table).await?;
+        let mut transaction = pool
+            .begin()
+            .await
+            .map_err(|error| AppError::Db(format!("开启 MySQL 事务失败: {error}")))?;
+
+        // 新增记录必须全部成功才继续。
+        for create_item in creates {
+            let create_item = normalize_create_values(create_item, &primary_key);
+            execute_insert(&mut *transaction, &safe_table, create_item).await?;
+        }
+
+        // 更新记录逐条提交，任何失败都会触发回滚。
+        for update_item in updates {
+            let values = normalize_update_values(update_item.values, &primary_key);
+            if values.is_empty() {
+                // 空更新直接跳过，避免写入无意义 SQL。
+                continue;
+            }
+            execute_update(
+                &mut *transaction,
+                &safe_table,
+                &primary_key,
+                &update_item.record_id,
+                values,
+            )
+            .await?;
+        }
+
+        // 删除记录逐条提交，确保与新增/更新处于同一事务。
+        for record_id in deletes {
+            execute_delete(&mut *transaction, &safe_table, &primary_key, &record_id).await?;
         }
 
         transaction
@@ -926,6 +1021,28 @@ where
         .execute(executor)
         .await
         .map_err(|error| AppError::Db(format!("更新 MySQL 记录失败: {error}")))?;
+    Ok(())
+}
+
+/// 执行 DELETE 语句（支持 pool 或 transaction 执行器）。
+async fn execute_delete<'a, E>(
+    executor: E,
+    table_name: &str,
+    primary_key: &str,
+    record_id: &str,
+) -> Result<(), AppError>
+where
+    E: sqlx::Executor<'a, Database = MySql>,
+{
+    let mut builder = QueryBuilder::<MySql>::new(format!(
+        "DELETE FROM `{table_name}` WHERE `{primary_key}` = "
+    ));
+    builder.push_bind(record_id);
+    builder
+        .build()
+        .execute(executor)
+        .await
+        .map_err(|error| AppError::Db(format!("删除 MySQL 记录失败: {error}")))?;
     Ok(())
 }
 
