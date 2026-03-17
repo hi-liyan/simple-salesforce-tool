@@ -5,6 +5,7 @@ import { NoticeAlert } from "../../../../components/NoticeAlert";
 import { SoqlMonacoEditor } from "../../../../components/SoqlMonacoEditor";
 import { api } from "../../../../api";
 import { Notice, ObjectDdl, TabState } from "../../../../types";
+import type { QueryOverrides } from "../types";
 import { MysqlSmartInput } from "./MysqlSmartInput";
 import { SalesforceSmartInput } from "./SalesforceSmartInput";
 
@@ -163,7 +164,7 @@ type DataQueryTabPaneProps = {
   onSortFieldChange: (value: string) => void;
   onSortDirectionChange: (value: "ASC" | "DESC") => void;
   onSortClauseChange: (value: string) => void;
-  onQuery: () => void;
+  onQuery: (overrides?: QueryOverrides) => void;
   onToggleRecord: (recordId: string, checked: boolean) => void;
   onToggleAllRecords: (checked: boolean, recordIds: string[]) => void;
   onEditCell: (rowIndex: number, columnName: string, value: unknown) => void;
@@ -180,6 +181,274 @@ type DataQueryTabPaneProps = {
   // 是否隐藏内置 Tab 栏：用于统一工作区模式下由外层渲染混合 Tab。
   hideTabBar?: boolean;
 };
+
+type QueryBarProps = {
+  // 当前激活 Tab：用于初始化草稿值，并在切换 Tab 时重置草稿。
+  activeTab: TabState;
+  // 是否 MySQL 数据源：用于切换输入组件与候选词集合。
+  isMysqlSource: boolean;
+  // MySQL WHERE 候选词。
+  mysqlWhereSuggestions: string[];
+  // MySQL 排序候选词。
+  mysqlSortSuggestions: string[];
+  // Salesforce WHERE 候选词。
+  salesforceWhereSuggestions: string[];
+  // Salesforce 排序候选词。
+  salesforceSortSuggestions: string[];
+  // 写入 WHERE：用于防抖回写到 store。
+  onWhereChange: (value: string) => void;
+  // 写入 LIMIT：用于防抖回写到 store。
+  onLimitChange: (value: number) => void;
+  // 写入排序表达式：用于防抖回写到 store。
+  onSortClauseChange: (value: string) => void;
+  // 执行查询：支持用草稿覆盖值执行，避免依赖 store 回写完成。
+  onQuery: (overrides?: QueryOverrides) => void;
+};
+
+// 查询栏：将输入草稿隔离在子组件内，避免输入时触发 DataGrid 等重组件重渲染导致卡顿。
+function QueryBar({
+  activeTab,
+  isMysqlSource,
+  mysqlWhereSuggestions,
+  mysqlSortSuggestions,
+  salesforceWhereSuggestions,
+  salesforceSortSuggestions,
+  onWhereChange,
+  onLimitChange,
+  onSortClauseChange,
+  onQuery
+}: QueryBarProps) {
+  // WHERE 草稿：输入时只更新本地状态，防抖回写 store。
+  const [whereDraft, setWhereDraft] = useState(activeTab.whereClause);
+  // 排序草稿：Salesforce 兼容旧版字段排序显示（sortField + sortDirection）。
+  const [sortDraft, setSortDraft] = useState(
+    activeTab.sortClause || (activeTab.sortField ? `${activeTab.sortField} ${activeTab.sortDirection}` : "")
+  );
+  // LIMIT 草稿：输入时保持数字态，避免直接写入 store 触发全局重渲染。
+  const [limitDraft, setLimitDraft] = useState(activeTab.limit);
+
+  // 草稿引用：用于在 effect 清理阶段读取最新草稿值。
+  const whereDraftRef = useRef(whereDraft);
+  const sortDraftRef = useRef(sortDraft);
+  const limitDraftRef = useRef(limitDraft);
+  useEffect(() => {
+    whereDraftRef.current = whereDraft;
+  }, [whereDraft]);
+  useEffect(() => {
+    sortDraftRef.current = sortDraft;
+  }, [sortDraft]);
+  useEffect(() => {
+    limitDraftRef.current = limitDraft;
+  }, [limitDraft]);
+
+  // 防抖计时器：避免每次按键都回写 store。
+  const whereTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
+  const sortTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
+  const limitTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
+
+  // 清理计时器：统一在切换 Tab 或卸载时执行，避免跨 Tab 写错目标。
+  function clearTimers() {
+    if (whereTimerRef.current) {
+      clearTimeout(whereTimerRef.current);
+      whereTimerRef.current = null;
+    }
+    if (sortTimerRef.current) {
+      clearTimeout(sortTimerRef.current);
+      sortTimerRef.current = null;
+    }
+    if (limitTimerRef.current) {
+      clearTimeout(limitTimerRef.current);
+      limitTimerRef.current = null;
+    }
+  }
+
+  // 刷新草稿：切换对象 Tab 时从 store 值重置草稿，并同步清理计时器。
+  useEffect(() => {
+    clearTimers(); // 先取消旧 Tab 的防抖回写，避免写入新 Tab。
+    setWhereDraft(activeTab.whereClause);
+    setSortDraft(activeTab.sortClause || (activeTab.sortField ? `${activeTab.sortField} ${activeTab.sortDirection}` : ""));
+    setLimitDraft(activeTab.limit);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab.objectName]);
+
+  // 卸载或切换 Tab 前尽量回写草稿：保证用户快速切换 Tab 时不会丢失输入。
+  useEffect(() => {
+    return () => {
+      // 先清理计时器，避免清理后仍触发旧定时器回写。
+      clearTimers();
+      // 仅在草稿与 store 不一致时回写，避免无意义的状态更新。
+      if (whereDraftRef.current !== activeTab.whereClause) {
+        onWhereChange(whereDraftRef.current);
+      }
+      const nextLimit = limitDraftRef.current;
+      if (nextLimit !== activeTab.limit) {
+        onLimitChange(nextLimit);
+      }
+      // 排序草稿与 store 的 sortClause/旧版 sortField 显示可能存在差异，这里统一回写 sortClause。
+      const nextSortDraft = sortDraftRef.current;
+      if (nextSortDraft !== (activeTab.sortClause || (activeTab.sortField ? `${activeTab.sortField} ${activeTab.sortDirection}` : ""))) {
+        onSortClauseChange(nextSortDraft);
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab.objectName]);
+
+  // 防抖回写 WHERE：250ms 内连续输入只写一次 store。
+  function scheduleWhereCommit(nextValue: string) {
+    if (whereTimerRef.current) clearTimeout(whereTimerRef.current);
+    whereTimerRef.current = window.setTimeout(() => {
+      whereTimerRef.current = null;
+      onWhereChange(nextValue);
+    }, 250);
+  }
+
+  // 防抖回写排序：250ms 内连续输入只写一次 store。
+  function scheduleSortCommit(nextValue: string) {
+    if (sortTimerRef.current) clearTimeout(sortTimerRef.current);
+    sortTimerRef.current = window.setTimeout(() => {
+      sortTimerRef.current = null;
+      onSortClauseChange(nextValue);
+    }, 250);
+  }
+
+  // 防抖回写 LIMIT：输入过程保持流畅，停顿后再同步 store。
+  function scheduleLimitCommit(nextValue: number) {
+    if (limitTimerRef.current) clearTimeout(limitTimerRef.current);
+    limitTimerRef.current = window.setTimeout(() => {
+      limitTimerRef.current = null;
+      onLimitChange(nextValue);
+    }, 250);
+  }
+
+  // 执行查询：优先使用草稿覆盖值，保证点击查询时使用最新输入。
+  function handleQueryClick() {
+    // 查询前先取消防抖回写，避免“点击查询后又被旧定时器回写”产生错觉。
+    clearTimers();
+    // 主动回写一次，保证 UI 切换 Tab 或其它地方读取 store 时拿到一致值。
+    onWhereChange(whereDraftRef.current);
+    onLimitChange(limitDraftRef.current);
+    onSortClauseChange(sortDraftRef.current);
+    onQuery({
+      whereClause: whereDraftRef.current,
+      limit: limitDraftRef.current,
+      sortClause: sortDraftRef.current
+    });
+  }
+
+  return (
+    // 查询栏容器：保持最小高度，避免内容区抖动。
+    <div className="border-b border-base-300 px-3 py-2">
+      {/* 输入区：按数据源类型切换 SQL/SOQL 提示与候选。 */}
+      <div className="flex min-w-max flex-row items-end gap-2">
+        {isMysqlSource ? (
+          <MysqlSmartInput
+            key={`mysql-where-${activeTab.objectName}`}
+            label="WHERE"
+            value={whereDraft}
+            placeholder="例如：status = 'ACTIVE' AND created_at >= '2025-01-01'"
+            // MySQL WHERE：仅更新草稿，防抖回写 store。
+            onChange={(value) => {
+              setWhereDraft(value); // 输入实时更新草稿，保证光标与输入联动不卡顿。
+              scheduleWhereCommit(value); // 防抖写入 store，避免触发全局重渲染。
+            }}
+            suggestions={mysqlWhereSuggestions}
+            defaultWidth={360}
+            allowClear
+          />
+        ) : (
+          <SalesforceSmartInput
+            key={`soql-where-${activeTab.objectName}`}
+            label="WHERE"
+            value={whereDraft}
+            placeholder="例如：CreatedDate >= LAST_N_DAYS:7 AND Name LIKE 'Acme%'"
+            // Salesforce WHERE：仅更新草稿，防抖回写 store。
+            onChange={(value) => {
+              setWhereDraft(value); // 输入实时更新草稿。
+              scheduleWhereCommit(value); // 防抖写入 store。
+            }}
+            suggestions={salesforceWhereSuggestions}
+            defaultWidth={360}
+            allowClear
+          />
+        )}
+
+        {isMysqlSource ? (
+          <>
+            <MysqlSmartInput
+              key={`mysql-sort-${activeTab.objectName}`}
+              label="排序"
+              value={sortDraft || ""}
+              placeholder="例如：created_at DESC, id ASC"
+              // MySQL 排序：仅更新草稿，防抖回写 store。
+              onChange={(value) => {
+                setSortDraft(value); // 输入实时更新草稿。
+                scheduleSortCommit(value); // 防抖写入 store。
+              }}
+              suggestions={mysqlSortSuggestions}
+              defaultWidth={300}
+              allowClear
+            />
+
+            <div className="w-[90px]">
+              {/* LIMIT 标题。 */}
+              <label className="mb-1 block text-[12px]">LIMIT</label>
+              {/* LIMIT 输入框：输入时不立即回写 store，避免全局重渲染导致卡顿。 */}
+              <input
+                className="input input-bordered input-sm h-[38px] min-h-[38px] w-full leading-[20px]"
+                type="number"
+                value={limitDraft}
+                onChange={(event) => {
+                  const next = Number(event.target.value || 200);
+                  setLimitDraft(next); // 输入实时更新草稿。
+                  scheduleLimitCommit(next); // 防抖写入 store。
+                }}
+              />
+            </div>
+          </>
+        ) : (
+          <>
+            <SalesforceSmartInput
+              key={`soql-sort-${activeTab.objectName}`}
+              label="排序"
+              value={sortDraft || ""}
+              placeholder="例如：LastModifiedDate DESC, Name ASC"
+              // Salesforce 排序：支持手动输入完整 ORDER BY 片段，输入过程使用草稿态。
+              onChange={(value) => {
+                setSortDraft(value); // 输入实时更新草稿。
+                scheduleSortCommit(value); // 防抖写入 store。
+              }}
+              suggestions={salesforceSortSuggestions}
+              defaultWidth={300}
+              allowClear
+            />
+
+            <div className="w-[90px]">
+              {/* LIMIT 标题。 */}
+              <label className="mb-1 block text-[12px]">LIMIT</label>
+              {/* LIMIT 输入框：输入时不立即回写 store。 */}
+              <input
+                className="input input-bordered input-sm h-[38px] min-h-[38px] w-full leading-[20px]"
+                type="number"
+                value={limitDraft}
+                onChange={(event) => {
+                  const next = Number(event.target.value || 200);
+                  setLimitDraft(next); // 输入实时更新草稿。
+                  scheduleLimitCommit(next); // 防抖写入 store。
+                }}
+              />
+            </div>
+          </>
+        )}
+
+        {/* 查询按钮：点击时用草稿覆盖参数执行，保证查询使用最新输入。 */}
+        <button className="btn btn-primary btn-sm mt-5 h-[35px]" disabled={activeTab.loading} onClick={handleQueryClick}>
+          <Search size={14} />
+          查询
+        </button>
+      </div>
+    </div>
+  );
+}
 
 // 右侧工作区：包含 Tab、查询工具栏、数据表格、日志面板和字段抽屉。
 export function DataQueryTabPane({
@@ -659,102 +928,18 @@ export function DataQueryTabPane({
 
             {/* 查询栏。 */}
             {activeTab.showQueryBar && (
-              <div className="border-b border-base-300 px-3 py-2">
-                <div className="flex min-w-max flex-row items-end gap-2">
-                  {isMysqlSource ? (
-                    <MysqlSmartInput
-                      key={`mysql-where-${activeTab.objectName}`}
-                      label="WHERE"
-                      value={activeTab.whereClause}
-                      placeholder="例如：status = 'ACTIVE' AND created_at >= '2025-01-01'"
-                      // MySQL WHERE：联动更新 Tab 查询条件。
-                      onChange={onWhereChange}
-                      // 候选包含字段、函数与关键字。
-                      suggestions={mysqlWhereSuggestions}
-                      // 默认宽度：与旧版视觉接近。
-                      defaultWidth={360}
-                      // 允许快速清空 WHERE。
-                      allowClear
-                    />
-                  ) : (
-                    <SalesforceSmartInput
-                      key={`soql-where-${activeTab.objectName}`}
-                      label="WHERE"
-                      value={activeTab.whereClause}
-                      placeholder="例如：CreatedDate >= LAST_N_DAYS:7 AND Name LIKE 'Acme%'"
-                      // Salesforce WHERE：联动更新 Tab 查询条件。
-                      onChange={onWhereChange}
-                      // 候选包含当前对象字段、SOQL 函数与关键字/日期字面量。
-                      suggestions={salesforceWhereSuggestions}
-                      // 默认宽度与 MySQL WHERE 保持一致。
-                      defaultWidth={360}
-                      // 允许快速清空 WHERE。
-                      allowClear
-                    />
-                  )}
-
-                  {isMysqlSource ? (
-                    <>
-                      <MysqlSmartInput
-                        key={`mysql-sort-${activeTab.objectName}`}
-                        label="排序"
-                        value={activeTab.sortClause || ""}
-                        placeholder="例如：created_at DESC, id ASC"
-                        // MySQL 排序表达式：直接写入 sortClause。
-                        onChange={onSortClauseChange}
-                        // 排序候选：字段 + 方向 + 常用函数。
-                        suggestions={mysqlSortSuggestions}
-                        // 默认宽度：略窄于 WHERE。
-                        defaultWidth={300}
-                        // 排序有值时显示清空按钮，与 WHERE 行为一致。
-                        allowClear
-                      />
-
-                      <div className="w-[90px]">
-                        <label className="mb-1 block text-[12px]">LIMIT</label>
-                        <input
-                          className="input input-bordered input-sm h-[38px] min-h-[38px] w-full leading-[20px]"
-                          type="number"
-                          value={activeTab.limit}
-                          onChange={(event) => onLimitChange(Number(event.target.value || 200))}
-                        />
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <SalesforceSmartInput
-                        key={`soql-sort-${activeTab.objectName}`}
-                        label="排序"
-                        value={activeTab.sortClause || (activeTab.sortField ? `${activeTab.sortField} ${activeTab.sortDirection}` : "")}
-                        placeholder="例如：LastModifiedDate DESC, Name ASC"
-                        // Salesforce 排序：支持手动输入完整 ORDER BY 片段。
-                        onChange={onSortClauseChange}
-                        // 自动补全字段仅来自 sortable=true 字段。
-                        suggestions={salesforceSortSuggestions}
-                        // 排序输入宽度与 MySQL 风格保持一致。
-                        defaultWidth={300}
-                        // 排序有值时可快速清空。
-                        allowClear
-                      />
-
-                      <div className="w-[90px]">
-                        <label className="mb-1 block text-[12px]">LIMIT</label>
-                        <input
-                          className="input input-bordered input-sm h-[38px] min-h-[38px] w-full leading-[20px]"
-                          type="number"
-                          value={activeTab.limit}
-                          onChange={(event) => onLimitChange(Number(event.target.value || 200))}
-                        />
-                      </div>
-                    </>
-                  )}
-
-                  <button className="btn btn-primary btn-sm mt-5 h-[35px]" disabled={activeTab.loading} onClick={onQuery}>
-                    <Search size={14} />
-                    查询
-                  </button>
-                </div>
-              </div>
+              <QueryBar
+                activeTab={activeTab}
+                isMysqlSource={isMysqlSource}
+                mysqlWhereSuggestions={mysqlWhereSuggestions}
+                mysqlSortSuggestions={mysqlSortSuggestions}
+                salesforceWhereSuggestions={salesforceWhereSuggestions}
+                salesforceSortSuggestions={salesforceSortSuggestions}
+                onWhereChange={onWhereChange}
+                onLimitChange={onLimitChange}
+                onSortClauseChange={onSortClauseChange}
+                onQuery={onQuery}
+              />
             )}
 
             {/* 数据网格区。 */}
