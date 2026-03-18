@@ -87,11 +87,12 @@ export function resolveActiveWorkspaceTabId({
 }: ResolveActiveWorkspaceTabIdInput): string {
   const hasCurrent = workspaceTabs.some((tab) => tab.id === currentActiveWorkspaceTabId);
   if (hasCurrent) return currentActiveWorkspaceTabId;
-  // 若当前目标是 console（例如刚新建控制台 Tab 的瞬时阶段），优先保持 console 焦点。
+  // 回退优先级：优先落到 data（对象查询），避免因 console 的瞬时失效 ID 抢占焦点。
+  if (activeDataObjectName) return buildDataWorkspaceTabId(activeDataObjectName);
+  // 当没有可用 data 时，再回退到 console 的当前激活 tab。
   if (currentActiveWorkspaceTabId.startsWith("console:") && activeConsoleTabId) {
     return buildConsoleWorkspaceTabId(activeConsoleTabId);
   }
-  if (activeDataObjectName) return buildDataWorkspaceTabId(activeDataObjectName);
   if (activeConsoleTabId) return buildConsoleWorkspaceTabId(activeConsoleTabId);
   return "";
 }

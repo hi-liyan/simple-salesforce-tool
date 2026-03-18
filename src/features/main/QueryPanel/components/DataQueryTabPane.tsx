@@ -4,6 +4,7 @@ import { DataGrid } from "../../../../components/DataGrid";
 import { NoticeAlert } from "../../../../components/NoticeAlert";
 import { SoqlMonacoEditor } from "../../../../components/SoqlMonacoEditor";
 import { api } from "../../../../api";
+import { useAppStore } from "../../../../store/useAppStore";
 import { Notice, ObjectDdl, TabState } from "../../../../types";
 import type { QueryOverrides } from "../types";
 import { MysqlSmartInput } from "./MysqlSmartInput";
@@ -218,6 +219,44 @@ function QueryBar({
   onSortClauseChange,
   onQuery
 }: QueryBarProps) {
+  // Store：直接更新目标 Tab，避免“常驻挂载 + 防抖回写”在切换 Tab 后误写到其它 Tab。
+  const patchTabInStore = useAppStore((state) => state.patchTab);
+
+  // 回写 WHERE：按当前 QueryBar 绑定的对象 Tab 精准写入。
+  function commitWhereClause(value: string) {
+    patchTabInStore(activeTab.objectName, (item) => ({ ...item, whereClause: value })); // 行内注释：仅更新目标 Tab 的 WHERE，避免跨 Tab 串写。
+  }
+
+  // 回写 LIMIT：按当前 QueryBar 绑定的对象 Tab 精准写入。
+  function commitLimit(value: number) {
+    patchTabInStore(activeTab.objectName, (item) => ({ ...item, limit: value })); // 行内注释：仅更新目标 Tab 的 LIMIT，避免跨 Tab 串写。
+  }
+
+  // 回写排序表达式：同步兼容旧版 sortField/sortDirection 显示逻辑。
+  function commitSortClause(value: string) {
+    patchTabInStore(activeTab.objectName, (item) => {
+      const normalized = value.trim();
+      if (!normalized) {
+        // 手动清空排序条件时同步清空旧版排序字段，避免 UI 回退显示旧值。
+        return { ...item, sortClause: "", sortField: "" };
+      }
+      // 解析首个排序片段（字段 + 可选方向），用于兼容旧逻辑字段。
+      const firstPart = normalized
+        .replace(/^order\s+by\s+/i, "")
+        .split(",")[0]
+        ?.trim();
+      const match = firstPart?.match(/^([A-Za-z_][\\w.]*)\\s*(ASC|DESC)?/i);
+      const parsedField = match?.[1] || item.sortField;
+      const parsedDirection = (match?.[2]?.toUpperCase() as "ASC" | "DESC" | undefined) || item.sortDirection;
+      return {
+        ...item,
+        sortClause: value,
+        sortField: parsedField,
+        sortDirection: parsedDirection
+      };
+    });
+  }
+
   // WHERE 草稿：输入时只更新本地状态，防抖回写 store。
   const [whereDraft, setWhereDraft] = useState(activeTab.whereClause);
   // 排序草稿：Salesforce 兼容旧版字段排序显示（sortField + sortDirection）。
@@ -278,16 +317,16 @@ function QueryBar({
       clearTimers();
       // 仅在草稿与 store 不一致时回写，避免无意义的状态更新。
       if (whereDraftRef.current !== activeTab.whereClause) {
-        onWhereChange(whereDraftRef.current);
+        commitWhereClause(whereDraftRef.current); // 行内注释：切换 Tab 前强制回写到“当前绑定 Tab”。
       }
       const nextLimit = limitDraftRef.current;
       if (nextLimit !== activeTab.limit) {
-        onLimitChange(nextLimit);
+        commitLimit(nextLimit); // 行内注释：切换 Tab 前强制回写到“当前绑定 Tab”。
       }
       // 排序草稿与 store 的 sortClause/旧版 sortField 显示可能存在差异，这里统一回写 sortClause。
       const nextSortDraft = sortDraftRef.current;
       if (nextSortDraft !== (activeTab.sortClause || (activeTab.sortField ? `${activeTab.sortField} ${activeTab.sortDirection}` : ""))) {
-        onSortClauseChange(nextSortDraft);
+        commitSortClause(nextSortDraft); // 行内注释：切换 Tab 前强制回写到“当前绑定 Tab”。
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -298,7 +337,7 @@ function QueryBar({
     if (whereTimerRef.current) clearTimeout(whereTimerRef.current);
     whereTimerRef.current = window.setTimeout(() => {
       whereTimerRef.current = null;
-      onWhereChange(nextValue);
+      commitWhereClause(nextValue); // 行内注释：防抖回写到“当前绑定 Tab”，避免切换后写错目标。
     }, 250);
   }
 
@@ -307,7 +346,7 @@ function QueryBar({
     if (sortTimerRef.current) clearTimeout(sortTimerRef.current);
     sortTimerRef.current = window.setTimeout(() => {
       sortTimerRef.current = null;
-      onSortClauseChange(nextValue);
+      commitSortClause(nextValue); // 行内注释：防抖回写到“当前绑定 Tab”，避免切换后写错目标。
     }, 250);
   }
 
@@ -316,7 +355,7 @@ function QueryBar({
     if (limitTimerRef.current) clearTimeout(limitTimerRef.current);
     limitTimerRef.current = window.setTimeout(() => {
       limitTimerRef.current = null;
-      onLimitChange(nextValue);
+      commitLimit(nextValue); // 行内注释：防抖回写到“当前绑定 Tab”，避免切换后写错目标。
     }, 250);
   }
 
@@ -325,9 +364,9 @@ function QueryBar({
     // 查询前先取消防抖回写，避免“点击查询后又被旧定时器回写”产生错觉。
     clearTimers();
     // 主动回写一次，保证 UI 切换 Tab 或其它地方读取 store 时拿到一致值。
-    onWhereChange(whereDraftRef.current);
-    onLimitChange(limitDraftRef.current);
-    onSortClauseChange(sortDraftRef.current);
+    commitWhereClause(whereDraftRef.current); // 行内注释：执行前强制写入 store，保证后续依赖值一致。
+    commitLimit(limitDraftRef.current); // 行内注释：执行前强制写入 store，保证后续依赖值一致。
+    commitSortClause(sortDraftRef.current); // 行内注释：执行前强制写入 store，保证后续依赖值一致。
     onQuery({
       whereClause: whereDraftRef.current,
       limit: limitDraftRef.current,
@@ -849,7 +888,7 @@ export function DataQueryTabPane({
 
       {activeTab && (
         // 主工作区。
-        <div className="relative flex min-h-0 flex-1 overflow-hidden">
+        <div className="relative flex h-full min-h-0 w-full overflow-hidden">
           {/* 当前 Tab 提示。 */}
           {activeTab.notice && (
             <NoticeAlert
