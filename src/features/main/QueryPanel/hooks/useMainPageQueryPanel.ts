@@ -360,7 +360,7 @@ export function useMainPageQueryPanel({
   }
 
   // 统一工作区 Tab 状态：抽离 data/console 混合映射与焦点回退逻辑。
-  const { workspaceTabs, activeWorkspaceTabId, setActiveWorkspaceTabId, activeWorkspaceTabKind } = useWorkspaceTabs({
+  const { workspaceTabs, activeWorkspaceTabId, setActiveWorkspaceTabId, reorderWorkspaceTabs, activeWorkspaceTabKind } = useWorkspaceTabs({
     dataTabs: tabs,
     consoleTabs: soqlTabs,
     activeDataObjectName: activeTabObjectName,
@@ -398,6 +398,7 @@ export function useMainPageQueryPanel({
     openAuthWindow,
     createSoqlConsoleTab,
     setActiveWorkspaceTabId,
+    reorderWorkspaceTabs,
     buildConsoleWorkspaceTabId,
     parseWorkspaceTabId,
     setActiveTabObjectName,
@@ -453,6 +454,7 @@ export function useMainPageQueryPanel({
     mysqlDdl: activeTab ? mysqlDdlMap[activeTab.objectName]?.data || null : null,
     mysqlDdlLoading: activeTab ? Boolean(mysqlDdlMap[activeTab.objectName]?.loading) : false,
     mysqlDdlError: activeTab ? mysqlDdlMap[activeTab.objectName]?.error || "" : "",
+    mysqlDdlMap,
     workspaceTabs,
     activeWorkspaceTabId,
     activeWorkspaceTabKind,

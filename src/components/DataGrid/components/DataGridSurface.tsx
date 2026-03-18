@@ -81,6 +81,8 @@ type DataGridSurfaceProps = {
   setHoveredHeaderMeta: (next: HoveredHeaderMetaState | null) => void;
   // 列宽写入函数。
   setColumnWidths: React.Dispatch<React.SetStateAction<Record<string, number>>>;
+  // 表头最小列宽：用于约束拖拽缩小，保证表头文本不被“缩放压扁”。
+  headerMinWidths: Record<string, number>;
   // 激活单元格 ref：供编辑器分发读取。
   activeEditorCellRef: React.MutableRefObject<Item | null>;
   // 激活单元格状态写入。
@@ -133,6 +135,7 @@ export function DataGridSurface({
   setRowContextMenu,
   setHoveredHeaderMeta,
   setColumnWidths,
+  headerMinWidths,
   activeEditorCellRef,
   setActiveEditorCell,
   canOpenRecordPage,
@@ -409,7 +412,8 @@ export function DataGridSurface({
           onColumnResize={(column, newSize) => {
             const id = String(column.id ?? "");
             if (!id) return;
-            setColumnWidths((current) => ({ ...current, [id]: Math.max(44, Math.floor(newSize)) }));
+            const minWidth = headerMinWidths[id] ?? 44; // 关键：至少要容纳表头文案宽度，避免 Canvas fillText 缩放导致压缩。
+            setColumnWidths((current) => ({ ...current, [id]: Math.max(minWidth, Math.floor(newSize)) }));
           }}
           // 列宽边界：约束最小/最大宽度，避免布局极端变形。
           minColumnWidth={44}

@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  buildConsoleWorkspaceTabId,
   buildDataWorkspaceTabId,
   buildWorkspaceTabs,
   parseWorkspaceTabId,
@@ -40,6 +41,22 @@ export function useWorkspaceTabs({
   const [workspaceTabOrder, setWorkspaceTabOrder] = useState<string[]>([]);
   // 统一工作区原始 Tab 列表：用于计算增量与基础映射。
   const baseWorkspaceTabs = useMemo(() => buildWorkspaceTabs(dataTabs, consoleTabs), [dataTabs, consoleTabs]);
+
+  // 拖拽排序回调：仅调整展示顺序，不改变“激活态”与业务 tab 的归属关系。
+  const reorderWorkspaceTabs = useCallback((activeId: string, overId: string) => {
+    if (!activeId || !overId) return;
+    if (activeId === overId) return;
+    setWorkspaceTabOrder((current) => {
+      const fromIndex = current.indexOf(activeId);
+      const toIndex = current.indexOf(overId);
+      if (fromIndex < 0 || toIndex < 0) return current; // 防御：拖拽目标不在当前顺序中时忽略。
+      if (fromIndex === toIndex) return current;
+      const nextOrder = [...current];
+      nextOrder.splice(fromIndex, 1); // 先移除拖拽项。
+      nextOrder.splice(toIndex, 0, activeId); // 再插入到目标位置。
+      return nextOrder;
+    });
+  }, []);
 
   // 维护稳定顺序：删除已关闭 Tab，并把新增 Tab 统一追加在最后。
   useEffect(() => {
@@ -82,6 +99,17 @@ export function useWorkspaceTabs({
     setActiveWorkspaceTabId(nextWorkspaceTabId); // 保持 data 焦点与工作区一致。
   }, [activeDataObjectName, activeWorkspaceTabId]);
 
+  // 当 console 侧主动切换 Tab 时，若当前工作区焦点就在 console，则同步工作区激活态。
+  // 典型场景：AI“新建Tab并应用”会在 store 内切换 activeConsoleTabId，需让工作区同步到新 tab。
+  useEffect(() => {
+    if (!activeConsoleTabId) return;
+    const current = parseWorkspaceTabId(activeWorkspaceTabId);
+    if (current?.kind !== "console") return; // 仅当用户当前就在 console 时才同步焦点，避免覆盖回退优先级。
+    const nextWorkspaceTabId = buildConsoleWorkspaceTabId(activeConsoleTabId);
+    if (nextWorkspaceTabId === activeWorkspaceTabId) return;
+    setActiveWorkspaceTabId(nextWorkspaceTabId); // 保持 console 焦点与工作区一致。
+  }, [activeConsoleTabId, activeWorkspaceTabId]);
+
   // 当前激活工作区 Tab 解析结果。
   const activeWorkspaceTabParsed: WorkspaceTabTarget | null = useMemo(
     () => parseWorkspaceTabId(activeWorkspaceTabId),
@@ -94,6 +122,7 @@ export function useWorkspaceTabs({
     workspaceTabs,
     activeWorkspaceTabId,
     setActiveWorkspaceTabId,
+    reorderWorkspaceTabs,
     activeWorkspaceTabParsed,
     activeWorkspaceTabKind
   };

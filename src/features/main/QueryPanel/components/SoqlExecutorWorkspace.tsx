@@ -33,6 +33,12 @@ type SoqlExecutorWorkspaceProps = {
   onCloseWorkspaceNotice: () => void;
   // 是否隐藏内置 Tab 栏：用于统一工作区模式下由外层渲染混合 Tab。
   hideTabBar?: boolean;
+  // 强制绑定到指定 console Tab：用于“每个工作区 Tab 独立实例常驻挂载”场景。
+  // 传入后将忽略 store 的 activeTabId，仅渲染目标 tabId 的工作区视图。
+  forcedTabId?: string;
+  // 是否启用全局副作用（流式事件监听、等待文案轮询）。
+  // 统一工作区下会同时挂载多个实例，为避免重复注册，需要在父层只挂载一次全局副作用。
+  enableGlobalEffects?: boolean;
 };
 
 type BottomView = "result" | "logs";
@@ -47,6 +53,67 @@ const AI_STREAMING_COPY_POOL = [
   "马上就好，正在做最后一轮推理"
 ];
 
+// SOQL 执行器全局副作用：用于在多实例常驻挂载时只注册一次流式监听与占位文案轮询。
+export function SoqlExecutorGlobalEffects() {
+  // SOQL 执行器 Tabs：用于判断是否存在进行中的 AI 流式任务。
+  const tabs = useSoqlExecutorStore((state) => state.tabs);
+  // 写入 Tabs：用于推进指定 requestId 的等待文案。
+  const setTabs = useSoqlExecutorStore((state) => state.setTabs);
+
+  // 是否存在任意进行中的 AI 流式任务：用于控制等待文案轮换定时器。
+  const hasLoadingAiTask = useMemo(
+    () => tabs.some((tab) => tab.aiLoading && Boolean(tab.aiStreamRequestId)),
+    [tabs]
+  );
+
+  useEffect(() => {
+    // 监听后端流式事件：按 requestId 路由到对应 Tab 的 AI 回复气泡。
+    let alive = true;
+    let unlisten: (() => void) | null = null;
+    void listen<AiStreamChunkPayload>("llm:soql-stream-chunk", (event) => {
+      if (!alive) return;
+      const requestId = event.payload?.requestId || "";
+      const chunk = event.payload?.chunk || "";
+      if (!requestId || !chunk) return;
+      setTabs((current) =>
+        current.map((tab) => {
+          if (tab.aiStreamRequestId !== requestId) return tab;
+          return advanceStreamingPlaceholderForTab(tab, requestId);
+        })
+      );
+    }).then((dispose) => {
+      unlisten = dispose;
+    });
+
+    return () => {
+      alive = false;
+      unlisten?.();
+    };
+  }, [setTabs]);
+
+  useEffect(() => {
+    if (!hasLoadingAiTask) return;
+    // 定时轮换等待文案：即使后端暂时没有新 chunk，也能持续反馈“AI 正在工作”。
+    const timer = window.setInterval(() => {
+      setTabs((current) => {
+        let changed = false;
+        const next = current.map((tab) => {
+          if (!tab.aiLoading || !tab.aiStreamRequestId) return tab;
+          const nextTab = advanceStreamingPlaceholderForTab(tab, tab.aiStreamRequestId);
+          if (nextTab !== tab) changed = true;
+          return nextTab;
+        });
+        return changed ? next : current;
+      });
+    }, 950);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [hasLoadingAiTask, setTabs]);
+
+  return null;
+}
+
 // SOQL 执行器工作区：支持多 Tab、执行、结果展示与查询日志。
 export function SoqlExecutorWorkspace({
   selectedSourceId,
@@ -56,7 +123,9 @@ export function SoqlExecutorWorkspace({
   objects,
   workspaceNotice,
   onCloseWorkspaceNotice,
-  hideTabBar = false
+  hideTabBar = false,
+  forcedTabId,
+  enableGlobalEffects = true
 }: SoqlExecutorWorkspaceProps) {
   // 是否是 MySQL 数据源：用于在控制台切换 SQL/SOQL 编辑器能力。
   const isMysqlSource = (selectedSourceType || "salesforce").toLowerCase() === "mysql";
@@ -67,6 +136,8 @@ export function SoqlExecutorWorkspace({
   const setTabs = useSoqlExecutorStore((state) => state.setTabs);
   const activeTabId = useSoqlExecutorStore((state) => state.activeTabId);
   const setActiveTabId = useSoqlExecutorStore((state) => state.setActiveTabId);
+  // 当前实例的目标 Tab：forcedTabId 存在时以其为准，避免切换工作区 Tab 后误操作其它 console tab。
+  const effectiveActiveTabId = forcedTabId || activeTabId;
   // 底部展示模式：结果 / 日志。
   const [bottomView, setBottomView] = useState<BottomView>("result");
   // 底部结果日志区高度：支持鼠标拖拽调整。
@@ -95,13 +166,8 @@ export function SoqlExecutorWorkspace({
 
   // 当前激活标签数据。
   const activeTab = useMemo(
-    () => tabs.find((item) => item.id === activeTabId) || null,
-    [tabs, activeTabId]
-  );
-  // 是否存在任意进行中的 AI 流式任务：用于控制等待文案轮换定时器。
-  const hasLoadingAiTask = useMemo(
-    () => tabs.some((tab) => tab.aiLoading && Boolean(tab.aiStreamRequestId)),
-    [tabs]
+    () => tabs.find((item) => item.id === effectiveActiveTabId) || null,
+    [tabs, effectiveActiveTabId]
   );
   // 平台检测：用于区分 Mac 的 Command 键与 Windows 的 Alt 键发送快捷键。
   const isMacPlatform = useMemo(() => {
@@ -145,7 +211,10 @@ export function SoqlExecutorWorkspace({
     };
   }, [tabContextMenu]);
 
+  // 多实例常驻挂载场景下，全局副作用由 SoqlExecutorGlobalEffects 统一处理，避免重复注册。
+  // 这里保留原逻辑作为兜底：当仅挂载单一实例时仍可正常工作。
   useEffect(() => {
+    if (!enableGlobalEffects) return;
     // 监听后端流式事件：按 requestId 路由到对应 Tab 的 AI 回复气泡。
     let alive = true;
     let unlisten: (() => void) | null = null;
@@ -168,9 +237,11 @@ export function SoqlExecutorWorkspace({
       alive = false;
       unlisten?.();
     };
-  }, []);
+  }, [enableGlobalEffects, setTabs]);
 
   useEffect(() => {
+    if (!enableGlobalEffects) return;
+    const hasLoadingAiTask = tabs.some((tab) => tab.aiLoading && Boolean(tab.aiStreamRequestId));
     if (!hasLoadingAiTask) return;
     // 定时轮换等待文案：即使后端暂时没有新 chunk，也能持续反馈“AI 正在工作”。
     const timer = window.setInterval(() => {
@@ -188,7 +259,7 @@ export function SoqlExecutorWorkspace({
     return () => {
       window.clearInterval(timer);
     };
-  }, [hasLoadingAiTask]);
+  }, [enableGlobalEffects, tabs, setTabs]);
 
   useEffect(() => {
     // 切换 Tab 或状态更新时同步 ref，保证执行入口读取到当前激活 Tab 的选区文本。
