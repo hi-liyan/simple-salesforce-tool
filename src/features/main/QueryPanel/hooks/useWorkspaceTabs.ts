@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   buildDataWorkspaceTabId,
   buildWorkspaceTabs,
@@ -40,6 +40,22 @@ export function useWorkspaceTabs({
   const [workspaceTabOrder, setWorkspaceTabOrder] = useState<string[]>([]);
   // 统一工作区原始 Tab 列表：用于计算增量与基础映射。
   const baseWorkspaceTabs = useMemo(() => buildWorkspaceTabs(dataTabs, consoleTabs), [dataTabs, consoleTabs]);
+
+  // 拖拽排序回调：仅调整展示顺序，不改变“激活态”与业务 tab 的归属关系。
+  const reorderWorkspaceTabs = useCallback((activeId: string, overId: string) => {
+    if (!activeId || !overId) return;
+    if (activeId === overId) return;
+    setWorkspaceTabOrder((current) => {
+      const fromIndex = current.indexOf(activeId);
+      const toIndex = current.indexOf(overId);
+      if (fromIndex < 0 || toIndex < 0) return current; // 防御：拖拽目标不在当前顺序中时忽略。
+      if (fromIndex === toIndex) return current;
+      const nextOrder = [...current];
+      nextOrder.splice(fromIndex, 1); // 先移除拖拽项。
+      nextOrder.splice(toIndex, 0, activeId); // 再插入到目标位置。
+      return nextOrder;
+    });
+  }, []);
 
   // 维护稳定顺序：删除已关闭 Tab，并把新增 Tab 统一追加在最后。
   useEffect(() => {
@@ -94,6 +110,7 @@ export function useWorkspaceTabs({
     workspaceTabs,
     activeWorkspaceTabId,
     setActiveWorkspaceTabId,
+    reorderWorkspaceTabs,
     activeWorkspaceTabParsed,
     activeWorkspaceTabKind
   };

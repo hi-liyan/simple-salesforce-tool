@@ -87,6 +87,8 @@ export type QueryPanelActions = {
   onOpenConsole: () => void;
   // 激活统一工作区 Tab。
   onActivateWorkspaceTab: (workspaceTabId: string) => void;
+  // 拖拽排序统一工作区 Tabs：基于拖拽前后 ID 调整展示顺序。
+  onReorderWorkspaceTabs: (activeWorkspaceTabId: string, overWorkspaceTabId: string) => void;
   // 关闭统一工作区 Tab。
   onCloseWorkspaceTab: (workspaceTabId: string) => void;
   // 批量关闭统一工作区 Tabs。

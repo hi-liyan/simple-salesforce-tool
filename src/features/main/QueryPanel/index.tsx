@@ -45,6 +45,7 @@ export function QueryPanel({ viewState, actions }: QueryPanelProps) {
           tabs={viewState.workspaceTabs}
           activeTabId={viewState.activeWorkspaceTabId}
           onActivateTab={actions.onActivateWorkspaceTab}
+          onReorderTabs={actions.onReorderWorkspaceTabs}
           onCloseTab={actions.onCloseWorkspaceTab}
           onCloseTabs={actions.onCloseWorkspaceTabs}
         />
