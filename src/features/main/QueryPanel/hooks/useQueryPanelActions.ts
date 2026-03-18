@@ -19,6 +19,8 @@ type UseQueryPanelActionsInput = {
   createSoqlConsoleTab: () => string;
   // 激活工作区 Tab。
   setActiveWorkspaceTabId: (workspaceTabId: string) => void;
+  // 拖拽排序工作区 Tabs。
+  reorderWorkspaceTabs: (activeWorkspaceTabId: string, overWorkspaceTabId: string) => void;
   // 构建控制台工作区 Tab ID。
   buildConsoleWorkspaceTabId: (tabId: string) => string;
   // 解析工作区 Tab ID。
@@ -104,6 +106,7 @@ export function useQueryPanelActions({
   openAuthWindow,
   createSoqlConsoleTab,
   setActiveWorkspaceTabId,
+  reorderWorkspaceTabs,
   buildConsoleWorkspaceTabId,
   parseWorkspaceTabId,
   setActiveTabObjectName,
@@ -152,6 +155,9 @@ export function useQueryPanelActions({
           return;
         }
         setActiveSoqlTabId(parsed.targetId); // 同步控制台 Tab 激活状态。
+      },
+      onReorderWorkspaceTabs: (activeWorkspaceTabId, overWorkspaceTabId) => {
+        reorderWorkspaceTabs(activeWorkspaceTabId, overWorkspaceTabId); // 仅调整展示顺序，保持业务状态不变。
       },
       onCloseWorkspaceTab: (workspaceTabId) => {
         const parsed = parseWorkspaceTabId(workspaceTabId);
@@ -384,6 +390,7 @@ export function useQueryPanelActions({
       openAuthWindow,
       createSoqlConsoleTab,
       setActiveWorkspaceTabId,
+      reorderWorkspaceTabs,
       buildConsoleWorkspaceTabId,
       parseWorkspaceTabId,
       setActiveTabObjectName,
