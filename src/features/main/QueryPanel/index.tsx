@@ -35,7 +35,16 @@ export function QueryPanel({ viewState, actions }: QueryPanelProps) {
   // Tab 列表变化时：移除已关闭 Tab 的常驻挂载记录，避免内存与事件监听泄漏。
   useEffect(() => {
     const aliveSet = new Set(viewState.workspaceTabs.map((tab) => tab.id));
-    setMountedWorkspaceTabIds((current) => current.filter((tabId) => aliveSet.has(tabId)));
+    setMountedWorkspaceTabIds((current) => {
+      // 关键修复：双击侧边栏打开对象时，会先写入 activeWorkspaceTabId，再异步把新 tab 追加到 workspaceTabs。
+      // 若这里直接按 aliveSet 过滤，会把“刚激活但尚未出现在 workspaceTabs 的 tabId”删掉，导致 pane 未挂载而出现空白。
+      const next = current.filter((tabId) => aliveSet.has(tabId) || tabId === viewState.activeWorkspaceTabId);
+      // 当 activeWorkspaceTabId 已出现在 workspaceTabs 时，确保它一定被纳入常驻挂载集合（即使 active 没变化）。
+      if (viewState.activeWorkspaceTabId && aliveSet.has(viewState.activeWorkspaceTabId) && !next.includes(viewState.activeWorkspaceTabId)) {
+        return [...next, viewState.activeWorkspaceTabId];
+      }
+      return next;
+    });
   }, [viewState.workspaceTabs]);
 
   // 常驻挂载 Tab 集合：用于快速判断是否需要渲染对应 pane。
