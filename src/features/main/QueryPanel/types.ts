@@ -1,6 +1,16 @@
 import { Notice, ObjectDdl, SalesforceObject, SalesforceSource, TabState } from "../../../types";
 import { MainViewMode } from "../../../store/useAppStore";
 
+// 单个对象的 MySQL DDL 加载状态：用于在抽屉内展示建表/索引/约束信息。
+export type MysqlDdlStateItem = {
+  // 是否正在加载。
+  loading: boolean;
+  // DDL 数据。
+  data: ObjectDdl | null;
+  // 错误信息。
+  error: string;
+};
+
 // 查询参数覆盖：用于在 UI 草稿态下直接触发查询，避免依赖“已回写到 store 的值”。
 export type QueryOverrides = {
   // WHERE 子句（不含 WHERE 关键字）。
@@ -69,6 +79,8 @@ export type QueryPanelViewState = {
   mysqlDdlLoading: boolean;
   // MySQL DDL 错误信息。
   mysqlDdlError: string;
+  // MySQL DDL 全量映射：按对象名缓存抽屉数据，支持每个 data Tab 独立常驻挂载。
+  mysqlDdlMap: Record<string, MysqlDdlStateItem>;
   // 统一工作区 Tab 列表（data + console）。
   workspaceTabs: QueryWorkspaceTabItem[];
   // 当前激活的统一工作区 Tab ID。

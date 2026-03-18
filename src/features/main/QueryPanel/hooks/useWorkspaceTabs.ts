@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  buildConsoleWorkspaceTabId,
   buildDataWorkspaceTabId,
   buildWorkspaceTabs,
   parseWorkspaceTabId,
@@ -97,6 +98,17 @@ export function useWorkspaceTabs({
     if (nextWorkspaceTabId === activeWorkspaceTabId) return;
     setActiveWorkspaceTabId(nextWorkspaceTabId); // 保持 data 焦点与工作区一致。
   }, [activeDataObjectName, activeWorkspaceTabId]);
+
+  // 当 console 侧主动切换 Tab 时，若当前工作区焦点就在 console，则同步工作区激活态。
+  // 典型场景：AI“新建Tab并应用”会在 store 内切换 activeConsoleTabId，需让工作区同步到新 tab。
+  useEffect(() => {
+    if (!activeConsoleTabId) return;
+    const current = parseWorkspaceTabId(activeWorkspaceTabId);
+    if (current?.kind !== "console") return; // 仅当用户当前就在 console 时才同步焦点，避免覆盖回退优先级。
+    const nextWorkspaceTabId = buildConsoleWorkspaceTabId(activeConsoleTabId);
+    if (nextWorkspaceTabId === activeWorkspaceTabId) return;
+    setActiveWorkspaceTabId(nextWorkspaceTabId); // 保持 console 焦点与工作区一致。
+  }, [activeConsoleTabId, activeWorkspaceTabId]);
 
   // 当前激活工作区 Tab 解析结果。
   const activeWorkspaceTabParsed: WorkspaceTabTarget | null = useMemo(

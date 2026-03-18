@@ -454,6 +454,7 @@ export function useMainPageQueryPanel({
     mysqlDdl: activeTab ? mysqlDdlMap[activeTab.objectName]?.data || null : null,
     mysqlDdlLoading: activeTab ? Boolean(mysqlDdlMap[activeTab.objectName]?.loading) : false,
     mysqlDdlError: activeTab ? mysqlDdlMap[activeTab.objectName]?.error || "" : "",
+    mysqlDdlMap,
     workspaceTabs,
     activeWorkspaceTabId,
     activeWorkspaceTabKind,

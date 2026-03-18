@@ -1,6 +1,6 @@
 import type * as Monaco from "monaco-editor";
-import type { MonacoLanguageModule, RuntimeCompletions } from "../types";
-import { buildSuggestions, dedupeByLowerCase, dedupeSuggestionsByLabel, normalizeObjectFieldsMap, normalizeQuerySpaces } from "../utils";
+import type { MonacoLanguageModule, RuntimeCompletions } from "../types.ts";
+import { buildSuggestions, dedupeByLowerCase, dedupeSuggestionsByLabel, normalizeObjectFieldsMap, normalizeQuerySpaces } from "../utils.ts";
 
 type MysqlCompletionContext = "table" | "field" | "orderModifier" | "number" | "general";
 

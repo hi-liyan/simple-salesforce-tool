@@ -45,6 +45,8 @@ type UseQueryPanelBindingsInput = {
   mysqlDdlLoading: boolean;
   // MySQL DDL 错误。
   mysqlDdlError: string;
+  // MySQL DDL 映射：按对象名缓存抽屉数据，供 Tab 常驻挂载按需读取。
+  mysqlDdlMap: Record<string, { loading: boolean; data: ObjectDdl | null; error: string }>;
   // 统一工作区 tab 列表。
   workspaceTabs: { id: string; kind: "data" | "console"; title: string }[];
   // 当前激活工作区 tab ID。
@@ -80,6 +82,7 @@ export function useQueryPanelBindings({
   mysqlDdl,
   mysqlDdlLoading,
   mysqlDdlError,
+  mysqlDdlMap,
   workspaceTabs,
   activeWorkspaceTabId,
   activeWorkspaceTabKind,
@@ -107,6 +110,7 @@ export function useQueryPanelBindings({
     mysqlDdl,
     mysqlDdlLoading,
     mysqlDdlError,
+    mysqlDdlMap,
     workspaceTabs,
     activeWorkspaceTabId,
     activeWorkspaceTabKind
