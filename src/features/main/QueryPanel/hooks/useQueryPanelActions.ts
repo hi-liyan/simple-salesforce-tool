@@ -43,6 +43,8 @@ type UseQueryPanelActionsInput = {
       showLoading?: boolean;
     }
   ) => Promise<void>;
+  // 刷新指定 MySQL 对象的字段元数据与 DDL。
+  refreshMysqlObjectMetadata: (objectName: string) => Promise<{ describe: ObjectDescribe; ddl: import("../../../../types").ObjectDdl }>;
   // 切换数据源。
   handleSourceChange: (sourceId: string) => Promise<void>;
   // 构建 data 工作区 Tab ID。
@@ -114,6 +116,7 @@ export function useQueryPanelActions({
   closeSoqlTab,
   closeSoqlTabsByIds,
   refreshSources,
+  refreshMysqlObjectMetadata,
   handleSourceChange,
   buildDataWorkspaceTabId,
   openObjectTab,
@@ -190,6 +193,7 @@ export function useQueryPanelActions({
       },
       onChangeSource: (sourceId) => void handleSourceChange(sourceId),
       onRefreshSources: () => void refreshSources(true),
+      onRefreshMysqlObjectMetadata: (objectName) => refreshMysqlObjectMetadata(objectName),
       onOpenObject: (item) => {
         setActiveWorkspaceTabId(buildDataWorkspaceTabId(item.name)); // 双击对象后切回 data 工作区 Tab。
         void openObjectTab(item);

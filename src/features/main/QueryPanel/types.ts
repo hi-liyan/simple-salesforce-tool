@@ -1,4 +1,4 @@
-import { Notice, ObjectDdl, SalesforceObject, SalesforceSource, TabState } from "../../../types";
+import { Notice, ObjectDdl, ObjectDescribe, SalesforceObject, SalesforceSource, TabState } from "../../../types";
 import { MainViewMode } from "../../../store/useAppStore";
 
 // 单个对象的 MySQL DDL 加载状态：用于在抽屉内展示建表/索引/约束信息。
@@ -109,6 +109,8 @@ export type QueryPanelActions = {
   onChangeSource: (sourceId: string) => void;
   // 刷新数据源。
   onRefreshSources: () => void;
+  // 刷新指定 MySQL 对象的字段元数据与 DDL。
+  onRefreshMysqlObjectMetadata: (objectName: string) => Promise<{ describe: ObjectDescribe; ddl: ObjectDdl }>;
   // 打开对象 Tab。
   onOpenObject: (item: SalesforceObject) => void;
   // 点击不可查询对象提示。
