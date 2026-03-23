@@ -1,6 +1,6 @@
 import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { Settings, SquareTerminal, Table2 } from "lucide-react";
+import { Settings, SquareTerminal, Table2, Wrench } from "lucide-react";
 import { api } from "../api";
 import { useMainPageQueryPanel } from "../features/main/QueryPanel/hooks/useMainPageQueryPanel";
 import { MainLayout } from "../layouts/MainLayout";
@@ -74,6 +74,14 @@ const LazySettingsPanel = lazy(async () => {
   const module = await import("../features/main/SettingsPanel");
   return {
     default: module.SettingsPanel
+  };
+});
+
+// 懒加载工具页：避免首屏加载 JSON 工具相关编辑器与树组件。
+const LazyToolsPanel = lazy(async () => {
+  const module = await import("../features/main/ToolsPanel");
+  return {
+    default: module.ToolsPanel
   };
 });
 
@@ -324,6 +332,14 @@ export function MainPage() {
             >
               <SquareTerminal size={16} />
             </button>
+            {/* 工具面板入口。 */}
+            <button
+              className={`tool-rail-btn ${viewMode === "tools" ? "tool-rail-btn--active" : ""}`}
+              title="工具面板"
+              onClick={() => queryPanelActions.onSetViewMode("tools")}
+            >
+              <Wrench size={16} />
+            </button>
             {/* 设置入口。 */}
             <button
               className={`tool-rail-btn ${viewMode === "settings" ? "tool-rail-btn--active" : ""}`}
@@ -351,6 +367,13 @@ export function MainPage() {
                   <LazyTerminalPanel visible={viewMode === "terminal"} />
                 </Suspense>
               </div>
+            )}
+            {/* 工具视图：首次进入时按需加载。 */}
+            {viewMode === "tools" && (
+              <Suspense fallback={<WorkspaceLoadingFallback title="正在加载工具面板" />}>
+                {/* 工具面板主体。 */}
+                <LazyToolsPanel />
+              </Suspense>
             )}
             {/* 设置视图：首次进入时按需加载。 */}
             {viewMode === "settings" && (
