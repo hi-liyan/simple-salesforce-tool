@@ -1453,10 +1453,13 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
 
                 return (
                   // 单个终端 Tab。
-                  <div key={tab.id} className={`flex items-center border-r border-base-300 ${active ? "bg-base-100" : "bg-base-200/50"}`}>
+                  <div
+                    key={tab.id}
+                    className={`flex select-none items-center border-r border-base-300 bg-base-100 ${active ? "ring-1 ring-inset ring-primary/25" : ""}`}
+                  >
                     {/* 激活终端按钮。 */}
                     <button
-                      className={`min-w-0 max-w-[240px] truncate px-3 py-2 text-[12px] ${active ? "text-primary" : "text-neutral/70"}`}
+                      className={`min-w-0 max-w-[240px] select-none truncate px-3 py-2 text-[12px] ${active ? "text-primary" : "text-neutral/70"}`}
                       onClick={() => setActiveTabId(tab.id)}
                       title={tooltipText}
                     >
@@ -1468,12 +1471,12 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
                     </button>
                     {/* 关闭终端按钮。 */}
                     <button
-                      className="btn btn-circle btn-ghost btn-xs mr-1"
+                      className="btn btn-circle btn-ghost btn-xs mr-1 cursor-pointer"
                       onClick={() => {
                         void handleCloseTerminalTab(tab.id);
                       }}
                     >
-                      <X size={12} />
+                      <X size={13} />
                     </button>
                   </div>
                 );
