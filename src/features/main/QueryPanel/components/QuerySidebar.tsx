@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Braces, Plus, RefreshCw } from "lucide-react";
 import { DataSourceSelector } from "../../../../components/DataSourceSelector";
 import { api } from "../../../../api";
-import { DataSourceType, SalesforceObject, SalesforceSource, SourceUpsertPayload } from "../../../../types";
+import { DataSourceType, ObjectDdl, ObjectDescribe, SalesforceObject, SalesforceSource, SourceUpsertPayload } from "../../../../types";
 import { QuerySidebarActions, type QuerySidebarActionItem } from "./QuerySidebarActions";
 import { QueryObjectTree } from "./QueryObjectTree";
 
@@ -31,6 +31,8 @@ type QuerySidebarProps = {
   onOpenObject: (item: SalesforceObject) => void;
   // 点击不可查询徽标回调。
   onNotQueryableObjectClick?: (item: SalesforceObject) => void;
+  // 刷新指定 MySQL 对象的字段元数据与 DDL。
+  onRefreshMysqlObjectMetadata: (objectName: string) => Promise<{ describe: ObjectDescribe; ddl: ObjectDdl }>;
   // 对象列表展示模式：`list` 为原列表，`tree` 为树形展开字段。
   objectListMode?: "list" | "tree";
 };
@@ -49,6 +51,7 @@ export function QuerySidebar({
   activeTabObjectName,
   onOpenObject,
   onNotQueryableObjectClick,
+  onRefreshMysqlObjectMetadata,
   objectListMode = "list"
 }: QuerySidebarProps) {
   // 数据源类型选择弹窗开关。
@@ -267,6 +270,7 @@ export function QuerySidebar({
         activeTabObjectName={activeTabObjectName}
         onOpenObject={onOpenObject}
         onNotQueryableObjectClick={onNotQueryableObjectClick}
+        onRefreshMysqlObjectMetadata={onRefreshMysqlObjectMetadata}
         objectListMode={objectListMode}
       />
 
