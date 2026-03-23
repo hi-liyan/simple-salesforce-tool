@@ -1,4 +1,4 @@
-import type { MonacoLanguageModule, QueryLanguage } from "../types.ts";
+import type { MonacoLanguageModule, QueryLanguage } from "../types";
 import { mysqlLanguageModule } from "./mysqlLanguage";
 import { soqlLanguageModule } from "./soqlLanguage";
 
