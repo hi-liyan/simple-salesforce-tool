@@ -94,10 +94,13 @@ function WorkspaceTabView({
     <div
       ref={setNodeRef}
       style={style}
-      className={`flex items-center border-r border-base-300 bg-base-100 ${active ? "ring-1 ring-inset ring-primary/25" : ""} ${
+      className={`flex select-none items-center border-r border-base-300 bg-base-100 ${active ? "ring-1 ring-inset ring-primary/25" : ""} ${
         isOverlay ? "" : "cursor-default"
       } ${isActiveDrag ? "opacity-80" : ""}`}
       {...(!isOverlay ? dragHandleProps : undefined)}
+      onSelectStart={(event) => {
+        event.preventDefault(); // 禁止鼠标拖拽选中文本，避免 Tab 标题被高亮复制。
+      }}
       onClick={() => {
         if (isOverlay) return;
         onActivateTab(tab.id); // 点击任意 Tab 区域即可激活对应工作区。
@@ -109,7 +112,7 @@ function WorkspaceTabView({
       }}
     >
       {/* Tab 标题按钮：点击后激活对应工作区。 */}
-      <div className={`min-w-0 px-3 py-2 text-[12px] ${active ? "text-primary" : "text-neutral/70"}`} title={tab.title}>
+      <div className={`min-w-0 select-none px-3 py-2 text-[12px] ${active ? "text-primary" : "text-neutral/70"}`} title={tab.title}>
         {tab.title}
       </div>
       {/* 关闭按钮：关闭当前工作区标签。 */}

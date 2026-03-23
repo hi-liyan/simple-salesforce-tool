@@ -172,7 +172,8 @@ export function MainPage() {
 
       // 异步重新拉取恢复的 Tab 数据（describe + query），不阻塞主界面。
       const finalSelectedSourceId = useAppStore.getState().selectedSourceId;
-      void reloadRestoredTabs(finalSelectedSourceId);
+      // 将恢复任务句柄保留下来，供后续版本检查避开启动重任务窗口。
+      const restoredTabsPromise = reloadRestoredTabs(finalSelectedSourceId);
 
       // 启动后在后台静默同步 CLI 数据源，不再影响首屏可交互时间。
       // 这里继续沿用持久化的数据源 ID，避免“首屏本地列表未命中 -> 选中被清空”后无法恢复 CLI 数据源。
@@ -188,7 +189,10 @@ export function MainPage() {
 
       if (!startupVersionCheckTriggered) {
         startupVersionCheckTriggered = true;
-        void checkLatestVersionOnStartup(showVersionUpdateModal);
+        void restoredTabsPromise.finally(() => {
+          // 等恢复 Tab 的重任务收尾后再做版本检查，避免弹窗按钮点击被启动任务阻塞。
+          void checkLatestVersionOnStartup(showVersionUpdateModal);
+        });
       }
     };
 
@@ -467,6 +471,18 @@ type ParsedSemanticVersion = {
   preRelease: string | null;
 };
 
+// 将升级弹窗延后到下一轮事件循环和浏览器下一帧，尽量避开启动尾部的主线程忙碌期。
+async function waitForUiIdleFrame(): Promise<void> {
+  // 先让出当前宏任务，让启动恢复期间的同步状态提交先落完。
+  await new Promise<void>((resolve) => {
+    window.setTimeout(() => resolve(), 0);
+  });
+  // 再等待浏览器下一帧，确保弹窗挂载后能更快进入可点击状态。
+  await new Promise<void>((resolve) => {
+    window.requestAnimationFrame(() => resolve());
+  });
+}
+
 // 启动时检查 GitHub 最新版本；若有更新则触发升级模态框。
 async function checkLatestVersionOnStartup(onFoundNewVersion: (payload: VersionUpdateModalState) => void): Promise<void> {
   try {
@@ -476,6 +492,8 @@ async function checkLatestVersionOnStartup(onFoundNewVersion: (payload: VersionU
     const latestVersion = await fetchLatestGithubReleaseVersion();
     if (!latestVersion) return;
     if (!isGithubVersionNewer(currentVersion, latestVersion)) return;
+    // 命中新版本后先让出 UI 一帧，减少弹窗出现瞬间的点击排队。
+    await waitForUiIdleFrame();
     onFoundNewVersion({
       currentVersion,
       latestVersion,
