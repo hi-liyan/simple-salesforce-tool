@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { ObjectDdl, ObjectDescribe, SalesforceObject } from "../types";
@@ -329,13 +329,29 @@ export function ObjectList({
   return (
     // 容器：输入框 + 可滚动树形列表。
     <div className="flex h-full min-h-0 flex-col">
-      {/* 筛选输入框。 */}
-      <input
-        className="input input-bordered input-sm w-full"
-        placeholder="筛选 Object"
-        value={keyword}
-        onChange={(event) => setKeyword(event.target.value)}
-      />
+      {/* 筛选输入区域：支持输入关键字并一键清空。 */}
+      <div className="relative">
+        {/* 筛选输入框。 */}
+        <input
+          className="input input-bordered input-sm w-full pr-8"
+          placeholder="筛选 Object"
+          value={keyword}
+          onChange={(event) => setKeyword(event.target.value)}
+        />
+        {/* 清空按钮：仅在存在筛选关键字时展示，便于快速恢复完整列表。 */}
+        {keyword ? (
+          <button
+            className="btn btn-circle btn-ghost btn-xs absolute right-1 top-1/2 -translate-y-1/2"
+            type="button"
+            aria-label="清空 Object 筛选"
+            onClick={() => {
+              setKeyword(""); // 点击后立即清空筛选关键字。
+            }}
+          >
+            <X size={13} />
+          </button>
+        ) : null}
+      </div>
 
       {/* 列表容器：支持滚动。 */}
       <div className="mt-2 min-h-0 flex-1 overflow-auto border-t border-base-300">
