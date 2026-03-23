@@ -52,6 +52,8 @@ type WorkspaceTabViewProps = {
   active: boolean;
   // 当前是否在拖拽中（用于高亮）。
   isActiveDrag: boolean;
+  // 是否隐藏为占位节点：拖拽中保留布局宽度，但不再显示原始 Tab。
+  isPlaceholder?: boolean;
   // 根节点引用：sortable 模式下挂载到真实 DOM。
   setNodeRef?: (element: HTMLDivElement | null) => void;
   // 拖拽根节点属性：由 dnd-kit 注入并合并为标准容器属性。
@@ -81,6 +83,7 @@ function WorkspaceTabView({
   tab,
   active,
   isActiveDrag,
+  isPlaceholder = false,
   setNodeRef,
   dragHandleProps,
   style,
@@ -96,9 +99,10 @@ function WorkspaceTabView({
       style={style}
       className={`flex select-none items-center border-r border-base-300 bg-base-100 ${active ? "ring-1 ring-inset ring-primary/25" : ""} ${
         isOverlay ? "" : "cursor-default"
-      } ${isActiveDrag ? "opacity-80" : ""}`}
+      } ${isPlaceholder ? "pointer-events-none opacity-0" : ""}`}
       {...(!isOverlay ? dragHandleProps : undefined)}
-      onSelectStart={(event) => {
+      onMouseDown={(event) => {
+        if (event.button !== 0) return;
         event.preventDefault(); // 禁止鼠标拖拽选中文本，避免 Tab 标题被高亮复制。
       }}
       onClick={() => {
@@ -158,6 +162,7 @@ function SortableWorkspaceTab(props: SortableWorkspaceTabProps) {
     <WorkspaceTabView
       {...props}
       isActiveDrag={isDragging || props.isActiveDrag}
+      isPlaceholder={isDragging}
       setNodeRef={setNodeRef}
       dragHandleProps={{ ...attributes, ...listeners }}
       style={style}
