@@ -261,7 +261,7 @@ export function QuerySidebar({
       </div>
 
       {/* 统一树区域：直接展示全部数据源与类型化子节点。 */}
-      <div className="min-h-0 flex-1 px-1 pb-2 pt-1">
+      <div className="min-h-0 flex-1 pb-2 pt-1">
         <QuerySourceTree
           sources={sources}
           selectedSourceId={selectedSourceId}
