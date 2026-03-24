@@ -1,6 +1,7 @@
 import { ChevronRight } from "lucide-react";
 import type { NodeRendererProps } from "react-arborist";
 import { buildObjectTabBindingKey } from "../../../../types";
+import { buildTreeNodeInteractionClassName } from "../logic/sourceTreeInteractions.ts";
 import { resolveQueryTreeBadgeMeta, resolveQueryTreeVisualKind } from "../logic/queryTreeVisuals.ts";
 import type { QueryTreeRenderNode } from "../hooks/useSourceTreeState.ts";
 import type { SourceTreeState } from "../types/tree.ts";
@@ -12,8 +13,6 @@ type QuerySourceTreeNodeProps = NodeRendererProps<QueryTreeRenderNode> & {
   activeTabObjectName: string;
   // 单击节点。
   onNodeClick: (node: QueryTreeRenderNode) => void;
-  // 双击节点。
-  onNodeDoubleClick: (node: QueryTreeRenderNode) => void;
   // 点击展开箭头。
   onToggleNode: (node: QueryTreeRenderNode) => void;
 };
@@ -47,7 +46,6 @@ export function QuerySourceTreeNode({
   treeState,
   activeTabObjectName,
   onNodeClick,
-  onNodeDoubleClick,
   onToggleNode
 }: QuerySourceTreeNodeProps) {
   const data = node.data;
@@ -67,11 +65,10 @@ export function QuerySourceTreeNode({
     <div style={style} className="px-2">
       {/* 节点主体：统一收紧箭头、图标、文字的间距，避免当前树看起来松散又凌乱。 */}
       <div
-        className={`group flex min-h-[30px] items-center gap-1.5 rounded px-2 py-[3px] text-[12px] ${
-          isActiveObject || isFocusedSource ? "bg-base-200 text-base-content" : "text-base-content/80 hover:bg-base-200/70"
-        }`}
+        className={buildTreeNodeInteractionClassName({
+          active: isActiveObject || isFocusedSource
+        })}
         onClick={() => onNodeClick(data)}
-        onDoubleClick={() => onNodeDoubleClick(data)}
       >
         {/* 展开箭头：减弱存在感，只负责树结构层级提示。 */}
         <button

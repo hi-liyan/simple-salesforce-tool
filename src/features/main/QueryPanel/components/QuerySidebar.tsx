@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Braces, Plus, RefreshCw } from "lucide-react";
 import { api } from "../../../../api";
 import { DataSourceType, ObjectDdl, ObjectDescribe, SalesforceObject, SalesforceSource, SourceUpsertPayload } from "../../../../types";
+import { resolveConsoleTargetSource } from "../logic/querySidebarConsoleSource.ts";
 import { QuerySidebarActions, type QuerySidebarActionItem } from "./QuerySidebarActions";
 import { QuerySourceTree } from "./QuerySourceTree";
 
@@ -21,7 +22,7 @@ type QuerySidebarProps = {
   // 兼容层：新增数据源后刷新 source 列表。
   onRefreshSources: () => void;
   // 打开查询控制台回调。
-  onOpenConsole?: () => void;
+  onOpenConsole?: (source?: SalesforceSource) => void;
   // 当前页面已持有的对象列表：用于给树组件复用已缓存数据。
   objects: SalesforceObject[];
   // 当前激活对象名。
@@ -82,8 +83,11 @@ export function QuerySidebar({
     password: "",
     primaryKey: ""
   });
-  // 左侧树动作句柄：由树组件回传“刷新聚焦数据源”能力。
-  const [treeActions, setTreeActions] = useState<{ refreshFocusedSource: () => Promise<void> } | null>(null);
+  // 左侧树动作句柄：由树组件回传“刷新聚焦数据源/读取聚焦源”能力。
+  const [treeActions, setTreeActions] = useState<{
+    refreshFocusedSource: () => Promise<void>;
+    getFocusedSourceId: () => string;
+  } | null>(null);
 
   // 打开“选择数据源类型”弹窗。
   function openSourceTypeModal() {
@@ -231,7 +235,12 @@ export function QuerySidebar({
       ariaLabel: "查询控制台",
       onClick: () => {
         if (!onOpenConsole) return;
-        onOpenConsole(); // 点击后交由外层决定打开控制台的具体行为（切页或新建 console tab）。
+        const targetSource = resolveConsoleTargetSource({
+          sources,
+          focusedSourceId: treeActions?.getFocusedSourceId() || "",
+          selectedSourceId
+        });
+        onOpenConsole(targetSource || undefined); // 点击后按聚焦源优先创建对应来源的控制台 Tab。
       }
     }
   ];

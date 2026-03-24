@@ -107,7 +107,8 @@ type UseQueryPanelRuntimeInput = {
     sortFieldOverride?: string,
     limitOverride?: number,
     directionOverride?: "ASC" | "DESC",
-    sortClauseOverride?: string
+    sortClauseOverride?: string,
+    fallbackTab?: TabState
   ) => Promise<void>;
   // 从 DB 读取字段可见性。
   loadColumnVisibilityFromDb: (
@@ -253,7 +254,7 @@ export function useQueryPanelRuntime({
           columnVisibility: persistedVisibility
         }));
 
-        await queryTabData(bindingKey, describe, "", defaultSortField, 200, "DESC");
+        await queryTabData(bindingKey, describe, "", defaultSortField, 200, "DESC", undefined, newTab);
       } catch (error) {
         patchTab(bindingKey, (tab) => ({
           ...tab,

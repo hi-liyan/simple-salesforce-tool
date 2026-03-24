@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { NodeApi } from "react-arborist";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "../../../../api";
 import type { SalesforceObject, SalesforceSource } from "../../../../types";
 import { getSourceColor } from "../logic/sourceColor.ts";
+import { resolveNodeClickOutcome, resolveNodeDoubleClickAction, type TreeNodeClickState } from "../logic/sourceTreeInteractions.ts";
 import { buildMySqlRootChildren, buildMySqlTableChildren, buildSalesforceRootChildren, buildSourceRootNodes } from "../logic/sourceTreeProviders.ts";
 import { beginRefreshingSource, finishRefreshingSource, focusSourceNode, toggleExpandedNode } from "../logic/sourceTreeState.ts";
 import type { QueryTreeNode, SourceTreeState } from "../types/tree.ts";
@@ -37,10 +38,8 @@ type UseSourceTreeStateResult = {
   treeState: SourceTreeState;
   // 树选择态：优先高亮聚焦数据源。
   selectionId: string;
-  // 点击节点。
-  onNodeClick: (node: QueryTreeNode) => void;
-  // 双击节点。
-  onNodeDoubleClick: (node: QueryTreeNode, treeNode: NodeApi<QueryTreeRenderNode>) => Promise<void>;
+  // 点击节点：内部处理单击聚焦与稳定双击判定。
+  onNodeClick: (node: QueryTreeNode, treeNode: NodeApi<QueryTreeRenderNode>) => Promise<void>;
   // 点击展开箭头。
   onToggleNode: (node: QueryTreeNode, treeNode: NodeApi<QueryTreeRenderNode>) => Promise<void>;
   // 刷新聚焦数据源。
@@ -72,6 +71,8 @@ export function useSourceTreeState({
 }: UseSourceTreeStateInput): UseSourceTreeStateResult {
   // 左树状态：只服务侧边栏，不再等同于全局“当前数据源”。
   const [treeState, setTreeState] = useState<SourceTreeState>(() => createEmptyTreeState(selectedSourceId));
+  // 最近一次节点点击快照：用于在 arborist 重绘场景下稳定识别双击。
+  const latestClickStateRef = useRef<TreeNodeClickState | null>(null);
 
   // 数据源索引：便于通过 sourceId 快速解析完整上下文。
   const sourceMap = useMemo(() => new Map(sources.map((source) => [source.id, source])), [sources]);
@@ -296,8 +297,8 @@ export function useSourceTreeState({
     [focusSource, loadSourceChildren, sourceMap, treeState.sourceLoadingById, treeState.sourceObjectsById, treeState.sourceTreeChildrenById]
   );
 
-  // 单击节点：source 只聚焦，object 不立即打开，贴近数据库客户端交互。
-  const onNodeClick = useCallback((node: QueryTreeNode) => {
+  // 处理单击聚焦：source/object 单击只更新焦点，不立即打开右侧 tab。
+  const handleSingleClick = useCallback((node: QueryTreeNode) => {
     if (node.kind === "source") {
       focusSource(node.sourceId);
       return;
@@ -307,14 +308,20 @@ export function useSourceTreeState({
     }
   }, [focusSource]);
 
-  // 双击节点：source/group 执行展开，object 执行打开。
-  const onNodeDoubleClick = useCallback(async (node: QueryTreeNode, treeNode: NodeApi<QueryTreeRenderNode>) => {
-    if (node.kind === "object") {
+  // 节点点击：先处理单击焦点，再基于时间窗把第二次点击提升为稳定双击动作。
+  const onNodeClick = useCallback(async (node: QueryTreeNode, treeNode: NodeApi<QueryTreeRenderNode>) => {
+    handleSingleClick(node);
+
+    const outcome = resolveNodeClickOutcome(latestClickStateRef.current, node.id, Date.now());
+    latestClickStateRef.current = outcome.nextState;
+    if (!outcome.isDoubleClick) return;
+
+    if (resolveNodeDoubleClickAction(node) === "open") {
       openObjectNode(node);
       return;
     }
     await toggleNode(node, treeNode);
-  }, [openObjectNode, toggleNode]);
+  }, [handleSingleClick, openObjectNode, toggleNode]);
 
   // 刷新当前聚焦数据源：仅刷新该 source，不做全量同步。
   const refreshFocusedSource = useCallback(async () => {
@@ -355,7 +362,6 @@ export function useSourceTreeState({
     treeState,
     selectionId: treeState.focusedSourceId ? `source:${treeState.focusedSourceId}` : "",
     onNodeClick,
-    onNodeDoubleClick,
     onToggleNode: toggleNode,
     refreshFocusedSource
   };

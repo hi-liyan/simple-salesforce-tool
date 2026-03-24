@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import { api } from "../../../../api";
 import { buildObjectTabBindingKey, ObjectDescribe, QueryResult, TabLog, TabState } from "../../../../types";
+import { resolveQueryExecutionContext } from "../logic/queryExecutionContext.ts";
 
 type UseQueryExecutionInput = {
   // 当前选中数据源 ID。
@@ -75,18 +76,26 @@ export function useQueryExecution({
       sortFieldOverride?: string,
       limitOverride?: number,
       directionOverride?: "ASC" | "DESC",
-      sortClauseOverride?: string
+      sortClauseOverride?: string,
+      fallbackTab?: TabState
     ) => {
-      const tab = tabs.find((item) => item.bindingKey === objectName || item.objectName === objectName);
-      if (!tab && !describeOverride) return;
+      const executionContext = resolveQueryExecutionContext({
+        tabs,
+        tabIdentity: objectName,
+        selectedSourceId,
+        selectedSourceType,
+        fallbackTab
+      });
+      if (!executionContext && !describeOverride) return;
 
+      const tab = executionContext?.tab || fallbackTab || null;
       const describe = describeOverride ?? tab?.describe;
       if (!describe) return;
-      const tabObjectName = tab?.objectName || objectName;
-      const resolvedSourceId = tab?.sourceId || selectedSourceId;
+      const tabObjectName = executionContext?.tabObjectName || tab?.objectName || objectName;
+      const resolvedSourceId = executionContext?.resolvedSourceId || tab?.sourceId || selectedSourceId;
       if (!resolvedSourceId) return;
-      const resolvedSourceType = String(tab?.sourceType || selectedSourceType || "salesforce");
-      const tabBindingKey = tab?.bindingKey || buildObjectTabBindingKey(resolvedSourceId, tabObjectName);
+      const resolvedSourceType = executionContext?.resolvedSourceType || String(tab?.sourceType || selectedSourceType || "salesforce");
+      const tabBindingKey = executionContext?.tabBindingKey || tab?.bindingKey || buildObjectTabBindingKey(resolvedSourceId, tabObjectName);
 
       const whereClause = (whereOverride ?? tab?.whereClause ?? "").trim();
       const limit = Math.max(1, Math.min(2000, limitOverride ?? tab?.limit ?? 200));
@@ -179,6 +188,7 @@ export function useQueryExecution({
     },
     [
       tabs,
+      selectedSourceId,
       selectedSourceType,
       getSortableFieldNames,
       patchTab,

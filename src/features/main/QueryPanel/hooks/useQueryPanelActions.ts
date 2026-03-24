@@ -3,6 +3,7 @@ import type { QueryPanelActions } from "../types";
 import { buildObjectTabBindingKey } from "../../../../types";
 import type { ObjectDescribe, SalesforceObject, SalesforceSource, SourceBindingMeta, TabState } from "../../../../types";
 import { MainViewMode } from "../../../../store/useAppStore";
+import { getSourceColor } from "../logic/sourceColor.ts";
 import { getMysqlPrimaryKeyField, getRecordKey } from "../logic/queryUtils";
 
 type UseQueryPanelActionsInput = {
@@ -151,12 +152,16 @@ export function useQueryPanelActions({
     () => ({
       onSetViewMode: setViewMode,
       onOpenAuthWindow: openAuthWindow,
-      onOpenConsole: () => {
+      onOpenConsole: (source) => {
+        const targetSourceId = source?.id || selectedSourceId;
+        const targetSourceType = String(source?.sourceType || selectedSourceType || "");
+        const targetSourceName = source?.name || selectedSourceName;
+        const targetSourceColor = source ? getSourceColor(source) : selectedSourceColor;
         const nextConsoleTabId = createSoqlConsoleTab({
-          sourceId: selectedSourceId,
-          sourceType: selectedSourceType,
-          sourceName: selectedSourceName,
-          sourceColor: selectedSourceColor
+          sourceId: targetSourceId,
+          sourceType: targetSourceType,
+          sourceName: targetSourceName,
+          sourceColor: targetSourceColor
         }); // 每次点击都新建并激活一个控制台 Tab。
         setActiveWorkspaceTabId(buildConsoleWorkspaceTabId(nextConsoleTabId)); // 激活新建的 console 工作区 Tab。
         setViewMode("query"); // 保持在统一 Query 工作区内切换，不跳离当前布局。

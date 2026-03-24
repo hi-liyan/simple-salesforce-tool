@@ -4,6 +4,10 @@ export type DataWorkspaceTab = {
   bindingKey: string;
   // 对象 API 名称。
   objectName: string;
+  // 对象 Tab 绑定的数据源 ID。
+  sourceId?: string;
+  // 对象 Tab 绑定的数据源名称。
+  sourceName?: string;
   // 展示标题：优先使用对象标签，兜底为对象 API 名称。
   title?: string;
 };
@@ -14,6 +18,10 @@ export type ConsoleWorkspaceTab = {
   id: string;
   // 控制台 Tab 名称。
   name: string;
+  // 控制台 Tab 绑定的数据源 ID。
+  sourceId?: string;
+  // 控制台 Tab 绑定的数据源名称。
+  sourceName?: string;
 };
 
 // 统一工作区 Tab 项：用于 data/console 混合渲染。
@@ -57,16 +65,28 @@ export function parseWorkspaceTabId(workspaceTabId: string): WorkspaceTabTarget 
 
 // 构建统一工作区 Tab 列表：提供 data/console 基础映射，最终展示顺序由 hook 层维护。
 export function buildWorkspaceTabs(dataTabs: DataWorkspaceTab[], consoleTabs: ConsoleWorkspaceTab[]): WorkspaceTabItem[] {
+  const sourceNameSet = new Set(
+    [...dataTabs, ...consoleTabs]
+      .map((tab) => String(tab.sourceName || tab.sourceId || "").trim())
+      .filter((item) => item !== "")
+  );
+  const shouldAppendSourceName = sourceNameSet.size > 1;
+  const buildWorkspaceTitle = (baseTitle: string, sourceName?: string, sourceId?: string): string => {
+    const resolvedSourceName = String(sourceName || sourceId || "").trim();
+    if (!shouldAppendSourceName || !resolvedSourceName) return baseTitle;
+    return `${baseTitle} [${resolvedSourceName}]`;
+  };
+
   return [
     ...dataTabs.map((tab) => ({
       id: buildDataWorkspaceTabId(tab.bindingKey),
       kind: "data" as const,
-      title: tab.title || tab.objectName
+      title: buildWorkspaceTitle(tab.title || tab.objectName, tab.sourceName, tab.sourceId)
     })),
     ...consoleTabs.map((tab) => ({
       id: buildConsoleWorkspaceTabId(tab.id),
       kind: "console" as const,
-      title: tab.name
+      title: buildWorkspaceTitle(tab.name, tab.sourceName, tab.sourceId)
     }))
   ];
 }

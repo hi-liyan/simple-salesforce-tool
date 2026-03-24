@@ -20,7 +20,7 @@ type QuerySourceTreeProps = {
   // 不可查询对象提示。
   onNotQueryableObjectClick?: (item: SalesforceObject) => void;
   // 对外暴露刷新聚焦数据源能力。
-  onReady?: (actions: { refreshFocusedSource: () => Promise<void> }) => void;
+  onReady?: (actions: { refreshFocusedSource: () => Promise<void>; getFocusedSourceId: () => string }) => void;
 };
 
 // 左侧多数据源树：统一展示所有 source，并按需懒加载子节点。
@@ -43,7 +43,6 @@ export function QuerySourceTree({
     treeState,
     selectionId,
     onNodeClick,
-    onNodeDoubleClick,
     onToggleNode,
     refreshFocusedSource
   } = useSourceTreeState({
@@ -57,8 +56,11 @@ export function QuerySourceTree({
 
   // 将刷新动作回传给侧边栏顶部按钮，避免继续走“全量刷新 source 列表”旧逻辑。
   useEffect(() => {
-    onReady?.({ refreshFocusedSource });
-  }, [onReady, refreshFocusedSource]);
+    onReady?.({
+      refreshFocusedSource,
+      getFocusedSourceId: () => treeState.focusedSourceId
+    });
+  }, [onReady, refreshFocusedSource, treeState.focusedSourceId]);
 
   // 监听容器尺寸变化，保持树高度自适应。
   useEffect(() => {
@@ -106,8 +108,7 @@ export function QuerySourceTree({
             {...props}
             treeState={treeState}
             activeTabObjectName={activeTabObjectName}
-            onNodeClick={onNodeClick}
-            onNodeDoubleClick={(node) => void onNodeDoubleClick(node, props.node)}
+            onNodeClick={(node) => void onNodeClick(node, props.node)}
             onToggleNode={(node) => void onToggleNode(node, props.node)}
           />
         )}
