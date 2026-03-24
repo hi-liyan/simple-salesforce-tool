@@ -155,6 +155,11 @@ type UseQueryPanelRuntimeInput = {
   setMysqlDdlMap: (updater: (state: MysqlDdlState) => MysqlDdlState) => void;
 };
 
+type ReloadTabOptions = {
+  // 当历史快照缺少 sourceId 时，允许调用方注入兜底数据源。
+  fallbackSourceId?: string;
+};
+
 // QueryPanel 运行时行为：封装对象打开、恢复查询、抽屉与 DDL 加载逻辑。
 export function useQueryPanelRuntime({
   selectedSourceId,
@@ -177,6 +182,16 @@ export function useQueryPanelRuntime({
   mysqlDdlMap,
   setMysqlDdlMap
 }: UseQueryPanelRuntimeInput) {
+  // 解析 Tab 实际绑定的数据源 ID：优先使用 Tab 快照，其次回退到默认数据源。
+  const resolveTabSourceId = useCallback((tab: TabState, fallbackSourceId = "") => {
+    return tab.sourceId || fallbackSourceId || selectedSourceId;
+  }, [selectedSourceId]);
+
+  // 解析 Tab 稳定身份：优先使用 bindingKey，兼容历史快照只保存 objectName 的场景。
+  const resolveTabIdentity = useCallback((tab: TabState, fallbackSourceId = "") => {
+    return tab.bindingKey || buildObjectTabBindingKey(resolveTabSourceId(tab, fallbackSourceId), tab.objectName);
+  }, [resolveTabSourceId]);
+
   // 打开对象：若不存在则新建 Tab 并加载 describe + 首次查询。
   const openObjectTab = useCallback(
     async (objectItem: SalesforceObject, sourceOverride?: SalesforceSource) => {
@@ -279,17 +294,19 @@ export function useQueryPanelRuntime({
 
   // 重新拉取单个 Tab 的 describe + 字段可见性 + 查询结果。
   const reloadSingleTab = useCallback(
-    async (sourceId: string, tab: TabState) => {
+    async (tab: TabState, options?: ReloadTabOptions) => {
       const { patchTab: storePatchTab } = useAppStore.getState();
-      const tabBindingKey = tab.bindingKey || buildObjectTabBindingKey(sourceId, tab.objectName);
+      const resolvedSourceId = resolveTabSourceId(tab, options?.fallbackSourceId);
+      if (!resolvedSourceId) return;
+      const tabBindingKey = resolveTabIdentity(tab, options?.fallbackSourceId);
       try {
         storePatchTab(tabBindingKey, (t) => ({ ...t, loading: true }));
-        const describe = await api.describeObject(sourceId, tab.objectName);
+        const describe = await api.describeObject(resolvedSourceId, tab.objectName);
 
         const defaults = describe.fields.reduce((acc, field) => ({ ...acc, [field.name]: true }), {} as Record<string, boolean>);
         let visibility: Record<string, boolean>;
         try {
-          const stored = await api.getColumnVisibility(sourceId, tab.objectName);
+          const stored = await api.getColumnVisibility(resolvedSourceId, tab.objectName);
           visibility = { ...defaults, ...stored };
         } catch {
           visibility = defaults;
@@ -297,14 +314,14 @@ export function useQueryPanelRuntime({
 
         storePatchTab(tabBindingKey, (t) => ({ ...t, describe, columnVisibility: visibility }));
         const freshTab = useAppStore.getState().tabs.find((t) => {
-          const currentBindingKey = t.bindingKey || buildObjectTabBindingKey(t.sourceId || sourceId, t.objectName);
+          const currentBindingKey = resolveTabIdentity(t, resolvedSourceId);
           return currentBindingKey === tabBindingKey;
         });
         if (!freshTab) return;
 
         const whereClause = (freshTab.whereClause ?? "").trim();
         const limit = Math.max(1, Math.min(2000, freshTab.limit ?? 200));
-        const normalizedType = (selectedSourceType || "salesforce").toLowerCase();
+        const normalizedType = String(freshTab.sourceType || selectedSourceType || "salesforce").toLowerCase();
         // MySQL 恢复查询时补齐主键字段，确保基线键与表格高亮键一致。
         const mysqlPrimaryKeyField = normalizedType === "mysql"
           ? describe.fields.find((field) => String(field.metadata?.columnKey || "").toUpperCase() === "PRI")?.name || ""
@@ -336,7 +353,7 @@ export function useQueryPanelRuntime({
           limit,
           sortClause
         );
-        const rawResult = await api.queryRecords(sourceId, soql);
+        const rawResult = await api.queryRecords(resolvedSourceId, soql);
         const result = normalizeQueryResult(rawResult);
 
         storePatchTab(tabBindingKey, (t) => ({
@@ -369,26 +386,69 @@ export function useQueryPanelRuntime({
         }));
       }
     },
-    [selectedSourceType, getSortableFieldNames, buildQueryStatement, normalizeQueryResult, buildBaselineRecords, appendTabLog]
+    [
+      resolveTabSourceId,
+      resolveTabIdentity,
+      selectedSourceType,
+      getSortableFieldNames,
+      buildQueryStatement,
+      normalizeQueryResult,
+      buildBaselineRecords,
+      appendTabLog
+    ]
   );
 
   // 启动后恢复持久化 Tabs：优先恢复激活 Tab，其余并发加载。
   const reloadRestoredTabs = useCallback(
-    async (sourceId: string) => {
+    async (fallbackSourceId = "") => {
       const restoredTabs = useAppStore.getState().tabs;
-      const activeObjectName = useAppStore.getState().activeTabObjectName;
-      if (restoredTabs.length === 0 || !sourceId) return;
+      const activeTabIdentity = useAppStore.getState().activeTabObjectName;
+      if (restoredTabs.length === 0) return;
 
-      const active = restoredTabs.find((t) => t.objectName === activeObjectName);
+      const runnableTabs = restoredTabs.filter((tab) => Boolean(resolveTabSourceId(tab, fallbackSourceId)));
+      if (runnableTabs.length === 0) return;
+
+      const active = runnableTabs.find(
+        (tab) => resolveTabIdentity(tab, fallbackSourceId) === activeTabIdentity || tab.objectName === activeTabIdentity
+      );
       if (active) {
-        await reloadSingleTab(sourceId, active);
+        await reloadSingleTab(active, { fallbackSourceId });
       }
-      const remainingTabs = restoredTabs.filter((t) => t.objectName !== activeObjectName);
+      const remainingTabs = runnableTabs.filter((tab) => {
+        if (!active) return true;
+        return resolveTabIdentity(tab, fallbackSourceId) !== resolveTabIdentity(active, fallbackSourceId);
+      });
       if (remainingTabs.length > 0) {
-        await Promise.allSettled(remainingTabs.map((tab) => reloadSingleTab(sourceId, tab)));
+        await Promise.allSettled(remainingTabs.map((tab) => reloadSingleTab(tab, { fallbackSourceId })));
       }
     },
-    [reloadSingleTab]
+    [reloadSingleTab, resolveTabIdentity, resolveTabSourceId]
+  );
+
+  // 刷新指定数据源下的所有已打开 Tab：用于手动刷新对象列表后同步重载字段元数据与查询结果。
+  const reloadTabsForSource = useCallback(
+    async (sourceId: string) => {
+      if (!sourceId) return;
+
+      const sourceTabs = useAppStore.getState().tabs.filter((tab) => resolveTabSourceId(tab, sourceId) === sourceId);
+      if (sourceTabs.length === 0) return;
+
+      const activeTabIdentity = useAppStore.getState().activeTabObjectName;
+      const active = sourceTabs.find((tab) => resolveTabIdentity(tab, sourceId) === activeTabIdentity || tab.objectName === activeTabIdentity);
+
+      if (active) {
+        await reloadSingleTab(active, { fallbackSourceId: sourceId });
+      }
+
+      const remainingTabs = sourceTabs.filter((tab) => {
+        if (!active) return true;
+        return resolveTabIdentity(tab, sourceId) !== resolveTabIdentity(active, sourceId);
+      });
+      if (remainingTabs.length === 0) return;
+
+      await Promise.allSettled(remainingTabs.map((tab) => reloadSingleTab(tab, { fallbackSourceId: sourceId })));
+    },
+    [reloadSingleTab, resolveTabIdentity, resolveTabSourceId]
   );
 
   // 加载指定对象的 MySQL DDL（建表/索引/约束）。
@@ -768,6 +828,7 @@ export function useQueryPanelRuntime({
   return {
     openObjectTab,
     reloadRestoredTabs,
+    reloadTabsForSource,
     loadMysqlDdl,
     toggleDrawerForActiveTab,
     deleteCheckedRecords,

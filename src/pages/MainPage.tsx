@@ -8,6 +8,7 @@ import { useAppStore } from "../store/useAppStore";
 import { useSoqlExecutorStore } from "../store/useSoqlExecutorStore";
 import { useTerminalStore } from "../store/useTerminalStore";
 import { useQueryWorkspaceTabsStore } from "../store/useQueryWorkspaceTabsStore";
+import { useQuerySourceTreeStore } from "../store/useQuerySourceTreeStore";
 import { enableStorageWrite } from "../store/tauriStorage";
 import { checkGithubLatestVersion, waitForUiIdleFrame } from "../utils/versionUpdate";
 // 启动版本检查标志：避免 React StrictMode 在开发环境重复触发弹窗。
@@ -155,6 +156,7 @@ export function MainPage() {
         useAppStore.persist.rehydrate(),
         useSoqlExecutorStore.persist.rehydrate(),
         useQueryWorkspaceTabsStore.persist.rehydrate(),
+        useQuerySourceTreeStore.persist.rehydrate(),
         useTerminalStore.persist.rehydrate()
       ]);
       if (!active) return;

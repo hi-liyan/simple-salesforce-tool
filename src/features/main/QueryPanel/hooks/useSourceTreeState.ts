@@ -3,7 +3,14 @@ import type { NodeApi } from "react-arborist";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "../../../../api";
 import type { SalesforceObject, SalesforceSource } from "../../../../types";
+import { useQuerySourceTreeStore } from "../../../../store/useQuerySourceTreeStore.ts";
 import { getSourceColor } from "../logic/sourceColor.ts";
+import {
+  buildSelectedNodeId,
+  collectRestorableSourceIds,
+  normalizePersistedSourceTreeUiState,
+  sanitizePersistedSourceTreeUiState
+} from "../logic/sourceTreePersistence.ts";
 import { resolveNodeClickOutcome, resolveNodeDoubleClickAction, type TreeNodeClickState } from "../logic/sourceTreeInteractions.ts";
 import { buildMySqlRootChildren, buildMySqlTableChildren, buildSalesforceRootChildren, buildSourceRootNodes } from "../logic/sourceTreeProviders.ts";
 import { beginRefreshingSource, finishRefreshingSource, focusSourceNode, toggleExpandedNode } from "../logic/sourceTreeState.ts";
@@ -47,10 +54,10 @@ type UseSourceTreeStateResult = {
 };
 
 // 创建空树状态：统一初始化所有分桶字段。
-function createEmptyTreeState(focusedSourceId: string): SourceTreeState {
+function createEmptyTreeState(focusedSourceId: string, selectedNodeId = ""): SourceTreeState {
   return {
     // 初始进入页面时，默认选中当前 source 根节点，保持树有稳定高亮。
-    selectedNodeId: focusedSourceId ? `source:${focusedSourceId}` : "",
+    selectedNodeId: buildSelectedNodeId(selectedNodeId, focusedSourceId),
     focusedSourceId,
     expandedNodeIds: [],
     sourceObjectsById: {},
@@ -71,13 +78,49 @@ export function useSourceTreeState({
   onOpenObject,
   onNotQueryableObjectClick
 }: UseSourceTreeStateInput): UseSourceTreeStateResult {
+  // 左树持久化 UI 快照：跨 panel 切换与重启恢复展开/高亮状态。
+  const persistedTreeUiState = useQuerySourceTreeStore((state) => state.treeUiState);
+  // 写入左树持久化 UI 快照。
+  const setPersistedTreeUiState = useQuerySourceTreeStore((state) => state.setTreeUiState);
+  // 持久化 store 是否已完成 hydration。
+  const [persistHydrated, setPersistHydrated] = useState(useQuerySourceTreeStore.persist.hasHydrated());
   // 左树状态：只服务侧边栏，不再等同于全局“当前数据源”。
-  const [treeState, setTreeState] = useState<SourceTreeState>(() => createEmptyTreeState(selectedSourceId));
+  const [treeState, setTreeState] = useState<SourceTreeState>(() => {
+    const initialTreeUiState = normalizePersistedSourceTreeUiState(persistedTreeUiState);
+    return {
+      ...createEmptyTreeState(initialTreeUiState.focusedSourceId || selectedSourceId, initialTreeUiState.selectedNodeId),
+      expandedNodeIds: initialTreeUiState.expandedNodeIds
+    };
+  });
   // 最近一次节点点击快照：用于在 arborist 重绘场景下稳定识别双击。
   const latestClickStateRef = useRef<TreeNodeClickState | null>(null);
+  // 持久化 UI 状态只恢复一次，避免后续用户交互被旧快照覆盖。
+  const persistedUiAppliedRef = useRef(false);
 
   // 数据源索引：便于通过 sourceId 快速解析完整上下文。
   const sourceMap = useMemo(() => new Map(sources.map((source) => [source.id, source])), [sources]);
+
+  // 监听持久化 hydration 完成：保证重启后首次进入 QueryPanel 也能拿到恢复后的树状态。
+  useEffect(() => {
+    if (persistHydrated) return;
+    const unsubscribe = useQuerySourceTreeStore.persist.onFinishHydration(() => {
+      setPersistHydrated(true);
+    });
+    return unsubscribe;
+  }, [persistHydrated]);
+
+  // hydration 完成后，将持久化 UI 快照灌回本地树状态。
+  useEffect(() => {
+    if (!persistHydrated || persistedUiAppliedRef.current) return;
+    persistedUiAppliedRef.current = true;
+    const restoredTreeUiState = normalizePersistedSourceTreeUiState(persistedTreeUiState);
+    setTreeState((current) => ({
+      ...current,
+      selectedNodeId: buildSelectedNodeId(restoredTreeUiState.selectedNodeId, restoredTreeUiState.focusedSourceId || selectedSourceId),
+      focusedSourceId: restoredTreeUiState.focusedSourceId || selectedSourceId,
+      expandedNodeIds: restoredTreeUiState.expandedNodeIds
+    }));
+  }, [persistHydrated, persistedTreeUiState, selectedSourceId]);
 
   // 当前选中 source 的对象列表同步到左树缓存，避免首个展开时重复请求。
   useEffect(() => {
@@ -126,15 +169,23 @@ export function useSourceTreeState({
       return;
     }
     setTreeState((current) => {
-      if (current.focusedSourceId && sourceMap.has(current.focusedSourceId)) return current;
-      const fallbackSourceId = sources[0]?.id || "";
+      const nextTreeUiState = sanitizePersistedSourceTreeUiState(
+        {
+          selectedNodeId: current.selectedNodeId,
+          focusedSourceId: current.focusedSourceId,
+          expandedNodeIds: current.expandedNodeIds
+        },
+        sources,
+        selectedSourceId
+      );
       return {
-        ...focusSourceNode(current, fallbackSourceId),
-        // 旧选中节点已失效时，回退到首个 source 根节点，避免高亮丢失到空状态。
-        selectedNodeId: fallbackSourceId ? `source:${fallbackSourceId}` : ""
+        ...current,
+        selectedNodeId: nextTreeUiState.selectedNodeId,
+        focusedSourceId: nextTreeUiState.focusedSourceId,
+        expandedNodeIds: nextTreeUiState.expandedNodeIds
       };
     });
-  }, [sources, sourceMap]);
+  }, [selectedSourceId, sources, sourceMap]);
 
   useEffect(() => {
     let active = true;
@@ -367,6 +418,46 @@ export function useSourceTreeState({
       };
     });
   }, [sources, treeState.sourceObjectsById, treeState.sourceTreeChildrenById]);
+
+  // 将本地树 UI 状态持久化到 store，供切换 panel 与重启后恢复。
+  useEffect(() => {
+    setPersistedTreeUiState({
+      selectedNodeId: treeState.selectedNodeId,
+      focusedSourceId: treeState.focusedSourceId,
+      expandedNodeIds: treeState.expandedNodeIds
+    });
+  }, [setPersistedTreeUiState, treeState.expandedNodeIds, treeState.focusedSourceId, treeState.selectedNodeId]);
+
+  // 根据持久化的展开/高亮状态恢复必要的数据源 children，确保重启后树内容能实际展开出来。
+  useEffect(() => {
+    if (sources.length === 0) return;
+
+    const restorableSourceIds = collectRestorableSourceIds(
+      {
+        selectedNodeId: treeState.selectedNodeId,
+        focusedSourceId: treeState.focusedSourceId,
+        expandedNodeIds: treeState.expandedNodeIds
+      },
+      sources
+    );
+
+    restorableSourceIds.forEach((sourceId) => {
+      const source = sourceMap.get(sourceId);
+      if (!source) return;
+      if (treeState.sourceTreeChildrenById[sourceId]) return;
+      if (treeState.sourceLoadingById[sourceId]) return;
+      void loadSourceChildren(source, false);
+    });
+  }, [
+    loadSourceChildren,
+    sourceMap,
+    sources,
+    treeState.expandedNodeIds,
+    treeState.focusedSourceId,
+    treeState.selectedNodeId,
+    treeState.sourceLoadingById,
+    treeState.sourceTreeChildrenById
+  ]);
 
   return {
     focusedSourceId: treeState.focusedSourceId,

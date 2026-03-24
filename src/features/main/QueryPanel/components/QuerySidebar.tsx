@@ -20,7 +20,7 @@ type QuerySidebarProps = {
   // 兼容层：新增数据源后仍可复用外层数据源更新逻辑。
   onChangeSource: (sourceId: string) => void;
   // 兼容层：新增数据源后刷新 source 列表。
-  onRefreshSources: () => void;
+  onRefreshSources: (sourceId?: string) => void;
   // 打开查询控制台回调。
   onOpenConsole?: (source?: SalesforceSource) => void;
   // 当前页面已持有的对象列表：用于给树组件复用已缓存数据。
@@ -226,7 +226,15 @@ export function QuerySidebar({
       icon: RefreshCw,
       ariaLabel: "刷新数据源",
       onClick: () => {
-        void treeActions?.refreshFocusedSource();
+        const focusedSourceId = treeActions?.getFocusedSourceId() || selectedSourceId;
+        if (!focusedSourceId) {
+          onRefreshSources();
+          return;
+        }
+        void (async () => {
+          await treeActions?.refreshFocusedSource();
+          onRefreshSources(focusedSourceId);
+        })();
       }
     },
     {

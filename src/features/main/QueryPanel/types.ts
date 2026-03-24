@@ -110,7 +110,7 @@ export type QueryPanelActions = {
   // 切换数据源。
   onChangeSource: (sourceId: string) => void;
   // 刷新数据源。
-  onRefreshSources: () => void;
+  onRefreshSources: (sourceId?: string) => void;
   // 刷新指定 MySQL 对象的字段元数据与 DDL。
   onRefreshMysqlObjectMetadata: (objectName: string) => Promise<{ describe: ObjectDescribe; ddl: ObjectDdl }>;
   // 打开对象 Tab：支持显式携带来源数据源。

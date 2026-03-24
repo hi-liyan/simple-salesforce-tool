@@ -64,6 +64,8 @@ type UseMainPageQueryPanelResult = {
   ) => Promise<void>;
   // 重新加载恢复的 Tab。
   reloadRestoredTabs: (sourceId: string) => Promise<void>;
+  // 刷新指定数据源对应的工作区缓存（对象列表 + 已打开 Tab）。
+  refreshWorkspaceSource: (sourceId?: string) => Promise<void>;
   // 显示工作区提示。
   showWorkspaceNotice: (notice: Notice, durationMs?: number) => void;
 };
@@ -301,6 +303,7 @@ export function useMainPageQueryPanel({
   const {
     openObjectTab,
     reloadRestoredTabs,
+    reloadTabsForSource,
     loadMysqlDdl,
     toggleDrawerForActiveTab,
     deleteCheckedRecords,
@@ -328,6 +331,30 @@ export function useMainPageQueryPanel({
     mysqlDdlMap,
     setMysqlDdlMap
   });
+
+  // 刷新工作区数据源：无参时沿用“同步 CLI 数据源”旧行为；传入 sourceId 时只同步该 source 的对象缓存与已打开 Tab。
+  const refreshWorkspaceSource = useCallback(
+    async (sourceId?: string) => {
+      const normalizedSourceId = String(sourceId || "").trim();
+      if (!normalizedSourceId) {
+        await refreshSources(true);
+        return;
+      }
+
+      try {
+        await queryClient.fetchQuery({
+          queryKey: ["objects", normalizedSourceId],
+          staleTime: 0,
+          queryFn: () => api.listObjects(normalizedSourceId)
+        });
+        await reloadTabsForSource(normalizedSourceId);
+        showWorkspaceNotice({ type: "success", message: "数据源元数据已刷新。" });
+      } catch (error) {
+        patchActiveTabNotice({ type: "error", message: `刷新数据源失败：${String(error)}` });
+      }
+    },
+    [patchActiveTabNotice, queryClient, refreshSources, reloadTabsForSource, showWorkspaceNotice]
+  );
 
   // 批量关闭 Tab：统一处理通知计时器、Tab 列表和激活项收敛。
   function closeTabsByObjectNames(objectNames: string[]) {
@@ -520,7 +547,7 @@ export function useMainPageQueryPanel({
     setActiveSoqlTabId,
     closeSoqlTab,
     closeSoqlTabsByIds,
-    refreshSources,
+    refreshSources: refreshWorkspaceSource,
     refreshMysqlObjectMetadata,
     handleSourceChange,
     buildDataWorkspaceTabId,
@@ -654,6 +681,7 @@ export function useMainPageQueryPanel({
     queryPanelActions,
     refreshSources,
     reloadRestoredTabs,
+    refreshWorkspaceSource,
     showWorkspaceNotice
   };
 }

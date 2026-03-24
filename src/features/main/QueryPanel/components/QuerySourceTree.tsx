@@ -4,6 +4,7 @@ import type { RowRendererProps } from "react-arborist";
 import type { SalesforceObject, SalesforceSource } from "../../../../types";
 import { useSourceTreeState } from "../hooks/useSourceTreeState.ts";
 import { buildSourceSurfacePalette, getSourceColor } from "../logic/sourceColor.ts";
+import { buildInitialOpenState } from "../logic/sourceTreePersistence.ts";
 import { QuerySourceTreeNode } from "./QuerySourceTreeNode";
 import type { QueryTreeRenderNode } from "../hooks/useSourceTreeState.ts";
 
@@ -100,6 +101,8 @@ export function QuerySourceTree({
     onOpenObject,
     onNotQueryableObjectClick
   });
+  // 树首次挂载时的展开映射：配合持久化状态恢复 source/group 展开态。
+  const initialOpenState = useMemo(() => buildInitialOpenState(treeState.expandedNodeIds), [treeState.expandedNodeIds]);
 
   // 将刷新动作回传给侧边栏顶部按钮，避免继续走“全量刷新 source 列表”旧逻辑。
   useEffect(() => {
@@ -145,6 +148,7 @@ export function QuerySourceTree({
         paddingTop={8}
         paddingBottom={8}
         openByDefault={false}
+        initialOpenState={initialOpenState}
         disableDrag
         selection={selectionId}
         childrenAccessor="children"
