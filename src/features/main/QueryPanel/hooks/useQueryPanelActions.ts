@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { QueryPanelActions } from "../types";
-import { ObjectDescribe, SalesforceObject, TabState } from "../../../../types";
+import { buildObjectTabBindingKey, ObjectDescribe, SalesforceObject, SalesforceSource, TabState } from "../../../../types";
 import { MainViewMode } from "../../../../store/useAppStore";
 import { getMysqlPrimaryKeyField, getRecordKey } from "../logic/queryUtils";
 
@@ -50,7 +50,7 @@ type UseQueryPanelActionsInput = {
   // 构建 data 工作区 Tab ID。
   buildDataWorkspaceTabId: (objectName: string) => string;
   // 打开对象 Tab。
-  openObjectTab: (item: SalesforceObject) => Promise<void>;
+  openObjectTab: (item: SalesforceObject, source?: SalesforceSource) => Promise<void>;
   // 不可查询对象点击提示。
   handleNotQueryableObjectClick: (item: SalesforceObject) => void;
   // 关闭对象 Tab。
@@ -194,9 +194,10 @@ export function useQueryPanelActions({
       onChangeSource: (sourceId) => void handleSourceChange(sourceId),
       onRefreshSources: () => void refreshSources(true),
       onRefreshMysqlObjectMetadata: (objectName) => refreshMysqlObjectMetadata(objectName),
-      onOpenObject: (item) => {
-        setActiveWorkspaceTabId(buildDataWorkspaceTabId(item.name)); // 双击对象后切回 data 工作区 Tab。
-        void openObjectTab(item);
+      onOpenObject: (item, source) => {
+        const targetSourceId = source?.id || selectedSourceId;
+        setActiveWorkspaceTabId(buildDataWorkspaceTabId(buildObjectTabBindingKey(targetSourceId, item.name))); // 双击对象后切回 data 工作区 Tab。
+        void openObjectTab(item, source);
       },
       onNotQueryableObjectClick: handleNotQueryableObjectClick,
       onActivateTab: setActiveTabObjectName,

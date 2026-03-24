@@ -1,7 +1,8 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
-import { TabState } from "../types";
-import { tauriSqliteStorage } from "./tauriStorage";
+import { buildObjectTabBindingKey, type TabState } from "../types/index.ts";
+import { tauriSqliteStorage } from "./tauriStorage.ts";
+import { hydrateTab } from "./queryTabHydration.ts";
 
 // 主页面视图模式：支持 Query 工作区、Terminal 工作区、工具页与设置页入口。
 export type MainViewMode = "query" | "terminal" | "tools" | "settings";
@@ -26,37 +27,23 @@ type PersistedSourceTabState = {
   activeTabObjectName: string;
 };
 
-// 将持久化快照恢复为完整 TabState，兼容历史字段缺失并重置瞬态运行标记。
-function hydrateTab(persisted: Partial<PersistedTabState>): TabState {
+// 为 Tab 补齐稳定唯一键：兼容历史快照缺少 bindingKey 的场景。
+function ensureTabBindingKey(tab: TabState): TabState {
+  if (tab.bindingKey) return tab;
   return {
-    ...persisted,
-    objectName: persisted.objectName || "",
-    label: persisted.label || persisted.objectName || "",
-    describe: persisted.describe || null,
-    result: persisted.result || { totalSize: 0, records: [] },
-    whereClause: persisted.whereClause || "",
-    limit: typeof persisted.limit === "number" ? persisted.limit : 200,
-    sortField: persisted.sortField || "",
-    sortDirection: persisted.sortDirection === "ASC" ? "ASC" : "DESC",
-    sortClause: persisted.sortClause || "",
-    selectedRecordIds: Array.isArray(persisted.selectedRecordIds) ? persisted.selectedRecordIds : [],
-    pendingDeleteRecordIds: Array.isArray(persisted.pendingDeleteRecordIds) ? persisted.pendingDeleteRecordIds : [],
-    currentSoql: persisted.currentSoql || "",
-    soqlDraft: persisted.soqlDraft || "",
-    showQueryBar: persisted.showQueryBar !== false,
-    showDrawer: persisted.showDrawer === true,
-    drawerView:
-      persisted.drawerView === "mysql-ddl" || persisted.drawerView === "mysql-fields" || persisted.drawerView === "salesforce"
-        ? persisted.drawerView
-        : "salesforce",
-    showLogs: persisted.showLogs === true,
-    logs: Array.isArray(persisted.logs) ? persisted.logs : [],
-    columnVisibility: persisted.columnVisibility || {},
-    dirtyCellKeys: Array.isArray(persisted.dirtyCellKeys) ? persisted.dirtyCellKeys : [],
-    baselineRecords: persisted.baselineRecords || {},
-    notice: persisted.notice || null,
-    loading: false
+    ...tab,
+    bindingKey: buildObjectTabBindingKey(tab.sourceId || "", tab.objectName || "")
   };
+}
+
+// 获取 Tab 唯一键：优先使用持久化字段，缺失时按 sourceId + objectName 推导。
+function getTabBindingKey(tab: TabState): string {
+  return tab.bindingKey || buildObjectTabBindingKey(tab.sourceId || "", tab.objectName || "");
+}
+
+// 判断给定标识是否命中 Tab：优先按 bindingKey，其次兼容 objectName 调用方。
+function isTabMatchedByIdentity(tab: TabState, tabIdentity: string): boolean {
+  return getTabBindingKey(tab) === tabIdentity || tab.objectName === tabIdentity;
 }
 
 // 将当前 source 运行态写回 source 维度快照，确保切换时可恢复。
@@ -70,7 +57,7 @@ function upsertSourceTabState(
   return {
     ...sourceTabStateBySourceId,
     [sourceId]: {
-      tabs,
+      tabs: tabs.map((tab) => ensureTabBindingKey(tab)),
       activeTabObjectName
     }
   };
@@ -142,10 +129,10 @@ type AppState = {
   setTabs: (tabs: TabState[] | ((tabs: TabState[]) => TabState[])) => void;
   // 更新全局加载状态。
   setLoading: (loading: boolean) => void;
-  // 对指定 Tab 打补丁更新。
-  patchTab: (objectName: string, updater: (tab: TabState) => TabState) => void;
+  // 对指定 Tab 打补丁更新：支持 bindingKey 或 objectName（兼容旧调用）。
+  patchTab: (tabIdentity: string, updater: (tab: TabState) => TabState) => void;
   // 关闭指定 Tab。
-  closeTab: (objectName: string) => void;
+  closeTab: (tabIdentity: string) => void;
   // 清空所有 Tab。
   resetTabs: () => void;
 };
@@ -188,7 +175,7 @@ export const useAppStore = create<AppState>()(
         }),
       setTabs: (tabs) =>
         set((state) => {
-          const nextTabs = typeof tabs === "function" ? tabs(state.tabs) : tabs;
+          const nextTabs = (typeof tabs === "function" ? tabs(state.tabs) : tabs).map((tab) => ensureTabBindingKey(tab));
           return {
             tabs: nextTabs,
             sourceTabStateBySourceId: upsertSourceTabState(
@@ -200,9 +187,16 @@ export const useAppStore = create<AppState>()(
           };
         }),
       setLoading: (loading) => set({ loading }),
-      patchTab: (objectName, updater) => {
+      patchTab: (tabIdentity, updater) => {
         set((state) => {
-          const nextTabs = state.tabs.map((tab) => (tab.objectName === objectName ? updater(tab) : tab));
+          let changed = false;
+          const nextTabs = state.tabs.map((tab) => {
+            if (!isTabMatchedByIdentity(tab, tabIdentity)) return tab;
+            changed = true;
+            const nextTab = updater(ensureTabBindingKey(tab));
+            return ensureTabBindingKey(nextTab);
+          });
+          if (!changed) return state;
           return {
             tabs: nextTabs,
             sourceTabStateBySourceId: upsertSourceTabState(
@@ -214,10 +208,11 @@ export const useAppStore = create<AppState>()(
           };
         });
       },
-      closeTab: (objectName) => {
+      closeTab: (tabIdentity) => {
         const { tabs, activeTabObjectName } = get();
-        const nextTabs = tabs.filter((tab) => tab.objectName !== objectName);
-        const nextActive = activeTabObjectName === objectName ? nextTabs[0]?.objectName || "" : activeTabObjectName;
+        const nextTabs = tabs.filter((tab) => !isTabMatchedByIdentity(tab, tabIdentity));
+        const activeTabMatched = tabs.some((tab) => tab.objectName === activeTabObjectName && isTabMatchedByIdentity(tab, tabIdentity));
+        const nextActive = activeTabMatched ? nextTabs[0]?.objectName || "" : activeTabObjectName;
         set((state) => ({
           tabs: nextTabs,
           activeTabObjectName: nextActive,

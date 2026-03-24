@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import { api } from "../../../../api";
-import { ObjectDescribe, ObjectDdl, TabLog, TabState, SalesforceObject } from "../../../../types";
+import { buildObjectTabBindingKey, ObjectDescribe, ObjectDdl, TabLog, TabState, SalesforceObject, SalesforceSource } from "../../../../types";
+import { getSourceColor } from "../logic/sourceColor.ts";
 import { useAppStore } from "../../../../store/useAppStore";
 
 type MysqlDdlState = Record<string, { loading: boolean; data: ObjectDdl | null; error: string }>;
@@ -95,9 +96,9 @@ type UseQueryPanelRuntimeInput = {
   // 设置激活对象名。
   setActiveTabObjectName: (objectName: string) => void;
   // 通用 Tab 更新器。
-  patchTab: (objectName: string, updater: (tab: TabState) => TabState) => void;
+  patchTab: (tabIdentity: string, updater: (tab: TabState) => TabState) => void;
   // 追加 Tab 日志。
-  appendTabLog: (objectName: string, payload: Omit<TabLog, "id" | "timestamp">) => void;
+  appendTabLog: (tabIdentity: string, payload: Omit<TabLog, "id" | "timestamp">) => void;
   // 执行对象查询。
   queryTabData: (
     objectName: string,
@@ -177,16 +178,40 @@ export function useQueryPanelRuntime({
 }: UseQueryPanelRuntimeInput) {
   // 打开对象：若不存在则新建 Tab 并加载 describe + 首次查询。
   const openObjectTab = useCallback(
-    async (objectItem: SalesforceObject) => {
-      if (!selectedSourceId) return;
+    async (objectItem: SalesforceObject, sourceOverride?: SalesforceSource) => {
+      const targetSourceId = sourceOverride?.id || selectedSourceId;
+      const targetSourceType = String(sourceOverride?.sourceType || selectedSourceType || "salesforce");
+      if (!targetSourceId) return;
 
-      const existed = tabs.find((tab) => tab.objectName === objectItem.name);
+      const bindingKey = buildObjectTabBindingKey(targetSourceId, objectItem.name);
+      const existed = tabs.find(
+        (tab) => (tab.bindingKey || buildObjectTabBindingKey(tab.sourceId || targetSourceId, tab.objectName)) === bindingKey
+      );
       if (existed) {
-        setActiveTabObjectName(objectItem.name);
+        setActiveTabObjectName(bindingKey);
         return;
       }
 
+      // 新建对象 Tab 时补齐 source 名称和颜色，确保跨 source 恢复时绑定信息完整。
+      let sourceName = sourceOverride?.name || "";
+      let sourceColor = sourceOverride ? getSourceColor(sourceOverride) : "";
+      try {
+        if (!sourceName || !sourceColor) {
+          const sources = await api.listSources();
+          const currentSource = sources.find((source) => source.id === targetSourceId) || null;
+          sourceName = sourceName || currentSource?.name || "";
+          sourceColor = sourceColor || (currentSource ? getSourceColor(currentSource) : "");
+        }
+      } catch {
+        // 元信息读取失败不阻塞打开流程，保持空值回退。
+      }
+
       const newTab: TabState = {
+        bindingKey,
+        sourceId: targetSourceId,
+        sourceType: targetSourceType,
+        sourceName,
+        sourceColor,
         objectName: objectItem.name,
         label: objectItem.label,
         describe: null,
@@ -203,7 +228,7 @@ export function useQueryPanelRuntime({
         showQueryBar: true,
         showDrawer: false,
         // 新建 Tab 时按数据源初始化抽屉视图：MySQL 默认先看 DDL。
-        drawerView: (selectedSourceType || "salesforce").toLowerCase() === "mysql" ? "mysql-ddl" : "salesforce",
+        drawerView: targetSourceType.toLowerCase() === "mysql" ? "mysql-ddl" : "salesforce",
         showLogs: false,
         logs: [],
         columnVisibility: {},
@@ -214,23 +239,23 @@ export function useQueryPanelRuntime({
       };
 
       setTabs((current) => [...current, newTab]);
-      setActiveTabObjectName(objectItem.name);
+      setActiveTabObjectName(bindingKey);
 
       try {
-        const describe = await api.describeObject(selectedSourceId, objectItem.name);
-        const persistedVisibility = await loadColumnVisibilityFromDb(selectedSourceId, objectItem.name, describe);
+        const describe = await api.describeObject(targetSourceId, objectItem.name);
+        const persistedVisibility = await loadColumnVisibilityFromDb(targetSourceId, objectItem.name, describe);
         const defaultSortField = pickDefaultSortField(getSortableFieldNames(describe));
 
-        patchTab(objectItem.name, (tab) => ({
+        patchTab(bindingKey, (tab) => ({
           ...tab,
           describe,
           sortField: defaultSortField,
           columnVisibility: persistedVisibility
         }));
 
-        await queryTabData(objectItem.name, describe, "", defaultSortField, 200, "DESC");
+        await queryTabData(bindingKey, describe, "", defaultSortField, 200, "DESC");
       } catch (error) {
-        patchTab(objectItem.name, (tab) => ({
+        patchTab(bindingKey, (tab) => ({
           ...tab,
           loading: false,
           notice: { type: "error", message: `打开对象失败：${String(error)}` }
@@ -239,6 +264,7 @@ export function useQueryPanelRuntime({
     },
     [
       selectedSourceId,
+      selectedSourceType,
       tabs,
       setActiveTabObjectName,
       setTabs,
@@ -254,8 +280,9 @@ export function useQueryPanelRuntime({
   const reloadSingleTab = useCallback(
     async (sourceId: string, tab: TabState) => {
       const { patchTab: storePatchTab } = useAppStore.getState();
+      const tabBindingKey = tab.bindingKey || buildObjectTabBindingKey(sourceId, tab.objectName);
       try {
-        storePatchTab(tab.objectName, (t) => ({ ...t, loading: true }));
+        storePatchTab(tabBindingKey, (t) => ({ ...t, loading: true }));
         const describe = await api.describeObject(sourceId, tab.objectName);
 
         const defaults = describe.fields.reduce((acc, field) => ({ ...acc, [field.name]: true }), {} as Record<string, boolean>);
@@ -267,8 +294,11 @@ export function useQueryPanelRuntime({
           visibility = defaults;
         }
 
-        storePatchTab(tab.objectName, (t) => ({ ...t, describe, columnVisibility: visibility }));
-        const freshTab = useAppStore.getState().tabs.find((t) => t.objectName === tab.objectName);
+        storePatchTab(tabBindingKey, (t) => ({ ...t, describe, columnVisibility: visibility }));
+        const freshTab = useAppStore.getState().tabs.find((t) => {
+          const currentBindingKey = t.bindingKey || buildObjectTabBindingKey(t.sourceId || sourceId, t.objectName);
+          return currentBindingKey === tabBindingKey;
+        });
         if (!freshTab) return;
 
         const whereClause = (freshTab.whereClause ?? "").trim();
@@ -287,7 +317,7 @@ export function useQueryPanelRuntime({
           .filter((name) => (visibility[name] ?? true) === true);
 
         if (selectedFields.length === 0) {
-          storePatchTab(tab.objectName, (t) => ({
+          storePatchTab(tabBindingKey, (t) => ({
             ...t,
             loading: false,
             notice: { type: "error", message: `${tab.objectName} 至少要勾选一个字段。` }
@@ -308,7 +338,7 @@ export function useQueryPanelRuntime({
         const rawResult = await api.queryRecords(sourceId, soql);
         const result = normalizeQueryResult(rawResult);
 
-        storePatchTab(tab.objectName, (t) => ({
+        storePatchTab(tabBindingKey, (t) => ({
           ...t,
           result,
           loading: false,
@@ -323,7 +353,7 @@ export function useQueryPanelRuntime({
           }),
           notice: { type: "success", message: `${tab.objectName} 查询成功，共 ${result.totalSize} 条。` }
         }));
-        appendTabLog(tab.objectName, {
+        appendTabLog(tabBindingKey, {
           action: "QUERY",
           success: true,
           request: soql,
@@ -331,7 +361,7 @@ export function useQueryPanelRuntime({
         });
       } catch (error) {
         const { patchTab: storePatchTab } = useAppStore.getState();
-        storePatchTab(tab.objectName, (t) => ({
+        storePatchTab(tabBindingKey, (t) => ({
           ...t,
           loading: false,
           notice: { type: "error", message: `恢复 ${tab.objectName} 数据失败：${String(error)}` }
@@ -399,6 +429,8 @@ export function useQueryPanelRuntime({
   // 切换抽屉：支持按目标视图打开（MySQL DDL / MySQL 字段 / Salesforce）。
   const toggleDrawerForActiveTab = useCallback(async (drawerView?: "salesforce" | "mysql-ddl" | "mysql-fields") => {
     if (!activeTab || !selectedSourceId) return;
+    const activeTabBindingKey =
+      activeTab.bindingKey || buildObjectTabBindingKey(activeTab.sourceId || selectedSourceId, activeTab.objectName);
     const isMysqlSource = (selectedSourceType || "salesforce").toLowerCase() === "mysql";
     // 目标视图推导：MySQL 默认 DDL，Salesforce 固定复合抽屉。
     const targetDrawerView = isMysqlSource
@@ -411,12 +443,12 @@ export function useQueryPanelRuntime({
 
     // 点击同一个按钮时直接关闭；点击另一个按钮时保持打开并切换抽屉内容。
     if (activeTab.showDrawer && currentDrawerView === targetDrawerView) {
-      patchTab(activeTab.objectName, (item) => ({ ...item, showDrawer: false, drawerView: targetDrawerView }));
+      patchTab(activeTabBindingKey, (item) => ({ ...item, showDrawer: false, drawerView: targetDrawerView }));
       return;
     }
 
     if (targetDrawerView === "mysql-ddl") {
-      patchTab(activeTab.objectName, (item) => ({ ...item, showDrawer: true, drawerView: targetDrawerView }));
+      patchTab(activeTabBindingKey, (item) => ({ ...item, showDrawer: true, drawerView: targetDrawerView }));
       const ddlState = mysqlDdlMap[activeTab.objectName];
       if (!ddlState?.loading && !ddlState?.data) {
         await loadMysqlDdl(activeTab.objectName);
@@ -426,15 +458,15 @@ export function useQueryPanelRuntime({
 
     // MySQL 字段抽屉与 Salesforce 抽屉都依赖 describe 字段元数据。
     if (activeTab.describe) {
-      patchTab(activeTab.objectName, (item) => ({ ...item, showDrawer: true, drawerView: targetDrawerView }));
+      patchTab(activeTabBindingKey, (item) => ({ ...item, showDrawer: true, drawerView: targetDrawerView }));
       return;
     }
 
-    patchTab(activeTab.objectName, (item) => ({ ...item, showDrawer: true, drawerView: targetDrawerView, loading: true }));
+    patchTab(activeTabBindingKey, (item) => ({ ...item, showDrawer: true, drawerView: targetDrawerView, loading: true }));
     try {
       const describe = await api.describeObject(selectedSourceId, activeTab.objectName);
       const visibility = await loadColumnVisibilityFromDb(selectedSourceId, activeTab.objectName, describe);
-      patchTab(activeTab.objectName, (item) => ({
+      patchTab(activeTabBindingKey, (item) => ({
         ...item,
         describe,
         columnVisibility: visibility,
@@ -442,7 +474,7 @@ export function useQueryPanelRuntime({
         loading: false
       }));
     } catch (error) {
-      patchTab(activeTab.objectName, (item) => ({
+      patchTab(activeTabBindingKey, (item) => ({
         ...item,
         loading: false,
         notice: { type: "error", message: `加载字段元数据失败：${String(error)}` }
@@ -461,8 +493,10 @@ export function useQueryPanelRuntime({
   // 标记删除勾选记录：仅前端标记，提交时再真正删除。
   const deleteCheckedRecords = useCallback(async () => {
     if (!selectedSourceId || !activeTab) return;
+    const activeTabBindingKey =
+      activeTab.bindingKey || buildObjectTabBindingKey(activeTab.sourceId || selectedSourceId, activeTab.objectName);
     if (activeTab.selectedRecordIds.length === 0) {
-      patchTab(activeTab.objectName, (item) => ({
+      patchTab(activeTabBindingKey, (item) => ({
         ...item,
         notice: { type: "error", message: "请先勾选要删除的记录。" }
       }));
@@ -470,24 +504,24 @@ export function useQueryPanelRuntime({
     }
 
     try {
-      patchTab(activeTab.objectName, (item) => ({
+      patchTab(activeTabBindingKey, (item) => ({
         ...item,
         pendingDeleteRecordIds: Array.from(new Set([...item.pendingDeleteRecordIds, ...item.selectedRecordIds])),
         selectedRecordIds: [],
         notice: { type: "success", message: `已标记 ${activeTab.selectedRecordIds.length} 条记录，执行更新时删除。` }
       }));
-      appendTabLog(activeTab.objectName, {
+      appendTabLog(activeTabBindingKey, {
         action: "DELETE",
         success: true,
         request: `recordIds=${activeTab.selectedRecordIds.join(",")}`,
         summary: `已标记删除 ${activeTab.selectedRecordIds.length} 条，待执行更新提交。`
       });
     } catch (error) {
-      patchTab(activeTab.objectName, (item) => ({
+      patchTab(activeTabBindingKey, (item) => ({
         ...item,
         notice: { type: "error", message: `标记删除失败：${String(error)}` }
       }));
-      appendTabLog(activeTab.objectName, {
+      appendTabLog(activeTabBindingKey, {
         action: "DELETE",
         success: false,
         request: `recordIds=${activeTab.selectedRecordIds.join(",")}`,
@@ -500,9 +534,11 @@ export function useQueryPanelRuntime({
   // 快速创建一行本地新增记录。
   const createRecordQuickly = useCallback(() => {
     if (!activeTab) return;
+    const activeTabBindingKey =
+      activeTab.bindingKey || buildObjectTabBindingKey(activeTab.sourceId || selectedSourceId, activeTab.objectName);
 
     const tempId = `new-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    patchTab(activeTab.objectName, (item) => ({
+    patchTab(activeTabBindingKey, (item) => ({
       ...item,
       result: {
         ...item.result,
@@ -510,12 +546,14 @@ export function useQueryPanelRuntime({
       },
       notice: { type: "success", message: "已新增一行，请填写后点击执行更新。" }
     }));
-  }, [activeTab, patchTab]);
+  }, [activeTab, patchTab, selectedSourceId]);
 
   // 执行新增/更新/删除提交。
   const applyPendingChanges = useCallback(async () => {
     if (!selectedSourceId || !activeTab || !activeTab.describe) return;
     if (!hasPendingChanges(activeTab)) return;
+    const activeTabBindingKey =
+      activeTab.bindingKey || buildObjectTabBindingKey(activeTab.sourceId || selectedSourceId, activeTab.objectName);
 
     const isMysqlSource = (selectedSourceType || "salesforce").toLowerCase() === "mysql";
     // MySQL 新增前置校验：必填字段缺失时直接提示并中断提交。
@@ -525,7 +563,7 @@ export function useQueryPanelRuntime({
         const message = `MySQL 新增失败：存在 NOT NULL 且无默认值字段未填写。${mysqlMissingRequiredItems
           .map((item) => `第 ${item.row} 行缺少 ${item.fields.join("、")}`)
           .join("；")}。`;
-        patchTab(activeTab.objectName, (item) => ({
+        patchTab(activeTabBindingKey, (item) => ({
           ...item,
           notice: { type: "error", message }
         }));
@@ -538,7 +576,7 @@ export function useQueryPanelRuntime({
         const message = `Salesforce 新增失败：存在创建必填字段未填写。${salesforceMissingRequiredItems
           .map((item) => `第 ${item.row} 行缺少 ${item.fields.join("、")}`)
           .join("；")}。`;
-        patchTab(activeTab.objectName, (item) => ({
+        patchTab(activeTabBindingKey, (item) => ({
           ...item,
           notice: { type: "error", message }
         }));
@@ -557,7 +595,7 @@ export function useQueryPanelRuntime({
     const deletes: string[] = [];
     const missingRecordIdRows: number[] = [];
 
-    patchTab(activeTab.objectName, (item) => ({ ...item, loading: true }));
+    patchTab(activeTabBindingKey, (item) => ({ ...item, loading: true }));
     try {
       for (let rowIndex = 0; rowIndex < activeTab.result.records.length; rowIndex += 1) {
         const record = activeTab.result.records[rowIndex];
@@ -647,25 +685,25 @@ export function useQueryPanelRuntime({
           );
         }
       }
-      appendTabLog(activeTab.objectName, {
+      appendTabLog(activeTabBindingKey, {
         action: "UPSERT",
         success: true,
         request: `creates=${creates.length}, updates=${updates.length}, deletes=${deletes.length}`,
         summary: `执行更新成功，新增 ${creates.length} 条，更新 ${updates.length} 条，删除 ${deletes.length} 条。`
       });
 
-      await queryTabData(activeTab.objectName);
-      patchTab(activeTab.objectName, (item) => ({
+      await queryTabData(activeTabBindingKey);
+      patchTab(activeTabBindingKey, (item) => ({
         ...item,
         notice: { type: "success", message: "执行更新成功，变更已提交。" }
       }));
     } catch (error) {
-      patchTab(activeTab.objectName, (item) => ({
+      patchTab(activeTabBindingKey, (item) => ({
         ...item,
         loading: false,
         notice: { type: "error", message: `执行更新失败：${String(error)}` }
       }));
-      appendTabLog(activeTab.objectName, {
+      appendTabLog(activeTabBindingKey, {
         action: "UPSERT",
         success: false,
         request: `creates=${creates.length}, updates=${updates.length}, deletes=${deletes.length}`,
@@ -679,11 +717,13 @@ export function useQueryPanelRuntime({
   const discardPendingChanges = useCallback(() => {
     if (!activeTab) return;
     if (!hasPendingChanges(activeTab)) return;
+    const activeTabBindingKey =
+      activeTab.bindingKey || buildObjectTabBindingKey(activeTab.sourceId || selectedSourceId, activeTab.objectName);
     const revertedNewCount = activeTab.result.records.filter((record) => Boolean(record.__isNew)).length;
     const revertedDirtyCount = activeTab.dirtyCellKeys.length;
     const revertedDeleteCount = activeTab.pendingDeleteRecordIds.length;
 
-    patchTab(activeTab.objectName, (item) => {
+    patchTab(activeTabBindingKey, (item) => {
       const isMysqlSource = (selectedSourceType || "salesforce").toLowerCase() === "mysql";
       const mysqlPrimaryKeyField = isMysqlSource
         ? item.describe?.fields.find((field) => String(field.metadata?.columnKey || "").toUpperCase() === "PRI")?.name || ""
@@ -710,13 +750,13 @@ export function useQueryPanelRuntime({
         notice: { type: "success", message: "已撤回未提交修改。" }
       };
     });
-    appendTabLog(activeTab.objectName, {
+    appendTabLog(activeTabBindingKey, {
       action: "DISCARD",
       success: true,
       request: `newRows=${revertedNewCount}, dirtyCells=${revertedDirtyCount}, pendingDeletes=${revertedDeleteCount}`,
       summary: `撤回成功，已撤销新增 ${revertedNewCount} 条、编辑 ${revertedDirtyCount} 个单元格、待删除 ${revertedDeleteCount} 条。`
     });
-  }, [activeTab, hasPendingChanges, selectedSourceType, patchTab, getRecordKey, appendTabLog]);
+  }, [activeTab, hasPendingChanges, selectedSourceType, patchTab, getRecordKey, appendTabLog, selectedSourceId]);
 
   return {
     openObjectTab,

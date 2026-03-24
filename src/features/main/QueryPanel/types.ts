@@ -111,8 +111,8 @@ export type QueryPanelActions = {
   onRefreshSources: () => void;
   // 刷新指定 MySQL 对象的字段元数据与 DDL。
   onRefreshMysqlObjectMetadata: (objectName: string) => Promise<{ describe: ObjectDescribe; ddl: ObjectDdl }>;
-  // 打开对象 Tab。
-  onOpenObject: (item: SalesforceObject) => void;
+  // 打开对象 Tab：支持显式携带来源数据源。
+  onOpenObject: (item: SalesforceObject, source?: SalesforceSource) => void;
   // 点击不可查询对象提示。
   onNotQueryableObjectClick: (item: SalesforceObject) => void;
   // 激活 Query Tab。

@@ -5,7 +5,7 @@ import { NoticeAlert } from "../../../../components/NoticeAlert";
 import { SoqlMonacoEditor } from "../../../../components/SoqlMonacoEditor";
 import { api } from "../../../../api";
 import { useAppStore } from "../../../../store/useAppStore";
-import { Notice, ObjectDdl, TabState } from "../../../../types";
+import { buildObjectTabBindingKey, Notice, ObjectDdl, TabState } from "../../../../types";
 import type { QueryOverrides } from "../types";
 import { MysqlSmartInput } from "./MysqlSmartInput";
 import { SalesforceSmartInput } from "./SalesforceSmartInput";
@@ -221,20 +221,21 @@ function QueryBar({
 }: QueryBarProps) {
   // Store：直接更新目标 Tab，避免“常驻挂载 + 防抖回写”在切换 Tab 后误写到其它 Tab。
   const patchTabInStore = useAppStore((state) => state.patchTab);
+  const activeTabIdentity = activeTab.bindingKey || buildObjectTabBindingKey(activeTab.sourceId || "", activeTab.objectName);
 
   // 回写 WHERE：按当前 QueryBar 绑定的对象 Tab 精准写入。
   function commitWhereClause(value: string) {
-    patchTabInStore(activeTab.objectName, (item) => ({ ...item, whereClause: value })); // 行内注释：仅更新目标 Tab 的 WHERE，避免跨 Tab 串写。
+    patchTabInStore(activeTabIdentity, (item) => ({ ...item, whereClause: value })); // 行内注释：仅更新目标 Tab 的 WHERE，避免跨 Tab 串写。
   }
 
   // 回写 LIMIT：按当前 QueryBar 绑定的对象 Tab 精准写入。
   function commitLimit(value: number) {
-    patchTabInStore(activeTab.objectName, (item) => ({ ...item, limit: value })); // 行内注释：仅更新目标 Tab 的 LIMIT，避免跨 Tab 串写。
+    patchTabInStore(activeTabIdentity, (item) => ({ ...item, limit: value })); // 行内注释：仅更新目标 Tab 的 LIMIT，避免跨 Tab 串写。
   }
 
   // 回写排序表达式：同步兼容旧版 sortField/sortDirection 显示逻辑。
   function commitSortClause(value: string) {
-    patchTabInStore(activeTab.objectName, (item) => {
+    patchTabInStore(activeTabIdentity, (item) => {
       const normalized = value.trim();
       if (!normalized) {
         // 手动清空排序条件时同步清空旧版排序字段，避免 UI 回退显示旧值。
@@ -797,32 +798,36 @@ export function DataQueryTabPane({
           <div className="flex overflow-x-auto border-b border-base-300">
             {tabs.length === 0 && <span className="px-2 py-1.5 text-[12px] text-neutral/70">请选择左侧 Object 打开标签页</span>}
             {tabs.map((tab) => {
-              const active = tab.objectName === activeTabObjectName;
-              const tabIndex = tabs.findIndex((item) => item.objectName === tab.objectName);
+              const tabIdentity = tab.bindingKey || buildObjectTabBindingKey(tab.sourceId || "", tab.objectName);
+              const active = tabIdentity === activeTabObjectName || tab.objectName === activeTabObjectName;
+              const tabIndex = tabs.findIndex((item) => {
+                const itemIdentity = item.bindingKey || buildObjectTabBindingKey(item.sourceId || "", item.objectName);
+                return itemIdentity === tabIdentity;
+              });
               const hasLeftTabs = tabIndex > 0;
               const hasRightTabs = tabIndex >= 0 && tabIndex < tabs.length - 1;
               const hasOtherTabs = tabs.length > 1;
               return (
                 <div
-                  key={tab.objectName}
+                  key={tabIdentity}
                   className={`flex items-center border-r border-base-300 ${active ? "bg-base-100" : ""}`}
                   onContextMenu={(event) => {
                     event.preventDefault(); // 阻止浏览器默认右键菜单。
-                    onActivateTab(tab.objectName); // 右键时先切换到目标 Tab，避免操作目标不一致。
-                    setTabContextMenu({ x: event.clientX, y: event.clientY, objectName: tab.objectName }); // 打开自定义菜单。
+                    onActivateTab(tabIdentity); // 右键时先切换到目标 Tab，避免操作目标不一致。
+                    setTabContextMenu({ x: event.clientX, y: event.clientY, objectName: tabIdentity }); // 打开自定义菜单。
                   }}
                 >
                   <button
                     className={`min-w-0 px-3 py-2 text-[12px] ${active ? "text-primary" : "text-neutral/70"}`}
-                    onClick={() => onActivateTab(tab.objectName)}
+                    onClick={() => onActivateTab(tabIdentity)}
                   >
                     {tab.objectName}
                   </button>
-                  <button className="btn btn-circle btn-ghost btn-xs mr-1" onClick={() => onCloseTab(tab.objectName)}>
+                  <button className="btn btn-circle btn-ghost btn-xs mr-1" onClick={() => onCloseTab(tabIdentity)}>
                     <X size={13} />
                   </button>
                   {/* Tab 右键菜单：提供常见批量关闭操作。 */}
-                  {tabContextMenu?.objectName === tab.objectName && (
+                  {tabContextMenu?.objectName === tabIdentity && (
                     <div
                       className="fixed z-[80] min-w-[132px] rounded border border-base-300 bg-base-100 p-1 shadow-xl"
                       style={{ left: tabContextMenu.x, top: tabContextMenu.y }}
@@ -831,7 +836,7 @@ export function DataQueryTabPane({
                       <button
                         className="btn btn-ghost btn-xs w-full justify-start"
                         onClick={() => {
-                          onCloseCurrentTab(tab.objectName); // 关闭当前 Tab。
+                          onCloseCurrentTab(tabIdentity); // 关闭当前 Tab。
                           setTabContextMenu(null); // 执行后关闭菜单。
                         }}
                       >
@@ -841,7 +846,7 @@ export function DataQueryTabPane({
                         className="btn btn-ghost btn-xs w-full justify-start"
                         disabled={!hasLeftTabs}
                         onClick={() => {
-                          onCloseLeftTabs(tab.objectName); // 关闭目标 Tab 左侧所有 Tab。
+                          onCloseLeftTabs(tabIdentity); // 关闭目标 Tab 左侧所有 Tab。
                           setTabContextMenu(null); // 执行后关闭菜单。
                         }}
                       >
@@ -851,7 +856,7 @@ export function DataQueryTabPane({
                         className="btn btn-ghost btn-xs w-full justify-start"
                         disabled={!hasRightTabs}
                         onClick={() => {
-                          onCloseRightTabs(tab.objectName); // 关闭目标 Tab 右侧所有 Tab。
+                          onCloseRightTabs(tabIdentity); // 关闭目标 Tab 右侧所有 Tab。
                           setTabContextMenu(null); // 执行后关闭菜单。
                         }}
                       >
@@ -861,7 +866,7 @@ export function DataQueryTabPane({
                         className="btn btn-ghost btn-xs w-full justify-start"
                         disabled={!hasOtherTabs}
                         onClick={() => {
-                          onCloseOtherTabs(tab.objectName); // 仅保留目标 Tab，关闭其它 Tab。
+                          onCloseOtherTabs(tabIdentity); // 仅保留目标 Tab，关闭其它 Tab。
                           setTabContextMenu(null); // 执行后关闭菜单。
                         }}
                       >

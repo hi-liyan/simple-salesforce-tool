@@ -1,10 +1,9 @@
 import { useState } from "react";
 import { Braces, Plus, RefreshCw } from "lucide-react";
-import { DataSourceSelector } from "../../../../components/DataSourceSelector";
 import { api } from "../../../../api";
 import { DataSourceType, ObjectDdl, ObjectDescribe, SalesforceObject, SalesforceSource, SourceUpsertPayload } from "../../../../types";
 import { QuerySidebarActions, type QuerySidebarActionItem } from "./QuerySidebarActions";
-import { QueryObjectTree } from "./QueryObjectTree";
+import { QuerySourceTree } from "./QuerySourceTree";
 
 type QuerySidebarProps = {
   // 数据源列表。
@@ -13,22 +12,22 @@ type QuerySidebarProps = {
   selectedSourceId: string;
   // 页面级加载状态。
   pageLoading: boolean;
-  // 对象列表加载状态。
+  // 当前页面已持有的对象列表加载状态：作为聚焦数据源缓存复用。
   objectsLoading: boolean;
   // 打开认证窗口回调。
   onOpenAuthWindow: () => void;
-  // 切换数据源回调。
+  // 兼容层：新增数据源后仍可复用外层数据源更新逻辑。
   onChangeSource: (sourceId: string) => void;
-  // 刷新数据源回调。
+  // 兼容层：新增数据源后刷新 source 列表。
   onRefreshSources: () => void;
   // 打开查询控制台回调。
   onOpenConsole?: () => void;
-  // 当前对象列表。
+  // 当前页面已持有的对象列表：用于给树组件复用已缓存数据。
   objects: SalesforceObject[];
   // 当前激活对象名。
   activeTabObjectName: string;
-  // 打开对象回调。
-  onOpenObject: (item: SalesforceObject) => void;
+  // 打开对象回调：支持显式携带发起 source。
+  onOpenObject: (item: SalesforceObject, source?: SalesforceSource) => void;
   // 点击不可查询徽标回调。
   onNotQueryableObjectClick?: (item: SalesforceObject) => void;
   // 刷新指定 MySQL 对象的字段元数据与 DDL。
@@ -83,6 +82,8 @@ export function QuerySidebar({
     password: "",
     primaryKey: ""
   });
+  // 左侧树动作句柄：由树组件回传“刷新聚焦数据源”能力。
+  const [treeActions, setTreeActions] = useState<{ refreshFocusedSource: () => Promise<void> } | null>(null);
 
   // 打开“选择数据源类型”弹窗。
   function openSourceTypeModal() {
@@ -220,7 +221,9 @@ export function QuerySidebar({
       id: "refresh-source",
       icon: RefreshCw,
       ariaLabel: "刷新数据源",
-      onClick: onRefreshSources
+      onClick: () => {
+        void treeActions?.refreshFocusedSource();
+      }
     },
     {
       id: "open-console",
@@ -241,38 +244,26 @@ export function QuerySidebar({
         <QuerySidebarActions actions={actionItems} disabled={pageLoading} />
       </div>
 
-      {/* 数据源标题与选择器区域。 */}
+      {/* 数据源标题区域。 */}
       <div className="border-b border-base-300 px-3 py-2">
         <div className="flex items-center justify-between">
-          <span className="text-[12px] text-neutral/70">DATA SOURCE</span>
-        </div>
-
-        {/* 数据源下拉选择器。 */}
-        <div className="mt-[6px]">
-          {/* 自定义数据源选择器：支持前置类型徽标与更灵活展示。 */}
-          <div className="min-w-0 flex-1">
-            <DataSourceSelector sources={sources} selectedSourceId={selectedSourceId} onChange={onChangeSource} disabled={pageLoading} />
-          </div>
+          <span className="text-[12px] text-neutral/70">DATA SOURCES</span>
         </div>
       </div>
 
-      {/* Objects 区块标题。 */}
-      <div className="border-b border-base-300 px-3 py-2">
-        <span className="text-[12px] text-neutral/70">OBJECTS</span>
+      {/* 统一树区域：直接展示全部数据源与类型化子节点。 */}
+      <div className="min-h-0 flex-1 px-1 pb-2 pt-1">
+        <QuerySourceTree
+          sources={sources}
+          selectedSourceId={selectedSourceId}
+          objectsLoading={objectsLoading}
+          objects={objects}
+          activeTabObjectName={activeTabObjectName}
+          onOpenObject={onOpenObject}
+          onNotQueryableObjectClick={onNotQueryableObjectClick}
+          onReady={setTreeActions}
+        />
       </div>
-
-      {/* 对象树区域：统一由 QueryObjectTree 管理加载态与树渲染。 */}
-      <QueryObjectTree
-        sources={sources}
-        selectedSourceId={selectedSourceId}
-        objectsLoading={objectsLoading}
-        objects={objects}
-        activeTabObjectName={activeTabObjectName}
-        onOpenObject={onOpenObject}
-        onNotQueryableObjectClick={onNotQueryableObjectClick}
-        onRefreshMysqlObjectMetadata={onRefreshMysqlObjectMetadata}
-        objectListMode={objectListMode}
-      />
 
       {/* 类型选择弹窗：先选择数据源类型，再进入对应配置窗口。 */}
       {showSourceTypeModal && (

@@ -1,6 +1,6 @@
 import { useCallback } from "react";
 import { api } from "../../../../api";
-import { ObjectDescribe, QueryResult, TabLog, TabState } from "../../../../types";
+import { buildObjectTabBindingKey, ObjectDescribe, QueryResult, TabLog, TabState } from "../../../../types";
 
 type UseQueryExecutionInput = {
   // 当前选中数据源 ID。
@@ -14,9 +14,9 @@ type UseQueryExecutionInput = {
   // 查询语言标签：SQL/SOQL。
   queryLanguageLabel: string;
   // 更新指定对象 Tab。
-  patchTab: (objectName: string, updater: (tab: TabState) => TabState) => void;
+  patchTab: (tabIdentity: string, updater: (tab: TabState) => TabState) => void;
   // 追加 Tab 日志。
-  appendTabLog: (objectName: string, nextLog: Omit<TabLog, "id" | "timestamp">) => void;
+  appendTabLog: (tabIdentity: string, nextLog: Omit<TabLog, "id" | "timestamp">) => void;
   // 持久化字段可见性。
   persistColumnVisibility: (sourceId: string, objectName: string, visibility: Record<string, boolean>) => Promise<void>;
   // 构建 SQL/SOQL 语句。
@@ -77,16 +77,20 @@ export function useQueryExecution({
       directionOverride?: "ASC" | "DESC",
       sortClauseOverride?: string
     ) => {
-      if (!selectedSourceId) return;
-      const tab = tabs.find((item) => item.objectName === objectName);
+      const tab = tabs.find((item) => item.bindingKey === objectName || item.objectName === objectName);
       if (!tab && !describeOverride) return;
 
       const describe = describeOverride ?? tab?.describe;
       if (!describe) return;
+      const tabObjectName = tab?.objectName || objectName;
+      const resolvedSourceId = tab?.sourceId || selectedSourceId;
+      if (!resolvedSourceId) return;
+      const resolvedSourceType = String(tab?.sourceType || selectedSourceType || "salesforce");
+      const tabBindingKey = tab?.bindingKey || buildObjectTabBindingKey(resolvedSourceId, tabObjectName);
 
       const whereClause = (whereOverride ?? tab?.whereClause ?? "").trim();
       const limit = Math.max(1, Math.min(2000, limitOverride ?? tab?.limit ?? 200));
-      const normalizedType = (selectedSourceType || "salesforce").toLowerCase();
+      const normalizedType = resolvedSourceType.toLowerCase();
       const sortableFieldSet = new Set(getSortableFieldNames(describe));
       const rawSortField = (sortFieldOverride ?? tab?.sortField ?? "").trim();
       // 排序字段兜底：仅允许使用字段元数据中 sortable=true 的字段，否则视为“不排序”。
@@ -103,15 +107,15 @@ export function useQueryExecution({
         .filter((name) => (visibility[name] ?? true) === true);
 
       if (selectedFields.length === 0) {
-        patchTab(objectName, (item) => ({
+        patchTab(tabBindingKey, (item) => ({
           ...item,
-          notice: { type: "error", message: `${objectName} 至少要勾选一个字段。` },
+          notice: { type: "error", message: `${tabObjectName} 至少要勾选一个字段。` },
           loading: false
         }));
         return;
       }
 
-      patchTab(objectName, (item) => ({
+      patchTab(tabBindingKey, (item) => ({
         ...item,
         loading: true,
         whereClause,
@@ -124,7 +128,7 @@ export function useQueryExecution({
       try {
         const soql = buildQueryStatement(
           normalizedType,
-          objectName,
+          tabObjectName,
           selectedFields,
           whereClause,
           sortField,
@@ -132,10 +136,10 @@ export function useQueryExecution({
           limit,
           sortClause
         );
-        const rawResult = await api.queryRecords(selectedSourceId, soql);
+        const rawResult = await api.queryRecords(resolvedSourceId, soql);
         const result = normalizeQueryResult(rawResult);
 
-        patchTab(objectName, (item) => ({
+        patchTab(tabBindingKey, (item) => ({
           ...item,
           result,
           loading: false,
@@ -148,24 +152,24 @@ export function useQueryExecution({
             sourceType: normalizedType,
             mysqlPrimaryKeyField
           }),
-          notice: { type: "success", message: `${objectName} 查询成功，共 ${result.totalSize} 条。` }
+          notice: { type: "success", message: `${tabObjectName} 查询成功，共 ${result.totalSize} 条。` }
         }));
-        appendTabLog(objectName, {
+        appendTabLog(tabBindingKey, {
           action: "QUERY",
           success: true,
           request: soql,
           summary: `查询成功，返回 ${result.totalSize} 条。`
         });
       } catch (error) {
-        patchTab(objectName, (item) => ({
+        patchTab(tabBindingKey, (item) => ({
           ...item,
           loading: false,
-          notice: { type: "error", message: `${objectName} 查询失败：${String(error)}` }
+          notice: { type: "error", message: `${tabObjectName} 查询失败：${String(error)}` }
         }));
-        appendTabLog(objectName, {
+        appendTabLog(tabBindingKey, {
           action: "QUERY",
           success: false,
-          request: `object=${objectName}, where=${whereClause}, sort=${
+          request: `object=${tabObjectName}, where=${whereClause}, sort=${
             normalizedType === "mysql" ? (sortClause || "无排序") : sortField ? `${sortField} ${sortDirection}` : "无排序"
           }, limit=${limit}`,
           summary: "查询失败。",
@@ -174,7 +178,6 @@ export function useQueryExecution({
       }
     },
     [
-      selectedSourceId,
       tabs,
       selectedSourceType,
       getSortableFieldNames,
@@ -188,24 +191,29 @@ export function useQueryExecution({
 
   // 执行自定义 SQL/SOQL：按草稿执行并同步结果与字段可见性。
   const executeCustomSoql = useCallback(async () => {
-    if (!selectedSourceId || !activeTab) return;
+    if (!activeTab) return;
+    const resolvedSourceId = activeTab.sourceId || selectedSourceId;
+    if (!resolvedSourceId) return;
+    const resolvedSourceType = String(activeTab.sourceType || selectedSourceType || "salesforce");
+    const activeTabBindingKey =
+      activeTab.bindingKey || buildObjectTabBindingKey(resolvedSourceId, activeTab.objectName);
     if (!activeTab.soqlDraft.trim()) {
-      patchTab(activeTab.objectName, (item) => ({ ...item, notice: { type: "error", message: `${queryLanguageLabel} 不能为空。` } }));
+      patchTab(activeTabBindingKey, (item) => ({ ...item, notice: { type: "error", message: `${queryLanguageLabel} 不能为空。` } }));
       return;
     }
 
-    patchTab(activeTab.objectName, (item) => ({ ...item, loading: true }));
+    patchTab(activeTabBindingKey, (item) => ({ ...item, loading: true }));
     try {
-      const normalizedType = (selectedSourceType || "salesforce").toLowerCase();
+      const normalizedType = resolvedSourceType.toLowerCase();
       // 自定义 SQL/SOQL 执行后仍需使用统一记录键策略，保证高亮与撤销一致。
       const mysqlPrimaryKeyField = normalizedType === "mysql"
         ? activeTab.describe?.fields.find((field) => String(field.metadata?.columnKey || "").toUpperCase() === "PRI")?.name || ""
         : "";
-      const rawResult = await api.queryRecords(selectedSourceId, activeTab.soqlDraft);
+      const rawResult = await api.queryRecords(resolvedSourceId, activeTab.soqlDraft);
       const result = normalizeQueryResult(rawResult);
       const nextVisibility = buildVisibilityFromSoql(activeTab.soqlDraft, activeTab.describe, activeTab.columnVisibility);
 
-      patchTab(activeTab.objectName, (item) => ({
+      patchTab(activeTabBindingKey, (item) => ({
         ...item,
         result,
         loading: false,
@@ -221,20 +229,20 @@ export function useQueryExecution({
         whereClause: extractWhereClause(activeTab.soqlDraft, activeTab.objectName) ?? item.whereClause,
         notice: { type: "success", message: `${activeTab.objectName} 执行${queryLanguageLabel}成功，共 ${result.totalSize} 条。` }
       }));
-      appendTabLog(activeTab.objectName, {
+      appendTabLog(activeTabBindingKey, {
         action: "SOQL",
         success: true,
         request: activeTab.soqlDraft,
         summary: `执行${queryLanguageLabel}成功，返回 ${result.totalSize} 条。`
       });
-      await persistColumnVisibility(selectedSourceId, activeTab.objectName, nextVisibility);
+      await persistColumnVisibility(resolvedSourceId, activeTab.objectName, nextVisibility);
     } catch (error) {
-      patchTab(activeTab.objectName, (item) => ({
+      patchTab(activeTabBindingKey, (item) => ({
         ...item,
         loading: false,
         notice: { type: "error", message: `执行${queryLanguageLabel}失败：${String(error)}` }
       }));
-      appendTabLog(activeTab.objectName, {
+      appendTabLog(activeTabBindingKey, {
         action: "SOQL",
         success: false,
         request: activeTab.soqlDraft,

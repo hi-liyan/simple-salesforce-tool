@@ -4,7 +4,7 @@ import { api } from "../../../../api";
 import { useObjectsQuery, useSourcesQuery, useSyncSourcesMutation } from "../../../../queries/salesforce";
 import { MainViewMode, useAppStore } from "../../../../store/useAppStore";
 import { useSoqlExecutorStore } from "../../../../store/useSoqlExecutorStore";
-import { Notice, ObjectDescribe, ObjectDdl, SalesforceObject, TabLog, TabState } from "../../../../types";
+import { buildObjectTabBindingKey, Notice, ObjectDescribe, ObjectDdl, SalesforceObject, TabLog, TabState } from "../../../../types";
 import { useSourceActions } from "./useSourceActions";
 import { useQueryExecution } from "./useQueryExecution";
 import { useQueryPanelRuntime } from "./useQueryPanelRuntime";
@@ -76,6 +76,16 @@ export function useMainPageQueryPanel({
   startupComplete,
   tokenRefreshing
 }: UseMainPageQueryPanelInput): UseMainPageQueryPanelResult {
+  // 读取对象 Tab 身份：优先使用 bindingKey，兼容历史 objectName。
+  function getTabIdentity(tab: Pick<TabState, "bindingKey" | "sourceId" | "objectName">): string {
+    return tab.bindingKey || buildObjectTabBindingKey(tab.sourceId || "", tab.objectName || "");
+  }
+
+  // 判断 Tab 是否命中指定身份：兼容旧 objectName 传参。
+  function isTabMatchedByIdentity(tab: Pick<TabState, "bindingKey" | "sourceId" | "objectName">, tabIdentity: string): boolean {
+    return getTabIdentity(tab) === tabIdentity || tab.objectName === tabIdentity;
+  }
+
   // React Query：数据源与对象列表。
   const queryClient = useQueryClient();
   const { data: sources = [], isFetching: sourcesFetching } = useSourcesQuery(startupComplete);
@@ -109,14 +119,16 @@ export function useMainPageQueryPanel({
     () => sources.find((source) => source.id === selectedSourceId) || null,
     [sources, selectedSourceId]
   );
-  // 查询语言标签：MySQL 显示 SQL，其它默认 SOQL。
-  const queryLanguageLabel = (selectedSource?.sourceType || "salesforce").toLowerCase() === "mysql" ? "SQL" : "SOQL";
-
   // 当前激活的 Query Tab。
   const activeTab = useMemo(
-    () => tabs.find((item) => item.objectName === activeTabObjectName) || null,
+    () => tabs.find((item) => isTabMatchedByIdentity(item, activeTabObjectName)) || null,
     [tabs, activeTabObjectName]
   );
+  // 当前激活对象 Tab 所绑定的数据源：优先使用 tab 自带 source 上下文，兼容旧模型回退到 selectedSource。
+  const activeTabSourceId = activeTab?.sourceId || selectedSourceId;
+  const activeTabSourceType = activeTab?.sourceType || selectedSource?.sourceType || "salesforce";
+  // 查询语言标签：优先跟随当前激活 tab 的 sourceType。
+  const queryLanguageLabel = activeTabSourceType.toLowerCase() === "mysql" ? "SQL" : "SOQL";
 
   // Tab 通知自动关闭计时器。
   const noticeTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
@@ -265,8 +277,8 @@ export function useMainPageQueryPanel({
 
   // 查询执行行为：抽离对象查询和自定义 SQL/SOQL 执行流程。
   const { queryTabData, executeCustomSoql } = useQueryExecution({
-    selectedSourceId,
-    selectedSourceType: selectedSource?.sourceType || "salesforce",
+    selectedSourceId: activeTabSourceId,
+    selectedSourceType: activeTabSourceType,
     tabs,
     activeTab,
     queryLanguageLabel,
@@ -292,8 +304,8 @@ export function useMainPageQueryPanel({
     applyPendingChanges,
     discardPendingChanges
   } = useQueryPanelRuntime({
-    selectedSourceId,
-    selectedSourceType: selectedSource?.sourceType || "salesforce",
+    selectedSourceId: activeTabSourceId,
+    selectedSourceType: activeTabSourceType,
     activeTab,
     tabs,
     setTabs,
@@ -324,8 +336,8 @@ export function useMainPageQueryPanel({
       delete noticeTimersRef.current[objectName];
     });
 
-    const nextTabs = tabs.filter((tab) => !closeSet.has(tab.objectName));
-    const nextActive = closeSet.has(activeTabObjectName) ? nextTabs[0]?.objectName || "" : activeTabObjectName;
+    const nextTabs = tabs.filter((tab) => !closeSet.has(getTabIdentity(tab)) && !closeSet.has(tab.objectName));
+    const nextActive = closeSet.has(activeTabObjectName) ? (nextTabs[0] ? getTabIdentity(nextTabs[0]) : "") : activeTabObjectName;
     setTabs(nextTabs);
     setActiveTabObjectName(nextActive);
   }
@@ -337,26 +349,26 @@ export function useMainPageQueryPanel({
 
   // 右键动作：关闭目标 Tab 左侧全部。
   function closeLeftTabs(objectName: string) {
-    const index = tabs.findIndex((tab) => tab.objectName === objectName);
+    const index = tabs.findIndex((tab) => isTabMatchedByIdentity(tab, objectName));
     if (index <= 0) return;
-    closeTabsByObjectNames(tabs.slice(0, index).map((tab) => tab.objectName));
+    closeTabsByObjectNames(tabs.slice(0, index).map((tab) => getTabIdentity(tab)));
   }
 
   // 右键动作：关闭目标 Tab 右侧全部。
   function closeRightTabs(objectName: string) {
-    const index = tabs.findIndex((tab) => tab.objectName === objectName);
+    const index = tabs.findIndex((tab) => isTabMatchedByIdentity(tab, objectName));
     if (index < 0 || index >= tabs.length - 1) return;
-    closeTabsByObjectNames(tabs.slice(index + 1).map((tab) => tab.objectName));
+    closeTabsByObjectNames(tabs.slice(index + 1).map((tab) => getTabIdentity(tab)));
   }
 
   // 右键动作：关闭除目标 Tab 外的其它 Tab。
   function closeOtherTabs(objectName: string) {
-    closeTabsByObjectNames(tabs.filter((tab) => tab.objectName !== objectName).map((tab) => tab.objectName));
+    closeTabsByObjectNames(tabs.filter((tab) => !isTabMatchedByIdentity(tab, objectName)).map((tab) => getTabIdentity(tab)));
   }
 
   // 右键动作：关闭全部 Tab。
   function closeAllTabs() {
-    closeTabsByObjectNames(tabs.map((tab) => tab.objectName));
+    closeTabsByObjectNames(tabs.map((tab) => getTabIdentity(tab)));
   }
 
   // 统一工作区 Tab 状态：抽离 data/console 混合映射与焦点回退逻辑。

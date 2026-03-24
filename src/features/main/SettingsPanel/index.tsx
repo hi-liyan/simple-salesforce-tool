@@ -17,6 +17,7 @@ import { NoticeAlert } from "../../../components/NoticeAlert";
 import { CliPathProbe, CliPathSettings, CliPathStatus, LlmSettings, SalesforceSource, TerminalShellOption } from "../../../types";
 import { checkGithubLatestVersion } from "../../../utils/versionUpdate";
 import { SystemLogsPanel } from "./SystemLogs";
+import { getSourceColor, withSourceColor } from "../QueryPanel/logic/sourceColor";
 
 // 判断当前 Shell 路径是否为绝对路径：Windows 支持盘符路径与 UNC 路径，Unix 支持 `/` 开头路径。
 function isAbsoluteShellPath(shellPath: string): boolean {
@@ -110,7 +111,8 @@ export function SettingsPanel() {
     name: "",
     instanceUrl: "",
     accessToken: "",
-    apiVersion: "v61.0"
+    apiVersion: "v61.0",
+    color: ""
   });
   // Salesforce 编辑弹窗提示文本（测试连接结果/保存失败等）。
   const [salesforceEditMessage, setSalesforceEditMessage] = useState("");
@@ -130,7 +132,8 @@ export function SettingsPanel() {
     database: "",
     username: "",
     password: "",
-    primaryKey: ""
+    primaryKey: "",
+    color: ""
   });
   // MySQL 编辑弹窗提示文本（测试连接结果/保存失败等）。
   const [mySqlEditMessage, setMySqlEditMessage] = useState("");
@@ -274,7 +277,8 @@ export function SettingsPanel() {
       database,
       username,
       password,
-      primaryKey
+      primaryKey,
+      color: getSourceColor(source)
     });
     setMySqlEditMessage("");
     setShowMySqlEditModal(true);
@@ -287,7 +291,8 @@ export function SettingsPanel() {
       name: source.name || "",
       instanceUrl: source.instanceUrl || "",
       accessToken: source.accessToken || "",
-      apiVersion: source.apiVersion || "v61.0"
+      apiVersion: source.apiVersion || "v61.0",
+      color: getSourceColor(source)
     });
     setSalesforceEditMessage("");
     setShowSalesforceEditModal(true);
@@ -311,7 +316,7 @@ export function SettingsPanel() {
   function buildMySqlPayloadFromEditForm() {
     const primaryKey = mySqlEditForm.primaryKey.trim();
     const normalizedPort = Number(mySqlEditForm.port) || 3306;
-    return {
+    return withSourceColor({
       name: mySqlEditForm.name.trim(),
       sourceType: "mysql",
       configJson: {
@@ -325,19 +330,19 @@ export function SettingsPanel() {
       instanceUrl: `mysql://${mySqlEditForm.host.trim()}:${normalizedPort}/${mySqlEditForm.database.trim()}`,
       accessToken: "",
       apiVersion: "mysql"
-    };
+    }, mySqlEditForm.color);
   }
 
   // 构建 Salesforce 更新 payload：用于测试连接与保存。
   function buildSalesforcePayloadFromEditForm() {
-    return {
+    return withSourceColor({
       name: salesforceEditForm.name.trim(),
       sourceType: "salesforce",
       configJson: {},
       instanceUrl: salesforceEditForm.instanceUrl.trim(),
       accessToken: salesforceEditForm.accessToken.trim(),
       apiVersion: salesforceEditForm.apiVersion.trim()
-    };
+    }, salesforceEditForm.color);
   }
 
   // 测试当前 MySQL 编辑表单连接。
@@ -1050,6 +1055,24 @@ export function SettingsPanel() {
                 spellCheck={false}
                 onChange={(event) => setSalesforceEditForm((state) => ({ ...state, apiVersion: event.target.value }))}
               />
+              <label className="flex items-center gap-3 rounded border border-base-300 px-3 py-2 text-[12px] text-neutral/80">
+                {/* 数据源颜色：仅支持用户手动设置，不生成默认色。 */}
+                <span className="min-w-[72px]">数据源颜色</span>
+                <input
+                  className="h-8 w-12 cursor-pointer rounded border border-base-300 bg-transparent"
+                  type="color"
+                  value={salesforceEditForm.color || "#000000"}
+                  onChange={(event) => setSalesforceEditForm((state) => ({ ...state, color: event.target.value }))}
+                />
+                <button
+                  className="btn btn-ghost btn-xs"
+                  type="button"
+                  onClick={() => setSalesforceEditForm((state) => ({ ...state, color: "" }))}
+                >
+                  清除
+                </button>
+                <span className="truncate text-neutral/60">{salesforceEditForm.color || "未设置"}</span>
+              </label>
             </div>
             {/* 编辑结果提示。 */}
             {salesforceEditMessage && <p className="mt-3 text-xs text-neutral/70">{salesforceEditMessage}</p>}
@@ -1142,6 +1165,24 @@ export function SettingsPanel() {
                 spellCheck={false}
                 onChange={(event) => setMySqlEditForm((state) => ({ ...state, primaryKey: event.target.value }))}
               />
+              <label className="flex items-center gap-3 rounded border border-base-300 px-3 py-2 text-[12px] text-neutral/80">
+                {/* 数据源颜色：供左侧树与未来右侧多源 Tab 复用。 */}
+                <span className="min-w-[72px]">数据源颜色</span>
+                <input
+                  className="h-8 w-12 cursor-pointer rounded border border-base-300 bg-transparent"
+                  type="color"
+                  value={mySqlEditForm.color || "#000000"}
+                  onChange={(event) => setMySqlEditForm((state) => ({ ...state, color: event.target.value }))}
+                />
+                <button
+                  className="btn btn-ghost btn-xs"
+                  type="button"
+                  onClick={() => setMySqlEditForm((state) => ({ ...state, color: "" }))}
+                >
+                  清除
+                </button>
+                <span className="truncate text-neutral/60">{mySqlEditForm.color || "未设置"}</span>
+              </label>
             </div>
             {/* 编辑结果提示。 */}
             {mySqlEditMessage && <p className="mt-3 text-xs text-neutral/70">{mySqlEditMessage}</p>}
@@ -1248,6 +1289,14 @@ function SortableSourceCard({
       <div className="mb-2">
         <p className="mt-1 text-neutral/70">序号: {item.sortOrder || 0}</p>
         <p className="mt-1 text-neutral/70">ID: {item.id}</p>
+        <p className="mt-1 flex items-center gap-2 text-neutral/70">
+          <span>颜色:</span>
+          <span
+            className="inline-block h-3 w-3 rounded-full border border-base-300"
+            style={{ backgroundColor: getSourceColor(item) || "transparent" }}
+          />
+          <span>{getSourceColor(item) || "未设置"}</span>
+        </p>
       </div>
       <div className="space-y-1 break-all">
         <p>

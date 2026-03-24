@@ -1,7 +1,11 @@
 // 数据查询 Tab 的最小输入结构：仅依赖工作区映射所需字段。
 export type DataWorkspaceTab = {
+  // 对象 Tab 稳定唯一键：用于区分不同数据源的同名对象。
+  bindingKey: string;
   // 对象 API 名称。
   objectName: string;
+  // 展示标题：优先使用对象标签，兜底为对象 API 名称。
+  title?: string;
 };
 
 // 控制台 Tab 的最小输入结构：仅依赖工作区映射所需字段。
@@ -26,13 +30,13 @@ export type WorkspaceTabItem = {
 export type WorkspaceTabTarget = {
   // Tab 类型：data=对象查询，console=查询控制台。
   kind: "data" | "console";
-  // 目标 ID：data 为 objectName，console 为 soqlTabId。
+  // 目标 ID：data 为对象 Tab bindingKey，console 为 soqlTabId。
   targetId: string;
 };
 
 // 生成 data 工作区 Tab ID。
-export function buildDataWorkspaceTabId(objectName: string): string {
-  return `data:${objectName}`;
+export function buildDataWorkspaceTabId(bindingKey: string): string {
+  return `data:${bindingKey}`;
 }
 
 // 生成 console 工作区 Tab ID。
@@ -55,9 +59,9 @@ export function parseWorkspaceTabId(workspaceTabId: string): WorkspaceTabTarget 
 export function buildWorkspaceTabs(dataTabs: DataWorkspaceTab[], consoleTabs: ConsoleWorkspaceTab[]): WorkspaceTabItem[] {
   return [
     ...dataTabs.map((tab) => ({
-      id: buildDataWorkspaceTabId(tab.objectName),
+      id: buildDataWorkspaceTabId(tab.bindingKey),
       kind: "data" as const,
-      title: tab.objectName
+      title: tab.title || tab.objectName
     })),
     ...consoleTabs.map((tab) => ({
       id: buildConsoleWorkspaceTabId(tab.id),

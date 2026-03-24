@@ -136,8 +136,23 @@ export type TabLog = {
   errorMessage?: string;
 };
 
+// 生成对象 Tab 的稳定唯一键：用于隔离“同名对象 + 不同数据源”。
+export function buildObjectTabBindingKey(sourceId: string, objectName: string): string {
+  return `${sourceId}::${objectName}`;
+}
+
 // 单个对象 Tab 的运行时状态。
 export type TabState = {
+  // 对象 Tab 的稳定唯一键（sourceId + objectName）。
+  bindingKey: string;
+  // 当前对象 Tab 绑定的数据源 ID：用于多数据源并行工作区。
+  sourceId: string;
+  // 当前对象 Tab 绑定的数据源类型。
+  sourceType: string;
+  // 当前对象 Tab 绑定的数据源名称。
+  sourceName: string;
+  // 当前对象 Tab 绑定的数据源颜色：供未来多源 Tab 视觉区分。
+  sourceColor: string;
   objectName: string;
   label: string;
   describe: ObjectDescribe | null;

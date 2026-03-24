@@ -140,8 +140,9 @@ export function QueryPanel({ viewState, actions }: QueryPanelProps) {
               );
             }
 
-            const objectName = parsed.targetId;
-            const tab = viewState.tabs.find((item) => item.objectName === objectName) || null;
+            const tabIdentity = parsed.targetId;
+            const tab = viewState.tabs.find((item) => item.bindingKey === tabIdentity || item.objectName === tabIdentity) || null;
+            const objectName = tab?.objectName || tabIdentity;
             const mysqlDdlState = viewState.mysqlDdlMap[objectName];
             const visibleColumns = tab ? getVisibleColumns(tab) : [];
             const fieldMetadataMap = buildFieldMetadataMapForTab(tab);
@@ -158,14 +159,14 @@ export function QueryPanel({ viewState, actions }: QueryPanelProps) {
                 aria-hidden={!active}
               >
                 <DataQueryTabPane
-                  selectedSourceId={viewState.selectedSourceId}
-                  selectedSourceType={viewState.selectedSourceType}
+                  selectedSourceId={tab?.sourceId || viewState.selectedSourceId}
+                  selectedSourceType={tab?.sourceType || viewState.selectedSourceType}
                   salesforceTimezone={viewState.salesforceTimezone}
                   mysqlDdl={mysqlDdlState?.data || null}
                   mysqlDdlLoading={Boolean(mysqlDdlState?.loading)}
                   mysqlDdlError={mysqlDdlState?.error || ""}
                   tabs={viewState.tabs}
-                  activeTabObjectName={objectName}
+                  activeTabObjectName={tabIdentity}
                   activeTab={tab}
                   workspaceNotice={viewState.workspaceNotice}
                   visibleColumns={visibleColumns}
