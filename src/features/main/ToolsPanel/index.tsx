@@ -2,9 +2,10 @@ import { useState } from "react";
 import { type LucideIcon, ArrowLeftRight, Braces, ChevronRight, Wrench } from "lucide-react";
 import { JsonFormatterTool } from "./components/JsonFormatterTool";
 import { TextDiffTool } from "./components/TextDiffTool";
+import { JsonDiffTool } from "./components/JsonDiffTool";
 
 // 工具标识：当前面板已实现的工具集合。
-type ToolItemId = "json-formatter" | "text-diff";
+type ToolItemId = "json-formatter" | "text-diff" | "json-diff";
 
 // 工具入口定义：驱动平铺入口卡片渲染。
 type ToolDefinition = {
@@ -35,6 +36,13 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     description: "提供左右双栏文本差异对比，支持多 Tab 持续编辑、拖拽排序、重命名与懒恢复。",
     statusText: "已上线",
     icon: ArrowLeftRight
+  },
+  {
+    id: "json-diff",
+    title: "JSON Diff",
+    description: "提供 JSON 语义对比与双栏差异高亮，支持多 Tab、拖拽排序、重命名与懒恢复。",
+    statusText: "已上线",
+    icon: Braces
   }
 ];
 
@@ -49,6 +57,10 @@ export function ToolsPanel() {
 
   if (activeToolId === "text-diff") {
     return <TextDiffTool onBack={() => setActiveToolId(null)} />;
+  }
+
+  if (activeToolId === "json-diff") {
+    return <JsonDiffTool onBack={() => setActiveToolId(null)} />;
   }
 
   return (
