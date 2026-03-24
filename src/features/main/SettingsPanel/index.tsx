@@ -1,5 +1,6 @@
-import { ExternalLink, GripVertical, RefreshCw, Save, Search, Settings, Trash2 } from "lucide-react";
+import { Check, ChevronDown, ExternalLink, GripVertical, RefreshCw, Save, Search, Settings, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   closestCenter,
@@ -1092,57 +1093,75 @@ export function SettingsPanel() {
       {/* Salesforce 编辑弹窗：仅在设置页用于编辑非 CLI 的 Salesforce 数据源。 */}
       {showSalesforceEditModal && (
         <div className="modal modal-open">
-          <div className="modal-box">
-            {/* 弹窗标题。 */}
-            <h3 className="text-base font-semibold">编辑 Salesforce 数据源</h3>
-            {/* Salesforce 配置表单。 */}
-            <div className="mt-3 space-y-2">
-              <input
-                className="input input-bordered input-sm w-full"
-                placeholder="数据源名称"
-                value={salesforceEditForm.name}
-                autoCorrect="off"
-                autoCapitalize="off"
-                spellCheck={false}
-                onChange={(event) => setSalesforceEditForm((state) => ({ ...state, name: event.target.value }))}
-              />
-              <input
-                className="input input-bordered input-sm w-full"
-                placeholder="Instance URL"
-                value={salesforceEditForm.instanceUrl}
-                autoCorrect="off"
-                autoCapitalize="off"
-                spellCheck={false}
-                onChange={(event) => setSalesforceEditForm((state) => ({ ...state, instanceUrl: event.target.value }))}
-              />
-              <input
-                className="input input-bordered input-sm w-full"
-                placeholder="Access Token"
-                value={salesforceEditForm.accessToken}
-                autoCorrect="off"
-                autoCapitalize="off"
-                spellCheck={false}
-                onChange={(event) => setSalesforceEditForm((state) => ({ ...state, accessToken: event.target.value }))}
-              />
-              <input
-                className="input input-bordered input-sm w-full"
-                placeholder="API Version（例如 v61.0）"
-                value={salesforceEditForm.apiVersion}
-                autoCorrect="off"
-                autoCapitalize="off"
-                spellCheck={false}
-                onChange={(event) => setSalesforceEditForm((state) => ({ ...state, apiVersion: event.target.value }))}
-              />
-              <SourceColorField
-                label="数据源颜色"
-                color={salesforceEditForm.color}
-                onChange={(color) => setSalesforceEditForm((state) => ({ ...state, color }))}
-              />
+          <div className="modal-box max-w-4xl p-0">
+            {/* 弹窗标题区：统一展示标题与说明，提升设置面板感。 */}
+            <div className="border-b border-base-300 bg-base-200/60 px-6 py-5">
+              <h3 className="text-lg font-semibold text-base-content">编辑 Salesforce 数据源</h3>
+              <p className="mt-1 text-[12px] text-neutral/70">连接信息与外观设置统一在这里维护，必填项会显示红色星号。</p>
             </div>
-            {/* 编辑结果提示。 */}
-            {salesforceEditMessage && <p className="mt-3 text-xs text-neutral/70">{salesforceEditMessage}</p>}
+
+            {/* 弹窗内容区：按“基本信息/连接设置/外观”分组展示。 */}
+            <div className="space-y-6 px-6 py-5">
+              <FormSection title="基本信息">
+                <FormFieldRow label="数据源名称" required>
+                  <input
+                    className="input input-bordered input-sm w-full"
+                    value={salesforceEditForm.name}
+                    autoCorrect="off"
+                    autoCapitalize="off"
+                    spellCheck={false}
+                    onChange={(event) => setSalesforceEditForm((state) => ({ ...state, name: event.target.value }))}
+                  />
+                </FormFieldRow>
+              </FormSection>
+
+              <FormSection title="连接设置">
+                <FormFieldRow label="Instance URL" required>
+                  <input
+                    className="input input-bordered input-sm w-full"
+                    value={salesforceEditForm.instanceUrl}
+                    autoCorrect="off"
+                    autoCapitalize="off"
+                    spellCheck={false}
+                    onChange={(event) => setSalesforceEditForm((state) => ({ ...state, instanceUrl: event.target.value }))}
+                  />
+                </FormFieldRow>
+                <FormFieldRow label="Access Token" required>
+                  <input
+                    className="input input-bordered input-sm w-full"
+                    value={salesforceEditForm.accessToken}
+                    autoCorrect="off"
+                    autoCapitalize="off"
+                    spellCheck={false}
+                    onChange={(event) => setSalesforceEditForm((state) => ({ ...state, accessToken: event.target.value }))}
+                  />
+                </FormFieldRow>
+                <FormFieldRow label="API Version" required hint="例如 v61.0">
+                  <input
+                    className="input input-bordered input-sm w-full"
+                    value={salesforceEditForm.apiVersion}
+                    autoCorrect="off"
+                    autoCapitalize="off"
+                    spellCheck={false}
+                    onChange={(event) => setSalesforceEditForm((state) => ({ ...state, apiVersion: event.target.value }))}
+                  />
+                </FormFieldRow>
+              </FormSection>
+
+              <FormSection title="外观">
+                <SourceColorField
+                  label="数据源颜色"
+                  color={salesforceEditForm.color}
+                  onChange={(color) => setSalesforceEditForm((state) => ({ ...state, color }))}
+                />
+              </FormSection>
+
+              {/* 编辑结果提示。 */}
+              {salesforceEditMessage && <p className="rounded border border-base-300 bg-base-200/50 px-3 py-2 text-xs text-neutral/80">{salesforceEditMessage}</p>}
+            </div>
+
             {/* 底部操作按钮。 */}
-            <div className="modal-action">
+            <div className="modal-action mt-0 border-t border-base-300 px-6 py-4">
               <button className="btn btn-outline" onClick={closeSalesforceEditModal} disabled={salesforceEditSubmitting || salesforceEditTesting}>
                 取消
               </button>
@@ -1160,86 +1179,107 @@ export function SettingsPanel() {
       {/* MySQL 编辑弹窗：仅在设置页用于编辑已存在的 MySQL 数据源。 */}
       {showMySqlEditModal && (
         <div className="modal modal-open">
-          <div className="modal-box">
-            {/* 弹窗标题。 */}
-            <h3 className="text-base font-semibold">编辑 MySQL 数据源</h3>
-            {/* MySQL 配置表单。 */}
-            <div className="mt-3 space-y-2">
-              <input
-                className="input input-bordered input-sm w-full"
-                placeholder="数据源名称"
-                value={mySqlEditForm.name}
-                autoCorrect="off"
-                autoCapitalize="off"
-                spellCheck={false}
-                onChange={(event) => setMySqlEditForm((state) => ({ ...state, name: event.target.value }))}
-              />
-              <input
-                className="input input-bordered input-sm w-full"
-                placeholder="Host"
-                value={mySqlEditForm.host}
-                autoCorrect="off"
-                autoCapitalize="off"
-                spellCheck={false}
-                onChange={(event) => setMySqlEditForm((state) => ({ ...state, host: event.target.value }))}
-              />
-              <input
-                className="input input-bordered input-sm w-full"
-                placeholder="Port"
-                type="number"
-                value={String(mySqlEditForm.port)}
-                autoCorrect="off"
-                autoCapitalize="off"
-                spellCheck={false}
-                onChange={(event) => setMySqlEditForm((state) => ({ ...state, port: Number(event.target.value || 3306) }))}
-              />
-              <input
-                className="input input-bordered input-sm w-full"
-                placeholder="Database"
-                value={mySqlEditForm.database}
-                autoCorrect="off"
-                autoCapitalize="off"
-                spellCheck={false}
-                onChange={(event) => setMySqlEditForm((state) => ({ ...state, database: event.target.value }))}
-              />
-              <input
-                className="input input-bordered input-sm w-full"
-                placeholder="Username"
-                value={mySqlEditForm.username}
-                autoCorrect="off"
-                autoCapitalize="off"
-                spellCheck={false}
-                onChange={(event) => setMySqlEditForm((state) => ({ ...state, username: event.target.value }))}
-              />
-              <input
-                className="input input-bordered input-sm w-full"
-                placeholder="Password"
-                type="password"
-                value={mySqlEditForm.password}
-                autoCorrect="off"
-                autoCapitalize="off"
-                spellCheck={false}
-                onChange={(event) => setMySqlEditForm((state) => ({ ...state, password: event.target.value }))}
-              />
-              <input
-                className="input input-bordered input-sm w-full"
-                placeholder="Primary Key（可选，默认自动检测）"
-                value={mySqlEditForm.primaryKey}
-                autoCorrect="off"
-                autoCapitalize="off"
-                spellCheck={false}
-                onChange={(event) => setMySqlEditForm((state) => ({ ...state, primaryKey: event.target.value }))}
-              />
-              <SourceColorField
-                label="数据源颜色"
-                color={mySqlEditForm.color}
-                onChange={(color) => setMySqlEditForm((state) => ({ ...state, color }))}
-              />
+          <div className="modal-box max-w-4xl p-0">
+            {/* 弹窗标题区：统一改为更接近数据库客户端的设置布局。 */}
+            <div className="border-b border-base-300 bg-base-200/60 px-6 py-5">
+              <h3 className="text-lg font-semibold text-base-content">编辑 MySQL 数据源</h3>
+              <p className="mt-1 text-[12px] text-neutral/70">连接参数、账号信息和颜色设置统一管理，必填项会显示红色星号。</p>
             </div>
-            {/* 编辑结果提示。 */}
-            {mySqlEditMessage && <p className="mt-3 text-xs text-neutral/70">{mySqlEditMessage}</p>}
+
+            {/* 弹窗内容区：分块展示，避免全部字段堆在一起。 */}
+            <div className="space-y-6 px-6 py-5">
+              <FormSection title="基本信息">
+                <FormFieldRow label="数据源名称" required>
+                  <input
+                    className="input input-bordered input-sm w-full"
+                    value={mySqlEditForm.name}
+                    autoCorrect="off"
+                    autoCapitalize="off"
+                    spellCheck={false}
+                    onChange={(event) => setMySqlEditForm((state) => ({ ...state, name: event.target.value }))}
+                  />
+                </FormFieldRow>
+              </FormSection>
+
+              <FormSection title="连接设置">
+                <FormFieldRow label="Host" required>
+                  <input
+                    className="input input-bordered input-sm w-full"
+                    value={mySqlEditForm.host}
+                    autoCorrect="off"
+                    autoCapitalize="off"
+                    spellCheck={false}
+                    onChange={(event) => setMySqlEditForm((state) => ({ ...state, host: event.target.value }))}
+                  />
+                </FormFieldRow>
+                <FormFieldRow label="Port" required>
+                  <input
+                    className="input input-bordered input-sm w-full"
+                    type="number"
+                    value={String(mySqlEditForm.port)}
+                    autoCorrect="off"
+                    autoCapitalize="off"
+                    spellCheck={false}
+                    onChange={(event) => setMySqlEditForm((state) => ({ ...state, port: Number(event.target.value || 3306) }))}
+                  />
+                </FormFieldRow>
+                <FormFieldRow label="Database" required>
+                  <input
+                    className="input input-bordered input-sm w-full"
+                    value={mySqlEditForm.database}
+                    autoCorrect="off"
+                    autoCapitalize="off"
+                    spellCheck={false}
+                    onChange={(event) => setMySqlEditForm((state) => ({ ...state, database: event.target.value }))}
+                  />
+                </FormFieldRow>
+                <FormFieldRow label="Username" required>
+                  <input
+                    className="input input-bordered input-sm w-full"
+                    value={mySqlEditForm.username}
+                    autoCorrect="off"
+                    autoCapitalize="off"
+                    spellCheck={false}
+                    onChange={(event) => setMySqlEditForm((state) => ({ ...state, username: event.target.value }))}
+                  />
+                </FormFieldRow>
+                <FormFieldRow label="Password" required>
+                  <input
+                    className="input input-bordered input-sm w-full"
+                    type="password"
+                    value={mySqlEditForm.password}
+                    autoCorrect="off"
+                    autoCapitalize="off"
+                    spellCheck={false}
+                    onChange={(event) => setMySqlEditForm((state) => ({ ...state, password: event.target.value }))}
+                  />
+                </FormFieldRow>
+                <FormFieldRow label="Primary Key" hint="可选，留空时默认自动检测">
+                  <input
+                    className="input input-bordered input-sm w-full"
+                    value={mySqlEditForm.primaryKey}
+                    autoCorrect="off"
+                    autoCapitalize="off"
+                    spellCheck={false}
+                    onChange={(event) => setMySqlEditForm((state) => ({ ...state, primaryKey: event.target.value }))}
+                  />
+                </FormFieldRow>
+              </FormSection>
+
+              <FormSection title="外观">
+                <SourceColorField
+                  label="数据源颜色"
+                  color={mySqlEditForm.color}
+                  onChange={(color) => setMySqlEditForm((state) => ({ ...state, color }))}
+                />
+              </FormSection>
+
+              {/* 编辑结果提示。 */}
+              {mySqlEditMessage && <p className="rounded border border-base-300 bg-base-200/50 px-3 py-2 text-xs text-neutral/80">{mySqlEditMessage}</p>}
+            </div>
+
             {/* 底部操作按钮。 */}
-            <div className="modal-action">
+            <div className="modal-action mt-0 border-t border-base-300 px-6 py-4">
               <button className="btn btn-outline" onClick={closeMySqlEditModal} disabled={mySqlEditSubmitting || mySqlEditTesting}>
                 取消
               </button>
@@ -1257,23 +1297,29 @@ export function SettingsPanel() {
       {/* 通用颜色设置弹窗：用于 CLI 等不展示完整连接编辑表单的数据源。 */}
       {showSourceColorModal && editingColorSource && (
         <div className="modal modal-open">
-          <div className="modal-box">
-            {/* 弹窗标题。 */}
-            <h3 className="text-base font-semibold">设置数据源颜色</h3>
-            {/* 弹窗说明：仅修改颜色，不改动连接信息。 */}
-            <p className="mt-2 text-[12px] text-neutral/70">
-              {editingColorSource.name || "-"}
-              {" · "}
-              {getSourceTypeBadge(editingColorSource.sourceType)}
-            </p>
-            {/* 颜色设置区。 */}
-            <div className="mt-3">
-              <SourceColorField label="数据源颜色" color={sourceColorForm} onChange={setSourceColorForm} />
+          <div className="modal-box max-w-3xl p-0">
+            {/* 弹窗标题区：强调这是轻量的外观设置。 */}
+            <div className="border-b border-base-300 bg-base-200/60 px-6 py-5">
+              <h3 className="text-lg font-semibold text-base-content">设置数据源颜色</h3>
+              <p className="mt-1 text-[12px] text-neutral/70">
+                {editingColorSource.name || "-"}
+                {" · "}
+                {getSourceTypeBadge(editingColorSource.sourceType)}
+              </p>
             </div>
-            {/* 编辑结果提示。 */}
-            {sourceColorMessage && <p className="mt-3 text-xs text-neutral/70">{sourceColorMessage}</p>}
+
+            {/* 颜色设置区：保留统一表单布局，不改动连接信息。 */}
+            <div className="space-y-6 px-6 py-5">
+              <FormSection title="外观">
+                <SourceColorField label="数据源颜色" color={sourceColorForm} onChange={setSourceColorForm} />
+              </FormSection>
+
+              {/* 编辑结果提示。 */}
+              {sourceColorMessage && <p className="rounded border border-base-300 bg-base-200/50 px-3 py-2 text-xs text-neutral/80">{sourceColorMessage}</p>}
+            </div>
+
             {/* 底部操作按钮。 */}
-            <div className="modal-action">
+            <div className="modal-action mt-0 border-t border-base-300 px-6 py-4">
               <button className="btn btn-outline" onClick={closeSourceColorModal} disabled={sourceColorSubmitting}>
                 取消
               </button>
@@ -1297,73 +1343,182 @@ type SourceColorFieldProps = {
   onChange: (color: string) => void;
 };
 
-// 数据源颜色选择区：统一封装预设色、自定义选择器和浅色预览。
+type FormSectionProps = {
+  // 分组标题。
+  title: string;
+  // 分组内容。
+  children: ReactNode;
+};
+
+type FormFieldRowProps = {
+  // 字段标签。
+  label: string;
+  // 是否必填。
+  required?: boolean;
+  // 字段补充说明。
+  hint?: string;
+  // 字段控件。
+  children: ReactNode;
+};
+
+// 表单分组：统一承载“基本信息/连接设置/外观”等分区。
+function FormSection({ title, children }: FormSectionProps) {
+  return (
+    <section className="rounded-xl border border-base-300 bg-base-100">
+      {/* 分组标题：收拢信息层级，增强配置面板感。 */}
+      <div className="border-b border-base-300 px-4 py-3">
+        <h4 className="text-[13px] font-semibold text-base-content">{title}</h4>
+      </div>
+      {/* 分组内容：统一使用紧凑间距。 */}
+      <div className="space-y-4 px-4 py-4">{children}</div>
+    </section>
+  );
+}
+
+// 表单行：统一渲染左侧标签、右侧控件和必填星号。
+function FormFieldRow({ label, required = false, hint = "", children }: FormFieldRowProps) {
+  return (
+    <div className="grid gap-2 md:grid-cols-[140px_minmax(0,1fr)] md:items-start md:gap-4">
+      {/* 左侧标签区：必填项显示红色星号。 */}
+      <div className="pt-1 text-[12px] text-neutral/75">
+        <label className="inline-flex items-center gap-1 font-medium text-base-content">
+          <span>{label}</span>
+          {required && <span className="text-error">*</span>}
+        </label>
+        {hint && <p className="mt-1 leading-[1.45] text-neutral/60">{hint}</p>}
+      </div>
+      {/* 右侧控件区。 */}
+      <div className="min-w-0">{children}</div>
+    </div>
+  );
+}
+
+// 数据源颜色选择区：统一封装下拉式预设色、自定义色与浅色预览。
 function SourceColorField({ label, color, onChange }: SourceColorFieldProps) {
   const currentPalette = buildSourceSurfacePalette(color);
+  // 面板开关：控制预设色下拉显隐。
+  const [open, setOpen] = useState(false);
+  // 根节点引用：用于点击外部时关闭下拉。
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  // 自定义颜色输入引用：用于点击“自定义颜色”时打开系统拾色器。
+  const colorInputRef = useRef<HTMLInputElement | null>(null);
+  // 当前颜色摘要：兼容未设置、预设色与自定义色文案。
+  const activePreset = SOURCE_COLOR_PRESETS.find((preset) => preset.color === color.toUpperCase());
+  const colorSummary = !color ? "未设置" : activePreset?.label || color.toUpperCase();
+
+  useEffect(() => {
+    // 点击外部时关闭颜色面板，保持交互和普通下拉一致。
+    function handlePointerDown(event: MouseEvent) {
+      if (!rootRef.current) return;
+      if (rootRef.current.contains(event.target as Node)) return;
+      setOpen(false);
+    }
+
+    // Esc 时关闭颜色面板，提升键盘可用性。
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      setOpen(false);
+    }
+
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, []);
 
   return (
-    <div className="rounded border border-base-300 bg-base-100 p-3">
-      {/* 标题与说明。 */}
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-[12px] font-semibold text-base-content">{label}</p>
-          <p className="mt-1 text-[11px] leading-[1.4] text-neutral/60">预设色与自定义色都会在 QueryPanel 中自动处理为浅色背景效果。</p>
-        </div>
-        {/* 清除按钮：回退为未设置状态。 */}
-        <button className="btn btn-ghost btn-xs shrink-0" type="button" onClick={() => onChange("")}>
-          清除
-        </button>
-      </div>
-
-      {/* 预设色按钮组。 */}
-      <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
-        {SOURCE_COLOR_PRESETS.map((preset) => {
-          const presetPalette = buildSourceSurfacePalette(preset.color);
-          const selected = color.toUpperCase() === preset.color;
-          return (
-            <button
-              key={preset.color}
-              type="button"
-              className={`flex items-center gap-2 rounded border px-2 py-2 text-left text-[12px] transition-colors ${selected ? "ring-1 ring-inset ring-primary/35" : ""}`}
+    <FormFieldRow label={label} hint="选择后，左侧数据源列表会显示为下面这样的浅色高亮效果。">
+      <div className="relative" ref={rootRef}>
+        {/* 触发器：只展示 QueryPanel 实际使用的浅色效果，避免出现双重预览。 */}
+        <button
+          type="button"
+          className="flex w-full items-center justify-between gap-3 rounded-lg border border-base-300 bg-base-100 px-3 py-2.5 text-left transition-colors hover:border-primary/35 hover:bg-base-200/70"
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          onClick={() => setOpen((state) => !state)}
+        >
+          <span className="flex min-w-0 flex-1 items-center justify-between gap-4">
+            <span className="min-w-0 truncate text-[13px] font-medium text-base-content">{colorSummary}</span>
+            <span
+              className="block h-7 w-40 shrink-0 rounded-lg border"
               style={{
-                backgroundColor: presetPalette?.backgroundColor,
-                borderColor: presetPalette?.borderColor
+                backgroundColor: currentPalette?.backgroundColor || "#FFFFFF",
+                borderColor: currentPalette?.borderColor || "#D1D5DB"
               }}
-              onClick={() => onChange(preset.color)}
-            >
-              {/* 预设色点：展示原始来源色。 */}
-              <span className="h-3 w-3 shrink-0 rounded-full border border-white/70" style={{ backgroundColor: preset.color }} aria-hidden="true" />
-              {/* 预设色名称。 */}
-              <span className="truncate text-neutral/80">{preset.label}</span>
-            </button>
-          );
-        })}
-      </div>
+            />
+          </span>
+          <ChevronDown size={16} className={`shrink-0 text-base-content/60 transition-transform ${open ? "rotate-180" : ""}`} />
+        </button>
 
-      {/* 自定义颜色选择器与浅色预览。 */}
-      <label className="mt-3 flex items-center gap-3 rounded border border-base-300 px-3 py-2 text-[12px] text-neutral/80">
-        {/* 自定义颜色标题。 */}
-        <span className="min-w-[72px]">自定义颜色</span>
-        {/* 系统颜色选择器。 */}
-        <input
-          className="h-8 w-12 cursor-pointer rounded border border-base-300 bg-transparent"
-          type="color"
-          value={color || "#000000"}
-          onChange={(event) => onChange(event.target.value)}
-        />
-        {/* 当前值与浅色预览。 */}
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-neutral/60">{color || "未设置"}</span>
-          <span
-            className="mt-1 block h-6 rounded border"
-            style={{
-              backgroundColor: currentPalette?.backgroundColor || "#FFFFFF",
-              borderColor: currentPalette?.borderColor || "#D1D5DB"
-            }}
-          />
-        </span>
-      </label>
-    </div>
+        {/* 颜色下拉面板：用列表方式展示“无颜色 / 预设 / 自定义”。 */}
+        {open && (
+          <div className="absolute left-0 top-[calc(100%+6px)] z-50 w-full min-w-[280px] rounded-xl border border-base-300 bg-base-100 p-2 shadow-xl">
+            <button
+              type="button"
+              className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-[13px] transition-colors hover:bg-primary/10 ${color ? "" : "bg-primary/10"}`}
+              onClick={() => {
+                onChange("");
+                setOpen(false);
+              }}
+            >
+              <span className="flex items-center gap-3">
+                <span className="inline-flex h-6 w-6 shrink-0 rounded-full border border-dashed border-base-300 bg-base-100" aria-hidden="true" />
+                <span>无颜色</span>
+              </span>
+              {!color && <Check size={14} className="text-primary" />}
+            </button>
+
+            {SOURCE_COLOR_PRESETS.map((preset) => {
+              const selected = color.toUpperCase() === preset.color;
+              return (
+                <button
+                  key={preset.color}
+                  type="button"
+                  className={`mt-1 flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-[13px] transition-colors hover:bg-primary/10 ${selected ? "bg-primary/10" : ""}`}
+                  onClick={() => {
+                    onChange(preset.color);
+                    setOpen(false);
+                  }}
+                >
+                  <span className="flex items-center gap-3">
+                    <span className="inline-flex h-6 w-6 shrink-0 rounded-full border border-base-300" style={{ backgroundColor: preset.color }} aria-hidden="true" />
+                    <span>{preset.label}</span>
+                  </span>
+                  {selected && <Check size={14} className="text-primary" />}
+                </button>
+              );
+            })}
+
+            <div className="mt-2 border-t border-base-300 px-2 pt-3">
+              <button
+                type="button"
+                className="flex w-full items-center justify-between rounded-lg px-1 py-2 text-left text-[13px] text-base-content transition-colors hover:bg-primary/10"
+                onClick={() => colorInputRef.current?.click()}
+              >
+                <span className="flex items-center gap-3">
+                  <span className="inline-flex h-6 w-6 shrink-0 rounded-full border border-base-300 bg-[conic-gradient(from_180deg_at_50%_50%,#ff5a5f_0deg,#fbbf24_72deg,#34d399_144deg,#60a5fa_216deg,#a78bfa_288deg,#ff5a5f_360deg)]" aria-hidden="true" />
+                  <span>自定义颜色</span>
+                </span>
+                <span className="text-[12px] text-neutral/60">{color || "点击选择"}</span>
+              </button>
+              {/* 系统颜色选择器：隐藏在面板底部，通过按钮触发。 */}
+              <input
+                ref={colorInputRef}
+                className="sr-only"
+                type="color"
+                value={color || "#000000"}
+                onChange={(event) => {
+                  onChange(event.target.value);
+                  setOpen(false);
+                }}
+              />
+            </div>
+          </div>
+        )}
+      </div>
+    </FormFieldRow>
   );
 }
 
