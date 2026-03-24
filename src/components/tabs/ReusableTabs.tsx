@@ -296,6 +296,13 @@ export function ReusableTabs({
                 style={{ left: contextMenu.x, top: contextMenu.y }}
                 onClick={(event) => event.stopPropagation()}
               >
+                <button
+                  className="btn btn-ghost btn-xs w-full justify-start"
+                  disabled={!contextMenuTab.renameable || !onRenameTab}
+                  onClick={() => startRename(tab.id)}
+                >
+                  重命名
+                </button>
                 <button className="btn btn-ghost btn-xs w-full justify-start" disabled={!onCloseTab && !onCloseTabs} onClick={() => closeTabs([tab.id])}>
                   关闭当前
                 </button>

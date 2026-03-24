@@ -23,6 +23,8 @@ import {
   Clipboard,
   FolderPlus,
   GripVertical,
+  PanelLeftClose,
+  PanelLeftOpen,
   PencilLine,
   Plus,
   RefreshCw,
@@ -44,6 +46,7 @@ import {
 import { NoticeAlert } from "../../../components/NoticeAlert";
 import { sortTabsByOrder } from "../../../components/tabs/tabOrder";
 import { TerminalTab, useTerminalStore } from "../../../store/useTerminalStore";
+import { buildTerminalInlineNotice, buildTerminalTabTooltip, TerminalProcessMeta } from "./uiState.ts";
 
 type TerminalPanelProps = {
   // 当前 Terminal 面板是否可见：用于控制激活时的 fit/focus。
@@ -56,22 +59,6 @@ type TerminalRuntime = {
   terminal: Terminal;
   // fit 插件：用于根据容器尺寸自适应列宽行高。
   fitAddon: FitAddon;
-};
-
-// 单个终端 Tab 的进程元信息。
-type TerminalProcessMeta = {
-  // 进程 PID。
-  pid: number | null;
-  // 启动命令行文本。
-  commandLine: string;
-  // 终端程序名称（如 PowerShell/bash）。
-  shellName: string;
-  // 终端程序版本文本。
-  shellVersion: string;
-  // 是否已连接到后端会话。
-  connected: boolean;
-  // 是否正在初始化。
-  opening: boolean;
 };
 
 // 左侧编辑器模式。
@@ -299,6 +286,8 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
   const [commandLibraryLoading, setCommandLibraryLoading] = useState(false);
   // 命令库错误文本。
   const [commandLibraryError, setCommandLibraryError] = useState("");
+  // 左侧命令库是否折叠：折叠后优先保证终端工作区宽度。
+  const [commandLibraryCollapsed, setCommandLibraryCollapsed] = useState(false);
   // 终端会话通知：用于提示 Shell 配置失效等创建失败场景。
   const [terminalSessionNotice, setTerminalSessionNotice] = useState("");
   // 命令写入提交态。
@@ -356,6 +345,10 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
   // 激活终端 Tab 派生值。
   const orderedTabs = useMemo(() => sortTabsByOrder(tabOrder, tabs), [tabOrder, tabs]);
   const activeTab = useMemo(() => orderedTabs.find((item) => item.id === activeTabId) || orderedTabs[0] || null, [orderedTabs, activeTabId]);
+  // 当前激活终端的进程元数据。
+  const activeProcessMeta = useMemo(() => (activeTab ? processMetaByTabId[activeTab.id] || null : null), [activeTab, processMetaByTabId]);
+  // 当前激活终端的就地提示。
+  const activeTerminalInlineNotice = useMemo(() => buildTerminalInlineNotice(activeProcessMeta), [activeProcessMeta]);
 
   // 当前选中命令组。
   const selectedGroup = useMemo(
@@ -391,6 +384,9 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
     () => Boolean(commandForm.groupId && commandForm.name.trim() && commandForm.command.trim()),
     [commandForm]
   );
+
+  // 命令编辑面板是否打开。
+  const editorPanelOpen = editorMode !== "closed";
 
   // dnd 传感器：设置轻微拖拽距离，减少点按按钮时误触排序。
   const dndSensors = useSensors(
@@ -1061,6 +1057,23 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
     createTerminalTab();
   }
 
+  // 重新连接指定终端：用于创建失败或进程退出后的就地恢复。
+  async function handleReconnectTerminalTab(tabId: string) {
+    const targetTab = useTerminalStore.getState().tabs.find((item) => item.id === tabId);
+    if (!targetTab) return;
+
+    setTerminalSessionNotice("");
+    openedSessionTabIdRef.current.delete(tabId);
+    delete openingSessionPromiseByTabIdRef.current[tabId];
+    await api.closeTerminalSession(tabId).catch(() => {
+      // 会话可能早已退出，此时忽略关闭失败，继续尝试重连。
+    });
+    await ensureBackendSession(targetTab);
+    if (activeTab?.id === tabId) {
+      scheduleTerminalViewportSync(targetTab, { focus: true });
+    }
+  }
+
   // 关闭终端 Tab（同时关闭后端进程）。
   async function handleCloseTerminalTab(tabId: string) {
     await api.closeTerminalSession(tabId).catch(() => {
@@ -1091,7 +1104,12 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
 
   return (
     // Terminal 主体布局：左侧命令库 + 右侧终端工作区。
-    <div className="grid h-full w-full grid-cols-[380px_1fr] overflow-hidden">
+    <div
+      className="relative grid h-full w-full overflow-hidden"
+      style={{
+        gridTemplateColumns: commandLibraryCollapsed ? "52px minmax(0, 1fr)" : "380px minmax(0, 1fr)"
+      }}
+    >
       {/* 终端创建全局通知：用于展示 Shell 配置失效等错误。 */}
       {terminalSessionNotice && (
         <NoticeAlert
@@ -1105,21 +1123,18 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
       {/* 左侧命令库面板。 */}
       <div className="flex min-h-0 flex-col border-r border-base-300 bg-base-100">
         {/* 顶部控制区：统计、搜索、操作。 */}
-        <div className="border-b border-base-300 p-3">
-          {/* 头部工具区：仅保留按钮栏与搜索栏。 */}
-          <div>
-            {/* 顶部按钮栏。 */}
-            <div className="flex items-center justify-end gap-1">
-              <button className="btn btn-ghost btn-square btn-sm" title="刷新命令库" onClick={() => void loadCommandLibrary({ keepSelection: true })}>
-                <RefreshCw size={14} />
-              </button>
+        <div className={`border-b border-base-300 ${commandLibraryCollapsed ? "p-2" : "p-3"}`}>
+          {commandLibraryCollapsed ? (
+            <div className="flex flex-col items-center gap-2">
               <button
                 className="btn btn-ghost btn-square btn-sm"
-                title="新建命令组"
-                onClick={openCreateGroupPanel}
-                disabled={commandLibrarySubmitting}
+                title="展开命令库"
+                onClick={() => setCommandLibraryCollapsed(false)}
               >
-                <FolderPlus size={15} />
+                <PanelLeftOpen size={15} />
+              </button>
+              <button className="btn btn-ghost btn-square btn-sm" title="刷新命令库" onClick={() => void loadCommandLibrary({ keepSelection: true })}>
+                <RefreshCw size={14} />
               </button>
               <button
                 className="btn btn-ghost btn-square btn-sm"
@@ -1130,166 +1145,90 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
                 <Plus size={15} />
               </button>
             </div>
+          ) : (
+            <div>
+              {/* 顶部标题与操作栏。 */}
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <h3 className="text-[13px] font-semibold text-neutral">命令库</h3>
+                  <p className="mt-0.5 text-[11px] text-neutral/65">收藏常用命令，按需粘贴到当前终端执行。</p>
+                </div>
+                <div className="flex items-center gap-1">
+                  <button
+                    className="btn btn-ghost btn-square btn-sm"
+                    title="折叠命令库"
+                    onClick={() => setCommandLibraryCollapsed(true)}
+                  >
+                    <PanelLeftClose size={15} />
+                  </button>
+                  <button className="btn btn-ghost btn-square btn-sm" title="刷新命令库" onClick={() => void loadCommandLibrary({ keepSelection: true })}>
+                    <RefreshCw size={14} />
+                  </button>
+                  <button
+                    className="btn btn-ghost btn-square btn-sm"
+                    title="新建命令组"
+                    onClick={openCreateGroupPanel}
+                    disabled={commandLibrarySubmitting}
+                  >
+                    <FolderPlus size={15} />
+                  </button>
+                  <button
+                    className="btn btn-ghost btn-square btn-sm"
+                    title="新建命令"
+                    onClick={() => openCreateCommandPanel()}
+                    disabled={commandGroups.length === 0 || commandLibrarySubmitting}
+                  >
+                    <Plus size={15} />
+                  </button>
+                </div>
+              </div>
 
-            {/* 搜索输入。 */}
-            <label className="input input-bordered input-sm mt-2 flex w-full items-center gap-2">
-              <Search size={14} className="text-neutral/60" />
-              <input
-                type="text"
-                className="grow"
-                placeholder="搜索组名 / 命令名 / 描述 / 命令正文"
-                value={searchKeyword}
-                onChange={(event) => setSearchKeyword(event.target.value)}
-              />
-              {/* 清空按钮：有搜索关键字时允许一键清空。 */}
-              {searchKeyword && (
-                <button
-                  type="button"
-                  className="text-neutral/50 transition-colors hover:text-neutral"
-                  title="清空搜索"
-                  onClick={() => setSearchKeyword("")}
-                >
-                  <X size={14} />
-                </button>
-              )}
-            </label>
-          </div>
+              {/* 搜索输入。 */}
+              <label className="input input-bordered input-sm mt-3 flex w-full items-center gap-2">
+                <Search size={14} className="text-neutral/60" />
+                <input
+                  type="text"
+                  className="grow"
+                  placeholder="搜索组名 / 命令名 / 描述 / 命令正文"
+                  value={searchKeyword}
+                  onChange={(event) => setSearchKeyword(event.target.value)}
+                />
+                {/* 清空按钮：有搜索关键字时允许一键清空。 */}
+                {searchKeyword && (
+                  <button
+                    type="button"
+                    className="text-neutral/50 transition-colors hover:text-neutral"
+                    title="清空搜索"
+                    onClick={() => setSearchKeyword("")}
+                  >
+                    <X size={14} />
+                  </button>
+                )}
+              </label>
+            </div>
+          )}
 
           {/* 错误提示。 */}
-          {commandLibraryError && <p className="mt-2 text-[12px] text-error">{commandLibraryError}</p>}
-
-          {/* 创建/重命名命令组面板。 */}
-          {(editorMode === "group" || editorMode === "groupEdit") && (
-            <div className="mt-3 rounded-xl border border-base-300 bg-base-100 p-3 shadow-sm">
-              {/* 面板标题。 */}
-              <h4 className="text-[13px] font-semibold text-neutral">{editorMode === "groupEdit" ? "重命名命令组" : "新建命令组"}</h4>
-              {/* 分组名输入。 */}
-              <input
-                type="text"
-                className="input input-bordered input-sm mt-2 w-full"
-                placeholder="例如：常用、脚本、排障"
-                value={newGroupName}
-                onChange={(event) => setNewGroupName(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key !== "Enter") return;
-                  void handleSubmitGroup(); // 回车快速提交命令组创建或重命名。
-                }}
-              />
-              {/* 操作按钮。 */}
-              <div className="mt-3 flex justify-end gap-2">
-                <button className="btn btn-ghost btn-sm" onClick={closeEditorPanel} disabled={commandLibrarySubmitting}>
-                  取消
-                </button>
-                <button className="btn btn-primary btn-sm" onClick={() => void handleSubmitGroup()} disabled={commandLibrarySubmitting}>
-                  {editorMode === "groupEdit" ? "保存重命名" : "创建分组"}
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* 创建/编辑命令面板。 */}
-          {(editorMode === "create" || editorMode === "edit") && (
-            <div className="mt-3 rounded-xl border border-base-300 bg-base-100 p-3 shadow-sm">
-              {/* 面板标题。 */}
-              <div className="flex items-start justify-between gap-2">
-                <div>
-                  <h4 className="text-[13px] font-semibold text-neutral">{editorMode === "create" ? "创建命令" : "编辑命令"}</h4>
-                  <p className="mt-0.5 text-[11px] text-neutral/70">命令输入使用编辑器，支持更友好的粘贴与修改。</p>
-                </div>
-                <button className="btn btn-ghost btn-xs" onClick={() => void handlePasteFromClipboard()} title="从剪贴板粘贴">
-                  <Clipboard size={13} />
-                </button>
-              </div>
-
-              {/* 基础字段：分组、名称、描述。 */}
-              <div className="mt-3 grid grid-cols-1 gap-2">
-                {/* 分组选择。 */}
-                <select
-                  className="select select-bordered select-sm w-full"
-                  value={commandForm.groupId}
-                  onChange={(event) => patchCommandForm({ groupId: event.target.value })}
-                >
-                  {commandGroups.map((group) => (
-                    <option key={group.id} value={group.id}>
-                      {group.name}
-                    </option>
-                  ))}
-                </select>
-
-                {/* 名称输入。 */}
-                <input
-                  type="text"
-                  className="input input-bordered input-sm w-full"
-                  placeholder="命令名称，例如：启动开发服务"
-                  value={commandForm.name}
-                  onChange={(event) => patchCommandForm({ name: event.target.value })}
-                />
-
-                {/* 描述输入。 */}
-                <input
-                  type="text"
-                  className="input input-bordered input-sm w-full"
-                  placeholder="命令描述（可选）"
-                  value={commandForm.description}
-                  onChange={(event) => patchCommandForm({ description: event.target.value })}
-                />
-              </div>
-
-              {/* 命令输入编辑器。 */}
-              <div className="mt-3 overflow-hidden rounded-lg border border-base-300">
-                {/* 编辑器标题行。 */}
-                <div className="flex items-center justify-between border-b border-base-300 bg-neutral px-2 py-1 text-[11px] text-neutral-content">
-                  <span className="font-mono">$ command</span>
-                  <span className="text-neutral-content/70">支持粘贴多行后再整理为单条命令</span>
-                </div>
-                {/* Monaco 命令输入框。 */}
-                <Editor
-                  height="118px"
-                  defaultLanguage="plaintext"
-                  value={commandForm.command}
-                  theme="vs-dark"
-                  onChange={(value) => {
-                    patchCommandForm({ command: value || "" }); // 同步编辑器内容到表单。
-                  }}
-                  options={{
-                    minimap: { enabled: false },
-                    lineNumbers: "off",
-                    glyphMargin: false,
-                    folding: false,
-                    lineDecorationsWidth: 0,
-                    lineNumbersMinChars: 0,
-                    renderLineHighlight: "none",
-                    scrollBeyondLastLine: false,
-                    wordWrap: "on",
-                    tabSize: 2,
-                    fontSize: 13,
-                    fontFamily: '"Cascadia Mono", "Consolas", "Noto Sans Mono CJK SC", monospace',
-                    automaticLayout: true,
-                    contextmenu: true,
-                    padding: { top: 8, bottom: 8 }
-                  }}
-                />
-              </div>
-
-              {/* 操作按钮。 */}
-              <div className="mt-3 flex justify-end gap-2">
-                <button className="btn btn-ghost btn-sm" onClick={closeEditorPanel} disabled={commandLibrarySubmitting}>
-                  取消
-                </button>
-                <button
-                  className="btn btn-primary btn-sm"
-                  onClick={() => void handleSubmitCommand()}
-                  disabled={!canSubmitCommandForm || commandLibrarySubmitting}
-                >
-                  {editorMode === "create" ? "保存命令" : "保存变更"}
-                </button>
-              </div>
-            </div>
-          )}
+          {commandLibraryError && !commandLibraryCollapsed && <p className="mt-2 text-[12px] text-error">{commandLibraryError}</p>}
         </div>
 
         {/* 命令组与命令列表。 */}
-        <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden p-3 pt-2">
+        <div className={`min-h-0 flex-1 overflow-y-auto overflow-x-hidden ${commandLibraryCollapsed ? "p-2" : "p-3 pt-2"}`}>
+          {commandLibraryCollapsed ? (
+            <div className="flex h-full flex-col items-center gap-2 py-2">
+              <button
+                className="btn btn-ghost btn-square btn-sm"
+                title="展开命令库"
+                onClick={() => setCommandLibraryCollapsed(false)}
+              >
+                <PanelLeftOpen size={15} />
+              </button>
+              <div className="writing-mode-vertical text-[11px] text-neutral/55 [writing-mode:vertical-rl] [text-orientation:mixed]">
+                命令库
+              </div>
+            </div>
+          ) : (
+            <>
           {/* 加载态提示。 */}
           {commandLibraryLoading && (
             <div className="rounded-lg border border-base-300 bg-base-100 px-3 py-3 text-[12px] text-neutral/60">命令库加载中...</div>
@@ -1447,6 +1386,8 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
               </div>
             );
           })}
+            </>
+          )}
         </div>
       </div>
 
@@ -1457,19 +1398,13 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
           <div className="min-w-0 flex-1 overflow-x-auto">
             <ReusableTabs
               tabs={orderedTabs.map((tab) => {
-                const processMeta = processMetaByTabId[tab.id];
-                const pidText = processMeta?.pid !== null && processMeta?.pid !== undefined ? String(processMeta.pid) : "-";
-                const commandText = processMeta?.commandLine || "-";
-                const terminalVersionText = processMeta?.shellVersion
-                  ? `${processMeta.shellName || "Terminal"} ${processMeta.shellVersion}`
-                  : "-";
-                const tooltipText = `进程 ID (PID): ${pidText}\n命令行: ${commandText}\n终端版本: ${terminalVersionText}`;
+                const processMeta = processMetaByTabId[tab.id] || null;
                 return {
                   id: tab.id,
                   title: tab.name,
                   closable: true,
                   renameable: true,
-                  titleTooltip: tooltipText,
+                  titleTooltip: buildTerminalTabTooltip(processMeta),
                   statusTone: processMeta?.opening ? "warning" : processMeta?.connected ? "success" : "idle"
                 };
               })}
@@ -1504,6 +1439,25 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
               <span className="text-[12px] text-neutral/70">暂无终端标签，请点击上方 + 创建终端</span>
             </div>
           )}
+          {activeTab && activeTerminalInlineNotice && (
+            <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-center p-3">
+              <div
+                className={`pointer-events-auto flex w-full max-w-xl items-start justify-between gap-3 rounded-xl border px-4 py-3 shadow-lg ${
+                  activeTerminalInlineNotice.tone === "error"
+                    ? "border-error/35 bg-base-100 text-neutral"
+                    : "border-warning/35 bg-base-100 text-neutral"
+                }`}
+              >
+                <div className="min-w-0">
+                  <h4 className="text-[13px] font-semibold">{activeTerminalInlineNotice.title}</h4>
+                  <p className="mt-1 text-[12px] text-neutral/70">{activeTerminalInlineNotice.detail}</p>
+                </div>
+                <button className="btn btn-primary btn-xs shrink-0" onClick={() => void handleReconnectTerminalTab(activeTab.id)}>
+                  {activeTerminalInlineNotice.actionLabel}
+                </button>
+              </div>
+            </div>
+          )}
           {tabs.map((tab) => (
             // 每个 Tab 对应一个终端视口外壳，非激活态仅隐藏不销毁。
             <div key={tab.id} className={`h-full w-full p-2 ${activeTab?.id === tab.id ? "block" : "hidden"}`}>
@@ -1523,6 +1477,156 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
           ))}
         </div>
       </div>
+
+      {/* 覆盖式命令编辑面板：避免长期占用命令库可视高度。 */}
+      {editorPanelOpen && (
+        <div className="absolute inset-0 z-[100] flex justify-end bg-base-300/20 backdrop-blur-[1px]">
+          <div className="flex h-full w-full max-w-[420px] flex-col border-l border-base-300 bg-base-100 shadow-2xl">
+            <div className="flex items-start justify-between gap-3 border-b border-base-300 px-4 py-4">
+              <div>
+                <h3 className="text-[14px] font-semibold text-neutral">
+                  {editorMode === "groupEdit"
+                    ? "重命名命令组"
+                    : editorMode === "group"
+                      ? "新建命令组"
+                      : editorMode === "edit"
+                        ? "编辑命令"
+                        : "创建命令"}
+                </h3>
+                <p className="mt-1 text-[12px] text-neutral/65">
+                  {editorMode === "group" || editorMode === "groupEdit"
+                    ? "为命令分组建立更清晰的结构。"
+                    : "在不打断终端操作的情况下维护常用命令。"}
+                </p>
+              </div>
+              <button className="btn btn-ghost btn-square btn-sm" title="关闭面板" onClick={closeEditorPanel}>
+                <X size={15} />
+              </button>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+              {(editorMode === "group" || editorMode === "groupEdit") && (
+                <div className="rounded-xl border border-base-300 bg-base-100 p-3 shadow-sm">
+                  {/* 分组名输入。 */}
+                  <input
+                    type="text"
+                    className="input input-bordered input-sm w-full"
+                    placeholder="例如：常用、脚本、排障"
+                    value={newGroupName}
+                    onChange={(event) => setNewGroupName(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key !== "Enter") return;
+                      void handleSubmitGroup(); // 回车快速提交命令组创建或重命名。
+                    }}
+                  />
+                  {/* 操作按钮。 */}
+                  <div className="mt-3 flex justify-end gap-2">
+                    <button className="btn btn-ghost btn-sm" onClick={closeEditorPanel} disabled={commandLibrarySubmitting}>
+                      取消
+                    </button>
+                    <button className="btn btn-primary btn-sm" onClick={() => void handleSubmitGroup()} disabled={commandLibrarySubmitting}>
+                      {editorMode === "groupEdit" ? "保存重命名" : "创建分组"}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {(editorMode === "create" || editorMode === "edit") && (
+                <div className="rounded-xl border border-base-300 bg-base-100 p-3 shadow-sm">
+                  {/* 面板标题。 */}
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <h4 className="text-[13px] font-semibold text-neutral">{editorMode === "create" ? "创建命令" : "编辑命令"}</h4>
+                      <p className="mt-0.5 text-[11px] text-neutral/70">命令输入使用编辑器，支持更友好的粘贴与修改。</p>
+                    </div>
+                    <button className="btn btn-ghost btn-xs" onClick={() => void handlePasteFromClipboard()} title="从剪贴板粘贴">
+                      <Clipboard size={13} />
+                    </button>
+                  </div>
+
+                  {/* 基础字段：分组、名称、描述。 */}
+                  <div className="mt-3 grid grid-cols-1 gap-2">
+                    <select
+                      className="select select-bordered select-sm w-full"
+                      value={commandForm.groupId}
+                      onChange={(event) => patchCommandForm({ groupId: event.target.value })}
+                    >
+                      {commandGroups.map((group) => (
+                        <option key={group.id} value={group.id}>
+                          {group.name}
+                        </option>
+                      ))}
+                    </select>
+
+                    <input
+                      type="text"
+                      className="input input-bordered input-sm w-full"
+                      placeholder="命令名称，例如：启动开发服务"
+                      value={commandForm.name}
+                      onChange={(event) => patchCommandForm({ name: event.target.value })}
+                    />
+
+                    <input
+                      type="text"
+                      className="input input-bordered input-sm w-full"
+                      placeholder="命令描述（可选）"
+                      value={commandForm.description}
+                      onChange={(event) => patchCommandForm({ description: event.target.value })}
+                    />
+                  </div>
+
+                  {/* 命令输入编辑器。 */}
+                  <div className="mt-3 overflow-hidden rounded-lg border border-base-300">
+                    <div className="flex items-center justify-between border-b border-base-300 bg-neutral px-2 py-1 text-[11px] text-neutral-content">
+                      <span className="font-mono">$ command</span>
+                      <span className="text-neutral-content/70">支持粘贴多行后再整理为单条命令</span>
+                    </div>
+                    <Editor
+                      height="220px"
+                      defaultLanguage="plaintext"
+                      value={commandForm.command}
+                      theme="vs-dark"
+                      onChange={(value) => {
+                        patchCommandForm({ command: value || "" }); // 同步编辑器内容到表单。
+                      }}
+                      options={{
+                        minimap: { enabled: false },
+                        lineNumbers: "off",
+                        glyphMargin: false,
+                        folding: false,
+                        lineDecorationsWidth: 0,
+                        lineNumbersMinChars: 0,
+                        renderLineHighlight: "none",
+                        scrollBeyondLastLine: false,
+                        wordWrap: "on",
+                        tabSize: 2,
+                        fontSize: 13,
+                        fontFamily: '"Cascadia Mono", "Consolas", "Noto Sans Mono CJK SC", monospace',
+                        automaticLayout: true,
+                        contextmenu: true,
+                        padding: { top: 8, bottom: 8 }
+                      }}
+                    />
+                  </div>
+
+                  <div className="mt-3 flex justify-end gap-2">
+                    <button className="btn btn-ghost btn-sm" onClick={closeEditorPanel} disabled={commandLibrarySubmitting}>
+                      取消
+                    </button>
+                    <button
+                      className="btn btn-primary btn-sm"
+                      onClick={() => void handleSubmitCommand()}
+                      disabled={!canSubmitCommandForm || commandLibrarySubmitting}
+                    >
+                      {editorMode === "create" ? "保存命令" : "保存变更"}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 命令右键菜单。 */}
       {commandContextMenu && (
