@@ -54,6 +54,7 @@ impl SalesforceClient {
             .map(|item| SalesforceObject {
                 name: item.name,
                 label: item.label,
+                comment: None,
                 queryable: item.queryable,
                 createable: item.createable,
                 updateable: item.updateable,

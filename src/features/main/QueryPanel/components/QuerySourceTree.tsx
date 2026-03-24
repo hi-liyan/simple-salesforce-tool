@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import { Tree } from "react-arborist";
-import type { RowRendererProps } from "react-arborist";
+import type { RowRendererProps, TreeApi } from "react-arborist";
 import { api } from "../../../../api";
 import { ContextMenu, type ContextMenuEntry } from "../../../../components/ContextMenu";
 import type { SalesforceObject, SalesforceSource } from "../../../../types";
@@ -29,7 +29,11 @@ type QuerySourceTreeProps = {
   // 不可查询对象提示。
   onNotQueryableObjectClick?: (item: SalesforceObject) => void;
   // 对外暴露刷新聚焦数据源能力。
-  onReady?: (actions: { refreshFocusedSource: () => Promise<void>; getFocusedSourceId: () => string }) => void;
+  onReady?: (actions: {
+    refreshFocusedSource: () => Promise<void>;
+    getFocusedSourceId: () => string;
+    locateNodeByTarget: (target: { sourceId: string; objectName?: string }) => Promise<void>;
+  }) => void;
 };
 
 type QuerySourceTreeRowProps = RowRendererProps<QueryTreeRenderNode> & {
@@ -70,6 +74,8 @@ export function QuerySourceTree({
 }: QuerySourceTreeProps) {
   // 容器尺寸：react-arborist 需要明确高度。
   const containerRef = useRef<HTMLDivElement | null>(null);
+  // 树实例引用：用于命令式展开与滚动定位目标节点。
+  const treeRef = useRef<TreeApi<QueryTreeRenderNode> | null>(null);
   const [treeHeight, setTreeHeight] = useState(360);
   // Object 右键菜单状态：记录菜单位置与目标对象。
   const [objectContextMenu, setObjectContextMenu] = useState<{
@@ -105,7 +111,8 @@ export function QuerySourceTree({
     selectionId,
     onNodeClick,
     onToggleNode,
-    refreshFocusedSource
+    refreshFocusedSource,
+    locateNodeByTarget: locateTreeNodeByTarget
   } = useSourceTreeState({
     sources,
     selectedSourceId,
@@ -118,14 +125,6 @@ export function QuerySourceTree({
   const sourceMap = useMemo(() => new Map(sources.map((source) => [source.id, source])), [sources]);
   // 树首次挂载时的展开映射：配合持久化状态恢复 source/group 展开态。
   const initialOpenState = useMemo(() => buildInitialOpenState(treeState.expandedNodeIds), [treeState.expandedNodeIds]);
-
-  // 将刷新动作回传给侧边栏顶部按钮，避免继续走“全量刷新 source 列表”旧逻辑。
-  useEffect(() => {
-    onReady?.({
-      refreshFocusedSource,
-      getFocusedSourceId: () => treeState.focusedSourceId
-    });
-  }, [onReady, refreshFocusedSource, treeState.focusedSourceId]);
 
   // 监听容器尺寸变化，保持树高度自适应。
   useEffect(() => {
@@ -174,10 +173,42 @@ export function QuerySourceTree({
     return objectItems.find((item) => item.name === node.objectName) || null;
   }
 
-  // 构建 Salesforce Object tooltip：鼠标经过时展示对象元数据摘要。
+  // 定位当前工作区目标：data Tab 定位对象节点，console Tab 定位所属数据源根节点。
+  const locateNodeByTarget = useCallback(
+    async (target: { sourceId: string; objectName?: string }) => {
+      const locateResult = await locateTreeNodeByTarget(target);
+      if (!locateResult) return;
+
+      const sourceNodeId = `source:${String(target.sourceId || "").trim()}`;
+      treeRef.current?.open(sourceNodeId); // 行内注释：先展开 source，确保后续滚动可命中目标节点。
+      if (locateResult.groupNodeId) {
+        treeRef.current?.open(locateResult.groupNodeId); // 行内注释：MySQL 对象位于 tables 分组下，需要额外展开一层。
+      }
+      await treeRef.current?.scrollTo(locateResult.targetNodeId, "smart");
+    },
+    [locateTreeNodeByTarget]
+  );
+
+  // 将刷新动作回传给侧边栏顶部按钮，避免继续走“全量刷新 source 列表”旧逻辑。
+  useEffect(() => {
+    onReady?.({
+      refreshFocusedSource,
+      getFocusedSourceId: () => treeState.focusedSourceId,
+      locateNodeByTarget
+    });
+  }, [locateNodeByTarget, onReady, refreshFocusedSource, treeState.focusedSourceId]);
+
+  // 构建对象 tooltip：MySQL 与 Salesforce 按各自元数据摘要展示。
   function getObjectTooltip(node: QueryTreeRenderNode): string {
     const objectItem = resolveObjectItemFromNode(node);
     if (!objectItem) return "";
+    const normalizedSourceType = String(node.sourceType || "salesforce").toLowerCase();
+    if (normalizedSourceType === "mysql") {
+      return [
+        `表名: ${objectItem.name}`,
+        `注释: ${objectItem.comment?.trim() || "-"}`
+      ].join("\n");
+    }
     return [
       `名称: ${objectItem.name}`,
       `标签: ${objectItem.label}`,
@@ -306,6 +337,7 @@ export function QuerySourceTree({
   return (
     <div ref={containerRef} className="h-full w-full bg-white">
       <Tree
+        ref={treeRef}
         data={treeData}
         width="100%"
         height={treeHeight}

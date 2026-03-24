@@ -420,6 +420,11 @@ export function useMainPageQueryPanel({
       })),
     [soqlTabs, sourceColorMap]
   );
+  // 渲染态激活 Query Tab：复用已同步数据源最新颜色的 data tab，避免设置页改色后右侧工具栏仍拿到旧颜色。
+  const renderActiveTab = useMemo(
+    () => workspaceDataTabs.find((item) => isTabMatchedByIdentity(item, activeTabObjectName)) || activeTab,
+    [workspaceDataTabs, activeTabObjectName, activeTab]
+  );
 
   // 统一工作区 Tab 状态：抽离 data/console 混合映射与焦点回退逻辑。
   const { workspaceTabs, activeWorkspaceTabId, setActiveWorkspaceTabId, reorderWorkspaceTabs, activeWorkspaceTabKind } = useWorkspaceTabs({
@@ -430,10 +435,10 @@ export function useMainPageQueryPanel({
   });
 
   const pageLoading = loading || sourcesFetching || objectsFetching;
-  const visibleColumns = activeTab ? getVisibleColumns(activeTab) : [];
+  const visibleColumns = renderActiveTab ? getVisibleColumns(renderActiveTab) : [];
   const loadingText = tokenRefreshing ? "重新获取认证凭证中..." : "Loading...";
-  const fieldMetadataMap = activeTab
-    ? activeTab.describe?.fields.reduce(
+  const fieldMetadataMap = renderActiveTab
+    ? renderActiveTab.describe?.fields.reduce(
         (acc, field) => ({
           ...acc,
           [field.name]: {
@@ -449,7 +454,7 @@ export function useMainPageQueryPanel({
         {} as Record<string, Record<string, unknown>>
       ) || {}
     : {};
-  const activeTabHasPendingChanges = activeTab ? hasPendingChanges(activeTab) : false;
+  const activeTabHasPendingChanges = renderActiveTab ? hasPendingChanges(renderActiveTab) : false;
 
   // 强制刷新单个 MySQL 对象的字段元数据与 DDL，并同步已打开 Tab。
   const refreshMysqlObjectMetadata = useCallback(
@@ -583,20 +588,20 @@ export function useMainPageQueryPanel({
     pageLoading,
     // 仅在当前数据源尚无可用 Objects 数据时显示 loading，避免切换到已缓存数据源时闪烁。
     objectsLoading: Boolean(selectedSourceId) && (objectsPending || (objectsFetching && objects.length === 0)),
-    tabs,
+    tabs: workspaceDataTabs,
     activeTabObjectName,
-    activeTab,
+    activeTab: renderActiveTab,
     workspaceNotice,
     visibleColumns,
     fieldMetadataMap,
     hasPendingChanges: activeTabHasPendingChanges,
-    pendingDeleteRecordIds: activeTab?.pendingDeleteRecordIds ?? [],
+    pendingDeleteRecordIds: renderActiveTab?.pendingDeleteRecordIds ?? [],
     loadingText,
     objects,
     sources,
-    mysqlDdl: activeTab ? mysqlDdlMap[activeTab.objectName]?.data || null : null,
-    mysqlDdlLoading: activeTab ? Boolean(mysqlDdlMap[activeTab.objectName]?.loading) : false,
-    mysqlDdlError: activeTab ? mysqlDdlMap[activeTab.objectName]?.error || "" : "",
+    mysqlDdl: renderActiveTab ? mysqlDdlMap[renderActiveTab.objectName]?.data || null : null,
+    mysqlDdlLoading: renderActiveTab ? Boolean(mysqlDdlMap[renderActiveTab.objectName]?.loading) : false,
+    mysqlDdlError: renderActiveTab ? mysqlDdlMap[renderActiveTab.objectName]?.error || "" : "",
     mysqlDdlMap,
     workspaceTabs,
     activeWorkspaceTabId,

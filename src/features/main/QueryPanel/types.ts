@@ -33,6 +33,10 @@ export type QueryWorkspaceTabItem = {
   kind: "data" | "console";
   // Tab 标题。
   title: string;
+  // Tab 绑定的数据源 ID：供左侧树定位当前激活来源。
+  sourceId?: string;
+  // data Tab 对应对象名：供左侧树定位对象节点。
+  objectName?: string;
   // Tab 绑定的数据源颜色：用于标签背景着色。
   sourceColor?: string;
 };

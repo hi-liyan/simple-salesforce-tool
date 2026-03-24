@@ -20,11 +20,19 @@ export type SalesforceSource = {
 
 // Salesforce 对象元数据列表项。
 export type SalesforceObject = {
+  // 对象/表名称。
   name: string;
+  // 对象标签；MySQL 场景下保留兼容字段。
   label: string;
+  // MySQL 表注释；Salesforce 场景为空。
+  comment?: string;
+  // 是否可查询。
   queryable: boolean;
+  // 是否可新增。
   createable: boolean;
+  // 是否可更新。
   updateable: boolean;
+  // 是否可删除。
   deletable: boolean;
 };
 

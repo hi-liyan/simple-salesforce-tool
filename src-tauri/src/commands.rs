@@ -822,6 +822,13 @@ pub async fn list_objects(
     state: State<'_, AppState>,
     source_id: String,
 ) -> Result<Vec<SalesforceObject>, String> {
+    let source = {
+        let connection = state
+            .db
+            .lock()
+            .map_err(|error| format!("Database lock failed: {error}"))?;
+        db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
+    };
     let cached_objects = {
         let connection = state
             .db
@@ -829,8 +836,29 @@ pub async fn list_objects(
             .map_err(|error| format!("Database lock failed: {error}"))?;
         db::read_object_cache(&connection, &source_id).map_err(AppError::to_string_error)?
     };
+    let is_mysql_source = source.source_type.eq_ignore_ascii_case("mysql");
 
     if let Some(cached) = cached_objects {
+        // MySQL 旧缓存可能没有 comment 字段；若整批缓存都缺注释，则自动回源刷新。
+        let should_reuse_cache = !is_mysql_source
+            || cached.is_empty()
+            || cached
+                .iter()
+                .any(|item| item.comment.as_deref().is_some_and(|comment| !comment.trim().is_empty()));
+        if should_reuse_cache {
+            write_system_log(
+                &state,
+                "INFO",
+                "SALESFORCE_API",
+                "list_objects",
+                Some(&source_id),
+                None,
+                true,
+                &format!("命中对象缓存,共 {} 个。", cached.len()),
+                None,
+            );
+            return Ok(cached);
+        }
         write_system_log(
             &state,
             "INFO",
@@ -839,19 +867,10 @@ pub async fn list_objects(
             Some(&source_id),
             None,
             true,
-            &format!("命中对象缓存,共 {} 个。", cached.len()),
+            "检测到 MySQL 对象缓存缺少表注释，已自动回源刷新。",
             None,
         );
-        return Ok(cached);
     }
-
-    let source = {
-        let connection = state
-            .db
-            .lock()
-            .map_err(|error| format!("Database lock failed: {error}"))?;
-        db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
-    };
     let provider =
         provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
 

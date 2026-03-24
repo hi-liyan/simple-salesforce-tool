@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Braces, Plus, RefreshCw } from "lucide-react";
+import { Braces, Crosshair, Plus, RefreshCw } from "lucide-react";
 import { api } from "../../../../api";
 import { DataSourceType, ObjectDdl, ObjectDescribe, SalesforceObject, SalesforceSource, SourceUpsertPayload } from "../../../../types";
 import { resolveConsoleTargetSource } from "../logic/querySidebarConsoleSource.ts";
@@ -35,6 +35,8 @@ type QuerySidebarProps = {
   onRefreshMysqlObjectMetadata: (objectName: string) => Promise<{ describe: ObjectDescribe; ddl: ObjectDdl }>;
   // 对象列表展示模式：`list` 为原列表，`tree` 为树形展开字段。
   objectListMode?: "list" | "tree";
+  // 当前激活工作区对应的树定位目标。
+  activeWorkspaceTreeTarget?: { kind: "data" | "console"; sourceId: string; objectName?: string } | null;
 };
 
 // 左侧栏：数据源选择与对象列表。
@@ -52,7 +54,8 @@ export function QuerySidebar({
   onOpenObject,
   onNotQueryableObjectClick,
   onRefreshMysqlObjectMetadata,
-  objectListMode = "list"
+  objectListMode = "list",
+  activeWorkspaceTreeTarget = null
 }: QuerySidebarProps) {
   // 数据源类型选择弹窗开关。
   const [showSourceTypeModal, setShowSourceTypeModal] = useState(false);
@@ -87,7 +90,10 @@ export function QuerySidebar({
   const [treeActions, setTreeActions] = useState<{
     refreshFocusedSource: () => Promise<void>;
     getFocusedSourceId: () => string;
+    locateNodeByTarget: (target: { sourceId: string; objectName?: string }) => Promise<void>;
   } | null>(null);
+  // 当前激活工作区是否具备可定位的左树目标。
+  const canLocateActiveWorkspaceNode = Boolean(activeWorkspaceTreeTarget?.sourceId);
 
   // 打开“选择数据源类型”弹窗。
   function openSourceTypeModal() {
@@ -249,6 +255,19 @@ export function QuerySidebar({
           selectedSourceId
         });
         onOpenConsole(targetSource || undefined); // 点击后按聚焦源优先创建对应来源的控制台 Tab。
+      }
+    },
+    {
+      id: "locate-active-workspace-node",
+      icon: Crosshair,
+      ariaLabel: "定位当前标签节点",
+      disabled: !canLocateActiveWorkspaceNode,
+      onClick: () => {
+        if (!activeWorkspaceTreeTarget) return;
+        void treeActions?.locateNodeByTarget({
+          sourceId: activeWorkspaceTreeTarget.sourceId,
+          objectName: activeWorkspaceTreeTarget.kind === "data" ? activeWorkspaceTreeTarget.objectName : undefined
+        }); // 点击后将左树滚动到当前激活工作区对应的 source/object 节点。
       }
     }
   ];

@@ -51,6 +51,8 @@ type UseSourceTreeStateResult = {
   onToggleNode: (node: QueryTreeNode, treeNode: NodeApi<QueryTreeRenderNode>) => Promise<void>;
   // 刷新聚焦数据源。
   refreshFocusedSource: () => Promise<void>;
+  // 定位指定 source/object 到左侧树。
+  locateNodeByTarget: (target: { sourceId: string; objectName?: string }) => Promise<{ targetNodeId: string; groupNodeId?: string } | null>;
 };
 
 // 创建空树状态：统一初始化所有分桶字段。
@@ -395,6 +397,48 @@ export function useSourceTreeState({
     await loadSourceChildren(source, true);
   }, [loadSourceChildren, sourceMap, treeState.focusedSourceId]);
 
+  // 定位树节点：必要时先补齐 source children，再同步焦点/高亮/展开状态。
+  const locateNodeByTarget = useCallback(
+    async (target: { sourceId: string; objectName?: string }) => {
+      const normalizedSourceId = String(target.sourceId || "").trim();
+      const normalizedObjectName = String(target.objectName || "").trim();
+      if (!normalizedSourceId) return null;
+
+      const source = sourceMap.get(normalizedSourceId);
+      if (!source) return null;
+
+      const sourceNodeId = `source:${normalizedSourceId}`;
+      const normalizedSourceType = String(source.sourceType || "salesforce").toLowerCase();
+      const groupNodeId = normalizedObjectName && normalizedSourceType === "mysql" ? `group:${normalizedSourceId}:tables` : "";
+      const targetNodeId = normalizedObjectName ? `object:${normalizedSourceId}:${normalizedObjectName}` : sourceNodeId;
+
+      if (!treeState.sourceTreeChildrenById[normalizedSourceId] && !treeState.sourceLoadingById[normalizedSourceId]) {
+        await loadSourceChildren(source, false); // 行内注释：首次定位前先补齐当前 source 的树结构与对象缓存。
+      }
+
+      setTreeState((current) => {
+        const nextExpandedNodeIds = new Set(current.expandedNodeIds);
+        nextExpandedNodeIds.add(sourceNodeId);
+        if (groupNodeId) {
+          nextExpandedNodeIds.add(groupNodeId);
+        }
+
+        return {
+          ...current,
+          focusedSourceId: normalizedSourceId,
+          selectedNodeId: targetNodeId,
+          expandedNodeIds: [...nextExpandedNodeIds]
+        };
+      });
+
+      return {
+        targetNodeId,
+        groupNodeId: groupNodeId || undefined
+      };
+    },
+    [loadSourceChildren, sourceMap, treeState.sourceLoadingById, treeState.sourceTreeChildrenById]
+  );
+
   // 构建树数据：source 为根，按类型挂载对象或分组。
   const treeData = useMemo<QueryTreeRenderNode[]>(() => {
     const rootNodes = buildSourceRootNodes(sources, {
@@ -466,6 +510,7 @@ export function useSourceTreeState({
     selectionId: treeState.selectedNodeId,
     onNodeClick,
     onToggleNode: toggleNode,
-    refreshFocusedSource
+    refreshFocusedSource,
+    locateNodeByTarget
   };
 }

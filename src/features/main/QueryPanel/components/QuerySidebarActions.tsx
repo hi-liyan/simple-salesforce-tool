@@ -8,6 +8,8 @@ export type QuerySidebarActionItem = {
   icon: LucideIcon;
   // 无障碍标签。
   ariaLabel: string;
+  // 当前动作是否禁用。
+  disabled?: boolean;
   // 点击事件。
   onClick: () => void;
 };
@@ -26,6 +28,7 @@ export function QuerySidebarActions({ actions, disabled = false }: QuerySidebarA
     <div className="flex items-center justify-end gap-1">
       {actions.map((action) => {
         const Icon = action.icon;
+        const actionDisabled = disabled || Boolean(action.disabled);
         return (
           // 单个动作按钮：保留统一尺寸与视觉样式。
           <button
@@ -34,10 +37,10 @@ export function QuerySidebarActions({ actions, disabled = false }: QuerySidebarA
             aria-label={action.ariaLabel}
             title={action.ariaLabel}
             onClick={() => {
-              if (disabled) return;
+              if (actionDisabled) return;
               action.onClick(); // 统一由配置项回调处理具体动作。
             }}
-            disabled={disabled}
+            disabled={actionDisabled}
           >
             {/* 动作图标。 */}
             <Icon size={14} />

@@ -36,6 +36,10 @@ export type WorkspaceTabItem = {
   kind: "data" | "console";
   // Tab 标题。
   title: string;
+  // Tab 绑定的数据源 ID：供左侧树定位当前工作区来源。
+  sourceId?: string;
+  // data Tab 对应对象名：供左侧树定位对象节点。
+  objectName?: string;
   // Tab 绑定的数据源颜色：用于工作区标签背景着色。
   sourceColor?: string;
 };
@@ -88,12 +92,15 @@ export function buildWorkspaceTabs(dataTabs: DataWorkspaceTab[], consoleTabs: Co
       id: buildDataWorkspaceTabId(tab.bindingKey),
       kind: "data" as const,
       title: buildWorkspaceTitle(tab.title || tab.objectName, tab.sourceName, tab.sourceId),
+      sourceId: tab.sourceId || "",
+      objectName: tab.objectName,
       sourceColor: tab.sourceColor || ""
     })),
     ...consoleTabs.map((tab) => ({
       id: buildConsoleWorkspaceTabId(tab.id),
       kind: "console" as const,
       title: buildWorkspaceTitle(tab.name, tab.sourceName, tab.sourceId),
+      sourceId: tab.sourceId || "",
       sourceColor: tab.sourceColor || ""
     }))
   ];

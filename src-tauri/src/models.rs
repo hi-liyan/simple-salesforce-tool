@@ -73,6 +73,9 @@ pub struct SalesforceObject {
     pub name: String,
     /// Object Label（可读名称）。
     pub label: String,
+    /// MySQL 表注释；Salesforce 对象为空。
+    #[serde(default)]
+    pub comment: Option<String>,
     /// 是否可查询。
     pub queryable: bool,
     /// 是否可新增。

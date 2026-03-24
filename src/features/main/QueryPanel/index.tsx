@@ -54,6 +54,16 @@ export function QueryPanel({ viewState, actions }: QueryPanelProps) {
     () => viewState.workspaceTabs.filter((tab) => mountedWorkspaceTabIdSet.has(tab.id)),
     [viewState.workspaceTabs, mountedWorkspaceTabIdSet]
   );
+  // 当前激活工作区 tab 的树定位目标：data 指向对象节点，console 指向来源数据源节点。
+  const activeWorkspaceTreeTarget = useMemo(() => {
+    const activeWorkspaceTab = viewState.workspaceTabs.find((tab) => tab.id === viewState.activeWorkspaceTabId) || null;
+    if (!activeWorkspaceTab?.sourceId) return null;
+    return {
+      kind: activeWorkspaceTab.kind,
+      sourceId: activeWorkspaceTab.sourceId,
+      objectName: activeWorkspaceTab.kind === "data" ? activeWorkspaceTab.objectName || "" : undefined
+    };
+  }, [viewState.activeWorkspaceTabId, viewState.workspaceTabs]);
 
   // 构建字段元数据映射：用于 DataGrid 类型推断、可编辑性与 label 显示。
   function buildFieldMetadataMapForTab(tab: QueryPanelViewState["activeTab"]): Record<string, Record<string, unknown>> {
@@ -97,6 +107,7 @@ export function QueryPanel({ viewState, actions }: QueryPanelProps) {
           onNotQueryableObjectClick={actions.onNotQueryableObjectClick}
           onRefreshMysqlObjectMetadata={actions.onRefreshMysqlObjectMetadata}
           objectListMode="tree"
+          activeWorkspaceTreeTarget={activeWorkspaceTreeTarget}
         />
       </div>
       {/* 右侧工作区：Tab 栏 + 内容区。 */}

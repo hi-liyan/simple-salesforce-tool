@@ -7,6 +7,7 @@ import { SoqlMonacoEditor } from "../../../../components/SoqlMonacoEditor";
 import { api } from "../../../../api";
 import { useAppStore } from "../../../../store/useAppStore";
 import { buildObjectTabBindingKey, Notice, ObjectDdl, TabState } from "../../../../types";
+import { buildSourceSurfacePalette } from "../logic/sourceColor.ts";
 import type { QueryOverrides } from "../types";
 import { MysqlSmartInput } from "./MysqlSmartInput";
 import { SalesforceSmartInput } from "./SalesforceSmartInput";
@@ -544,6 +545,8 @@ export function DataQueryTabPane({
 }: DataQueryTabPaneProps) {
   // “执行更新”按钮是否可用：可用时使用绿色强调，强化“可提交”感知。
   const canApplyPendingChanges = Boolean(activeTab && !activeTab.loading && hasPendingChanges);
+  // 工具栏背景色：将数据源颜色转换为浅色表面背景，避免顶部工具栏过重抢视觉焦点。
+  const toolbarBackgroundColor = buildSourceSurfacePalette(String(activeTab?.sourceColor || "").trim())?.backgroundColor || "#FFFFFF";
   // 工具栏按钮统一尺寸：使用 34px 中间档高度（介于 h-8 与 h-9 之间）。
   const toolbarButtonClassName = "btn btn-outline btn-sm h-[34px] min-h-[34px]";
   // “执行更新”按钮样式：可用态使用蓝青渐变强调，贴合项目品牌色并提升可见性。
@@ -903,7 +906,8 @@ export function DataQueryTabPane({
 
           {/* 左侧主内容区：工具栏 + 查询栏 + 表格 + 日志。 */}
           <div className="flex min-w-0 flex-1 flex-col">
-            <div className="border-b border-base-300 px-3 py-1.5 overflow-x-auto">
+            {/* 顶部工具栏背景：默认白色；如果数据源设置颜色，则整条按钮区域显示该颜色。 */}
+            <div className="border-b border-base-300 px-3 py-1.5 overflow-x-auto" style={{ backgroundColor: toolbarBackgroundColor }}>
               <div className="flex flex-row items-center gap-1 min-w-max">
                 <button className={toolbarButtonClassName} disabled={activeTab.loading} onClick={onCreateRecord}>
                   <Plus size={13} />

@@ -204,7 +204,7 @@ impl MySqlProvider {
 
         let rows = sqlx::query(
             r#"
-            SELECT table_name
+            SELECT table_name, table_comment
             FROM information_schema.tables
             WHERE table_schema = ? AND table_type = 'BASE TABLE'
             ORDER BY table_name ASC
@@ -218,9 +218,12 @@ impl MySqlProvider {
         let mut items = Vec::with_capacity(rows.len());
         for row in rows {
             let table_name = decode_row_string(&row, 0usize, "表名")?;
+            let table_comment = decode_optional_row_string(&row, 1usize)
+                .and_then(|comment| (!comment.trim().is_empty()).then_some(comment));
             items.push(SalesforceObject {
                 name: table_name.clone(),
                 label: table_name,
+                comment: table_comment,
                 queryable: true,
                 createable: true,
                 updateable: true,
