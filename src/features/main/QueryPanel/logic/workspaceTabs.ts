@@ -8,6 +8,8 @@ export type DataWorkspaceTab = {
   sourceId?: string;
   // 对象 Tab 绑定的数据源名称。
   sourceName?: string;
+  // 对象 Tab 当前展示使用的数据源颜色。
+  sourceColor?: string;
   // 展示标题：优先使用对象标签，兜底为对象 API 名称。
   title?: string;
 };
@@ -22,6 +24,8 @@ export type ConsoleWorkspaceTab = {
   sourceId?: string;
   // 控制台 Tab 绑定的数据源名称。
   sourceName?: string;
+  // 控制台 Tab 当前展示使用的数据源颜色。
+  sourceColor?: string;
 };
 
 // 统一工作区 Tab 项：用于 data/console 混合渲染。
@@ -32,6 +36,8 @@ export type WorkspaceTabItem = {
   kind: "data" | "console";
   // Tab 标题。
   title: string;
+  // Tab 绑定的数据源颜色：用于工作区标签背景着色。
+  sourceColor?: string;
 };
 
 // 统一工作区 Tab 解析结果。
@@ -81,12 +87,14 @@ export function buildWorkspaceTabs(dataTabs: DataWorkspaceTab[], consoleTabs: Co
     ...dataTabs.map((tab) => ({
       id: buildDataWorkspaceTabId(tab.bindingKey),
       kind: "data" as const,
-      title: buildWorkspaceTitle(tab.title || tab.objectName, tab.sourceName, tab.sourceId)
+      title: buildWorkspaceTitle(tab.title || tab.objectName, tab.sourceName, tab.sourceId),
+      sourceColor: tab.sourceColor || ""
     })),
     ...consoleTabs.map((tab) => ({
       id: buildConsoleWorkspaceTabId(tab.id),
       kind: "console" as const,
-      title: buildWorkspaceTitle(tab.name, tab.sourceName, tab.sourceId)
+      title: buildWorkspaceTitle(tab.name, tab.sourceName, tab.sourceId),
+      sourceColor: tab.sourceColor || ""
     }))
   ];
 }

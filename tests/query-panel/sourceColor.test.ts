@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { getSourceColor, withSourceColor } from "../../src/features/main/QueryPanel/logic/sourceColor.ts";
+import { buildSourceSurfacePalette, getSourceColor, SOURCE_COLOR_PRESETS, withSourceColor } from "../../src/features/main/QueryPanel/logic/sourceColor.ts";
 import type { SalesforceSource, SourceUpsertPayload } from "../../src/types/index.ts";
 
 // 构造最小数据源对象：仅保留颜色逻辑需要的字段。
@@ -21,6 +21,7 @@ function createSource(configJson: Record<string, unknown>): SalesforceSource {
 
 test("getSourceColor: 应仅返回用户手动配置的合法颜色值", () => {
   assert.equal(getSourceColor(createSource({ color: "#4F46E5" })), "#4F46E5");
+  assert.equal(getSourceColor(createSource({ color: "#abc" })), "#AABBCC");
   assert.equal(getSourceColor(createSource({ color: "not-a-color" })), "");
   assert.equal(getSourceColor(createSource({})), "");
 });
@@ -55,4 +56,18 @@ test("withSourceColor: 空颜色应移除 color 字段而不生成默认色", ()
   assert.deepEqual(withSourceColor(payload, "").configJson, {
     region: "prod"
   });
+});
+
+test("SOURCE_COLOR_PRESETS: 应提供可直接用于设置页的浅色预设候选", () => {
+  assert.equal(SOURCE_COLOR_PRESETS.length >= 6, true);
+  assert.deepEqual(SOURCE_COLOR_PRESETS[0], { label: "天空蓝", color: "#60A5FA" });
+});
+
+test("buildSourceSurfacePalette: 应将来源色转换为统一的浅色背景与边框色", () => {
+  assert.deepEqual(buildSourceSurfacePalette("#2563EB"), {
+    backgroundColor: "#DCE6FC",
+    activeBackgroundColor: "#C6D6FA",
+    borderColor: "#B5CAF8"
+  });
+  assert.equal(buildSourceSurfacePalette("invalid"), null);
 });

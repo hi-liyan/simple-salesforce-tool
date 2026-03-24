@@ -1,5 +1,6 @@
-import { Cog, ExternalLink, GripVertical, RefreshCw, Save, Search, Trash2 } from "lucide-react";
+import { ExternalLink, GripVertical, RefreshCw, Save, Search, Settings, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   closestCenter,
   DndContext,
@@ -17,7 +18,7 @@ import { NoticeAlert } from "../../../components/NoticeAlert";
 import { CliPathProbe, CliPathSettings, CliPathStatus, LlmSettings, SalesforceSource, TerminalShellOption } from "../../../types";
 import { checkGithubLatestVersion } from "../../../utils/versionUpdate";
 import { SystemLogsPanel } from "./SystemLogs";
-import { getSourceColor, withSourceColor } from "../QueryPanel/logic/sourceColor";
+import { buildSourceSurfacePalette, getSourceColor, SOURCE_COLOR_PRESETS, withSourceColor } from "../QueryPanel/logic/sourceColor";
 
 // 判断当前 Shell 路径是否为绝对路径：Windows 支持盘符路径与 UNC 路径，Unix 支持 `/` 开头路径。
 function isAbsoluteShellPath(shellPath: string): boolean {
@@ -48,6 +49,8 @@ function findTerminalShellOption(options: TerminalShellOption[], commandValue: s
 
 // 设置面板：通过顶部 Tab 切换数据源、CLI 设置、LLM 设置、系统日志和关于与反馈页面。
 export function SettingsPanel() {
+  // React Query 客户端：用于在设置页保存后同步失效 QueryPanel 的 sources 缓存。
+  const queryClient = useQueryClient();
   // 反馈入口 URL：统一集中管理，便于后续替换反馈地址。
   const feedbackIssueUrl = "https://github.com/hi-liyan/simple-salesforce-tool/issues/new";
   // 顶部 Tab 状态：控制当前展示的设置分区。
@@ -141,6 +144,16 @@ export function SettingsPanel() {
   const [mySqlEditSubmitting, setMySqlEditSubmitting] = useState(false);
   // MySQL 测试连接中状态。
   const [mySqlEditTesting, setMySqlEditTesting] = useState(false);
+  // 通用颜色设置弹窗开关：用于 CLI 等仅支持改颜色的数据源。
+  const [showSourceColorModal, setShowSourceColorModal] = useState(false);
+  // 当前正在编辑颜色的数据源。
+  const [editingColorSource, setEditingColorSource] = useState<SalesforceSource | null>(null);
+  // 通用颜色设置表单值。
+  const [sourceColorForm, setSourceColorForm] = useState("");
+  // 通用颜色设置提示信息。
+  const [sourceColorMessage, setSourceColorMessage] = useState("");
+  // 通用颜色设置提交中状态。
+  const [sourceColorSubmitting, setSourceColorSubmitting] = useState(false);
   // 反馈提交中状态：用于避免重复点击并反馈按钮处理中。
   const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
 
@@ -298,6 +311,28 @@ export function SettingsPanel() {
     setShowSalesforceEditModal(true);
   }
 
+  // 打开通用颜色设置弹窗：用于 CLI 等当前不走完整连接编辑表单的数据源。
+  function openSourceColorModal(source: SalesforceSource) {
+    setEditingColorSource(source);
+    setSourceColorForm(getSourceColor(source));
+    setSourceColorMessage("");
+    setShowSourceColorModal(true);
+  }
+
+  // 打开数据源设置入口：优先复用现有编辑弹窗，否则回退到通用颜色设置弹窗。
+  function openSourceSettingsModal(source: SalesforceSource) {
+    const normalizedSourceType = (source.sourceType || "salesforce").toLowerCase();
+    if (normalizedSourceType === "mysql") {
+      openMySqlEditModal(source);
+      return;
+    }
+    if (normalizedSourceType === "salesforce" && !source.id.startsWith("cli-")) {
+      openSalesforceEditModal(source);
+      return;
+    }
+    openSourceColorModal(source);
+  }
+
   // 关闭 Salesforce 编辑弹窗并清理状态。
   function closeSalesforceEditModal() {
     setShowSalesforceEditModal(false);
@@ -310,6 +345,14 @@ export function SettingsPanel() {
     setShowMySqlEditModal(false);
     setEditingMySqlSource(null);
     setMySqlEditMessage("");
+  }
+
+  // 关闭通用颜色设置弹窗并清理状态。
+  function closeSourceColorModal() {
+    setShowSourceColorModal(false);
+    setEditingColorSource(null);
+    setSourceColorForm("");
+    setSourceColorMessage("");
   }
 
   // 构建 MySQL 更新 payload：用于测试连接与保存。
@@ -343,6 +386,26 @@ export function SettingsPanel() {
       accessToken: salesforceEditForm.accessToken.trim(),
       apiVersion: salesforceEditForm.apiVersion.trim()
     }, salesforceEditForm.color);
+  }
+
+  // 构建通用颜色更新 payload：保留原有连接字段，只覆盖 configJson.color。
+  function buildSourceColorPayload(source: SalesforceSource) {
+    return withSourceColor({
+      name: source.name,
+      sourceType: source.sourceType,
+      configJson: { ...(source.configJson || {}) },
+      instanceUrl: source.instanceUrl,
+      accessToken: source.accessToken,
+      apiVersion: source.apiVersion
+    }, sourceColorForm);
+  }
+
+  // 保存后同步刷新设置页列表与 QueryPanel 的 sources 查询缓存。
+  async function refreshSourceVisualState() {
+    await Promise.all([
+      loadSources(),
+      queryClient.invalidateQueries({ queryKey: ["sources"] })
+    ]);
   }
 
   // 测试当前 MySQL 编辑表单连接。
@@ -380,7 +443,7 @@ export function SettingsPanel() {
     setMySqlEditSubmitting(true);
     try {
       await api.updateSource(editingMySqlSource.id, buildMySqlPayloadFromEditForm());
-      await loadSources(); // 保存后立即刷新设置页列表，保持展示一致。
+      await refreshSourceVisualState(); // 保存后立即同步设置页与 QueryPanel 的数据源颜色展示。
       closeMySqlEditModal();
     } catch (saveError) {
       setMySqlEditMessage(`更新 MySQL 数据源失败：${String(saveError)}`);
@@ -396,12 +459,28 @@ export function SettingsPanel() {
     setSalesforceEditSubmitting(true);
     try {
       await api.updateSource(editingSalesforceSource.id, buildSalesforcePayloadFromEditForm());
-      await loadSources(); // 保存后立即刷新设置页列表，保持展示一致。
+      await refreshSourceVisualState(); // 保存后立即同步设置页与 QueryPanel 的数据源颜色展示。
       closeSalesforceEditModal();
     } catch (saveError) {
       setSalesforceEditMessage(`更新 Salesforce 数据源失败：${String(saveError)}`);
     } finally {
       setSalesforceEditSubmitting(false);
+    }
+  }
+
+  // 保存通用颜色设置：用于不展示完整连接编辑表单的数据源。
+  async function saveSourceColorSettings() {
+    if (!editingColorSource) return;
+    setSourceColorMessage("");
+    setSourceColorSubmitting(true);
+    try {
+      await api.updateSource(editingColorSource.id, buildSourceColorPayload(editingColorSource));
+      await refreshSourceVisualState(); // 保存后让 QueryPanel 左树与工作区标签同步拿到最新颜色。
+      closeSourceColorModal();
+    } catch (saveError) {
+      setSourceColorMessage(`更新数据源颜色失败：${String(saveError)}`);
+    } finally {
+      setSourceColorSubmitting(false);
     }
   }
 
@@ -938,8 +1017,7 @@ export function SettingsPanel() {
                             isActiveDrag={activeDragSourceId === item.id}
                             getSourceBadgeClassName={getSourceBadgeClassName}
                             getSourceTypeBadge={getSourceTypeBadge}
-                            onOpenSalesforceEdit={openSalesforceEditModal}
-                            onOpenMySqlEdit={openMySqlEditModal}
+                            onOpenSourceSettings={openSourceSettingsModal}
                           />
                         ))}
                       </div>
@@ -1055,24 +1133,11 @@ export function SettingsPanel() {
                 spellCheck={false}
                 onChange={(event) => setSalesforceEditForm((state) => ({ ...state, apiVersion: event.target.value }))}
               />
-              <label className="flex items-center gap-3 rounded border border-base-300 px-3 py-2 text-[12px] text-neutral/80">
-                {/* 数据源颜色：仅支持用户手动设置，不生成默认色。 */}
-                <span className="min-w-[72px]">数据源颜色</span>
-                <input
-                  className="h-8 w-12 cursor-pointer rounded border border-base-300 bg-transparent"
-                  type="color"
-                  value={salesforceEditForm.color || "#000000"}
-                  onChange={(event) => setSalesforceEditForm((state) => ({ ...state, color: event.target.value }))}
-                />
-                <button
-                  className="btn btn-ghost btn-xs"
-                  type="button"
-                  onClick={() => setSalesforceEditForm((state) => ({ ...state, color: "" }))}
-                >
-                  清除
-                </button>
-                <span className="truncate text-neutral/60">{salesforceEditForm.color || "未设置"}</span>
-              </label>
+              <SourceColorField
+                label="数据源颜色"
+                color={salesforceEditForm.color}
+                onChange={(color) => setSalesforceEditForm((state) => ({ ...state, color }))}
+              />
             </div>
             {/* 编辑结果提示。 */}
             {salesforceEditMessage && <p className="mt-3 text-xs text-neutral/70">{salesforceEditMessage}</p>}
@@ -1165,24 +1230,11 @@ export function SettingsPanel() {
                 spellCheck={false}
                 onChange={(event) => setMySqlEditForm((state) => ({ ...state, primaryKey: event.target.value }))}
               />
-              <label className="flex items-center gap-3 rounded border border-base-300 px-3 py-2 text-[12px] text-neutral/80">
-                {/* 数据源颜色：供左侧树与未来右侧多源 Tab 复用。 */}
-                <span className="min-w-[72px]">数据源颜色</span>
-                <input
-                  className="h-8 w-12 cursor-pointer rounded border border-base-300 bg-transparent"
-                  type="color"
-                  value={mySqlEditForm.color || "#000000"}
-                  onChange={(event) => setMySqlEditForm((state) => ({ ...state, color: event.target.value }))}
-                />
-                <button
-                  className="btn btn-ghost btn-xs"
-                  type="button"
-                  onClick={() => setMySqlEditForm((state) => ({ ...state, color: "" }))}
-                >
-                  清除
-                </button>
-                <span className="truncate text-neutral/60">{mySqlEditForm.color || "未设置"}</span>
-              </label>
+              <SourceColorField
+                label="数据源颜色"
+                color={mySqlEditForm.color}
+                onChange={(color) => setMySqlEditForm((state) => ({ ...state, color }))}
+              />
             </div>
             {/* 编辑结果提示。 */}
             {mySqlEditMessage && <p className="mt-3 text-xs text-neutral/70">{mySqlEditMessage}</p>}
@@ -1201,6 +1253,116 @@ export function SettingsPanel() {
           </div>
         </div>
       )}
+
+      {/* 通用颜色设置弹窗：用于 CLI 等不展示完整连接编辑表单的数据源。 */}
+      {showSourceColorModal && editingColorSource && (
+        <div className="modal modal-open">
+          <div className="modal-box">
+            {/* 弹窗标题。 */}
+            <h3 className="text-base font-semibold">设置数据源颜色</h3>
+            {/* 弹窗说明：仅修改颜色，不改动连接信息。 */}
+            <p className="mt-2 text-[12px] text-neutral/70">
+              {editingColorSource.name || "-"}
+              {" · "}
+              {getSourceTypeBadge(editingColorSource.sourceType)}
+            </p>
+            {/* 颜色设置区。 */}
+            <div className="mt-3">
+              <SourceColorField label="数据源颜色" color={sourceColorForm} onChange={setSourceColorForm} />
+            </div>
+            {/* 编辑结果提示。 */}
+            {sourceColorMessage && <p className="mt-3 text-xs text-neutral/70">{sourceColorMessage}</p>}
+            {/* 底部操作按钮。 */}
+            <div className="modal-action">
+              <button className="btn btn-outline" onClick={closeSourceColorModal} disabled={sourceColorSubmitting}>
+                取消
+              </button>
+              <button className="btn btn-primary" onClick={() => void saveSourceColorSettings()} disabled={sourceColorSubmitting}>
+                {sourceColorSubmitting ? "保存中..." : "保存"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+type SourceColorFieldProps = {
+  // 表单标题。
+  label: string;
+  // 当前颜色值。
+  color: string;
+  // 更新颜色值。
+  onChange: (color: string) => void;
+};
+
+// 数据源颜色选择区：统一封装预设色、自定义选择器和浅色预览。
+function SourceColorField({ label, color, onChange }: SourceColorFieldProps) {
+  const currentPalette = buildSourceSurfacePalette(color);
+
+  return (
+    <div className="rounded border border-base-300 bg-base-100 p-3">
+      {/* 标题与说明。 */}
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-[12px] font-semibold text-base-content">{label}</p>
+          <p className="mt-1 text-[11px] leading-[1.4] text-neutral/60">预设色与自定义色都会在 QueryPanel 中自动处理为浅色背景效果。</p>
+        </div>
+        {/* 清除按钮：回退为未设置状态。 */}
+        <button className="btn btn-ghost btn-xs shrink-0" type="button" onClick={() => onChange("")}>
+          清除
+        </button>
+      </div>
+
+      {/* 预设色按钮组。 */}
+      <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+        {SOURCE_COLOR_PRESETS.map((preset) => {
+          const presetPalette = buildSourceSurfacePalette(preset.color);
+          const selected = color.toUpperCase() === preset.color;
+          return (
+            <button
+              key={preset.color}
+              type="button"
+              className={`flex items-center gap-2 rounded border px-2 py-2 text-left text-[12px] transition-colors ${selected ? "ring-1 ring-inset ring-primary/35" : ""}`}
+              style={{
+                backgroundColor: presetPalette?.backgroundColor,
+                borderColor: presetPalette?.borderColor
+              }}
+              onClick={() => onChange(preset.color)}
+            >
+              {/* 预设色点：展示原始来源色。 */}
+              <span className="h-3 w-3 shrink-0 rounded-full border border-white/70" style={{ backgroundColor: preset.color }} aria-hidden="true" />
+              {/* 预设色名称。 */}
+              <span className="truncate text-neutral/80">{preset.label}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* 自定义颜色选择器与浅色预览。 */}
+      <label className="mt-3 flex items-center gap-3 rounded border border-base-300 px-3 py-2 text-[12px] text-neutral/80">
+        {/* 自定义颜色标题。 */}
+        <span className="min-w-[72px]">自定义颜色</span>
+        {/* 系统颜色选择器。 */}
+        <input
+          className="h-8 w-12 cursor-pointer rounded border border-base-300 bg-transparent"
+          type="color"
+          value={color || "#000000"}
+          onChange={(event) => onChange(event.target.value)}
+        />
+        {/* 当前值与浅色预览。 */}
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-neutral/60">{color || "未设置"}</span>
+          <span
+            className="mt-1 block h-6 rounded border"
+            style={{
+              backgroundColor: currentPalette?.backgroundColor || "#FFFFFF",
+              borderColor: currentPalette?.borderColor || "#D1D5DB"
+            }}
+          />
+        </span>
+      </label>
     </div>
   );
 }
@@ -1214,10 +1376,8 @@ type SortableSourceCardProps = {
   getSourceTypeBadge: (sourceType: string | undefined) => string;
   // 数据源类型徽标样式计算函数。
   getSourceBadgeClassName: (sourceType: string | undefined) => string;
-  // 打开 Salesforce 编辑弹窗回调。
-  onOpenSalesforceEdit: (source: SalesforceSource) => void;
-  // 打开 MySQL 编辑弹窗回调。
-  onOpenMySqlEdit: (source: SalesforceSource) => void;
+  // 打开数据源设置弹窗回调。
+  onOpenSourceSettings: (source: SalesforceSource) => void;
 };
 
 // 可拖拽数据源卡片：封装 dnd-kit sortable 行为，避免主组件 JSX 过长。
@@ -1226,8 +1386,7 @@ function SortableSourceCard({
   isActiveDrag,
   getSourceTypeBadge,
   getSourceBadgeClassName,
-  onOpenSalesforceEdit,
-  onOpenMySqlEdit
+  onOpenSourceSettings
 }: SortableSourceCardProps) {
   // 绑定 sortable：提供容器引用、拖拽 handle 监听和位移动画信息。
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({
@@ -1238,6 +1397,8 @@ function SortableSourceCard({
     transform: CSS.Transform.toString(transform),
     transition
   };
+  const sourceColor = getSourceColor(item);
+  const sourcePalette = buildSourceSurfacePalette(sourceColor);
 
   return (
     // 卡片容器：setNodeRef 必须绑定到可排序根节点。
@@ -1271,18 +1432,10 @@ function SortableSourceCard({
             <span className="truncate">
               [{item.sortOrder || 0}] {item.name || "-"}
             </span>
-            {/* Salesforce 非 CLI 数据源支持编辑连接信息。 */}
-            {(item.sourceType || "salesforce").toLowerCase() === "salesforce" && !item.id.startsWith("cli-") && (
-              <button className="btn btn-ghost btn-xs" aria-label="编辑 Salesforce 数据源" onClick={() => onOpenSalesforceEdit(item)}>
-                <Cog size={14} />
-              </button>
-            )}
-            {/* MySQL 专属齿轮按钮：紧跟在名称后面。 */}
-            {(item.sourceType || "salesforce").toLowerCase() === "mysql" && (
-              <button className="btn btn-ghost btn-xs" aria-label="编辑 MySQL 数据源" onClick={() => onOpenMySqlEdit(item)}>
-                <Cog size={14} />
-              </button>
-            )}
+            {/* 设置按钮：统一作为数据源颜色入口，必要时复用已有编辑弹窗。 */}
+            <button className="btn btn-ghost btn-xs" aria-label="设置数据源颜色" onClick={() => onOpenSourceSettings(item)}>
+              <Settings size={14} />
+            </button>
           </p>
         </div>
       </div>
@@ -1293,9 +1446,16 @@ function SortableSourceCard({
           <span>颜色:</span>
           <span
             className="inline-block h-3 w-3 rounded-full border border-base-300"
-            style={{ backgroundColor: getSourceColor(item) || "transparent" }}
-          />
-          <span>{getSourceColor(item) || "未设置"}</span>
+            style={{ backgroundColor: sourceColor || "transparent" }}
+            />
+          <span>{sourceColor || "未设置"}</span>
+          {sourcePalette && (
+            <span
+              className="inline-block h-4 w-10 rounded border"
+              style={{ backgroundColor: sourcePalette.backgroundColor, borderColor: sourcePalette.borderColor }}
+              aria-label="浅色背景预览"
+            />
+          )}
         </p>
       </div>
       <div className="space-y-1 break-all">

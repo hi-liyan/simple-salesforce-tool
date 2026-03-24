@@ -81,7 +81,7 @@ export function QueryPanel({ viewState, actions }: QueryPanelProps) {
     // Query 统一工作区：对象树 + 混合 Tab（data/console）。
     <div className="grid h-full w-full grid-cols-[320px_1fr] overflow-hidden">
       {/* 左侧对象树侧栏。 */}
-      <div className="flex min-h-0 flex-col border-r border-base-300">
+      <div className="flex min-h-0 flex-col border-r border-base-300 bg-white">
         <QuerySidebar
           sources={viewState.sources}
           selectedSourceId={viewState.selectedSourceId}

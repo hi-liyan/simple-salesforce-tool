@@ -101,10 +101,16 @@ function TabView({
     });
   }, [renaming]);
 
+  // 合并排序动画样式与标签表面样式：保证拖拽位移和来源色背景同时生效。
+  const mergedStyle: CSSProperties = {
+    ...(active ? tab.activeSurfaceStyle || tab.surfaceStyle : tab.surfaceStyle),
+    ...style
+  };
+
   return (
     <div
       ref={setNodeRef}
-      style={style}
+      style={mergedStyle}
       className={`flex select-none items-center border-r border-base-300 bg-base-100 ${active ? "ring-1 ring-inset ring-primary/25" : ""} ${
         isPlaceholder ? "pointer-events-none opacity-0" : ""
       } ${isOverlay ? "" : "cursor-default"}`}

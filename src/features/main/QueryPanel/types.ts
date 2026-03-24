@@ -33,6 +33,8 @@ export type QueryWorkspaceTabItem = {
   kind: "data" | "console";
   // Tab 标题。
   title: string;
+  // Tab 绑定的数据源颜色：用于标签背景着色。
+  sourceColor?: string;
 };
 
 // QueryPanel 渲染所需状态：集中约束 UI 输入，降低 MainPage 与子组件耦合。

@@ -55,9 +55,10 @@ type BuildTreeNodeInteractionClassNameInput = {
 // 构建树节点交互样式：统一禁用文本选择并保持默认箭头光标。
 export function buildTreeNodeInteractionClassName({ selected, active }: BuildTreeNodeInteractionClassNameInput): string {
   const stateClassName = selected
-    ? "bg-sky-100 text-sky-950 hover:bg-sky-100"
+    // 选中态仅保留 1px 浅蓝边框，避免额外阴影让描边看起来偏厚。
+    ? "border border-sky-200 bg-sky-100 text-sky-950 hover:border-sky-200 hover:bg-sky-100"
     : active
-      ? "text-base-content hover:bg-base-200/70"
-      : "text-base-content/80 hover:bg-base-200/70";
-  return `group w-full cursor-default select-none rounded transition-colors ${stateClassName}`;
+      ? "border border-transparent text-base-content hover:bg-base-200/70"
+      : "border border-transparent text-base-content/80 hover:bg-base-200/70";
+  return `group box-border w-full cursor-default select-none rounded transition-colors ${stateClassName}`;
 }

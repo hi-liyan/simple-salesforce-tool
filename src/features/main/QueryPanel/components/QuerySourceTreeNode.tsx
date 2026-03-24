@@ -11,6 +11,8 @@ type QuerySourceTreeNodeProps = NodeRendererProps<QueryTreeRenderNode> & {
   treeState: SourceTreeState;
   // 当前激活对象 Tab 身份。
   activeTabObjectName: string;
+  // 数据源颜色映射：用于让同一 source 的所有节点共享整块区域背景。
+  sourceColorById: Record<string, string>;
   // 单击节点。
   onNodeClick: (node: QueryTreeRenderNode) => void;
   // 点击展开箭头。
@@ -45,6 +47,7 @@ export function QuerySourceTreeNode({
   style,
   treeState,
   activeTabObjectName,
+  sourceColorById,
   onNodeClick,
   onToggleNode
 }: QuerySourceTreeNodeProps) {
@@ -104,15 +107,6 @@ export function QuerySourceTreeNode({
 
         {/* source 节点刷新时在名称前显示 loading，满足单源刷新反馈要求。 */}
         {isSourceNode && sourceLoading && <span className="loading loading-spinner shrink-0" style={{ width: 12, height: 12 }} />}
-
-        {/* source 颜色点：仅保留为很轻的辅助信息，不再让主图标承担颜色识别。 */}
-        {isSourceNode && data.sourceColor && (
-          <span
-            className="h-2 w-2 shrink-0 rounded-full"
-            style={{ backgroundColor: data.sourceColor }}
-            aria-hidden="true"
-          />
-        )}
 
         {/* 名称主体：当前聚焦的数据源名称单独加粗，便于快速识别当前工作来源。 */}
         <span className={`min-w-0 flex-1 truncate leading-[1.35] ${isFocusedSource ? "font-semibold" : ""}`}>{data.label}</span>

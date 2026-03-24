@@ -121,6 +121,8 @@ export function useMainPageQueryPanel({
   );
   // 当前选中数据源的颜色：用于新建 console tab 时写入来源元信息。
   const selectedSourceColor = selectedSource ? getSourceColor(selectedSource) : "";
+  // 数据源颜色索引：用于让已打开的工作区 Tab 跟随最新设置颜色即时更新。
+  const sourceColorMap = useMemo(() => new Map(sources.map((source) => [source.id, getSourceColor(source)])), [sources]);
   // 当前激活的 Query Tab。
   const activeTab = useMemo(
     () => tabs.find((item) => isTabMatchedByIdentity(item, activeTabObjectName)) || null,
@@ -373,10 +375,29 @@ export function useMainPageQueryPanel({
     closeTabsByObjectNames(tabs.map((tab) => getTabIdentity(tab)));
   }
 
+  // 工作区 data tabs：优先使用当前数据源列表中的最新颜色，避免设置页改色后旧 Tab 颜色滞后。
+  const workspaceDataTabs = useMemo(
+    () =>
+      tabs.map((tab) => ({
+        ...tab,
+        sourceColor: sourceColorMap.get(tab.sourceId || "") || tab.sourceColor || ""
+      })),
+    [tabs, sourceColorMap]
+  );
+  // 工作区 console tabs：同样跟随最新数据源颜色，保持标签视觉与左树一致。
+  const workspaceConsoleTabs = useMemo(
+    () =>
+      soqlTabs.map((tab) => ({
+        ...tab,
+        sourceColor: sourceColorMap.get(tab.sourceId || "") || tab.sourceColor || ""
+      })),
+    [soqlTabs, sourceColorMap]
+  );
+
   // 统一工作区 Tab 状态：抽离 data/console 混合映射与焦点回退逻辑。
   const { workspaceTabs, activeWorkspaceTabId, setActiveWorkspaceTabId, reorderWorkspaceTabs, activeWorkspaceTabKind } = useWorkspaceTabs({
-    dataTabs: tabs,
-    consoleTabs: soqlTabs,
+    dataTabs: workspaceDataTabs,
+    consoleTabs: workspaceConsoleTabs,
     activeDataObjectName: activeTabObjectName,
     activeConsoleTabId: activeSoqlTabId
   });

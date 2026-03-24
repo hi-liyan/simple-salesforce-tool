@@ -1,4 +1,5 @@
 import { ReusableTabs } from "../../../../components/tabs/ReusableTabs";
+import { buildSourceSurfacePalette } from "../logic/sourceColor.ts";
 import { QueryWorkspaceTabItem } from "../types";
 
 type QueryWorkspaceTabsProps = {
@@ -27,12 +28,27 @@ export function QueryWorkspaceTabs({
 }: QueryWorkspaceTabsProps) {
   return (
     <ReusableTabs
-      tabs={tabs.map((tab) => ({
-        id: tab.id,
-        title: tab.title,
-        closable: true,
-        renameable: false
-      }))}
+      tabs={tabs.map((tab) => {
+        const surfacePalette = buildSourceSurfacePalette(tab.sourceColor || "");
+        return {
+          id: tab.id,
+          title: tab.title,
+          closable: true,
+          renameable: false,
+          surfaceStyle: surfacePalette
+            ? {
+                backgroundColor: surfacePalette.backgroundColor,
+                borderColor: surfacePalette.borderColor
+              }
+            : undefined,
+          activeSurfaceStyle: surfacePalette
+            ? {
+                backgroundColor: surfacePalette.activeBackgroundColor,
+                borderColor: surfacePalette.borderColor
+              }
+            : undefined
+        };
+      })}
       activeTabId={activeTabId}
       emptyText="请选择左侧 Object 或点击查询控制台"
       onActivateTab={onActivateTab}

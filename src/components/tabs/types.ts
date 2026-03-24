@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { OrderableTabItem } from "./tabOrder";
 
 // 通用标签状态点类型：用于展示连接或运行状态。
@@ -16,6 +16,10 @@ export type ReusableTabItem = OrderableTabItem & {
   titleTooltip?: string;
   // 可选状态点。
   statusTone?: ReusableTabStatusTone;
+  // 默认背景样式：用于来源色等轻量视觉增强。
+  surfaceStyle?: CSSProperties;
+  // 激活态背景样式：用于在当前标签上增强来源色可见性。
+  activeSurfaceStyle?: CSSProperties;
 };
 
 // 通用标签栏组件入参。

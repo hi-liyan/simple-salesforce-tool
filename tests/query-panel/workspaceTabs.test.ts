@@ -10,8 +10,8 @@ import {
 import { useQueryWorkspaceTabsStore } from "../../src/store/useQueryWorkspaceTabsStore.ts";
 
 // 构造最小 data tab：覆盖工作区映射所需 bindingKey 与展示标题。
-function createDataTab(bindingKey: string, objectName: string, title?: string, sourceId = "sf-1", sourceName = "Org A") {
-  return { bindingKey, objectName, title: title || objectName, sourceId, sourceName };
+function createDataTab(bindingKey: string, objectName: string, title?: string, sourceId = "sf-1", sourceName = "Org A", sourceColor = "#60A5FA") {
+  return { bindingKey, objectName, title: title || objectName, sourceId, sourceName, sourceColor };
 }
 
 // 重置工作区顺序 Store：避免测试之间共享状态导致断言互相污染。
@@ -35,8 +35,8 @@ test("统一工作区 Tab 列表应保持 data 在前、console 在后", () => {
   const tabs = buildWorkspaceTabs(
     [createDataTab("sf-1::Account", "Account", "客户"), createDataTab("sf-1::Contact", "Contact", "联系人")],
     [
-      { id: "soql-1", name: "Console 1", sourceId: "sf-1", sourceName: "Org A" },
-      { id: "soql-2", name: "Console 2", sourceId: "sf-1", sourceName: "Org A" }
+      { id: "soql-1", name: "Console 1", sourceId: "sf-1", sourceName: "Org A", sourceColor: "#60A5FA" },
+      { id: "soql-2", name: "Console 2", sourceId: "sf-1", sourceName: "Org A", sourceColor: "#60A5FA" }
     ]
   );
   assert.deepEqual(
@@ -44,17 +44,18 @@ test("统一工作区 Tab 列表应保持 data 在前、console 在后", () => {
     ["data:sf-1::Account", "data:sf-1::Contact", "console:soql-1", "console:soql-2"]
   );
   assert.deepEqual(tabs.map((item) => item.title), ["客户", "联系人", "Console 1", "Console 2"]);
+  assert.deepEqual(tabs.map((item) => item.sourceColor), ["#60A5FA", "#60A5FA", "#60A5FA", "#60A5FA"]);
 });
 
 test("统一工作区 Tab 列表：存在不同数据源时应为对象与控制台标题追加数据源名称", () => {
   const tabs = buildWorkspaceTabs(
     [
       createDataTab("sf-1::Account", "Account", "Account", "sf-1", "Org A"),
-      createDataTab("mysql-1::users", "users", "users", "mysql-1", "DB A")
+      createDataTab("mysql-1::users", "users", "users", "mysql-1", "DB A", "#34D399")
     ],
     [
-      { id: "soql-1", name: "SOQL 1", sourceId: "sf-1", sourceName: "Org A" },
-      { id: "soql-2", name: "SQL 1", sourceId: "mysql-1", sourceName: "DB A" }
+      { id: "soql-1", name: "SOQL 1", sourceId: "sf-1", sourceName: "Org A", sourceColor: "#60A5FA" },
+      { id: "soql-2", name: "SQL 1", sourceId: "mysql-1", sourceName: "DB A", sourceColor: "#34D399" }
     ]
   );
 
