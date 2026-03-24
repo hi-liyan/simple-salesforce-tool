@@ -1,5 +1,5 @@
 import { type StateStorage } from "zustand/middleware";
-import { api } from "../api";
+import { api } from "../api/index.ts";
 
 // 写入门控：rehydrate 完成前阻止 setItem，防止默认空值覆盖持久化数据。
 let writeEnabled = false;

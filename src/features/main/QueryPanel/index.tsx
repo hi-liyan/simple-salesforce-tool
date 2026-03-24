@@ -95,6 +95,7 @@ export function QueryPanel({ viewState, actions }: QueryPanelProps) {
           activeTabObjectName={viewState.activeTabObjectName}
           onOpenObject={actions.onOpenObject}
           onNotQueryableObjectClick={actions.onNotQueryableObjectClick}
+          onRefreshMysqlObjectMetadata={actions.onRefreshMysqlObjectMetadata}
           objectListMode="tree"
         />
       </div>

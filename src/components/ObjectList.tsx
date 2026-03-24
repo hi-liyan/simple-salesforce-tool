@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { ObjectDdl, ObjectDescribe, SalesforceObject } from "../types";
@@ -22,12 +22,23 @@ type Props = {
   onOpenObject: (objectItem: SalesforceObject) => void;
   // 不可查询徽标点击回调：用于提示当前对象不可查询。
   onNotQueryableClick?: (objectItem: SalesforceObject) => void;
+  // 刷新指定 MySQL 对象的字段元数据与 DDL。
+  onRefreshMysqlObjectMetadata?: (objectName: string) => Promise<{ describe: ObjectDescribe; ddl: ObjectDdl }>;
   // 是否使用树形模式：false 为传统列表，true 为对象-字段树。
   treeMode?: boolean;
 };
 
 // 对象列表：树形模式（对象 -> 字段 -> 字段元数据）。
-export function ObjectList({ objects, sourceId, sourceType, activeObjectName, onOpenObject, onNotQueryableClick, treeMode = false }: Props) {
+export function ObjectList({
+  objects,
+  sourceId,
+  sourceType,
+  activeObjectName,
+  onOpenObject,
+  onNotQueryableClick,
+  onRefreshMysqlObjectMetadata,
+  treeMode = false
+}: Props) {
   // 仅 Salesforce 数据源显示 Salesforce 专属菜单。
   const isSalesforceSource = (sourceType || "salesforce").toLowerCase() === "salesforce";
   // 关键字：用于对象过滤。
@@ -278,16 +289,69 @@ export function ObjectList({ objects, sourceId, sourceType, activeObjectName, on
     }
   }
 
+  // 右键菜单动作：强制刷新当前 MySQL 表的 describe 与 DDL，并同步左侧树缓存。
+  async function refreshMysqlObjectFromMenu() {
+    if (!objectContextMenu) return;
+    const objectName = objectContextMenu.objectItem.name;
+    const isMysqlSource = (sourceType || "salesforce").toLowerCase() === "mysql";
+    if (!isMysqlSource || !sourceId) {
+      setObjectContextMenu(null); // 非 MySQL 或未选中数据源时直接关闭菜单。
+      return;
+    }
+
+    setObjectContextMenu(null); // 先关闭菜单，避免等待期间悬浮层残留。
+    setLoadingByObjectName((current) => ({ ...current, [objectName]: true }));
+    setErrorByObjectName((current) => ({ ...current, [objectName]: "" }));
+    setDdlLoadingByObjectName((current) => ({ ...current, [objectName]: true }));
+    setDdlErrorByObjectName((current) => ({ ...current, [objectName]: "" }));
+
+    try {
+      // 优先走外层统一刷新链路，确保 Query 缓存、已打开 Tab 与对象树缓存保持一致。
+      const refreshedMetadata = onRefreshMysqlObjectMetadata
+        ? await onRefreshMysqlObjectMetadata(objectName)
+        : {
+            describe: await api.describeObject(sourceId, objectName),
+            ddl: await api.getObjectDdl(sourceId, objectName)
+          };
+      setDescribeByObjectName((current) => ({ ...current, [objectName]: refreshedMetadata.describe }));
+      setDdlByObjectName((current) => ({ ...current, [objectName]: refreshedMetadata.ddl }));
+      setExpandedObjectNames((current) => (current.includes(objectName) ? current : [...current, objectName]));
+    } catch (error) {
+      const errorMessage = `刷新表元数据失败：${String(error)}`;
+      setErrorByObjectName((current) => ({ ...current, [objectName]: errorMessage }));
+      setDdlErrorByObjectName((current) => ({ ...current, [objectName]: errorMessage }));
+    } finally {
+      setLoadingByObjectName((current) => ({ ...current, [objectName]: false }));
+      setDdlLoadingByObjectName((current) => ({ ...current, [objectName]: false }));
+    }
+  }
+
   return (
     // 容器：输入框 + 可滚动树形列表。
     <div className="flex h-full min-h-0 flex-col">
-      {/* 筛选输入框。 */}
-      <input
-        className="input input-bordered input-sm w-full"
-        placeholder="筛选 Object"
-        value={keyword}
-        onChange={(event) => setKeyword(event.target.value)}
-      />
+      {/* 筛选输入区域：支持输入关键字并一键清空。 */}
+      <div className="relative">
+        {/* 筛选输入框。 */}
+        <input
+          className="input input-bordered input-sm w-full pr-8"
+          placeholder="筛选 Object"
+          value={keyword}
+          onChange={(event) => setKeyword(event.target.value)}
+        />
+        {/* 清空按钮：仅在存在筛选关键字时展示，便于快速恢复完整列表。 */}
+        {keyword ? (
+          <button
+            className="btn btn-circle btn-ghost btn-xs absolute right-1 top-1/2 -translate-y-1/2"
+            type="button"
+            aria-label="清空 Object 筛选"
+            onClick={() => {
+              setKeyword(""); // 点击后立即清空筛选关键字。
+            }}
+          >
+            <X size={13} />
+          </button>
+        ) : null}
+      </div>
 
       {/* 列表容器：支持滚动。 */}
       <div className="mt-2 min-h-0 flex-1 overflow-auto border-t border-base-300">
@@ -521,6 +585,17 @@ export function ObjectList({ objects, sourceId, sourceType, activeObjectName, on
           >
             复制表名
           </button>
+          {!isSalesforceSource && (
+            <button
+              className="btn btn-ghost btn-xs w-full justify-start whitespace-nowrap px-2"
+              disabled={!sourceId}
+              onClick={() => {
+                void refreshMysqlObjectFromMenu(); // 强制刷新当前 MySQL 表的字段元数据与 DDL。
+              }}
+            >
+              刷新
+            </button>
+          )}
           {isSalesforceSource && (
             <>
               <div className="my-1 border-t border-base-300" />

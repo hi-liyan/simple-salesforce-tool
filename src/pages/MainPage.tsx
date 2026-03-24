@@ -1,18 +1,15 @@
 import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { getVersion } from "@tauri-apps/api/app";
-import { Settings, SquareTerminal, Table2 } from "lucide-react";
+import { Settings, SquareTerminal, Table2, Wrench } from "lucide-react";
 import { api } from "../api";
 import { useMainPageQueryPanel } from "../features/main/QueryPanel/hooks/useMainPageQueryPanel";
 import { MainLayout } from "../layouts/MainLayout";
 import { useAppStore } from "../store/useAppStore";
 import { useSoqlExecutorStore } from "../store/useSoqlExecutorStore";
+import { useTerminalStore } from "../store/useTerminalStore";
+import { useQueryWorkspaceTabsStore } from "../store/useQueryWorkspaceTabsStore";
 import { enableStorageWrite } from "../store/tauriStorage";
-
-// GitHub Releases 固定地址：用于更新提示中的展示与跳转。
-const GITHUB_RELEASE_PAGE_URL = "https://github.com/hi-liyan/simple-salesforce-tool/releases";
-// GitHub Latest Release API：用于读取最新版本号并做对比。
-const GITHUB_LATEST_RELEASE_API_URL = "https://api.github.com/repos/hi-liyan/simple-salesforce-tool/releases/latest";
+import { checkGithubLatestVersion, waitForUiIdleFrame } from "../utils/versionUpdate";
 // 启动版本检查标志：避免 React StrictMode 在开发环境重复触发弹窗。
 let startupVersionCheckTriggered = false;
 
@@ -82,6 +79,14 @@ const LazySettingsPanel = lazy(async () => {
   };
 });
 
+// 懒加载工具页：避免首屏加载 JSON 工具相关编辑器与树组件。
+const LazyToolsPanel = lazy(async () => {
+  const module = await import("../features/main/ToolsPanel");
+  return {
+    default: module.ToolsPanel
+  };
+});
+
 // 工作区懒加载占位：用于展示面板代码分片加载中的状态。
 function WorkspaceLoadingFallback({ title }: { title: string }) {
   return (
@@ -146,7 +151,12 @@ export function MainPage() {
       // 启动第一阶段：恢复持久化工作区快照。
       setStartupStage(STARTUP_STAGE_MAP.rehydrate);
       // 手动触发 rehydrate（skipHydration: true），从 SQLite 恢复持久化状态。
-      await Promise.all([useAppStore.persist.rehydrate(), useSoqlExecutorStore.persist.rehydrate()]);
+      await Promise.all([
+        useAppStore.persist.rehydrate(),
+        useSoqlExecutorStore.persist.rehydrate(),
+        useQueryWorkspaceTabsStore.persist.rehydrate(),
+        useTerminalStore.persist.rehydrate()
+      ]);
       if (!active) return;
 
       // 启动第二阶段：允许后续状态重新写回本地存储。
@@ -172,7 +182,8 @@ export function MainPage() {
 
       // 异步重新拉取恢复的 Tab 数据（describe + query），不阻塞主界面。
       const finalSelectedSourceId = useAppStore.getState().selectedSourceId;
-      void reloadRestoredTabs(finalSelectedSourceId);
+      // 将恢复任务句柄保留下来，供后续版本检查避开启动重任务窗口。
+      const restoredTabsPromise = reloadRestoredTabs(finalSelectedSourceId);
 
       // 启动后在后台静默同步 CLI 数据源，不再影响首屏可交互时间。
       // 这里继续沿用持久化的数据源 ID，避免“首屏本地列表未命中 -> 选中被清空”后无法恢复 CLI 数据源。
@@ -188,7 +199,10 @@ export function MainPage() {
 
       if (!startupVersionCheckTriggered) {
         startupVersionCheckTriggered = true;
-        void checkLatestVersionOnStartup(showVersionUpdateModal);
+        void restoredTabsPromise.finally(() => {
+          // 等恢复 Tab 的重任务收尾后再做版本检查，避免弹窗按钮点击被启动任务阻塞。
+          void checkLatestVersionOnStartup(showVersionUpdateModal);
+        });
       }
     };
 
@@ -325,6 +339,14 @@ export function MainPage() {
             >
               <SquareTerminal size={16} />
             </button>
+            {/* 工具面板入口。 */}
+            <button
+              className={`tool-rail-btn ${viewMode === "tools" ? "tool-rail-btn--active" : ""}`}
+              title="工具面板"
+              onClick={() => queryPanelActions.onSetViewMode("tools")}
+            >
+              <Wrench size={16} />
+            </button>
             {/* 设置入口。 */}
             <button
               className={`tool-rail-btn ${viewMode === "settings" ? "tool-rail-btn--active" : ""}`}
@@ -352,6 +374,13 @@ export function MainPage() {
                   <LazyTerminalPanel visible={viewMode === "terminal"} />
                 </Suspense>
               </div>
+            )}
+            {/* 工具视图：首次进入时按需加载。 */}
+            {viewMode === "tools" && (
+              <Suspense fallback={<WorkspaceLoadingFallback title="正在加载工具面板" />}>
+                {/* 工具面板主体。 */}
+                <LazyToolsPanel />
+              </Suspense>
             )}
             {/* 设置视图：首次进入时按需加载。 */}
             {viewMode === "settings" && (
@@ -449,11 +478,6 @@ export function MainPage() {
   );
 }
 
-// GitHub Latest Release API 返回结构：仅取版本号字段即可完成比较。
-type GithubLatestReleasePayload = {
-  tag_name?: string;
-};
-
 // 新版本提示模态框载荷：包含版本差异与发布页地址。
 type VersionUpdateModalState = {
   currentVersion: string;
@@ -461,99 +485,20 @@ type VersionUpdateModalState = {
   releasePageUrl: string;
 };
 
-// 语义版本结构：拆分主版本段与预发布标签，便于稳定比较。
-type ParsedSemanticVersion = {
-  coreParts: number[];
-  preRelease: string | null;
-};
-
 // 启动时检查 GitHub 最新版本；若有更新则触发升级模态框。
 async function checkLatestVersionOnStartup(onFoundNewVersion: (payload: VersionUpdateModalState) => void): Promise<void> {
   try {
-    const currentVersion = (await getVersion()).trim();
-    if (!currentVersion) return;
-
-    const latestVersion = await fetchLatestGithubReleaseVersion();
-    if (!latestVersion) return;
-    if (!isGithubVersionNewer(currentVersion, latestVersion)) return;
+    const result = await checkGithubLatestVersion();
+    if (!result?.hasUpdate) return;
+    // 命中新版本后先让出 UI 一帧，减少弹窗出现瞬间的点击排队。
+    await waitForUiIdleFrame();
     onFoundNewVersion({
-      currentVersion,
-      latestVersion,
-      releasePageUrl: GITHUB_RELEASE_PAGE_URL
+      currentVersion: result.currentVersion,
+      latestVersion: result.latestVersion,
+      releasePageUrl: result.releasePageUrl
     });
   } catch (error) {
     // 版本检查失败不影响业务启动，只打印调试日志。
     console.warn("启动版本检查失败：", error);
   }
-}
-
-// 拉取 GitHub 最新发布版本号（tag_name），失败时返回 null。
-async function fetchLatestGithubReleaseVersion(): Promise<string | null> {
-  const response = await fetch(GITHUB_LATEST_RELEASE_API_URL, {
-    method: "GET",
-    headers: {
-      Accept: "application/vnd.github+json"
-    }
-  });
-  if (!response.ok) return null;
-
-  const payload = (await response.json()) as GithubLatestReleasePayload;
-  const version = (payload.tag_name ?? "").trim();
-  return version || null;
-}
-
-// 判断 GitHub 版本是否高于当前版本。
-function isGithubVersionNewer(currentVersion: string, latestVersion: string): boolean {
-  return compareSemanticVersion(latestVersion, currentVersion) > 0;
-}
-
-// 比较两个语义版本：返回 1 表示 left 更新，-1 表示 right 更新，0 表示相等。
-function compareSemanticVersion(leftVersion: string, rightVersion: string): number {
-  // 比较前统一忽略版本号前缀 `v/V`，避免 `v1.2.3` 与 `1.2.3` 被误判为不相等。
-  const normalizedLeftVersion = leftVersion.trim().replace(/^[vV]/, "");
-  const normalizedRightVersion = rightVersion.trim().replace(/^[vV]/, "");
-  const left = parseSemanticVersion(normalizedLeftVersion);
-  const right = parseSemanticVersion(normalizedRightVersion);
-  if (!left || !right) {
-    // 兜底比较：非标准版本格式时使用带数字感知的字符串比较。
-    return normalizedLeftVersion.localeCompare(normalizedRightVersion, undefined, {
-      numeric: true,
-      sensitivity: "base"
-    });
-  }
-
-  const compareLength = Math.max(left.coreParts.length, right.coreParts.length);
-  for (let index = 0; index < compareLength; index += 1) {
-    const leftPart = left.coreParts[index] ?? 0;
-    const rightPart = right.coreParts[index] ?? 0;
-    if (leftPart > rightPart) return 1;
-    if (leftPart < rightPart) return -1;
-  }
-
-  const leftIsStable = !left.preRelease;
-  const rightIsStable = !right.preRelease;
-  // 主版本一致时：正式版 > 预发布版。
-  if (leftIsStable && !rightIsStable) return 1;
-  if (!leftIsStable && rightIsStable) return -1;
-  if (left.preRelease && right.preRelease) {
-    return left.preRelease.localeCompare(right.preRelease, undefined, {
-      numeric: true,
-      sensitivity: "base"
-    });
-  }
-  return 0;
-}
-
-// 解析语义版本字符串，兼容 `v1.2.3` 与 `1.2.3-beta.1`。
-function parseSemanticVersion(rawVersion: string): ParsedSemanticVersion | null {
-  const normalizedVersion = rawVersion.trim().replace(/^[vV]/, "");
-  if (!normalizedVersion) return null;
-
-  const [coreSegment, preReleaseSegment = ""] = normalizedVersion.split("-", 2);
-  if (!/^\d+(\.\d+)*$/.test(coreSegment)) return null;
-
-  return {
-    coreParts: coreSegment.split(".").map((part) => Number.parseInt(part, 10)),
-    preRelease: preReleaseSegment.trim() || null
-  };
 }

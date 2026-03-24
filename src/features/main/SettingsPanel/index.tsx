@@ -13,7 +13,9 @@ import { arrayMove, SortableContext, useSortable, verticalListSortingStrategy } 
 import { CSS } from "@dnd-kit/utilities";
 import { getVersion } from "@tauri-apps/api/app";
 import { api } from "../../../api";
+import { NoticeAlert } from "../../../components/NoticeAlert";
 import { CliPathProbe, CliPathSettings, CliPathStatus, LlmSettings, SalesforceSource, TerminalShellOption } from "../../../types";
+import { checkGithubLatestVersion } from "../../../utils/versionUpdate";
 import { SystemLogsPanel } from "./SystemLogs";
 
 // 判断当前 Shell 路径是否为绝对路径：Windows 支持盘符路径与 UNC 路径，Unix 支持 `/` 开头路径。
@@ -87,6 +89,12 @@ export function SettingsPanel() {
   const [error, setError] = useState("");
   // 应用版本号：通过 Tauri API 获取。
   const [appVersion, setAppVersion] = useState("-");
+  // 手动检查更新中的状态：用于禁用按钮并展示“检查中”文案。
+  const [checkingAppUpdate, setCheckingAppUpdate] = useState(false);
+  // 手动检查更新结果：用于展示版本检查反馈。
+  const [appUpdateNotice, setAppUpdateNotice] = useState<{ tone: "success" | "info" | "error"; message: string } | null>(null);
+  // 手动检查到的新版本信息：命中更新时显示“前往更新”按钮。
+  const [appUpdateResult, setAppUpdateResult] = useState<{ latestVersion: string; releasePageUrl: string } | null>(null);
   // 数据源列表：用于“数据源”Tab 展示完整信息（含 token）。
   const [sources, setSources] = useState<SalesforceSource[]>([]);
   // 当前拖拽中的数据源 ID：用于渲染拖拽态样式。
@@ -537,6 +545,43 @@ export function SettingsPanel() {
     }
   }
 
+  // 手动检查应用更新：命中新版本时展示入口，未命中时给出明确提示。
+  async function checkAppUpdate() {
+    setCheckingAppUpdate(true);
+    setAppUpdateNotice(null);
+    try {
+      const result = await checkGithubLatestVersion();
+      if (!result) {
+        setAppUpdateResult(null);
+        setAppUpdateNotice({ tone: "error", message: "检查更新失败：未能读取当前版本或最新发布信息。" });
+        return;
+      }
+
+      if (result.hasUpdate) {
+        setAppUpdateResult({
+          latestVersion: result.latestVersion,
+          releasePageUrl: result.releasePageUrl
+        });
+        setAppUpdateNotice({
+          tone: "success",
+          message: `发现新版本：当前 ${result.currentVersion}，最新 ${result.latestVersion}。`
+        });
+        return;
+      }
+
+      setAppUpdateResult(null);
+      setAppUpdateNotice({
+        tone: "info",
+        message: `当前已是最新版本：${result.currentVersion}。`
+      });
+    } catch (error) {
+      setAppUpdateResult(null);
+      setAppUpdateNotice({ tone: "error", message: `检查更新失败：${String(error)}` });
+    } finally {
+      setCheckingAppUpdate(false);
+    }
+  }
+
   // 保存自定义 CLI 路径：输入为空时清空配置。
   async function saveCustomPath() {
     setLoading(true);
@@ -910,6 +955,32 @@ export function SettingsPanel() {
                 软件版本:
                 <span className="ml-1 font-semibold">{appVersion}</span>
               </p>
+              {/* 检查更新操作区：支持手动检查并在命中新版本时前往发布页。 */}
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <button className="btn btn-outline btn-sm" type="button" disabled={checkingAppUpdate} onClick={() => void checkAppUpdate()}>
+                  {checkingAppUpdate ? "检查中..." : "检查更新"}
+                </button>
+                {appUpdateResult && (
+                  <button
+                    className="btn btn-primary btn-sm"
+                    type="button"
+                    onClick={() => {
+                      void api.openExternalUrl(appUpdateResult.releasePageUrl); // 统一走后端命令打开 Releases 页面。
+                    }}
+                  >
+                    前往更新
+                  </button>
+                )}
+              </div>
+              {/* 手动检查结果提示：展示是否有新版本或失败原因。 */}
+              {appUpdateNotice && (
+                <NoticeAlert
+                  tone={appUpdateNotice.tone}
+                  message={appUpdateNotice.message}
+                  onClose={() => setAppUpdateNotice(null)}
+                  className="mt-3 max-w-full"
+                />
+              )}
               <p className="mt-1 text-[12px] text-neutral/80">© 2026 李炎</p>
             </div>
 

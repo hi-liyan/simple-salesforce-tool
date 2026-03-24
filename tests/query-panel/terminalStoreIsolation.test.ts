@@ -6,6 +6,7 @@ import { useTerminalStore } from "../../src/store/useTerminalStore.ts";
 function resetTerminalStore() {
   useTerminalStore.setState({
     tabs: [],
+    tabOrder: [],
     activeTabId: ""
   });
 }
@@ -44,4 +45,21 @@ test("Terminal store 在常规 Tab 操作后应持续保留已有终端内容", 
   assert.equal(terminalTab?.name, "Terminal A");
   assert.equal(terminalTab?.inputDraft, "echo hello");
   assert.equal(terminalTab?.outputs.some((line) => line.text === "hello"), true);
+});
+
+test("Terminal store 应支持重命名与拖拽排序，并保持顺序状态独立", () => {
+  resetTerminalStore();
+
+  const firstTabId = useTerminalStore.getState().createTerminalTab("echo 1", "Terminal 1");
+  const secondTabId = useTerminalStore.getState().createTerminalTab("echo 2", "Terminal 2");
+
+  useTerminalStore.getState().renameTerminalTab(firstTabId, "已重命名终端");
+  useTerminalStore.getState().reorderTerminalTabs(secondTabId, firstTabId);
+
+  const state = useTerminalStore.getState();
+  const renamedTab = state.tabs.find((tab) => tab.id === firstTabId);
+
+  assert.equal(renamedTab?.name, "已重命名终端");
+  assert.deepEqual(state.tabOrder.slice(0, 2), [secondTabId, firstTabId]);
+  assert.equal(typeof (state as Record<string, unknown>).sourceId, "undefined");
 });

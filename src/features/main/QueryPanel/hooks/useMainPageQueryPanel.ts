@@ -1,4 +1,4 @@
-import { useMemo, useEffect, useRef, useState } from "react";
+import { useCallback, useMemo, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "../../../../api";
 import { useObjectsQuery, useSourcesQuery, useSyncSourcesMutation } from "../../../../queries/salesforce";
@@ -361,6 +361,7 @@ export function useMainPageQueryPanel({
 
   // 统一工作区 Tab 状态：抽离 data/console 混合映射与焦点回退逻辑。
   const { workspaceTabs, activeWorkspaceTabId, setActiveWorkspaceTabId, reorderWorkspaceTabs, activeWorkspaceTabKind } = useWorkspaceTabs({
+    sourceId: selectedSourceId,
     dataTabs: tabs,
     consoleTabs: soqlTabs,
     activeDataObjectName: activeTabObjectName,
@@ -389,6 +390,84 @@ export function useMainPageQueryPanel({
     : {};
   const activeTabHasPendingChanges = activeTab ? hasPendingChanges(activeTab) : false;
 
+  // 强制刷新单个 MySQL 对象的字段元数据与 DDL，并同步已打开 Tab。
+  const refreshMysqlObjectMetadata = useCallback(
+    async (objectName: string) => {
+      const sourceId = selectedSourceId.trim();
+      const normalizedObjectName = objectName.trim();
+      const normalizedSourceType = (selectedSource?.sourceType || "salesforce").toLowerCase();
+      if (!sourceId) {
+        throw new Error("请先选择数据源。");
+      }
+      if (normalizedSourceType !== "mysql") {
+        throw new Error("当前数据源不是 MySQL。");
+      }
+      if (!normalizedObjectName) {
+        throw new Error("表名不能为空。");
+      }
+
+      setMysqlDdlMap((state) => ({
+        ...state,
+        [normalizedObjectName]: {
+          loading: true,
+          data: state[normalizedObjectName]?.data || null,
+          error: ""
+        }
+      }));
+      patchTab(normalizedObjectName, (tab) => ({ ...tab, loading: true }));
+
+      try {
+        const refreshedObjects = await queryClient.fetchQuery({
+          queryKey: ["objects", sourceId],
+          staleTime: 0,
+          // 对象级刷新复用现有后端强刷链路：更新对象列表缓存并清空该数据源全部元数据缓存。
+          queryFn: () => api.refreshObjects(sourceId)
+        });
+        if (!refreshedObjects.some((item) => item.name === normalizedObjectName)) {
+          throw new Error(`刷新后未找到表：${normalizedObjectName}`);
+        }
+
+        const describe = await api.describeObject(sourceId, normalizedObjectName);
+        const visibility = await loadColumnVisibilityFromDb(sourceId, normalizedObjectName, describe);
+        const ddl = await api.getObjectDdl(sourceId, normalizedObjectName);
+
+        setMysqlDdlMap((state) => ({
+          ...state,
+          [normalizedObjectName]: {
+            loading: false,
+            data: ddl,
+            error: ""
+          }
+        }));
+
+        const openedTab = useAppStore.getState().tabs.find((tab) => tab.objectName === normalizedObjectName);
+        if (openedTab) {
+          patchTab(normalizedObjectName, (tab) => ({
+            ...tab,
+            describe,
+            columnVisibility: visibility
+          }));
+          await queryTabData(normalizedObjectName, describe);
+        }
+
+        return { describe, ddl };
+      } catch (error) {
+        const errorMessage = String(error);
+        setMysqlDdlMap((state) => ({
+          ...state,
+          [normalizedObjectName]: {
+            loading: false,
+            data: state[normalizedObjectName]?.data || null,
+            error: errorMessage
+          }
+        }));
+        patchTab(normalizedObjectName, (tab) => ({ ...tab, loading: false }));
+        throw error;
+      }
+    },
+    [selectedSourceId, selectedSource, setMysqlDdlMap, patchTab, queryClient, loadColumnVisibilityFromDb, queryTabData]
+  );
+
   // QueryPanel 交互输出：所有行为回调都在本 hook 侧实现。
   const rawQueryPanelActions: QueryPanelActions = useQueryPanelActions({
     activeTab,
@@ -406,6 +485,7 @@ export function useMainPageQueryPanel({
     closeSoqlTab,
     closeSoqlTabsByIds,
     refreshSources,
+    refreshMysqlObjectMetadata,
     handleSourceChange,
     buildDataWorkspaceTabId,
     openObjectTab,

@@ -1,5 +1,5 @@
 import { ObjectList } from "../../../../components/ObjectList";
-import { SalesforceObject, SalesforceSource } from "../../../../types";
+import { ObjectDdl, ObjectDescribe, SalesforceObject, SalesforceSource } from "../../../../types";
 import { useObjectTreeData } from "../hooks/useObjectTreeData";
 
 type QueryObjectTreeProps = {
@@ -17,6 +17,8 @@ type QueryObjectTreeProps = {
   onOpenObject: (item: SalesforceObject) => void;
   // 点击不可查询对象回调。
   onNotQueryableObjectClick?: (item: SalesforceObject) => void;
+  // 刷新指定 MySQL 对象的字段元数据与 DDL。
+  onRefreshMysqlObjectMetadata: (objectName: string) => Promise<{ describe: ObjectDescribe; ddl: ObjectDdl }>;
   // 对象列表展示模式：list/tree。
   objectListMode: "list" | "tree";
 };
@@ -30,6 +32,7 @@ export function QueryObjectTree({
   activeTabObjectName,
   onOpenObject,
   onNotQueryableObjectClick,
+  onRefreshMysqlObjectMetadata,
   objectListMode
 }: QueryObjectTreeProps) {
   // 对象树派生数据：统一计算 sourceType 与 treeMode。
@@ -55,6 +58,7 @@ export function QueryObjectTree({
           activeObjectName={activeTabObjectName}
           onOpenObject={onOpenObject}
           onNotQueryableClick={onNotQueryableObjectClick}
+          onRefreshMysqlObjectMetadata={onRefreshMysqlObjectMetadata}
           treeMode={treeMode}
         />
       )}
