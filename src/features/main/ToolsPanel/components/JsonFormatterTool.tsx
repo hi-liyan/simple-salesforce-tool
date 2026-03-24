@@ -2,9 +2,11 @@ import Editor from "@monaco-editor/react";
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import JsonView from "react18-json-view";
 import "react18-json-view/src/style.css";
-import { Braces, ChevronLeft, Clipboard, Maximize2, Minimize2, Plus, RotateCcw, Sparkles, X } from "lucide-react";
+import { Braces, ChevronLeft, Clipboard, Maximize2, Minimize2, RotateCcw, Sparkles } from "lucide-react";
 import { MonacoEditorLoadingFallback } from "../../../../components/MonacoEditorLoadingFallback";
 import { NoticeAlert, NoticeTone } from "../../../../components/NoticeAlert";
+import { ReusableTabs } from "../../../../components/tabs/ReusableTabs";
+import { sortTabsByOrder } from "../../../../components/tabs/tabOrder";
 import { JsonFormatterTab, useJsonFormatterStore } from "../../../../store/useJsonFormatterStore";
 
 type JsonFormatterToolProps = {
@@ -316,7 +318,9 @@ export function JsonFormatterTool({ onBack }: JsonFormatterToolProps) {
   const setActiveTabId = useJsonFormatterStore((state) => state.setActiveTabId);
   const createTab = useJsonFormatterStore((state) => state.createTab);
   const patchTab = useJsonFormatterStore((state) => state.patchTab);
+  const reorderTabs = useJsonFormatterStore((state) => state.reorderTabs);
   const closeTab = useJsonFormatterStore((state) => state.closeTab);
+  const tabOrder = useJsonFormatterStore((state) => state.tabOrder);
 
   // 工具级提示：承载复制、格式化失败等反馈。
   const [notice, setNotice] = useState<{ tone: NoticeTone; message: string } | null>(null);
@@ -324,17 +328,12 @@ export function JsonFormatterTool({ onBack }: JsonFormatterToolProps) {
   const [hydrated, setHydrated] = useState(useJsonFormatterStore.persist.hasHydrated());
   // 已常驻挂载的页签集合：切换时不销毁内部编辑器与树组件状态。
   const [mountedTabIds, setMountedTabIds] = useState<string[]>([]);
-  // 当前进入重命名态的页签 ID：为空表示未编辑任何页签标题。
-  const [renamingTabId, setRenamingTabId] = useState("");
-  // 页签标题编辑草稿：输入框内容与 store 中正式标题分离，避免未提交前污染持久化状态。
-  const [renamingDraft, setRenamingDraft] = useState("");
   // 只执行一次的恢复标记：避免 StrictMode 下重复触发恢复流程。
   const hydrationStartedRef = useRef(false);
-  // 重命名输入框引用：进入编辑态后自动聚焦并全选，减少额外点击。
-  const renameInputRef = useRef<HTMLInputElement | null>(null);
 
   // 激活页签实体：为空时回退到第一个页签。
-  const activeTab = useMemo(() => tabs.find((tab) => tab.id === activeTabId) || tabs[0] || null, [tabs, activeTabId]);
+  const orderedTabs = useMemo(() => sortTabsByOrder(tabOrder, tabs), [tabOrder, tabs]);
+  const activeTab = useMemo(() => orderedTabs.find((tab) => tab.id === activeTabId) || orderedTabs[0] || null, [orderedTabs, activeTabId]);
 
   // 工具级通知自动关闭：对齐 QueryPanel 的轻提示体验，避免提示常驻遮挡内容。
   useEffect(() => {
@@ -376,26 +375,8 @@ export function JsonFormatterTool({ onBack }: JsonFormatterToolProps) {
     setMountedTabIds((current) => current.filter((tabId) => aliveTabIdSet.has(tabId)));
   }, [tabs]);
 
-  // 被删除页签若正处于重命名态，则同步退出编辑，避免悬空状态残留。
-  useEffect(() => {
-    if (!renamingTabId) return;
-    const targetTabExists = tabs.some((tab) => tab.id === renamingTabId);
-    if (targetTabExists) return;
-    setRenamingTabId("");
-    setRenamingDraft("");
-  }, [tabs, renamingTabId]);
-
-  // 进入重命名态后自动聚焦并全选标题，方便用户直接覆盖原名称。
-  useEffect(() => {
-    if (!renamingTabId) return;
-    window.requestAnimationFrame(() => {
-      renameInputRef.current?.focus(); // 自动聚焦输入框，减少一次手动点击。
-      renameInputRef.current?.select(); // 全选旧标题，便于直接输入新名称。
-    });
-  }, [renamingTabId]);
-
   // 当前挂载中的页签：保持与 tabs 顺序一致。
-  const mountedTabs = useMemo(() => tabs.filter((tab) => mountedTabIds.includes(tab.id)), [tabs, mountedTabIds]);
+  const mountedTabs = useMemo(() => orderedTabs.filter((tab) => mountedTabIds.includes(tab.id)), [orderedTabs, mountedTabIds]);
 
   // 新建 JSON 页签。
   function handleCreateTab() {
@@ -405,56 +386,8 @@ export function JsonFormatterTool({ onBack }: JsonFormatterToolProps) {
 
   // 关闭单个 JSON 页签。
   function handleCloseTab(tabId: string) {
-    if (renamingTabId === tabId) {
-      setRenamingTabId(""); // 关闭当前编辑页签时，顺手清理本地重命名状态。
-      setRenamingDraft("");
-    }
     closeTab(tabId);
     setNotice(null);
-  }
-
-  // 进入页签重命名态：双击标题时激活目标页签并回填当前名称。
-  function handleStartRename(tabId: string) {
-    const targetTab = tabs.find((tab) => tab.id === tabId);
-    if (!targetTab) return;
-    setActiveTabId(tabId); // 双击标题时顺手激活目标页签，保持交互一致。
-    setRenamingTabId(tabId);
-    setRenamingDraft(targetTab.name);
-    setNotice(null);
-  }
-
-  // 提交页签重命名：空白名称回退为原值，避免生成空标题。
-  function handleCommitRename(tabId: string) {
-    const targetTab = tabs.find((tab) => tab.id === tabId);
-    if (!targetTab) return;
-    const trimmedName = renamingDraft.trim();
-    const nextName = trimmedName || targetTab.name;
-    patchTab(tabId, (current) => ({
-      ...current,
-      name: nextName
-    }));
-    setRenamingTabId("");
-    setRenamingDraft("");
-  }
-
-  // 取消页签重命名：丢弃草稿并退出输入框。
-  function handleCancelRename() {
-    setRenamingTabId("");
-    setRenamingDraft("");
-  }
-
-  // 处理重命名输入框按键：回车提交，Esc 取消，避免事件冒泡触发 Tab 切换。
-  function handleRenameInputKeyDown(event: React.KeyboardEvent<HTMLInputElement>, tabId: string) {
-    event.stopPropagation(); // 输入态下拦截键盘事件，避免影响外围页签交互。
-    if (event.key === "Enter") {
-      event.preventDefault();
-      handleCommitRename(tabId); // 回车提交当前标题修改。
-      return;
-    }
-    if (event.key === "Escape") {
-      event.preventDefault();
-      handleCancelRename(); // Esc 直接放弃修改，恢复原标题。
-    }
   }
 
   if (!hydrated) {
@@ -497,57 +430,30 @@ export function JsonFormatterTool({ onBack }: JsonFormatterToolProps) {
         {/* 工具说明：强调多页签与懒恢复行为。 */}
         <p className="text-[12px] text-neutral/60">支持多 Tab 持续工作，关闭程序后会在下次进入该工具时恢复。</p>
       </div>
-      {/* 页签栏：行为参考 TerminalPanel。 */}
-      <div className="flex overflow-x-auto border-b border-base-300 bg-base-100">
-        {tabs.map((tab) => {
-          const active = tab.id === activeTab?.id;
-          const renaming = tab.id === renamingTabId;
-          return (
-            // 单个 JSON 工具 Tab。
-            <div key={tab.id} className={`flex select-none items-center border-r border-base-300 bg-base-100 ${active ? "ring-1 ring-inset ring-primary/25" : ""}`}>
-              {renaming ? (
-                // 重命名输入框：双击标题后切换为就地编辑模式。
-                <input
-                  ref={renameInputRef}
-                  type="text"
-                  className="h-[32px] min-w-0 max-w-[240px] bg-transparent px-3 py-2 text-[12px] text-primary outline-none"
-                  value={renamingDraft}
-                  onChange={(event) => setRenamingDraft(event.target.value)}
-                  onBlur={() => handleCommitRename(tab.id)}
-                  onClick={(event) => event.stopPropagation()}
-                  onDoubleClick={(event) => event.stopPropagation()}
-                  onKeyDown={(event) => handleRenameInputKeyDown(event, tab.id)}
-                  title={tab.name}
-                />
-              ) : (
-                // 激活页签按钮：支持单击切换、双击进入重命名态。
-                <button
-                  type="button"
-                  className={`min-w-0 max-w-[240px] truncate px-3 py-2 text-[12px] ${active ? "text-primary" : "text-neutral/70"}`}
-                  onClick={() => setActiveTabId(tab.id)}
-                  onDoubleClick={() => handleStartRename(tab.id)}
-                  title="双击可重命名"
-                >
-                  {tab.name}
-                </button>
-              )}
-              {/* 关闭页签按钮。 */}
-              <button
-                type="button"
-                className="btn btn-circle btn-ghost btn-xs mr-1 cursor-pointer"
-                onClick={() => handleCloseTab(tab.id)}
-                aria-label={`关闭 ${tab.name}`}
-              >
-                <X size={13} />
-              </button>
-            </div>
-          );
-        })}
-        {/* 新建页签按钮。 */}
-        <button type="button" className="btn btn-ghost btn-sm mx-2 shrink-0" onClick={handleCreateTab} title="新建 JSON 格式化页签">
-          <Plus size={14} />
-        </button>
-      </div>
+      <ReusableTabs
+        tabs={orderedTabs.map((tab) => ({
+          id: tab.id,
+          title: tab.name,
+          closable: true,
+          renameable: true
+        }))}
+        activeTabId={activeTab?.id || ""}
+        createButtonTitle="新建 JSON 格式化页签"
+        onActivateTab={setActiveTabId}
+        onCreateTab={handleCreateTab}
+        onReorderTabs={reorderTabs}
+        onRenameTab={(tabId, title) => {
+          patchTab(tabId, (current) => ({
+            ...current,
+            name: title
+          }));
+        }}
+        onCloseTab={handleCloseTab}
+        onCloseTabs={(tabIds) => {
+          useJsonFormatterStore.getState().closeTabsByIds(tabIds);
+          setNotice(null);
+        }}
+      />
       {/* 工作区：所有已访问页签常驻挂载，切换时仅隐藏。 */}
       <div className="relative min-h-0 flex-1 overflow-hidden">
         {mountedTabs.map((tab) => (

@@ -6,6 +6,8 @@ import { useMainPageQueryPanel } from "../features/main/QueryPanel/hooks/useMain
 import { MainLayout } from "../layouts/MainLayout";
 import { useAppStore } from "../store/useAppStore";
 import { useSoqlExecutorStore } from "../store/useSoqlExecutorStore";
+import { useTerminalStore } from "../store/useTerminalStore";
+import { useQueryWorkspaceTabsStore } from "../store/useQueryWorkspaceTabsStore";
 import { enableStorageWrite } from "../store/tauriStorage";
 import { checkGithubLatestVersion, waitForUiIdleFrame } from "../utils/versionUpdate";
 // 启动版本检查标志：避免 React StrictMode 在开发环境重复触发弹窗。
@@ -149,7 +151,12 @@ export function MainPage() {
       // 启动第一阶段：恢复持久化工作区快照。
       setStartupStage(STARTUP_STAGE_MAP.rehydrate);
       // 手动触发 rehydrate（skipHydration: true），从 SQLite 恢复持久化状态。
-      await Promise.all([useAppStore.persist.rehydrate(), useSoqlExecutorStore.persist.rehydrate()]);
+      await Promise.all([
+        useAppStore.persist.rehydrate(),
+        useSoqlExecutorStore.persist.rehydrate(),
+        useQueryWorkspaceTabsStore.persist.rehydrate(),
+        useTerminalStore.persist.rehydrate()
+      ]);
       if (!active) return;
 
       // 启动第二阶段：允许后续状态重新写回本地存储。
