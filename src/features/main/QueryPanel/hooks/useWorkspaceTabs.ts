@@ -20,8 +20,6 @@ export {
 } from "../logic/workspaceTabs";
 
 type UseWorkspaceTabsInput = {
-  // 当前数据源 ID：用于分桶持久化工作区顺序。
-  sourceId: string;
   // data 工作区 Tab 列表。
   dataTabs: DataWorkspaceTab[];
   // console 工作区 Tab 列表。
@@ -34,7 +32,6 @@ type UseWorkspaceTabsInput = {
 
 // 统一工作区 Tab hook：集中处理列表映射、激活态回退和 data 焦点同步。
 export function useWorkspaceTabs({
-  sourceId,
   dataTabs,
   consoleTabs,
   activeDataObjectName,
@@ -44,8 +41,8 @@ export function useWorkspaceTabs({
   const [activeWorkspaceTabId, setActiveWorkspaceTabId] = useState("");
   // 统一工作区原始 Tab 列表：用于计算增量与基础映射。
   const baseWorkspaceTabs = useMemo(() => buildWorkspaceTabs(dataTabs, consoleTabs), [dataTabs, consoleTabs]);
-  // 当前数据源下已持久化的工作区顺序。
-  const workspaceTabOrder = useQueryWorkspaceTabsStore(useCallback((state) => state.getTabOrder(sourceId), [sourceId]));
+  // 全局工作区持久化顺序：data/console 混排，不再按 source 分桶。
+  const workspaceTabOrder = useQueryWorkspaceTabsStore(useCallback((state) => state.getTabOrder(), []));
   // 回写工作区顺序。
   const setWorkspaceTabOrder = useQueryWorkspaceTabsStore((state) => state.setTabOrder);
 
@@ -53,18 +50,17 @@ export function useWorkspaceTabs({
   const reorderWorkspaceTabs = useCallback((activeId: string, overId: string) => {
     if (!activeId || !overId) return;
     if (activeId === overId) return;
-    setWorkspaceTabOrder(sourceId, (current) => moveTabOrder(current, activeId, overId));
-  }, [setWorkspaceTabOrder, sourceId]);
+    setWorkspaceTabOrder("", (current) => moveTabOrder(current, activeId, overId));
+  }, [setWorkspaceTabOrder]);
 
   // 维护稳定顺序：删除已关闭 Tab，并把新增 Tab 统一追加在最后。
   useEffect(() => {
-    if (!sourceId) return;
     const nextOrder = sortTabsByOrder(workspaceTabOrder, baseWorkspaceTabs).map((tab) => tab.id);
     if (nextOrder.length === workspaceTabOrder.length && nextOrder.every((tabId, index) => tabId === workspaceTabOrder[index])) {
       return;
     }
-    setWorkspaceTabOrder(sourceId, nextOrder); // 仅在顺序真实变化时回写，避免无意义渲染。
-  }, [baseWorkspaceTabs, setWorkspaceTabOrder, sourceId, workspaceTabOrder]);
+    setWorkspaceTabOrder("", nextOrder); // 仅在顺序真实变化时回写，避免无意义渲染。
+  }, [baseWorkspaceTabs, setWorkspaceTabOrder, workspaceTabOrder]);
 
   // 按稳定顺序输出工作区 Tab：确保“新开在末尾”。
   const workspaceTabs = useMemo(() => sortTabsByOrder(workspaceTabOrder, baseWorkspaceTabs), [baseWorkspaceTabs, workspaceTabOrder]);

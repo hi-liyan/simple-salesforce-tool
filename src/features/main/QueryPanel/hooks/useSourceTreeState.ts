@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { NodeApi } from "react-arborist";
+import { listen } from "@tauri-apps/api/event";
 import { api } from "../../../../api";
 import type { SalesforceObject, SalesforceSource } from "../../../../types";
 import { getSourceColor } from "../logic/sourceColor.ts";
@@ -127,6 +128,47 @@ export function useSourceTreeState({
     });
   }, [sources, sourceMap]);
 
+  useEffect(() => {
+    let active = true;
+    let unlistenStart: (() => void) | undefined;
+    let unlistenEnd: (() => void) | undefined;
+
+    const setup = async () => {
+      unlistenStart = await listen<{ sourceId?: string }>("sf:token-refresh-start", (event) => {
+        if (!active) return;
+        const sourceId = String(event.payload?.sourceId || "");
+        if (!sourceId) return;
+        setTreeState((current) => ({
+          ...current,
+          sourceAuthPendingById: {
+            ...current.sourceAuthPendingById,
+            [sourceId]: true
+          }
+        }));
+      });
+
+      unlistenEnd = await listen<{ sourceId?: string }>("sf:token-refresh-end", (event) => {
+        if (!active) return;
+        const sourceId = String(event.payload?.sourceId || "");
+        if (!sourceId) return;
+        setTreeState((current) => ({
+          ...current,
+          sourceAuthPendingById: {
+            ...current.sourceAuthPendingById,
+            [sourceId]: false
+          }
+        }));
+      });
+    };
+
+    void setup();
+    return () => {
+      active = false;
+      unlistenStart?.();
+      unlistenEnd?.();
+    };
+  }, []);
+
   // 加载单个数据源的根子节点，并按类型缓存对象/分组数据。
   const loadSourceChildren = useCallback(
     async (source: SalesforceSource, forceRefresh = false) => {
@@ -157,7 +199,8 @@ export function useSourceTreeState({
             : await api.listObjects(sourceId);
         const context = {
           getSourceColor,
-          listObjects: async () => objects
+          listObjects: async () => objects,
+          withSalesforceSourceReauth: async <T>(_source: SalesforceSource, action: () => Promise<T>) => action()
         };
         const normalizedSourceType = String(source.sourceType || "salesforce").toLowerCase();
         const children = normalizedSourceType === "mysql"

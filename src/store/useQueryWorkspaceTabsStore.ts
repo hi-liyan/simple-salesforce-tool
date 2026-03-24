@@ -2,51 +2,60 @@ import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { tauriSqliteStorage } from "./tauriStorage.ts";
 
-type QueryWorkspaceTabsState = {
-  // 按数据源分桶保存工作区标签顺序。
-  tabOrderBySourceId: Record<string, string[]>;
-  // 读取指定数据源的标签顺序。
-  getTabOrder: (sourceId: string) => string[];
-  // 写入指定数据源的标签顺序。
-  setTabOrder: (sourceId: string, order: string[] | ((current: string[]) => string[])) => void;
-  // 清空指定数据源的标签顺序。
-  clearTabOrder: (sourceId: string) => void;
+// 旧版按数据源分桶的工作区顺序结构：用于历史快照迁移。
+type LegacyQueryWorkspaceTabsState = {
+  tabOrderBySourceId?: Record<string, string[]>;
+  tabOrder?: string[];
 };
+
+type QueryWorkspaceTabsState = {
+  // 全局工作区标签顺序：data/console 混排，不再按 source 分桶。
+  tabOrder: string[];
+  // 读取工作区标签顺序：保留 sourceId 入参仅用于兼容旧调用。
+  getTabOrder: (sourceId?: string) => string[];
+  // 写入工作区标签顺序：保留 sourceId 入参仅用于兼容旧调用。
+  setTabOrder: (sourceId: string, order: string[] | ((current: string[]) => string[])) => void;
+  // 清空工作区标签顺序：保留 sourceId 入参仅用于兼容旧调用。
+  clearTabOrder: (sourceId?: string) => void;
+};
+
+// 归一化工作区顺序持久化快照：优先使用新版全局顺序，兼容旧版分桶结构。
+function normalizeWorkspaceTabOrder(state: Partial<LegacyQueryWorkspaceTabsState>): string[] {
+  if (Array.isArray(state.tabOrder)) {
+    return state.tabOrder;
+  }
+
+  if (!state.tabOrderBySourceId || typeof state.tabOrderBySourceId !== "object") {
+    return [];
+  }
+
+  const mergedOrder: string[] = [];
+  Object.values(state.tabOrderBySourceId).forEach((order) => {
+    if (!Array.isArray(order)) return;
+    order.forEach((tabId) => {
+      if (mergedOrder.includes(tabId)) return;
+      mergedOrder.push(tabId);
+    });
+  });
+  return mergedOrder;
+}
 
 // Query 工作区标签顺序持久化 store：仅保存展示顺序，不保存业务 tab 内容。
 export const useQueryWorkspaceTabsStore = create<QueryWorkspaceTabsState>()(
   persist(
     (set, get) => ({
-      tabOrderBySourceId: {},
+      tabOrder: [],
 
-      getTabOrder: (sourceId) => {
-        if (!sourceId) return [];
-        return get().tabOrderBySourceId[sourceId] || [];
+      getTabOrder: () => get().tabOrder,
+
+      setTabOrder: (_sourceId, order) => {
+        set((state) => ({
+          tabOrder: typeof order === "function" ? order(state.tabOrder) : order
+        }));
       },
 
-      setTabOrder: (sourceId, order) => {
-        if (!sourceId) return;
-        set((state) => {
-          const current = state.tabOrderBySourceId[sourceId] || [];
-          const nextOrder = typeof order === "function" ? order(current) : order;
-          return {
-            tabOrderBySourceId: {
-              ...state.tabOrderBySourceId,
-              [sourceId]: nextOrder
-            }
-          };
-        });
-      },
-
-      clearTabOrder: (sourceId) => {
-        if (!sourceId) return;
-        set((state) => {
-          const nextMap = { ...state.tabOrderBySourceId };
-          delete nextMap[sourceId];
-          return {
-            tabOrderBySourceId: nextMap
-          };
-        });
+      clearTabOrder: () => {
+        set({ tabOrder: [] });
       }
     }),
     {
@@ -54,14 +63,14 @@ export const useQueryWorkspaceTabsStore = create<QueryWorkspaceTabsState>()(
       storage: createJSONStorage(() => tauriSqliteStorage),
       skipHydration: true,
       partialize: (state) => ({
-        tabOrderBySourceId: state.tabOrderBySourceId
+        tabOrder: state.tabOrder
       }),
       merge: (persisted, current) => {
-        const state = persisted as Partial<QueryWorkspaceTabsState>;
+        const state = persisted as Partial<LegacyQueryWorkspaceTabsState>;
         return {
           ...current,
           ...state,
-          tabOrderBySourceId: state.tabOrderBySourceId && typeof state.tabOrderBySourceId === "object" ? state.tabOrderBySourceId : {}
+          tabOrder: normalizeWorkspaceTabOrder(state)
         };
       }
     }

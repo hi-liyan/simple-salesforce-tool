@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
-import { Notice, QueryResult, TabLog } from "../types";
-import { tauriSqliteStorage } from "./tauriStorage";
+import type { Notice, QueryResult, SourceBindingMeta, TabLog } from "../types/index.ts";
+import { tauriSqliteStorage } from "./tauriStorage.ts";
 
 // AI 对话单条消息。
 export type AiConversationItem = {
@@ -13,8 +13,8 @@ export type AiConversationItem = {
   soql?: string;
 };
 
-// SOQL 执行器标签页完整状态。
-export type SoqlExecutorTab = {
+// SOQL 执行器标签页完整状态：每个 console tab 永久绑定自己的数据源上下文。
+export type SoqlExecutorTab = SourceBindingMeta & {
   id: string;
   name: string;
   soqlDraft: string;
@@ -33,18 +33,38 @@ export type SoqlExecutorTab = {
   aiStreamRequestId: string;
 };
 
-// 控制台 Tab 持久化快照：按“完整页面状态”保存，切换数据源时可完整恢复。
+// 控制台 Tab 持久化快照：按“完整页面状态”保存，恢复时重建瞬态标记。
 type PersistedSoqlTab = SoqlExecutorTab;
 
-// 每个数据源独立维护控制台 Tabs 快照。
-type PersistedSourceSoqlState = {
-  tabs: PersistedSoqlTab[];
+// 旧版按 source 分桶的控制台持久化结构：用于历史快照兼容迁移。
+type LegacyPersistedSourceSoqlState = {
+  tabs: Partial<PersistedSoqlTab>[];
   activeTabId: string;
 };
 
-// 创建新的 SOQL 执行器标签默认值。
-export function createSoqlExecutorTab(index: number): SoqlExecutorTab {
+// 旧版控制台持久化结构：迁移期兼容字段。
+type LegacySoqlExecutorState = {
+  sourceId?: string;
+  sourceTabStateBySourceId?: Record<string, LegacyPersistedSourceSoqlState>;
+  tabs?: Partial<PersistedSoqlTab>[];
+  activeTabId?: string;
+};
+
+// 归一化数据源绑定快照：缺失字段时回退为空字符串，避免恢复时报错。
+function normalizeSourceBindingMeta(sourceMeta: Partial<SourceBindingMeta> = {}): SourceBindingMeta {
   return {
+    sourceId: sourceMeta.sourceId || "",
+    sourceType: sourceMeta.sourceType || "",
+    sourceName: sourceMeta.sourceName || "",
+    sourceColor: sourceMeta.sourceColor || ""
+  };
+}
+
+// 创建新的 SOQL 执行器标签默认值：写入创建时数据源上下文，确保后续执行不串源。
+export function createSoqlExecutorTab(index: number, sourceMeta: Partial<SourceBindingMeta> = {}): SoqlExecutorTab {
+  const normalizedSourceMeta = normalizeSourceBindingMeta(sourceMeta);
+  return {
+    ...normalizedSourceMeta,
     id: `soql-tab-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     name: `SOQL ${index}`,
     soqlDraft: "",
@@ -65,9 +85,17 @@ export function createSoqlExecutorTab(index: number): SoqlExecutorTab {
 }
 
 // 将持久化快照恢复为完整 SoqlExecutorTab，兼容历史字段缺失并重置瞬态运行标记。
-function hydrateSoqlTab(persisted: Partial<PersistedSoqlTab>): SoqlExecutorTab {
+function hydrateSoqlTab(persisted: Partial<PersistedSoqlTab>, fallbackSourceMeta: Partial<SourceBindingMeta> = {}): SoqlExecutorTab {
+  const normalizedSourceMeta = normalizeSourceBindingMeta({
+    sourceId: persisted.sourceId || fallbackSourceMeta.sourceId,
+    sourceType: persisted.sourceType || fallbackSourceMeta.sourceType,
+    sourceName: persisted.sourceName || fallbackSourceMeta.sourceName,
+    sourceColor: persisted.sourceColor || fallbackSourceMeta.sourceColor
+  });
+
   return {
     ...persisted,
+    ...normalizedSourceMeta,
     id: persisted.id || `soql-tab-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     name: persisted.name || "SOQL",
     soqlDraft: persisted.soqlDraft || "",
@@ -87,76 +115,56 @@ function hydrateSoqlTab(persisted: Partial<PersistedSoqlTab>): SoqlExecutorTab {
   };
 }
 
-// 将当前 source 控制台状态写回 source 维度快照。
-function upsertSourceSoqlState(
-  sourceTabStateBySourceId: Record<string, PersistedSourceSoqlState>,
-  sourceId: string,
-  tabs: SoqlExecutorTab[],
-  activeTabId: string
-): Record<string, PersistedSourceSoqlState> {
-  if (!sourceId) return sourceTabStateBySourceId;
-  return {
-    ...sourceTabStateBySourceId,
-    [sourceId]: {
-      tabs,
-      activeTabId
-    }
-  };
-}
+// 归一化控制台持久化快照：兼容旧版按 source 分桶结构，并保留所有来源的 console tabs。
+function normalizePersistedSoqlState(state: Partial<LegacySoqlExecutorState>): { tabs: SoqlExecutorTab[]; activeTabId: string } {
+  const tabMap = new Map<string, SoqlExecutorTab>();
 
-// 恢复指定 source 的控制台 Tabs。
-function restoreSourceSoqlState(
-  sourceTabStateBySourceId: Record<string, PersistedSourceSoqlState>,
-  sourceId: string
-): { tabs: SoqlExecutorTab[]; activeTabId: string } {
-  if (!sourceId) return { tabs: [], activeTabId: "" };
-  const sourceState = sourceTabStateBySourceId[sourceId];
-  if (!sourceState) return { tabs: [], activeTabId: "" };
-  const hydratedTabs = Array.isArray(sourceState.tabs) ? sourceState.tabs.map((tab) => hydrateSoqlTab(tab)) : [];
-  const activeExists = hydratedTabs.some((tab) => tab.id === sourceState.activeTabId);
-  return {
-    tabs: hydratedTabs,
-    activeTabId: activeExists ? sourceState.activeTabId : hydratedTabs[0]?.id || ""
-  };
-}
-
-// 兼容旧结构：将历史 tabs + activeTabId 迁移到按 sourceId 分桶结构。
-function normalizeSourceSoqlStateMap(state: Partial<SoqlExecutorState>): Record<string, PersistedSourceSoqlState> {
-  const rawMap = state.sourceTabStateBySourceId;
-  const normalizedMap: Record<string, PersistedSourceSoqlState> = {};
-  if (rawMap && typeof rawMap === "object") {
-    Object.entries(rawMap).forEach(([sourceId, sourceState]) => {
-      if (!sourceId || !sourceState || typeof sourceState !== "object") return;
-      const tabs = Array.isArray(sourceState.tabs) ? sourceState.tabs.map((tab) => hydrateSoqlTab(tab as Partial<PersistedSoqlTab>)) : [];
-      const activeTabId = typeof sourceState.activeTabId === "string" ? sourceState.activeTabId : "";
-      normalizedMap[sourceId] = { tabs, activeTabId };
+  if (Array.isArray(state.tabs)) {
+    state.tabs.forEach((tab) => {
+      const hydratedTab = hydrateSoqlTab(tab as Partial<PersistedSoqlTab>);
+      tabMap.set(hydratedTab.id, hydratedTab);
     });
   }
-  const sourceId = typeof state.sourceId === "string" ? state.sourceId : "";
-  if (!normalizedMap[sourceId] && Array.isArray(state.tabs) && state.tabs.length > 0 && sourceId) {
-    normalizedMap[sourceId] = {
-      tabs: state.tabs.map((tab) => hydrateSoqlTab(tab as Partial<PersistedSoqlTab>)),
-      activeTabId: typeof state.activeTabId === "string" ? state.activeTabId : ""
-    };
+
+  if (state.sourceTabStateBySourceId && typeof state.sourceTabStateBySourceId === "object") {
+    Object.entries(state.sourceTabStateBySourceId).forEach(([sourceId, sourceState]) => {
+      if (!sourceState || typeof sourceState !== "object" || !Array.isArray(sourceState.tabs)) return;
+      sourceState.tabs.forEach((tab) => {
+        const hydratedTab = hydrateSoqlTab(tab, { sourceId });
+        tabMap.set(hydratedTab.id, hydratedTab);
+      });
+    });
   }
-  return normalizedMap;
+
+  const tabs = Array.from(tabMap.values());
+  const currentActiveTabId = typeof state.activeTabId === "string" ? state.activeTabId : "";
+  if (currentActiveTabId && tabs.some((tab) => tab.id === currentActiveTabId)) {
+    return { tabs, activeTabId: currentActiveTabId };
+  }
+
+  const currentSourceId = typeof state.sourceId === "string" ? state.sourceId : "";
+  if (currentSourceId && state.sourceTabStateBySourceId?.[currentSourceId]?.activeTabId) {
+    const legacyActiveTabId = state.sourceTabStateBySourceId[currentSourceId]?.activeTabId || "";
+    if (tabs.some((tab) => tab.id === legacyActiveTabId)) {
+      return { tabs, activeTabId: legacyActiveTabId };
+    }
+  }
+
+  return {
+    tabs,
+    activeTabId: tabs[0]?.id || ""
+  };
 }
 
 type SoqlExecutorState = {
-  // 当前控制台状态所属的数据源 ID。
-  sourceId: string;
-  // 按数据源分桶保存控制台 Tabs。
-  sourceTabStateBySourceId: Record<string, PersistedSourceSoqlState>;
   tabs: SoqlExecutorTab[];
   activeTabId: string;
-  // 切换当前控制台的数据源上下文，并恢复对应 Tabs。
-  switchSource: (sourceId: string) => void;
   // 设置 Tab 列表（直接值或更新函数）。
   setTabs: (tabs: SoqlExecutorTab[] | ((tabs: SoqlExecutorTab[]) => SoqlExecutorTab[])) => void;
   // 设置激活 Tab ID。
   setActiveTabId: (tabId: string | ((current: string) => string)) => void;
-  // 新建 Tab。
-  createTab: () => string;
+  // 新建 Tab：创建时写入来源数据源上下文。
+  createTab: (sourceMeta?: Partial<SourceBindingMeta>) => string;
   // 关闭指定 Tab（批量）。
   closeTabsByIds: (tabIds: string[]) => void;
   // 关闭单个 Tab。
@@ -170,76 +178,27 @@ type SoqlExecutorState = {
 export const useSoqlExecutorStore = create<SoqlExecutorState>()(
   persist(
     (set, get) => ({
-      sourceId: "",
-      sourceTabStateBySourceId: {},
       tabs: [],
       activeTabId: "",
 
-      switchSource: (nextSourceId) =>
-        set((state) => {
-          if (state.sourceId === nextSourceId) return state;
-          // 切换前先保存当前 source 快照，再恢复目标 source 快照。
-          const nextSourceMap = upsertSourceSoqlState(
-            state.sourceTabStateBySourceId,
-            state.sourceId,
-            state.tabs,
-            state.activeTabId
-          );
-          const restored = restoreSourceSoqlState(nextSourceMap, nextSourceId);
-          return {
-            sourceId: nextSourceId,
-            sourceTabStateBySourceId: nextSourceMap,
-            tabs: restored.tabs,
-            activeTabId: restored.activeTabId
-          };
-        }),
-
       setTabs: (tabs) =>
-        set((state) => {
-          const nextTabs = typeof tabs === "function" ? tabs(state.tabs) : tabs;
-          return {
-            tabs: nextTabs,
-            sourceTabStateBySourceId: upsertSourceSoqlState(
-              state.sourceTabStateBySourceId,
-              state.sourceId,
-              nextTabs,
-              state.activeTabId
-            )
-          };
-        }),
+        set((state) => ({
+          tabs: typeof tabs === "function" ? tabs(state.tabs) : tabs
+        })),
 
       setActiveTabId: (tabId) =>
-        set((state) => {
-          const nextActiveTabId = typeof tabId === "function" ? tabId(state.activeTabId) : tabId;
-          return {
-            activeTabId: nextActiveTabId,
-            sourceTabStateBySourceId: upsertSourceSoqlState(
-              state.sourceTabStateBySourceId,
-              state.sourceId,
-              state.tabs,
-              nextActiveTabId
-            )
-          };
-        }),
+        set((state) => ({
+          activeTabId: typeof tabId === "function" ? tabId(state.activeTabId) : tabId
+        })),
 
-      createTab: () => {
+      createTab: (sourceMeta = {}) => {
         const { tabs } = get();
-        const nextIndex = tabs.length + 1;
-        const nextTab = createSoqlExecutorTab(nextIndex);
-        set((state) => {
-          const nextTabs = [...tabs, nextTab];
-          return {
-            tabs: nextTabs,
-            activeTabId: nextTab.id,
-            sourceTabStateBySourceId: upsertSourceSoqlState(
-              state.sourceTabStateBySourceId,
-              state.sourceId,
-              nextTabs,
-              nextTab.id
-            )
-          };
-        });
-        return nextTab.id; // 返回新建 Tab ID，便于外层统一工作区直接激活。
+        const nextTab = createSoqlExecutorTab(tabs.length + 1, sourceMeta);
+        set((state) => ({
+          tabs: [...state.tabs, nextTab],
+          activeTabId: nextTab.id
+        }));
+        return nextTab.id;
       },
 
       closeTabsByIds: (tabIds) => {
@@ -247,17 +206,11 @@ export const useSoqlExecutorStore = create<SoqlExecutorState>()(
         const closeSet = new Set(tabIds);
         const { tabs, activeTabId } = get();
         const nextTabs = tabs.filter((item) => !closeSet.has(item.id));
-        const nextActive = closeSet.has(activeTabId) ? nextTabs[0]?.id || "" : activeTabId;
-        set((state) => ({
+        const nextActiveTabId = closeSet.has(activeTabId) ? nextTabs[0]?.id || "" : activeTabId;
+        set({
           tabs: nextTabs,
-          activeTabId: nextTabs.length > 0 ? nextActive : "",
-          sourceTabStateBySourceId: upsertSourceSoqlState(
-            state.sourceTabStateBySourceId,
-            state.sourceId,
-            nextTabs,
-            nextTabs.length > 0 ? nextActive : ""
-          )
-        }));
+          activeTabId: nextTabs.length > 0 ? nextActiveTabId : ""
+        });
       },
 
       closeTab: (tabId) => {
@@ -265,26 +218,16 @@ export const useSoqlExecutorStore = create<SoqlExecutorState>()(
       },
 
       patchTab: (tabId, updater) => {
-        set((state) => {
-          const nextTabs = state.tabs.map((tab) => (tab.id === tabId ? updater(tab) : tab));
-          return {
-            tabs: nextTabs,
-            sourceTabStateBySourceId: upsertSourceSoqlState(
-              state.sourceTabStateBySourceId,
-              state.sourceId,
-              nextTabs,
-              state.activeTabId
-            )
-          };
-        });
+        set((state) => ({
+          tabs: state.tabs.map((tab) => (tab.id === tabId ? updater(tab) : tab))
+        }));
       },
 
       resetTabs: () => {
-        set((state) => ({
+        set({
           tabs: [],
-          activeTabId: "",
-          sourceTabStateBySourceId: upsertSourceSoqlState(state.sourceTabStateBySourceId, state.sourceId, [], "")
-        }));
+          activeTabId: ""
+        });
       }
     }),
     {
@@ -293,26 +236,17 @@ export const useSoqlExecutorStore = create<SoqlExecutorState>()(
       // 跳过自动 hydration，由 MainPage 启动流程手动控制恢复时机。
       skipHydration: true,
       partialize: (state) => ({
-        sourceId: state.sourceId,
-        sourceTabStateBySourceId: upsertSourceSoqlState(
-          state.sourceTabStateBySourceId,
-          state.sourceId,
-          state.tabs,
-          state.activeTabId
-        )
+        tabs: state.tabs,
+        activeTabId: state.activeTabId
       }),
       merge: (persisted, current) => {
-        const state = persisted as Partial<SoqlExecutorState>;
-        const sourceId = typeof state.sourceId === "string" ? state.sourceId : current.sourceId;
-        const sourceTabStateBySourceId = normalizeSourceSoqlStateMap(state);
-        const restored = restoreSourceSoqlState(sourceTabStateBySourceId, sourceId);
+        const state = persisted as Partial<LegacySoqlExecutorState>;
+        const normalized = normalizePersistedSoqlState(state);
         return {
           ...current,
           ...state,
-          sourceId,
-          sourceTabStateBySourceId,
-          tabs: restored.tabs,
-          activeTabId: restored.activeTabId
+          tabs: normalized.tabs,
+          activeTabId: normalized.activeTabId
         };
       }
     }

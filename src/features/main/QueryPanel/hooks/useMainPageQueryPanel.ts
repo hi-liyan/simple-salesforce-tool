@@ -30,6 +30,7 @@ import {
   pickDefaultSortField
 } from "../logic/queryUtils";
 import { QueryPanelActions, QueryPanelViewState } from "../types";
+import { getSourceColor } from "../logic/sourceColor.ts";
 
 type UseMainPageQueryPanelInput = {
   // 页面视图模式。
@@ -103,7 +104,6 @@ export function useMainPageQueryPanel({
   const patchTabInStore = useAppStore((state) => state.patchTab);
 
   // Store：SOQL 控制台状态与行为。
-  const switchSoqlSource = useSoqlExecutorStore((state) => state.switchSource);
   const createSoqlConsoleTab = useSoqlExecutorStore((state) => state.createTab);
   const soqlTabs = useSoqlExecutorStore((state) => state.tabs);
   const activeSoqlTabId = useSoqlExecutorStore((state) => state.activeTabId);
@@ -119,6 +119,8 @@ export function useMainPageQueryPanel({
     () => sources.find((source) => source.id === selectedSourceId) || null,
     [sources, selectedSourceId]
   );
+  // 当前选中数据源的颜色：用于新建 console tab 时写入来源元信息。
+  const selectedSourceColor = selectedSource ? getSourceColor(selectedSource) : "";
   // 当前激活的 Query Tab。
   const activeTab = useMemo(
     () => tabs.find((item) => isTabMatchedByIdentity(item, activeTabObjectName)) || null,
@@ -373,7 +375,6 @@ export function useMainPageQueryPanel({
 
   // 统一工作区 Tab 状态：抽离 data/console 混合映射与焦点回退逻辑。
   const { workspaceTabs, activeWorkspaceTabId, setActiveWorkspaceTabId, reorderWorkspaceTabs, activeWorkspaceTabKind } = useWorkspaceTabs({
-    sourceId: selectedSourceId,
     dataTabs: tabs,
     consoleTabs: soqlTabs,
     activeDataObjectName: activeTabObjectName,
@@ -485,6 +486,8 @@ export function useMainPageQueryPanel({
     activeTab,
     selectedSourceId,
     selectedSourceType: selectedSource?.sourceType || "salesforce",
+    selectedSourceName: selectedSource?.name || "",
+    selectedSourceColor,
     setViewMode,
     openAuthWindow,
     createSoqlConsoleTab,
@@ -565,13 +568,6 @@ export function useMainPageQueryPanel({
       }
     };
   }, []);
-
-  // 数据源切换时：仅切换 SOQL 控制台 source 上下文。
-  // TerminalPanel 作为独立工作区，不再跟随 QueryPanel 数据源切换。
-  useEffect(() => {
-    if (!startupComplete) return;
-    switchSoqlSource(selectedSourceId);
-  }, [startupComplete, selectedSourceId, switchSoqlSource]);
 
   // 对象列表加载失败时给出明确提示，避免出现“空白但无错误”。
   useEffect(() => {

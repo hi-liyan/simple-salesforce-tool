@@ -1,6 +1,7 @@
 import { useMemo } from "react";
-import { QueryPanelActions } from "../types";
-import { buildObjectTabBindingKey, ObjectDescribe, SalesforceObject, SalesforceSource, TabState } from "../../../../types";
+import type { QueryPanelActions } from "../types";
+import { buildObjectTabBindingKey } from "../../../../types";
+import type { ObjectDescribe, SalesforceObject, SalesforceSource, SourceBindingMeta, TabState } from "../../../../types";
 import { MainViewMode } from "../../../../store/useAppStore";
 import { getMysqlPrimaryKeyField, getRecordKey } from "../logic/queryUtils";
 
@@ -11,12 +12,16 @@ type UseQueryPanelActionsInput = {
   selectedSourceId: string;
   // 当前选中数据源类型：用于 MySQL 主键键值计算。
   selectedSourceType: string;
+  // 当前选中数据源名称：用于新建控制台 Tab 时绑定来源元信息。
+  selectedSourceName: string;
+  // 当前选中数据源颜色：用于新建控制台 Tab 时绑定来源元信息。
+  selectedSourceColor: string;
   // 切换页面模式。
   setViewMode: (viewMode: MainViewMode) => void;
   // 打开认证窗口。
   openAuthWindow: () => void;
   // 创建控制台 Tab。
-  createSoqlConsoleTab: () => string;
+  createSoqlConsoleTab: (sourceMeta?: Partial<SourceBindingMeta>) => string;
   // 激活工作区 Tab。
   setActiveWorkspaceTabId: (workspaceTabId: string) => void;
   // 拖拽排序工作区 Tabs。
@@ -104,6 +109,8 @@ export function useQueryPanelActions({
   activeTab,
   selectedSourceId,
   selectedSourceType,
+  selectedSourceName,
+  selectedSourceColor,
   setViewMode,
   openAuthWindow,
   createSoqlConsoleTab,
@@ -145,7 +152,12 @@ export function useQueryPanelActions({
       onSetViewMode: setViewMode,
       onOpenAuthWindow: openAuthWindow,
       onOpenConsole: () => {
-        const nextConsoleTabId = createSoqlConsoleTab(); // 每次点击都新建并激活一个控制台 Tab。
+        const nextConsoleTabId = createSoqlConsoleTab({
+          sourceId: selectedSourceId,
+          sourceType: selectedSourceType,
+          sourceName: selectedSourceName,
+          sourceColor: selectedSourceColor
+        }); // 每次点击都新建并激活一个控制台 Tab。
         setActiveWorkspaceTabId(buildConsoleWorkspaceTabId(nextConsoleTabId)); // 激活新建的 console 工作区 Tab。
         setViewMode("query"); // 保持在统一 Query 工作区内切换，不跳离当前布局。
       },
@@ -363,8 +375,9 @@ export function useQueryPanelActions({
           return acc;
         }, {} as Record<string, boolean>);
         patchTab(activeTab.objectName, (item) => ({ ...item, columnVisibility: nextVisibility }));
-        if (selectedSourceId) {
-          void persistColumnVisibility(selectedSourceId, activeTab.objectName, nextVisibility);
+        const resolvedSourceId = activeTab.sourceId || selectedSourceId;
+        if (resolvedSourceId) {
+          void persistColumnVisibility(resolvedSourceId, activeTab.objectName, nextVisibility);
         }
       },
       onToggleFieldVisibility: (fieldName, checked) => {
@@ -374,8 +387,9 @@ export function useQueryPanelActions({
           ...item,
           columnVisibility: nextVisibility
         }));
-        if (selectedSourceId) {
-          void persistColumnVisibility(selectedSourceId, activeTab.objectName, nextVisibility);
+        const resolvedSourceId = activeTab.sourceId || selectedSourceId;
+        if (resolvedSourceId) {
+          void persistColumnVisibility(resolvedSourceId, activeTab.objectName, nextVisibility);
         }
       },
       onSoqlChange: (value) => {
@@ -400,6 +414,8 @@ export function useQueryPanelActions({
       parseWorkspaceTabId,
       setActiveTabObjectName,
       selectedSourceType,
+      selectedSourceName,
+      selectedSourceColor,
       setActiveSoqlTabId,
       closeTab,
       closeTabsByObjectNames,

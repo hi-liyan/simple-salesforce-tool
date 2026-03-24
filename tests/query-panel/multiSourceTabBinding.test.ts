@@ -2,15 +2,23 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { hydrateTab } from "../../src/store/queryTabHydration.ts";
 import { useAppStore } from "../../src/store/useAppStore.ts";
+import { useSoqlExecutorStore } from "../../src/store/useSoqlExecutorStore.ts";
 
 // 重置 App Store：避免测试之间共享状态导致断言互相污染。
 function resetAppStoreState() {
   useAppStore.setState({
     selectedSourceId: "",
-    sourceTabStateBySourceId: {},
     tabs: [],
     activeTabObjectName: "",
     loading: false
+  });
+}
+
+// 重置控制台 Store：避免测试之间共享状态导致断言互相污染。
+function resetSoqlExecutorStoreState() {
+  useSoqlExecutorStore.setState({
+    tabs: [],
+    activeTabId: ""
   });
 }
 
@@ -61,8 +69,8 @@ test("useAppStore: 使用 source+object 唯一键补丁时，不应覆盖其他 
   ]);
   store.setActiveTabObjectName("Account");
 
-  store.setSelectedSourceId("sf-2");
-  store.setTabs([
+  store.setTabs((current) => [
+    ...current,
     hydrateTab({
       sourceId: "sf-2",
       sourceType: "salesforce",
@@ -74,12 +82,73 @@ test("useAppStore: 使用 source+object 唯一键补丁时，不应覆盖其他 
   ]);
   store.setActiveTabObjectName("Account");
 
-  store.setSelectedSourceId("sf-1");
   store.patchTab("sf-1::Account", (tab) => ({ ...tab, label: "Account-A-Patched" }));
 
-  store.setSelectedSourceId("sf-1");
-  assert.equal(useAppStore.getState().tabs[0]?.label, "Account-A-Patched");
+  const tabs = useAppStore.getState().tabs;
+  assert.equal(tabs.find((tab) => tab.bindingKey === "sf-1::Account")?.label, "Account-A-Patched");
+  assert.equal(tabs.find((tab) => tab.bindingKey === "sf-2::Account")?.label, "Account-B");
+});
 
-  store.setSelectedSourceId("sf-2");
-  assert.equal(useAppStore.getState().tabs[0]?.label, "Account-B");
+test("useAppStore: 切换 selectedSourceId 后不应丢失已打开的多 source 对象 Tab", () => {
+  resetAppStoreState();
+  const store = useAppStore.getState();
+
+  store.setTabs([
+    hydrateTab({
+      sourceId: "sf-1",
+      sourceType: "salesforce",
+      sourceName: "Org A",
+      sourceColor: "#111111",
+      objectName: "Account",
+      label: "Account-A"
+    }),
+    hydrateTab({
+      sourceId: "mysql-1",
+      sourceType: "mysql",
+      sourceName: "DB A",
+      sourceColor: "#222222",
+      objectName: "users",
+      label: "Users"
+    })
+  ]);
+  store.setActiveTabObjectName("sf-1::Account");
+
+  store.setSelectedSourceId("sf-1");
+  store.setSelectedSourceId("mysql-1");
+
+  assert.deepEqual(
+    useAppStore.getState().tabs.map((tab) => tab.bindingKey),
+    ["sf-1::Account", "mysql-1::users"]
+  );
+});
+
+test("console tabs: 应永久绑定创建时 sourceId/sourceType/sourceName/sourceColor", () => {
+  resetSoqlExecutorStoreState();
+  const store = useSoqlExecutorStore.getState();
+
+  const sourceATabId = store.createTab({
+    sourceId: "sf-1",
+    sourceType: "salesforce",
+    sourceName: "Org A",
+    sourceColor: "#2563EB"
+  });
+  const sourceBTabId = useSoqlExecutorStore.getState().createTab({
+    sourceId: "mysql-1",
+    sourceType: "mysql",
+    sourceName: "DB A",
+    sourceColor: "#DC2626"
+  });
+
+  const tabs = useSoqlExecutorStore.getState().tabs;
+  const sourceATab = tabs.find((tab) => tab.id === sourceATabId);
+  const sourceBTab = tabs.find((tab) => tab.id === sourceBTabId);
+
+  assert.equal(sourceATab?.sourceId, "sf-1");
+  assert.equal(sourceATab?.sourceType, "salesforce");
+  assert.equal(sourceATab?.sourceName, "Org A");
+  assert.equal(sourceATab?.sourceColor, "#2563EB");
+  assert.equal(sourceBTab?.sourceId, "mysql-1");
+  assert.equal(sourceBTab?.sourceType, "mysql");
+  assert.equal(sourceBTab?.sourceName, "DB A");
+  assert.equal(sourceBTab?.sourceColor, "#DC2626");
 });

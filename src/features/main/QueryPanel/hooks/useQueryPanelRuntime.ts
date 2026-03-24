@@ -393,7 +393,8 @@ export function useQueryPanelRuntime({
   // 加载指定对象的 MySQL DDL（建表/索引/约束）。
   const loadMysqlDdl = useCallback(
     async (objectName: string) => {
-      if (!selectedSourceId) return;
+      const resolvedSourceId = activeTab?.sourceId || selectedSourceId;
+      if (!resolvedSourceId) return;
       setMysqlDdlMap((state) => ({
         ...state,
         [objectName]: {
@@ -403,7 +404,7 @@ export function useQueryPanelRuntime({
         }
       }));
       try {
-        const ddl = await api.getObjectDdl(selectedSourceId, objectName);
+        const ddl = await api.getObjectDdl(resolvedSourceId, objectName);
         setMysqlDdlMap((state) => ({
           ...state,
           [objectName]: {
@@ -423,15 +424,17 @@ export function useQueryPanelRuntime({
         }));
       }
     },
-    [selectedSourceId, setMysqlDdlMap]
+    [activeTab?.sourceId, selectedSourceId, setMysqlDdlMap]
   );
 
   // 切换抽屉：支持按目标视图打开（MySQL DDL / MySQL 字段 / Salesforce）。
   const toggleDrawerForActiveTab = useCallback(async (drawerView?: "salesforce" | "mysql-ddl" | "mysql-fields") => {
-    if (!activeTab || !selectedSourceId) return;
+    const resolvedSourceId = activeTab?.sourceId || selectedSourceId;
+    const resolvedSourceType = activeTab?.sourceType || selectedSourceType || "salesforce";
+    if (!activeTab || !resolvedSourceId) return;
     const activeTabBindingKey =
-      activeTab.bindingKey || buildObjectTabBindingKey(activeTab.sourceId || selectedSourceId, activeTab.objectName);
-    const isMysqlSource = (selectedSourceType || "salesforce").toLowerCase() === "mysql";
+      activeTab.bindingKey || buildObjectTabBindingKey(activeTab.sourceId || resolvedSourceId, activeTab.objectName);
+    const isMysqlSource = resolvedSourceType.toLowerCase() === "mysql";
     // 目标视图推导：MySQL 默认 DDL，Salesforce 固定复合抽屉。
     const targetDrawerView = isMysqlSource
       ? drawerView === "mysql-fields"
@@ -464,8 +467,8 @@ export function useQueryPanelRuntime({
 
     patchTab(activeTabBindingKey, (item) => ({ ...item, showDrawer: true, drawerView: targetDrawerView, loading: true }));
     try {
-      const describe = await api.describeObject(selectedSourceId, activeTab.objectName);
-      const visibility = await loadColumnVisibilityFromDb(selectedSourceId, activeTab.objectName, describe);
+      const describe = await api.describeObject(resolvedSourceId, activeTab.objectName);
+      const visibility = await loadColumnVisibilityFromDb(resolvedSourceId, activeTab.objectName, describe);
       patchTab(activeTabBindingKey, (item) => ({
         ...item,
         describe,
@@ -482,7 +485,6 @@ export function useQueryPanelRuntime({
     }
   }, [
     activeTab,
-    selectedSourceId,
     selectedSourceType,
     patchTab,
     mysqlDdlMap,
@@ -492,9 +494,10 @@ export function useQueryPanelRuntime({
 
   // 标记删除勾选记录：仅前端标记，提交时再真正删除。
   const deleteCheckedRecords = useCallback(async () => {
-    if (!selectedSourceId || !activeTab) return;
+    const resolvedSourceId = activeTab?.sourceId || selectedSourceId;
+    if (!resolvedSourceId || !activeTab) return;
     const activeTabBindingKey =
-      activeTab.bindingKey || buildObjectTabBindingKey(activeTab.sourceId || selectedSourceId, activeTab.objectName);
+      activeTab.bindingKey || buildObjectTabBindingKey(activeTab.sourceId || resolvedSourceId, activeTab.objectName);
     if (activeTab.selectedRecordIds.length === 0) {
       patchTab(activeTabBindingKey, (item) => ({
         ...item,
@@ -550,12 +553,14 @@ export function useQueryPanelRuntime({
 
   // 执行新增/更新/删除提交。
   const applyPendingChanges = useCallback(async () => {
-    if (!selectedSourceId || !activeTab || !activeTab.describe) return;
+    const resolvedSourceId = activeTab?.sourceId || selectedSourceId;
+    const resolvedSourceType = activeTab?.sourceType || selectedSourceType || "salesforce";
+    if (!resolvedSourceId || !activeTab || !activeTab.describe) return;
     if (!hasPendingChanges(activeTab)) return;
     const activeTabBindingKey =
-      activeTab.bindingKey || buildObjectTabBindingKey(activeTab.sourceId || selectedSourceId, activeTab.objectName);
+      activeTab.bindingKey || buildObjectTabBindingKey(activeTab.sourceId || resolvedSourceId, activeTab.objectName);
 
-    const isMysqlSource = (selectedSourceType || "salesforce").toLowerCase() === "mysql";
+    const isMysqlSource = resolvedSourceType.toLowerCase() === "mysql";
     // MySQL 新增前置校验：必填字段缺失时直接提示并中断提交。
     if (isMysqlSource) {
       const mysqlMissingRequiredItems = collectMysqlMissingRequiredFields(activeTab.result.records, activeTab.describe);
@@ -600,7 +605,7 @@ export function useQueryPanelRuntime({
       for (let rowIndex = 0; rowIndex < activeTab.result.records.length; rowIndex += 1) {
         const record = activeTab.result.records[rowIndex];
         const recordKey = getRecordKey(record, rowIndex, {
-          sourceType: selectedSourceType,
+          sourceType: resolvedSourceType,
           mysqlPrimaryKeyField
         });
         // 稳定基线键：编辑主键列后仍使用初始键定位 dirty/baseline，避免更新丢失。
@@ -663,7 +668,7 @@ export function useQueryPanelRuntime({
       if (isMysqlSource) {
         // MySQL 下统一走单事务命令，确保新增/更新/删除原子提交。
         await api.saveRecordsWithDeletes({
-          sourceId: selectedSourceId,
+          sourceId: resolvedSourceId,
           objectName: activeTab.objectName,
           creates,
           updates,
@@ -673,7 +678,7 @@ export function useQueryPanelRuntime({
         // Salesforce 仍使用现有拆分逻辑：新增/更新批量提交，删除逐条提交。
         if (creates.length > 0 || updates.length > 0) {
           await api.saveRecords({
-            sourceId: selectedSourceId,
+            sourceId: resolvedSourceId,
             objectName: activeTab.objectName,
             creates,
             updates
@@ -681,7 +686,7 @@ export function useQueryPanelRuntime({
         }
         if (deletes.length > 0) {
           await Promise.all(
-            deletes.map((recordId) => api.deleteRecord(selectedSourceId, activeTab.objectName, recordId))
+            deletes.map((recordId) => api.deleteRecord(resolvedSourceId, activeTab.objectName, recordId))
           );
         }
       }
@@ -724,7 +729,8 @@ export function useQueryPanelRuntime({
     const revertedDeleteCount = activeTab.pendingDeleteRecordIds.length;
 
     patchTab(activeTabBindingKey, (item) => {
-      const isMysqlSource = (selectedSourceType || "salesforce").toLowerCase() === "mysql";
+      const resolvedSourceType = activeTab.sourceType || selectedSourceType || "salesforce";
+      const isMysqlSource = resolvedSourceType.toLowerCase() === "mysql";
       const mysqlPrimaryKeyField = isMysqlSource
         ? item.describe?.fields.find((field) => String(field.metadata?.columnKey || "").toUpperCase() === "PRI")?.name || ""
         : "";
@@ -734,7 +740,7 @@ export function useQueryPanelRuntime({
         if (record.__isNew) return;
         const keyFromRecord = typeof record.__baselineKey === "string" ? record.__baselineKey : "";
         const key = keyFromRecord || getRecordKey(record, index, {
-          sourceType: selectedSourceType,
+          sourceType: resolvedSourceType,
           mysqlPrimaryKeyField
         });
         const baseline = item.baselineRecords[key];

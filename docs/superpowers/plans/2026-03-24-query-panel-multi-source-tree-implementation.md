@@ -18,7 +18,7 @@
 - Create: `src/features/main/QueryPanel/logic/sourceColor.ts`
 - Create: `tests/query-panel/sourceColor.test.ts`
 
-- [ ] **Step 1: 写失败测试，覆盖颜色读取与写回规则**
+- [x] **Step 1: 写失败测试，覆盖颜色读取与写回规则**
 
 ```ts
 test("getSourceColor: 应仅从 configJson.color 读取合法颜色值", () => {
@@ -27,12 +27,12 @@ test("getSourceColor: 应仅从 configJson.color 读取合法颜色值", () => {
 });
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `node --test --experimental-strip-types tests/query-panel/sourceColor.test.ts`
 Expected: FAIL with module/function not found
 
-- [ ] **Step 3: 实现最小颜色辅助函数与类型扩展**
+- [x] **Step 3: 实现最小颜色辅助函数与类型扩展**
 
 ```ts
 export function getSourceColor(source: SalesforceSource): string {
@@ -40,7 +40,7 @@ export function getSourceColor(source: SalesforceSource): string {
 }
 ```
 
-- [ ] **Step 4: 在设置页编辑表单中规划颜色字段接入点**
+- [x] **Step 4: 在设置页编辑表单中规划颜色字段接入点**
 
 ```ts
 const [salesforceEditForm, setSalesforceEditForm] = useState({
@@ -49,7 +49,7 @@ const [salesforceEditForm, setSalesforceEditForm] = useState({
 });
 ```
 
-- [ ] **Step 5: 运行测试确认通过**
+- [x] **Step 5: 运行测试确认通过**
 
 Run: `node --test --experimental-strip-types tests/query-panel/sourceColor.test.ts`
 Expected: PASS
@@ -61,7 +61,7 @@ Expected: PASS
 - Create: `src/features/main/QueryPanel/logic/sourceTreeProviders.ts`
 - Create: `tests/query-panel/sourceTreeProviders.test.ts`
 
-- [ ] **Step 1: 写失败测试，覆盖 Salesforce / MySQL 节点生成**
+- [x] **Step 1: 写失败测试，覆盖 Salesforce / MySQL 节点生成**
 
 ```ts
 test("buildMySqlRootChildren: 应生成 tables、collations、users、virtual views 分组", async () => {
@@ -70,12 +70,12 @@ test("buildMySqlRootChildren: 应生成 tables、collations、users、virtual vi
 });
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `node --test --experimental-strip-types tests/query-panel/sourceTreeProviders.test.ts`
 Expected: FAIL with provider not found
 
-- [ ] **Step 3: 实现最小树节点类型与 provider 抽象**
+- [x] **Step 3: 实现最小树节点类型与 provider 抽象**
 
 ```ts
 export type QueryTreeNode = { id: string; kind: "source" | "group" | "object"; ... };
@@ -85,7 +85,7 @@ export const sourceTreeProviders = {
 };
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `node --test --experimental-strip-types tests/query-panel/sourceTreeProviders.test.ts`
 Expected: PASS
@@ -96,7 +96,7 @@ Expected: PASS
 - Create: `src/features/main/QueryPanel/logic/sourceTreeState.ts`
 - Create: `tests/query-panel/sourceTreeState.test.ts`
 
-- [ ] **Step 1: 写失败测试，覆盖聚焦、展开与单源刷新**
+- [x] **Step 1: 写失败测试，覆盖聚焦、展开与单源刷新**
 
 ```ts
 test("refreshFocusedSourceState: 应仅将聚焦数据源标记为刷新中", () => {
@@ -106,12 +106,12 @@ test("refreshFocusedSourceState: 应仅将聚焦数据源标记为刷新中", ()
 });
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `node --test --experimental-strip-types tests/query-panel/sourceTreeState.test.ts`
 Expected: FAIL with function not found
 
-- [ ] **Step 3: 实现最小状态纯函数**
+- [x] **Step 3: 实现最小状态纯函数**
 
 ```ts
 export function toggleExpandedNode(ids: string[], nodeId: string): string[] {
@@ -119,7 +119,7 @@ export function toggleExpandedNode(ids: string[], nodeId: string): string[] {
 }
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `node --test --experimental-strip-types tests/query-panel/sourceTreeState.test.ts`
 Expected: PASS
@@ -132,7 +132,7 @@ Expected: PASS
 - Modify: `src/store/useSoqlExecutorStore.ts`
 - Create: `tests/query-panel/multiSourceTabBinding.test.ts`
 
-- [ ] **Step 1: 写失败测试，覆盖 Tab 恢复时保留 source 元信息**
+- [x] **Step 1: 写失败测试，覆盖 Tab 恢复时保留 source 元信息**
 
 ```ts
 test("hydrateTab: 应保留对象 Tab 的 sourceId/sourceType/sourceName/sourceColor", () => {
@@ -141,12 +141,12 @@ test("hydrateTab: 应保留对象 Tab 的 sourceId/sourceType/sourceName/sourceC
 });
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `node --test --experimental-strip-types tests/query-panel/multiSourceTabBinding.test.ts`
 Expected: FAIL with expected mismatch or property missing
 
-- [ ] **Step 3: 扩展 TabState / Console Tab 持久化结构**
+- [x] **Step 3: 扩展 TabState / Console Tab 持久化结构**
 
 ```ts
 export type TabState = {
@@ -158,7 +158,7 @@ export type TabState = {
 };
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `node --test --experimental-strip-types tests/query-panel/multiSourceTabBinding.test.ts`
 Expected: PASS
@@ -170,7 +170,7 @@ Expected: PASS
 - Modify: `src/types/index.ts`
 - Test: `tests/query-panel/sourceColor.test.ts`
 
-- [ ] **Step 1: 为设置页颜色表单补失败测试或纯函数断言**
+- [x] **Step 1: 为设置页颜色表单补失败测试或纯函数断言**
 
 ```ts
 test("buildSalesforceUpdatePayload: 应将 color 写入 configJson", () => {
@@ -178,18 +178,18 @@ test("buildSalesforceUpdatePayload: 应将 color 写入 configJson", () => {
 });
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `node --test --experimental-strip-types tests/query-panel/sourceColor.test.ts`
 Expected: FAIL with payload mismatch
 
-- [ ] **Step 3: 在 Salesforce / MySQL 编辑表单中增加颜色字段，并在卡片列表展示颜色预览**
+- [x] **Step 3: 在 Salesforce / MySQL 编辑表单中增加颜色字段，并在卡片列表展示颜色预览**
 
 ```tsx
 <input type="color" value={salesforceEditForm.color} ... />
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `node --test --experimental-strip-types tests/query-panel/sourceColor.test.ts`
 Expected: PASS
@@ -203,7 +203,7 @@ Expected: PASS
 - Modify: `src/features/main/QueryPanel/components/QuerySidebar.tsx`
 - Modify: `src/features/main/QueryPanel/types.ts`
 
-- [ ] **Step 1: 先为树节点映射纯函数补失败测试**
+- [x] **Step 1: 先为树节点映射纯函数补失败测试**
 
 ```ts
 test("buildSourceRootNodes: 应按 sortOrder 输出全部 source 节点并携带颜色", () => {
@@ -212,24 +212,24 @@ test("buildSourceRootNodes: 应按 sortOrder 输出全部 source 节点并携带
 });
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `node --test --experimental-strip-types tests/query-panel/sourceTreeProviders.test.ts`
 Expected: FAIL with function not found or mismatch
 
-- [ ] **Step 3: 安装树组件并实现统一树侧栏骨架**
+- [x] **Step 3: 安装树组件并实现统一树侧栏骨架**
 
 ```tsx
 return <Tree data={rootNodes} childrenAccessor="children">...</Tree>;
 ```
 
-- [ ] **Step 4: 将 QuerySidebar 从“下拉 + 当前对象树”改为“动作区 + 统一树”**
+- [x] **Step 4: 将 QuerySidebar 从“下拉 + 当前对象树”改为“动作区 + 统一树”**
 
 ```tsx
 <QuerySourceTree sources={sources} focusedSourceId={focusedSourceId} ... />
 ```
 
-- [ ] **Step 5: 运行现有 Query 测试，确认基础回归**
+- [x] **Step 5: 运行现有 Query 测试，确认基础回归**
 
 Run: `npm run test:query-panel`
 Expected: PASS or only tree 相关新断言失败
@@ -243,7 +243,7 @@ Expected: PASS or only tree 相关新断言失败
 - Modify: `src/features/main/QueryPanel/types.ts`
 - Test: `tests/query-panel/sourceTreeState.test.ts`
 
-- [ ] **Step 1: 写失败测试，覆盖展开加载与刷新只影响单源**
+- [x] **Step 1: 写失败测试，覆盖展开加载与刷新只影响单源**
 
 ```ts
 test("expandSourceNode: 应按 sourceId 分桶缓存对象与子节点", async () => {
@@ -251,24 +251,24 @@ test("expandSourceNode: 应按 sourceId 分桶缓存对象与子节点", async (
 });
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `node --test --experimental-strip-types tests/query-panel/sourceTreeState.test.ts`
 Expected: FAIL with branch not implemented
 
-- [ ] **Step 3: 实现 useSourceTreeState，并将焦点/展开/刷新动作接入 MainPage 聚合层**
+- [x] **Step 3: 实现 useSourceTreeState，并将焦点/展开/刷新动作接入 MainPage 聚合层**
 
 ```ts
 const { sourceTreeState, focusSource, toggleSourceNode, refreshFocusedSource } = useSourceTreeState(...);
 ```
 
-- [ ] **Step 4: 让顶部刷新按钮只刷新聚焦数据源，并在节点前显示 loading**
+- [x] **Step 4: 让顶部刷新按钮只刷新聚焦数据源，并在节点前显示 loading**
 
 ```ts
 onRefreshSources: () => void refreshFocusedSource()
 ```
 
-- [ ] **Step 5: 运行测试确认通过**
+- [x] **Step 5: 运行测试确认通过**
 
 Run: `npm run test:query-panel`
 Expected: PASS
@@ -281,7 +281,7 @@ Expected: PASS
 - Modify: `src/pages/MainPage.tsx`
 - Create: `tests/query-panel/sourceTreeAuthRetry.test.ts`
 
-- [ ] **Step 1: 写失败测试，覆盖 Salesforce 展开失败后触发认证重试**
+- [x] **Step 1: 写失败测试，覆盖 Salesforce 展开失败后触发认证重试**
 
 ```ts
 test("salesforce provider: 展开加载遇到认证失效时应触发 retry wrapper 并重试", async () => {
@@ -289,21 +289,24 @@ test("salesforce provider: 展开加载遇到认证失效时应触发 retry wrap
 });
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `node --test --experimental-strip-types tests/query-panel/sourceTreeAuthRetry.test.ts`
 Expected: FAIL with retry wrapper not invoked
 
-- [ ] **Step 3: 为 provider 注入认证重试包装器，并接入现有 Salesforce 认证逻辑**
+- [x] **Step 3: 为 provider 注入认证重试包装器，并接入现有 Salesforce 认证逻辑**
 
 ```ts
 await withSalesforceSourceReauth(source, () => api.listObjects(source.id));
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `node --test --experimental-strip-types tests/query-panel/sourceTreeAuthRetry.test.ts`
 Expected: PASS
+
+Note:
+当前实现采用“前端 provider 包装器 + 后端 401 自动刷新”的组合链路：`buildSalesforceRootChildren` 支持注入 `withSalesforceSourceReauth`，左树状态通过 `sf:token-refresh-start/end` 事件回填 `sourceAuthPendingById`，后端 `list_objects` / `refresh_objects` 继续负责 CLI Salesforce 数据源的实际 `401 -> CLI 刷新 token -> 重试`。
 
 ### Task 9: 将对象 Tab 打开链路迁移为永久绑定 source 上下文
 
@@ -314,7 +317,7 @@ Expected: PASS
 - Modify: `src/features/main/QueryPanel/components/DataQueryTabPane.tsx`
 - Test: `tests/query-panel/multiSourceTabBinding.test.ts`
 
-- [ ] **Step 1: 写失败测试，覆盖从树节点打开对象 Tab 时写入 source 元信息**
+- [x] **Step 1: 写失败测试，覆盖从树节点打开对象 Tab 时写入 source 元信息**
 
 ```ts
 test("openObjectFromSource: 应创建带 sourceId/sourceType/sourceName/sourceColor 的 tab", async () => {
@@ -322,18 +325,18 @@ test("openObjectFromSource: 应创建带 sourceId/sourceType/sourceName/sourceCo
 });
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `node --test --experimental-strip-types tests/query-panel/multiSourceTabBinding.test.ts`
 Expected: FAIL with source metadata missing
 
-- [ ] **Step 3: 修改对象打开链路，所有 describe/query/DDL 默认从 activeTab.sourceId 取值**
+- [x] **Step 3: 修改对象打开链路，所有 describe/query/DDL 默认从 activeTab.sourceId 取值**
 
 ```ts
 const sourceId = activeTab?.sourceId || "";
 ```
 
-- [ ] **Step 4: 运行 Query 相关测试**
+- [x] **Step 4: 运行 Query 相关测试**
 
 Run: `npm run test:query-panel`
 Expected: PASS
@@ -347,7 +350,7 @@ Expected: PASS
 - Modify: `src/features/main/QueryPanel/hooks/useQueryPanelActions.ts`
 - Test: `tests/query-panel/multiSourceTabBinding.test.ts`
 
-- [ ] **Step 1: 写失败测试，覆盖不同 source 打开的 console tab 不串源**
+- [x] **Step 1: 写失败测试，覆盖不同 source 打开的 console tab 不串源**
 
 ```ts
 test("console tabs: 应永久绑定创建时 sourceId", () => {
@@ -355,12 +358,12 @@ test("console tabs: 应永久绑定创建时 sourceId", () => {
 });
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `node --test --experimental-strip-types tests/query-panel/multiSourceTabBinding.test.ts`
 Expected: FAIL with console source state shared
 
-- [ ] **Step 3: 重构 console store 与 workspace，使执行、补全和恢复都以 tab 自身 sourceId 为准**
+- [x] **Step 3: 重构 console store 与 workspace，使执行、补全和恢复都以 tab 自身 sourceId 为准**
 
 ```ts
 type SoqlConsoleTabState = {
@@ -372,7 +375,7 @@ type SoqlConsoleTabState = {
 };
 ```
 
-- [ ] **Step 4: 运行 Query 测试确认通过**
+- [x] **Step 4: 运行 Query 测试确认通过**
 
 Run: `npm run test:query-panel`
 Expected: PASS
@@ -386,7 +389,7 @@ Expected: PASS
 - Modify: `src/features/main/QueryPanel/index.tsx`
 - Test: `tests/query-panel/workspaceTabs.test.ts`
 
-- [ ] **Step 1: 写失败测试，覆盖多 source workspace tabs 的顺序与激活回退**
+- [x] **Step 1: 写失败测试，覆盖多 source workspace tabs 的顺序与激活回退**
 
 ```ts
 test("workspace tabs: 多 source tab 混合显示时应按全局工作区顺序恢复", () => {
@@ -394,12 +397,12 @@ test("workspace tabs: 多 source tab 混合显示时应按全局工作区顺序�
 });
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `node --test --experimental-strip-types tests/query-panel/workspaceTabs.test.ts`
 Expected: FAIL with legacy source-bucket assumption
 
-- [ ] **Step 3: 实现新的工作区顺序模型，并让 QueryPanel 以全局 workspace 维度渲染**
+- [x] **Step 3: 实现新的工作区顺序模型，并让 QueryPanel 以全局 workspace 维度渲染**
 
 ```ts
 type QueryWorkspaceOrderState = {
@@ -407,7 +410,7 @@ type QueryWorkspaceOrderState = {
 };
 ```
 
-- [ ] **Step 4: 运行 Query 测试确认通过**
+- [x] **Step 4: 运行 Query 测试确认通过**
 
 Run: `npm run test:query-panel`
 Expected: PASS
@@ -420,22 +423,30 @@ Expected: PASS
 - Modify: `src/features/main/QueryPanel/hooks/useObjectTreeData.ts`
 - Modify: `docs/superpowers/plans/2026-03-24-query-panel-multi-source-tree-implementation.md`
 
-- [ ] **Step 1: 清理不再作为核心业务语义的 selectedSourceId / selectedSourceType 依赖**
+- [x] **Step 1: 清理不再作为核心业务语义的 selectedSourceId / selectedSourceType 依赖**
 
 Checklist:
 - QuerySidebar 不再依赖数据源下拉
 - DataQuery / Console 关键操作以 tab.sourceId 为准
 - 刷新以 focusedSourceId 为准
 
-- [ ] **Step 2: 运行完整验证**
+- [x] **Step 2: 运行完整验证**
 
 Run: `npm run test:query-panel && npm run test:datagrid-utils && npm run build`
 Expected: all PASS / build exit 0
 
-- [ ] **Step 3: 回填计划执行状态并整理交付说明**
+- [x] **Step 3: 回填计划执行状态并整理交付说明**
 
 Include:
 - 左侧树交互与刷新行为
 - Salesforce 重新认证行为
 - 数据源颜色设置入口
 - 剩余风险：MySQL `collations / users / virtual views` 的数据深度仍受后端接口约束
+
+Current Delivery Notes:
+- 左侧树交互与刷新行为：统一树侧栏已替换原数据源下拉；顶部刷新按钮仅刷新当前聚焦数据源，并按 sourceId 分桶维护展开、缓存与 loading 状态。
+- Salesforce 重新认证行为：CLI Salesforce 数据源的 `list_objects` / `refresh_objects` 已在后端自动处理 401 后 token 刷新与请求重试；前端专用 retry wrapper 测试仍未单独补齐，因此 Task 8 保持未勾选。
+- Salesforce 重新认证行为：`buildSalesforceRootChildren` 已支持通过 `withSalesforceSourceReauth` 包装器进入认证重试链路；左树会根据 `sf:token-refresh-start/end` 事件显示 `认证中` 状态，后端继续负责 CLI Salesforce 数据源的实际 token 刷新与重试。
+- 数据源颜色设置入口：设置页的 Salesforce / MySQL 编辑表单已支持颜色编辑，颜色写入 `configJson.color`，左侧树节点与 tab 来源元信息可复用该值。
+- 工作区与 Tab 绑定：对象 Tab 与控制台 Tab 均已改为永久绑定创建时数据源；工作区顺序改为全局 `tabOrder`，不再按 `selectedSourceId` 分桶恢复。
+- 剩余风险：MySQL `collations / users / virtual views` 仍只有分组骨架，数据深度继续受后端接口能力约束。

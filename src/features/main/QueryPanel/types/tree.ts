@@ -39,6 +39,8 @@ export type QueryTreeProviderContext = {
   getSourceColor: (source: SalesforceSource) => string;
   // 拉取指定数据源对象列表：供 Salesforce / MySQL provider 复用。
   listObjects: (sourceId: string) => Promise<SalesforceObject[]>;
+  // Salesforce 认证重试包装器：供 provider 在对象加载时复用现有 token 刷新链路。
+  withSalesforceSourceReauth?: <T>(source: SalesforceSource, action: () => Promise<T>) => Promise<T>;
 };
 
 // 左侧树按数据源分桶状态：用于聚焦、高亮、刷新和错误提示。

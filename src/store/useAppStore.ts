@@ -7,6 +7,22 @@ import { hydrateTab } from "./queryTabHydration.ts";
 // 主页面视图模式：支持 Query 工作区、Terminal 工作区、工具页与设置页入口。
 export type MainViewMode = "query" | "terminal" | "tools" | "settings";
 
+// 旧版按 source 分桶的对象 Tab 持久化结构：用于历史快照兼容迁移。
+type LegacyPersistedSourceTabState = {
+  tabs: Partial<TabState>[];
+  activeTabObjectName: string;
+};
+
+// 旧版对象 Tab 持久化结构：兼容 source 分桶恢复。
+type LegacyAppState = {
+  selectedSourceId?: string;
+  viewMode?: string;
+  soqlSidebarWidth?: number;
+  sourceTabStateBySourceId?: Record<string, LegacyPersistedSourceTabState>;
+  tabs?: Partial<TabState>[];
+  activeTabObjectName?: string;
+};
+
 // 归一化视图模式：清理历史分裂视图值，统一进入 QueryPanel 工作区。
 function normalizeMainViewMode(viewMode: string | undefined): MainViewMode {
   if (viewMode === "settings") return "settings";
@@ -17,15 +33,6 @@ function normalizeMainViewMode(viewMode: string | undefined): MainViewMode {
   if (viewMode === "systemLogs") return "settings";
   return "query";
 }
-
-// Tab 持久化快照：按“完整页面状态”保存，切换数据源时可完整恢复。
-type PersistedTabState = TabState;
-
-// 每个数据源独立维护 Query Tab 快照（Tabs + 当前激活项）。
-type PersistedSourceTabState = {
-  tabs: PersistedTabState[];
-  activeTabObjectName: string;
-};
 
 // 为 Tab 补齐稳定唯一键：兼容历史快照缺少 bindingKey 的场景。
 function ensureTabBindingKey(tab: TabState): TabState {
@@ -46,74 +53,58 @@ function isTabMatchedByIdentity(tab: TabState, tabIdentity: string): boolean {
   return getTabBindingKey(tab) === tabIdentity || tab.objectName === tabIdentity;
 }
 
-// 将当前 source 运行态写回 source 维度快照，确保切换时可恢复。
-function upsertSourceTabState(
-  sourceTabStateBySourceId: Record<string, PersistedSourceTabState>,
-  sourceId: string,
-  tabs: TabState[],
-  activeTabObjectName: string
-): Record<string, PersistedSourceTabState> {
-  if (!sourceId) return sourceTabStateBySourceId;
-  return {
-    ...sourceTabStateBySourceId,
-    [sourceId]: {
-      tabs: tabs.map((tab) => ensureTabBindingKey(tab)),
-      activeTabObjectName
-    }
-  };
-}
+// 归一化对象 Tab 持久化快照：兼容旧版按 source 分桶结构，并保留所有来源的 data tabs。
+function normalizePersistedTabs(state: Partial<LegacyAppState>): { tabs: TabState[]; activeTabObjectName: string } {
+  const tabMap = new Map<string, TabState>();
 
-// 恢复指定数据源的 Tab 快照；无数据时返回空状态。
-function restoreSourceTabState(
-  sourceTabStateBySourceId: Record<string, PersistedSourceTabState>,
-  sourceId: string
-): { tabs: TabState[]; activeTabObjectName: string } {
-  if (!sourceId) return { tabs: [], activeTabObjectName: "" };
-  const sourceState = sourceTabStateBySourceId[sourceId];
-  if (!sourceState) return { tabs: [], activeTabObjectName: "" };
-  const hydratedTabs = Array.isArray(sourceState.tabs) ? sourceState.tabs.map((tab) => hydrateTab(tab)) : [];
-  const activeExists = hydratedTabs.some((tab) => tab.objectName === sourceState.activeTabObjectName);
-  return {
-    tabs: hydratedTabs,
-    activeTabObjectName: activeExists ? sourceState.activeTabObjectName : hydratedTabs[0]?.objectName || ""
-  };
-}
-
-// 兼容旧结构：将历史 tabs + activeTabObjectName 迁移到按数据源分桶结构。
-function normalizeSourceTabStateMap(state: Partial<AppState>): Record<string, PersistedSourceTabState> {
-  const rawMap = state.sourceTabStateBySourceId;
-  const normalizedMap: Record<string, PersistedSourceTabState> = {};
-  if (rawMap && typeof rawMap === "object") {
-    Object.entries(rawMap).forEach(([sourceId, sourceState]) => {
-      if (!sourceId || !sourceState || typeof sourceState !== "object") return;
-      const tabs = Array.isArray(sourceState.tabs) ? sourceState.tabs.map((tab) => hydrateTab(tab as Partial<PersistedTabState>)) : [];
-      const activeTabObjectName = typeof sourceState.activeTabObjectName === "string" ? sourceState.activeTabObjectName : "";
-      normalizedMap[sourceId] = { tabs, activeTabObjectName };
+  if (Array.isArray(state.tabs)) {
+    state.tabs.forEach((tab) => {
+      const hydratedTab = ensureTabBindingKey(hydrateTab(tab));
+      tabMap.set(hydratedTab.bindingKey, hydratedTab);
     });
   }
-  const selectedSourceId = typeof state.selectedSourceId === "string" ? state.selectedSourceId : "";
-  if (!normalizedMap[selectedSourceId] && Array.isArray(state.tabs) && state.tabs.length > 0 && selectedSourceId) {
-    normalizedMap[selectedSourceId] = {
-      tabs: state.tabs.map((tab) => hydrateTab(tab as Partial<PersistedTabState>)),
-      activeTabObjectName: typeof state.activeTabObjectName === "string" ? state.activeTabObjectName : ""
-    };
+
+  if (state.sourceTabStateBySourceId && typeof state.sourceTabStateBySourceId === "object") {
+    Object.values(state.sourceTabStateBySourceId).forEach((sourceState) => {
+      if (!sourceState || typeof sourceState !== "object" || !Array.isArray(sourceState.tabs)) return;
+      sourceState.tabs.forEach((tab) => {
+        const hydratedTab = ensureTabBindingKey(hydrateTab(tab));
+        tabMap.set(hydratedTab.bindingKey, hydratedTab);
+      });
+    });
   }
-  return normalizedMap;
+
+  const tabs = Array.from(tabMap.values());
+  const currentActiveTabObjectName = typeof state.activeTabObjectName === "string" ? state.activeTabObjectName : "";
+  if (currentActiveTabObjectName && tabs.some((tab) => isTabMatchedByIdentity(tab, currentActiveTabObjectName))) {
+    return { tabs, activeTabObjectName: currentActiveTabObjectName };
+  }
+
+  const selectedSourceId = typeof state.selectedSourceId === "string" ? state.selectedSourceId : "";
+  if (selectedSourceId && state.sourceTabStateBySourceId?.[selectedSourceId]?.activeTabObjectName) {
+    const legacyActiveTabObjectName = state.sourceTabStateBySourceId[selectedSourceId]?.activeTabObjectName || "";
+    if (tabs.some((tab) => isTabMatchedByIdentity(tab, legacyActiveTabObjectName))) {
+      return { tabs, activeTabObjectName: legacyActiveTabObjectName };
+    }
+  }
+
+  return {
+    tabs,
+    activeTabObjectName: tabs[0]?.bindingKey || ""
+  };
 }
 
 // 全局应用状态：集中管理 Tab、视图模式与基础 UI 状态。
 type AppState = {
-  // 当前选中的数据源 ID。
+  // 当前选中的数据源 ID：仍用于左侧对象缓存与“新建控制台默认来源”等兼容场景。
   selectedSourceId: string;
   // 主页面视图模式。
   viewMode: MainViewMode;
   // SOQL 执行器左侧栏宽度（像素）。
   soqlSidebarWidth: number;
-  // 按数据源分桶保存 Query Tabs，支持切换数据源后恢复原工作区。
-  sourceTabStateBySourceId: Record<string, PersistedSourceTabState>;
-  // 已打开的对象 Tab 列表。
+  // 已打开的对象 Tab 列表：改为全局列表，不再按 source 分桶恢复。
   tabs: TabState[];
-  // 当前激活的对象名称。
+  // 当前激活的对象唯一标识（优先 bindingKey）。
   activeTabObjectName: string;
   // 页面级全局加载标记。
   loading: boolean;
@@ -144,49 +135,20 @@ export const useAppStore = create<AppState>()(
       selectedSourceId: "",
       viewMode: "query" as MainViewMode,
       soqlSidebarWidth: 320,
-      sourceTabStateBySourceId: {},
       tabs: [],
       activeTabObjectName: "",
       loading: false,
-      setSelectedSourceId: (sourceId) =>
-        set((state) => {
-          if (state.selectedSourceId === sourceId) return state;
-          // 切换前先保存当前 source 快照，再恢复目标 source 快照。
-          const nextSourceStateMap = upsertSourceTabState(
-            state.sourceTabStateBySourceId,
-            state.selectedSourceId,
-            state.tabs,
-            state.activeTabObjectName
-          );
-          const restored = restoreSourceTabState(nextSourceStateMap, sourceId);
-          return {
-            selectedSourceId: sourceId,
-            sourceTabStateBySourceId: nextSourceStateMap,
-            tabs: restored.tabs,
-            activeTabObjectName: restored.activeTabObjectName
-          };
-        }),
+
+      setSelectedSourceId: (sourceId) => set({ selectedSourceId: sourceId }),
       setViewMode: (viewMode) => set({ viewMode: normalizeMainViewMode(viewMode) }),
       setSoqlSidebarWidth: (width) => set({ soqlSidebarWidth: Math.max(240, Math.min(1200, Math.round(width))) }),
-      setActiveTabObjectName: (objectName) =>
-        set((state) => {
-          const nextSourceStateMap = upsertSourceTabState(state.sourceTabStateBySourceId, state.selectedSourceId, state.tabs, objectName);
-          return { activeTabObjectName: objectName, sourceTabStateBySourceId: nextSourceStateMap };
-        }),
+      setActiveTabObjectName: (objectName) => set({ activeTabObjectName: objectName }),
       setTabs: (tabs) =>
-        set((state) => {
-          const nextTabs = (typeof tabs === "function" ? tabs(state.tabs) : tabs).map((tab) => ensureTabBindingKey(tab));
-          return {
-            tabs: nextTabs,
-            sourceTabStateBySourceId: upsertSourceTabState(
-              state.sourceTabStateBySourceId,
-              state.selectedSourceId,
-              nextTabs,
-              state.activeTabObjectName
-            )
-          };
-        }),
+        set((state) => ({
+          tabs: (typeof tabs === "function" ? tabs(state.tabs) : tabs).map((tab) => ensureTabBindingKey(tab))
+        })),
       setLoading: (loading) => set({ loading }),
+
       patchTab: (tabIdentity, updater) => {
         set((state) => {
           let changed = false;
@@ -198,38 +160,27 @@ export const useAppStore = create<AppState>()(
           });
           if (!changed) return state;
           return {
-            tabs: nextTabs,
-            sourceTabStateBySourceId: upsertSourceTabState(
-              state.sourceTabStateBySourceId,
-              state.selectedSourceId,
-              nextTabs,
-              state.activeTabObjectName
-            )
+            tabs: nextTabs
           };
         });
       },
+
       closeTab: (tabIdentity) => {
         const { tabs, activeTabObjectName } = get();
         const nextTabs = tabs.filter((tab) => !isTabMatchedByIdentity(tab, tabIdentity));
-        const activeTabMatched = tabs.some((tab) => tab.objectName === activeTabObjectName && isTabMatchedByIdentity(tab, tabIdentity));
-        const nextActive = activeTabMatched ? nextTabs[0]?.objectName || "" : activeTabObjectName;
-        set((state) => ({
+        const activeTabMatched = tabs.some((tab) => isTabMatchedByIdentity(tab, activeTabObjectName) && isTabMatchedByIdentity(tab, tabIdentity));
+        const nextActiveTabObjectName = activeTabMatched ? nextTabs[0]?.bindingKey || "" : activeTabObjectName;
+        set({
           tabs: nextTabs,
-          activeTabObjectName: nextActive,
-          sourceTabStateBySourceId: upsertSourceTabState(
-            state.sourceTabStateBySourceId,
-            state.selectedSourceId,
-            nextTabs,
-            nextActive
-          )
-        }));
+          activeTabObjectName: nextActiveTabObjectName
+        });
       },
+
       resetTabs: () =>
-        set((state) => ({
+        set({
           tabs: [],
-          activeTabObjectName: "",
-          sourceTabStateBySourceId: upsertSourceTabState(state.sourceTabStateBySourceId, state.selectedSourceId, [], "")
-        }))
+          activeTabObjectName: ""
+        })
     }),
     {
       name: "ui.app-store",
@@ -242,29 +193,21 @@ export const useAppStore = create<AppState>()(
         selectedSourceId: state.selectedSourceId,
         viewMode: state.viewMode,
         soqlSidebarWidth: state.soqlSidebarWidth,
-        sourceTabStateBySourceId: upsertSourceTabState(
-          state.sourceTabStateBySourceId,
-          state.selectedSourceId,
-          state.tabs,
-          state.activeTabObjectName
-        )
+        tabs: state.tabs,
+        activeTabObjectName: state.activeTabObjectName
       }),
-      // 从持久化快照恢复时，按 sourceId 恢复对应 Tabs，兼容历史结构。
+      // 从持久化快照恢复时，兼容历史 source 分桶结构并扁平化为全局 tabs。
       merge: (persisted, current) => {
-        const state = persisted as Partial<AppState>;
-        // 兼容旧版持久化数据：systemLogs 回退 settings；soqlExecutor 回退 query。
-        const viewMode = normalizeMainViewMode(state.viewMode as string | undefined);
-        const selectedSourceId = typeof state.selectedSourceId === "string" ? state.selectedSourceId : current.selectedSourceId;
-        const sourceTabStateBySourceId = normalizeSourceTabStateMap(state);
-        const restored = restoreSourceTabState(sourceTabStateBySourceId, selectedSourceId);
+        const state = persisted as Partial<LegacyAppState>;
+        const normalized = normalizePersistedTabs(state);
         return {
           ...current,
           ...state,
-          viewMode: viewMode ?? current.viewMode,
-          selectedSourceId,
-          sourceTabStateBySourceId,
-          tabs: restored.tabs,
-          activeTabObjectName: restored.activeTabObjectName,
+          viewMode: normalizeMainViewMode(state.viewMode),
+          selectedSourceId: typeof state.selectedSourceId === "string" ? state.selectedSourceId : current.selectedSourceId,
+          soqlSidebarWidth: typeof state.soqlSidebarWidth === "number" ? state.soqlSidebarWidth : current.soqlSidebarWidth,
+          tabs: normalized.tabs,
+          activeTabObjectName: normalized.activeTabObjectName,
           // loading 始终从默认值开始。
           loading: false
         };

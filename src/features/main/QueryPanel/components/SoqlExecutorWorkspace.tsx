@@ -6,8 +6,9 @@ import { NoticeAlert } from "../../../../components/NoticeAlert";
 import { SoqlMonacoEditor } from "../../../../components/SoqlMonacoEditor";
 import { SqlMonacoEditor } from "../../../../components/SqlMonacoEditor";
 import { api } from "../../../../api";
+import { useObjectsQuery } from "../../../../queries/salesforce";
 import { useSoqlExecutorStore, createSoqlExecutorTab, type SoqlExecutorTab, type AiConversationItem } from "../../../../store/useSoqlExecutorStore";
-import { AiChatTurnV2Response, Notice, ObjectDescribe, QueryResult, SalesforceObject, TabLog } from "../../../../types";
+import type { AiChatTurnV2Response, Notice, ObjectDescribe, QueryResult, SalesforceObject, TabLog } from "../../../../types";
 
 type AiStreamChunkPayload = {
   // 流式请求 ID。
@@ -127,10 +128,6 @@ export function SoqlExecutorWorkspace({
   forcedTabId,
   enableGlobalEffects = true
 }: SoqlExecutorWorkspaceProps) {
-  // 是否是 MySQL 数据源：用于在控制台切换 SQL/SOQL 编辑器能力。
-  const isMysqlSource = (selectedSourceType || "salesforce").toLowerCase() === "mysql";
-  // 查询语言标签：按数据源类型显示 SQL/SOQL 文案。
-  const queryLanguageLabel = isMysqlSource ? "SQL" : "SOQL";
   // SOQL 执行器的多标签状态（通过 Zustand persist 自动持久化到 SQLite）。
   const tabs = useSoqlExecutorStore((state) => state.tabs);
   const setTabs = useSoqlExecutorStore((state) => state.setTabs);
@@ -156,18 +153,30 @@ export function SoqlExecutorWorkspace({
   const [objectFieldsMap, setObjectFieldsMap] = useState<Record<string, string[]>>({});
   // 对象 describe 缓存：用于结果表字段 label/type 映射，保证显示与 Query 页面一致。
   const [objectDescribeMap, setObjectDescribeMap] = useState<Record<string, ObjectDescribe>>({});
-  // 当前数据源可查询对象名集合：用于 FROM 子句对象补全。
-  const objectNames = useMemo(() => objects.filter((item) => item.queryable).map((item) => item.name), [objects]);
-  // 缓存中的字段总集合：作为 FROM 未确定时的回退补全候选。
-  const fallbackFieldNames = useMemo(
-    () => Array.from(new Set(Object.values(objectFieldsMap).flatMap((fields) => fields))),
-    [objectFieldsMap]
-  );
-
   // 当前激活标签数据。
   const activeTab = useMemo(
     () => tabs.find((item) => item.id === effectiveActiveTabId) || null,
     [tabs, effectiveActiveTabId]
+  );
+  // 当前控制台实例的实际数据源：优先使用 console tab 自身 source，上层 props 仅作为新建默认值。
+  const effectiveSourceId = activeTab?.sourceId || selectedSourceId;
+  // 当前控制台实例的实际数据源类型：优先使用 console tab 自身 sourceType。
+  const effectiveSourceType = activeTab?.sourceType || selectedSourceType || "salesforce";
+  // 是否是 MySQL 数据源：用于在控制台切换 SQL/SOQL 编辑器能力。
+  const isMysqlSource = effectiveSourceType.toLowerCase() === "mysql";
+  // 查询语言标签：按数据源类型显示 SQL/SOQL 文案。
+  const queryLanguageLabel = isMysqlSource ? "SQL" : "SOQL";
+  // 当前控制台数据源对象列表：按 console tab 自身 sourceId 拉取，避免多 source console 串补全。
+  const { data: effectiveSourceObjects = [] } = useObjectsQuery(effectiveSourceId);
+  // 当前数据源可查询对象名集合：用于 FROM 子句对象补全。
+  const objectNames = useMemo(
+    () => (effectiveSourceId ? effectiveSourceObjects : objects).filter((item) => item.queryable).map((item) => item.name),
+    [effectiveSourceId, effectiveSourceObjects, objects]
+  );
+  // 缓存中的字段总集合：作为 FROM 未确定时的回退补全候选。
+  const fallbackFieldNames = useMemo(
+    () => Array.from(new Set(Object.values(objectFieldsMap).flatMap((fields) => fields))),
+    [objectFieldsMap]
   );
   // 平台检测：用于区分 Mac 的 Command 键与 Windows 的 Alt 键发送快捷键。
   const isMacPlatform = useMemo(() => {
@@ -269,7 +278,7 @@ export function SoqlExecutorWorkspace({
   useEffect(() => {
     setObjectFieldsMap({}); // 切换数据源后清空旧缓存，避免跨源字段污染。
     setObjectDescribeMap({}); // 同步清理 describe 缓存，避免跨源元数据污染。
-  }, [selectedSourceId]);
+  }, [effectiveSourceId]);
 
   useEffect(() => {
     if (!draggingBottomResize) return;
@@ -294,7 +303,7 @@ export function SoqlExecutorWorkspace({
   }, [draggingBottomResize]);
 
   useEffect(() => {
-    if (!selectedSourceId || !activeTab) return;
+    if (!effectiveSourceId || !activeTab) return;
     const fromObjectNames = extractFromObjectNames(activeTab.soqlDraft);
     if (fromObjectNames.length === 0) return;
     const queryableObjectNameSet = new Set(objectNames.map((name) => name.toLowerCase()));
@@ -309,7 +318,7 @@ export function SoqlExecutorWorkspace({
     void Promise.all(
       unloadedObjectNames.map(async (objectName) => {
         try {
-          const describe = await api.describeObject(selectedSourceId, objectName);
+          const describe = await api.describeObject(effectiveSourceId, objectName);
           return {
             objectName,
             describe
@@ -341,7 +350,7 @@ export function SoqlExecutorWorkspace({
     return () => {
       cancelled = true; // 避免异步返回后写入已失效状态。
     };
-  }, [selectedSourceId, activeTab, objectNames, objectDescribeMap]);
+  }, [effectiveSourceId, activeTab, objectNames, objectDescribeMap]);
 
   // 结果表专用数据：Salesforce 走关系字段扁平化；MySQL 保持原始列结构（JSON 不拆列）。
   const gridResult = useMemo<QueryResult>(() => {
@@ -416,10 +425,10 @@ export function SoqlExecutorWorkspace({
   // 执行当前标签中的 SOQL 并写入结果与日志。
   async function executeActiveTabSoql() {
     if (!activeTab) return;
-    if (!selectedSourceId) {
+    if (!effectiveSourceId) {
       patchActiveTab((tab) => ({
         ...tab,
-        notice: { type: "error", message: "请先在左侧选择数据源。" }
+        notice: { type: "error", message: "请先为当前控制台绑定数据源。" }
       }));
       return;
     }
@@ -439,7 +448,7 @@ export function SoqlExecutorWorkspace({
 
     try {
       // 调用后端统一查询命令，支持常规查询与复杂子查询。
-      const result = await api.queryRecords(selectedSourceId, executeSoql);
+      const result = await api.queryRecords(effectiveSourceId, executeSoql);
       const normalizedResult = normalizeQueryResult(result);
 
       patchActiveTab((tab) => ({
@@ -474,10 +483,10 @@ export function SoqlExecutorWorkspace({
   // 向 AI 发送一轮消息：支持澄清追问和最终 SOQL 生成。
   async function sendAiPrompt() {
     if (!activeTab) return;
-    if (!selectedSourceId) {
+    if (!effectiveSourceId) {
       patchActiveTab((tab) => ({
         ...tab,
-        notice: { type: "error", message: "请先在左侧选择数据源。" }
+        notice: { type: "error", message: "请先为当前控制台绑定数据源。" }
       }));
       return;
     }
@@ -507,7 +516,7 @@ export function SoqlExecutorWorkspace({
 
     try {
       const response = await api.aiChatTurnV2({
-        sourceId: selectedSourceId,
+        sourceId: effectiveSourceId,
         conversationId: activeTab.aiConversationId || undefined,
         message: prompt,
         streamRequestId,
@@ -572,11 +581,21 @@ export function SoqlExecutorWorkspace({
     }));
   }
 
+  // 解析新建 console tab 的默认来源：优先复用当前激活 tab，其次回退到父层传入的当前数据源。
+  function getNextTabSourceMeta() {
+    return {
+      sourceId: activeTab?.sourceId || selectedSourceId,
+      sourceType: activeTab?.sourceType || selectedSourceType || "",
+      sourceName: activeTab?.sourceName || "",
+      sourceColor: activeTab?.sourceColor || ""
+    };
+  }
+
   // 创建新 Tab 并将 AI 生成的 SOQL 应用到新 Tab。
   function createTabAndApplyAiSoql(soql: string) {
     const nextIndex = tabs.length + 1;
     const nextTab = {
-      ...createSoqlExecutorTab(nextIndex),
+      ...createSoqlExecutorTab(nextIndex, getNextTabSourceMeta()),
       soqlDraft: soql,
       aiMode: false // 创建后回到传统编辑模式，便于直接执行与调整。
     };
@@ -588,7 +607,7 @@ export function SoqlExecutorWorkspace({
     return (
       // 防御分支：理论上不会触发，兜底给出可操作入口。
       <div className="flex h-full items-center justify-center">
-        <button className="btn btn-primary btn-sm" onClick={storeCreateTab}>
+        <button className="btn btn-primary btn-sm" onClick={() => storeCreateTab(getNextTabSourceMeta())}>
           <Plus size={14} />
           {`新建 ${queryLanguageLabel} Tab`}
         </button>
@@ -701,7 +720,11 @@ export function SoqlExecutorWorkspace({
                 );
               })}
             </div>
-            <button className="btn btn-ghost btn-sm mx-1" onClick={storeCreateTab} aria-label={`新建 ${queryLanguageLabel} Tab`}>
+            <button
+              className="btn btn-ghost btn-sm mx-1"
+              onClick={() => storeCreateTab(getNextTabSourceMeta())}
+              aria-label={`新建 ${queryLanguageLabel} Tab`}
+            >
               <Plus size={14} />
             </button>
           </div>

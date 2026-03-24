@@ -247,7 +247,7 @@ export function QuerySidebar({
       {/* 数据源标题区域。 */}
       <div className="border-b border-base-300 px-3 py-2">
         <div className="flex items-center justify-between">
-          <span className="text-[12px] text-neutral/70">DATA SOURCES</span>
+          <span className="text-[12px] text-neutral/70">数据源</span>
         </div>
       </div>
 

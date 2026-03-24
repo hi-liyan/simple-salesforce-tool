@@ -58,6 +58,7 @@ export function QuerySourceTreeNode({
   const isFocusedSource = isSourceNode && treeState.focusedSourceId === sourceId;
   const isActiveObject = isObjectNode && (activeTabObjectName === objectBindingKey || activeTabObjectName === data.objectName);
   const sourceLoading = Boolean(treeState.sourceLoadingById[sourceId] || treeState.sourceRefreshingById[sourceId]);
+  const sourceAuthPending = Boolean(treeState.sourceAuthPendingById[sourceId]);
   const sourceError = treeState.sourceErrorById[sourceId] || "";
   const visualKind = resolveQueryTreeVisualKind(data);
   const badgeMeta = resolveQueryTreeBadgeMeta(visualKind);
@@ -104,6 +105,13 @@ export function QuerySourceTreeNode({
 
         {/* 名称主体。 */}
         <span className="min-w-0 flex-1 truncate leading-[1.35]">{data.label}</span>
+
+        {/* 认证刷新提示：当前 source 正在自动刷新 token 时显示轻量文案。 */}
+        {isSourceNode && sourceAuthPending && (
+          <span className="rounded bg-warning/15 px-1.5 py-[2px] text-[10px] leading-[1] text-warning-content">
+            认证中
+          </span>
+        )}
 
         {/* 不可查询 badge：沿用旧对象列表的中性灰提示语义。 */}
         {isObjectNode && !data.queryable && (

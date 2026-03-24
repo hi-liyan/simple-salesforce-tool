@@ -141,18 +141,22 @@ export function buildObjectTabBindingKey(sourceId: string, objectName: string): 
   return `${sourceId}::${objectName}`;
 }
 
+// Tab 级数据源绑定快照：供对象 Tab、控制台 Tab 复用统一来源上下文。
+export type SourceBindingMeta = {
+  // 当前 Tab 绑定的数据源 ID。
+  sourceId: string;
+  // 当前 Tab 绑定的数据源类型。
+  sourceType: string;
+  // 当前 Tab 绑定的数据源名称。
+  sourceName: string;
+  // 当前 Tab 绑定的数据源颜色。
+  sourceColor: string;
+};
+
 // 单个对象 Tab 的运行时状态。
-export type TabState = {
+export type TabState = SourceBindingMeta & {
   // 对象 Tab 的稳定唯一键（sourceId + objectName）。
   bindingKey: string;
-  // 当前对象 Tab 绑定的数据源 ID：用于多数据源并行工作区。
-  sourceId: string;
-  // 当前对象 Tab 绑定的数据源类型。
-  sourceType: string;
-  // 当前对象 Tab 绑定的数据源名称。
-  sourceName: string;
-  // 当前对象 Tab 绑定的数据源颜色：供未来多源 Tab 视觉区分。
-  sourceColor: string;
   objectName: string;
   label: string;
   describe: ObjectDescribe | null;

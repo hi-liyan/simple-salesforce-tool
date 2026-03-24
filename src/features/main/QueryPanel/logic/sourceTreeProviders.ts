@@ -26,7 +26,9 @@ export async function buildSalesforceRootChildren(
   source: SalesforceSource,
   context: QueryTreeProviderContext
 ): Promise<QueryTreeNode[]> {
-  const objects = await context.listObjects(source.id);
+  const objects = context.withSalesforceSourceReauth
+    ? await context.withSalesforceSourceReauth(source, () => context.listObjects(source.id))
+    : await context.listObjects(source.id);
   return objects.map((item) => buildObjectNode(source.id, String(source.sourceType || "salesforce"), item));
 }
 

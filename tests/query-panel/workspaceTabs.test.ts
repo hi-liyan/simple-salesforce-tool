@@ -7,10 +7,18 @@ import {
   parseWorkspaceTabId,
   resolveActiveWorkspaceTabId
 } from "../../src/features/main/QueryPanel/logic/workspaceTabs.ts";
+import { useQueryWorkspaceTabsStore } from "../../src/store/useQueryWorkspaceTabsStore.ts";
 
 // 构造最小 data tab：覆盖工作区映射所需 bindingKey 与展示标题。
 function createDataTab(bindingKey: string, objectName: string, title?: string) {
   return { bindingKey, objectName, title: title || objectName };
+}
+
+// 重置工作区顺序 Store：避免测试之间共享状态导致断言互相污染。
+function resetWorkspaceTabsStore() {
+  useQueryWorkspaceTabsStore.setState({
+    tabOrder: []
+  });
 }
 
 test("构建与解析工作区 Tab ID", () => {
@@ -79,4 +87,14 @@ test("激活工作区 Tab 回退：无可用 Tab 时清空", () => {
     activeConsoleTabId: ""
   });
   assert.equal(result, "");
+});
+
+test("workspace tabs: 多 source tab 混合显示时应按全局工作区顺序恢复", () => {
+  resetWorkspaceTabsStore();
+  const store = useQueryWorkspaceTabsStore.getState();
+  const globalOrder = ["data:sf-1::Account", "console:soql-a", "data:mysql-1::users"];
+
+  store.setTabOrder("sf-1", globalOrder);
+
+  assert.deepEqual(useQueryWorkspaceTabsStore.getState().getTabOrder("mysql-1"), globalOrder);
 });
