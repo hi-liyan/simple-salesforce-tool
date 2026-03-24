@@ -18,4 +18,4 @@
 
 
 ## GIT规则
-用户要求提交代码时，仅根据修改内容生成中文 commit message（带类型和作用域的格式）。
+用户要求提交代码时，仅根据修改内容生成中文 commit message（`type(scope): message` 的格式）。

@@ -1,4 +1,4 @@
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, Folder } from "lucide-react";
 import type { NodeRendererProps } from "react-arborist";
 import { buildObjectTabBindingKey } from "../../../../types";
 import { buildTreeNodeInteractionClassName } from "../logic/sourceTreeInteractions.ts";
@@ -61,6 +61,8 @@ export function QuerySourceTreeNode({
   const sourceError = treeState.sourceErrorById[sourceId] || "";
   const visualKind = resolveQueryTreeVisualKind(data);
   const badgeMeta = resolveQueryTreeBadgeMeta(visualKind);
+  const showFolderIcon = data.expandable && !isSourceNode;
+  const folderIconClassName = visualKind === "group-views" ? "text-violet-400" : "text-primary/75";
 
   return (
     <>
@@ -89,9 +91,15 @@ export function QuerySourceTreeNode({
           <ChevronRight size={12} className={`${node.isOpen ? "rotate-90" : ""} text-base-content/55 transition-transform`} />
         </button>
 
-        {/* 主徽标：统一缩成非常轻量的文字 badge，减少整棵树的视觉噪音。 */}
+        {/* 主图标：可展开节点改为文件夹图标，保持树结构语义更直观。 */}
         <span className="flex h-[15px] w-[18px] shrink-0 items-center justify-center">
-          <QueryTreeBadge text={badgeMeta.text} tone={badgeMeta.tone} />
+          {showFolderIcon ? (
+            /* 文件夹图标：仅用于可展开节点，替代原来的文字徽标。 */
+            <Folder size={15} className={folderIconClassName} aria-hidden="true" />
+          ) : (
+            /* 文字徽标：不可展开节点继续保留当前轻量视觉。 */
+            <QueryTreeBadge text={badgeMeta.text} tone={badgeMeta.tone} />
+          )}
         </span>
 
         {/* source 节点刷新时在名称前显示 loading，满足单源刷新反馈要求。 */}
@@ -106,8 +114,8 @@ export function QuerySourceTreeNode({
           />
         )}
 
-        {/* 名称主体。 */}
-        <span className="min-w-0 flex-1 truncate leading-[1.35]">{data.label}</span>
+        {/* 名称主体：当前聚焦的数据源名称单独加粗，便于快速识别当前工作来源。 */}
+        <span className={`min-w-0 flex-1 truncate leading-[1.35] ${isFocusedSource ? "font-semibold" : ""}`}>{data.label}</span>
 
         {/* 认证刷新提示：当前 source 正在自动刷新 token 时显示轻量文案。 */}
         {isSourceNode && sourceAuthPending && (
