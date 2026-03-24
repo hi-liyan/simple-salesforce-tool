@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { MouseEvent as ReactMouseEvent } from "react";
 import { Tree } from "react-arborist";
 import type { RowRendererProps } from "react-arborist";
+import { api } from "../../../../api";
 import type { SalesforceObject, SalesforceSource } from "../../../../types";
 import { useSourceTreeState } from "../hooks/useSourceTreeState.ts";
 import { buildSourceSurfacePalette, getSourceColor } from "../logic/sourceColor.ts";
@@ -65,6 +67,13 @@ export function QuerySourceTree({
   // 容器尺寸：react-arborist 需要明确高度。
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [treeHeight, setTreeHeight] = useState(360);
+  // Object 右键菜单状态：记录菜单位置与目标对象。
+  const [objectContextMenu, setObjectContextMenu] = useState<{
+    x: number;
+    y: number;
+    objectItem: SalesforceObject;
+    source: SalesforceSource;
+  } | null>(null);
   // 数据源颜色映射：供节点内部读取来源色（例如 source 根节点色点）。
   const sourceColorById = useMemo(
     () =>
@@ -101,6 +110,8 @@ export function QuerySourceTree({
     onOpenObject,
     onNotQueryableObjectClick
   });
+  // 数据源索引：供 tooltip、右键菜单动作快速解析来源信息。
+  const sourceMap = useMemo(() => new Map(sources.map((source) => [source.id, source])), [sources]);
   // 树首次挂载时的展开映射：配合持久化状态恢复 source/group 展开态。
   const initialOpenState = useMemo(() => buildInitialOpenState(treeState.expandedNodeIds), [treeState.expandedNodeIds]);
 
@@ -128,6 +139,95 @@ export function QuerySourceTree({
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
+
+  // 全局关闭对象右键菜单：点击空白、滚动、按下 ESC 时关闭。
+  useEffect(() => {
+    if (!objectContextMenu) return;
+
+    const closeMenu = () => {
+      setObjectContextMenu(null); // 行内注释：统一关闭菜单，避免浮层残留。
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      closeMenu(); // 行内注释：支持 ESC 快捷关闭菜单。
+    };
+
+    window.addEventListener("click", closeMenu);
+    window.addEventListener("scroll", closeMenu, true);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("click", closeMenu);
+      window.removeEventListener("scroll", closeMenu, true);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [objectContextMenu]);
+
+  // 从树节点解析完整对象信息：恢复旧版 tooltip/右键菜单依赖的对象元数据。
+  function resolveObjectItemFromNode(node: QueryTreeRenderNode): SalesforceObject | null {
+    if (node.kind !== "object") return null;
+    const objectItems = treeState.sourceObjectsById[node.sourceId] || [];
+    return objectItems.find((item) => item.name === node.objectName) || null;
+  }
+
+  // 构建 Salesforce Object tooltip：鼠标经过时展示对象元数据摘要。
+  function getObjectTooltip(node: QueryTreeRenderNode): string {
+    const objectItem = resolveObjectItemFromNode(node);
+    if (!objectItem) return "";
+    return [
+      `名称: ${objectItem.name}`,
+      `标签: ${objectItem.label}`,
+      `可查询: ${objectItem.queryable ? "是" : "否"}`,
+      `可新增: ${objectItem.createable ? "是" : "否"}`,
+      `可更新: ${objectItem.updateable ? "是" : "否"}`,
+      `可删除: ${objectItem.deletable ? "是" : "否"}`
+    ].join("\n");
+  }
+
+  // 打开右键菜单：仅 Salesforce Object 节点支持旧版菜单动作。
+  function handleObjectContextMenu(event: ReactMouseEvent<HTMLDivElement>, node: QueryTreeRenderNode) {
+    event.preventDefault(); // 行内注释：阻止浏览器默认右键菜单。
+    event.stopPropagation(); // 行内注释：避免右键时触发行选中链路的额外副作用。
+    if (node.kind !== "object") return;
+    const source = sourceMap.get(node.sourceId);
+    const objectItem = resolveObjectItemFromNode(node);
+    if (!source || !objectItem) return;
+    if (String(source.sourceType || "salesforce").toLowerCase() !== "salesforce") return;
+    setObjectContextMenu({
+      x: event.clientX,
+      y: event.clientY,
+      objectItem,
+      source
+    });
+  }
+
+  // 右键菜单动作：复制 Object 名称。
+  async function copyObjectNameFromMenu() {
+    if (!objectContextMenu) return;
+    const objectName = objectContextMenu.objectItem.name;
+    setObjectContextMenu(null); // 行内注释：复制后立即关闭菜单。
+    await navigator.clipboard.writeText(objectName);
+  }
+
+  // 右键菜单动作：打开 Salesforce 列表页。
+  async function openSalesforceListPageFromMenu() {
+    if (!objectContextMenu) return;
+    const { source, objectItem } = objectContextMenu;
+    setObjectContextMenu(null); // 行内注释：先关闭菜单，避免等待期间悬浮层残留。
+    if (!objectItem.queryable) {
+      onNotQueryableObjectClick?.(objectItem);
+      return;
+    }
+    await api.openObjectListPage(source.id, objectItem.name);
+  }
+
+  // 右键菜单动作：打开 Salesforce Object 管理页。
+  async function openSalesforceObjectEditPageFromMenu() {
+    if (!objectContextMenu) return;
+    const { source, objectItem } = objectContextMenu;
+    setObjectContextMenu(null); // 行内注释：先关闭菜单，确保 UI 反馈及时。
+    await api.openObjectEditPage(source.id, objectItem.name);
+  }
 
   if (sources.length === 0) {
     return (
@@ -168,9 +268,46 @@ export function QuerySourceTree({
             sourceColorById={sourceColorById}
             onNodeClick={(node) => void onNodeClick(node, props.node)}
             onToggleNode={(node) => void onToggleNode(node, props.node)}
+            onObjectContextMenu={handleObjectContextMenu}
+            getObjectTooltip={getObjectTooltip}
           />
         )}
       </Tree>
+      {/* Object 右键菜单：恢复旧版 Salesforce 对象菜单能力。 */}
+      {objectContextMenu && (
+        <div
+          className="fixed z-[80] flex min-w-max flex-col rounded border border-base-300 bg-base-100 p-1 shadow-xl"
+          style={{ left: objectContextMenu.x, top: objectContextMenu.y }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <button
+            className="btn btn-ghost btn-xs w-full justify-start whitespace-nowrap px-2"
+            onClick={() => {
+              void copyObjectNameFromMenu(); // 行内注释：复制 Object 名称并关闭菜单。
+            }}
+          >
+            复制表名
+          </button>
+          <div className="my-1 border-t border-base-300" />
+          <button
+            className="btn btn-ghost btn-xs w-full justify-start whitespace-nowrap px-2"
+            disabled={!objectContextMenu.objectItem.queryable}
+            onClick={() => {
+              void openSalesforceListPageFromMenu(); // 行内注释：打开 Salesforce 列表页。
+            }}
+          >
+            打开 Salesforce 列表页
+          </button>
+          <button
+            className="btn btn-ghost btn-xs w-full justify-start whitespace-nowrap px-2"
+            onClick={() => {
+              void openSalesforceObjectEditPageFromMenu(); // 行内注释：打开 Object 管理页。
+            }}
+          >
+            编辑 Object 页面
+          </button>
+        </div>
+      )}
     </div>
   );
 }

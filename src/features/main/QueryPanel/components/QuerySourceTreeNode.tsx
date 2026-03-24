@@ -1,5 +1,6 @@
 import { ChevronRight, Folder } from "lucide-react";
 import type { NodeRendererProps } from "react-arborist";
+import type { MouseEvent as ReactMouseEvent } from "react";
 import { buildObjectTabBindingKey } from "../../../../types";
 import { buildTreeNodeInteractionClassName } from "../logic/sourceTreeInteractions.ts";
 import { resolveQueryTreeBadgeMeta, resolveQueryTreeVisualKind } from "../logic/queryTreeVisuals.ts";
@@ -17,6 +18,10 @@ type QuerySourceTreeNodeProps = NodeRendererProps<QueryTreeRenderNode> & {
   onNodeClick: (node: QueryTreeRenderNode) => void;
   // 点击展开箭头。
   onToggleNode: (node: QueryTreeRenderNode) => void;
+  // 右键 Object 节点。
+  onObjectContextMenu?: (event: ReactMouseEvent<HTMLDivElement>, node: QueryTreeRenderNode) => void;
+  // 解析 Object 节点 tooltip。
+  getObjectTooltip?: (node: QueryTreeRenderNode) => string;
 };
 
 // 文字小徽标：把树节点前缀收敛成紧凑的字母标签，避免大量图形图标造成视觉噪音。
@@ -49,7 +54,9 @@ export function QuerySourceTreeNode({
   activeTabObjectName,
   sourceColorById,
   onNodeClick,
-  onToggleNode
+  onToggleNode,
+  onObjectContextMenu,
+  getObjectTooltip
 }: QuerySourceTreeNodeProps) {
   const data = node.data;
   const sourceId = data.sourceId;
@@ -66,6 +73,8 @@ export function QuerySourceTreeNode({
   const badgeMeta = resolveQueryTreeBadgeMeta(visualKind);
   const showFolderIcon = data.expandable && !isSourceNode;
   const folderIconClassName = visualKind === "group-views" ? "text-violet-400" : "text-primary/75";
+  // Object 节点 tooltip：恢复旧版“鼠标经过显示对象元数据”的能力。
+  const objectTooltip = isObjectNode ? getObjectTooltip?.(data) || "" : "";
 
   return (
     <>
@@ -77,7 +86,12 @@ export function QuerySourceTreeNode({
           selected: isSelectedNode,
           active: isActiveObject || isFocusedSource
         })}
+        title={objectTooltip || undefined}
         onClick={() => onNodeClick(data)}
+        onContextMenu={(event) => {
+          if (!isObjectNode || !onObjectContextMenu) return;
+          onObjectContextMenu(event, data);
+        }}
       >
         {/* 节点主体：统一收紧箭头、图标、文字的间距，避免当前树看起来松散又凌乱。 */}
         <div className="flex min-h-[30px] items-center gap-1.5 px-2 py-[3px] text-[12px]">
