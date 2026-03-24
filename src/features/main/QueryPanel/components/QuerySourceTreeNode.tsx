@@ -55,6 +55,7 @@ export function QuerySourceTreeNode({
   const objectBindingKey = isObjectNode ? buildObjectTabBindingKey(data.sourceId, data.objectName) : "";
   const isFocusedSource = isSourceNode && treeState.focusedSourceId === sourceId;
   const isActiveObject = isObjectNode && (activeTabObjectName === objectBindingKey || activeTabObjectName === data.objectName);
+  const isSelectedNode = node.isSelected;
   const sourceLoading = Boolean(treeState.sourceLoadingById[sourceId] || treeState.sourceRefreshingById[sourceId]);
   const sourceAuthPending = Boolean(treeState.sourceAuthPendingById[sourceId]);
   const sourceError = treeState.sourceErrorById[sourceId] || "";
@@ -62,14 +63,19 @@ export function QuerySourceTreeNode({
   const badgeMeta = resolveQueryTreeBadgeMeta(visualKind);
 
   return (
-    <div style={style} className="px-2">
-      {/* 节点主体：统一收紧箭头、图标、文字的间距，避免当前树看起来松散又凌乱。 */}
+    <>
+      {/* 行容器：背景挂在带缩进 padding 的整行上，确保高亮铺满整行宽度而不是只包住内容区。 */}
       <div
+        style={style}
         className={buildTreeNodeInteractionClassName({
+          // 真实选中态优先用于整行浅蓝背景；兼容态仅保留正常文字强调。
+          selected: isSelectedNode,
           active: isActiveObject || isFocusedSource
         })}
         onClick={() => onNodeClick(data)}
       >
+        {/* 节点主体：统一收紧箭头、图标、文字的间距，避免当前树看起来松散又凌乱。 */}
+        <div className="flex min-h-[30px] items-center gap-1.5 px-2 py-[3px] text-[12px]">
         {/* 展开箭头：减弱存在感，只负责树结构层级提示。 */}
         <button
           type="button"
@@ -114,14 +120,15 @@ export function QuerySourceTreeNode({
         {isObjectNode && !data.queryable && (
           <span className="rounded bg-base-300 px-1.5 py-[2px] text-[10px] leading-[1] text-base-content/80">不可查询</span>
         )}
+        </div>
       </div>
 
       {/* source 错误提示：以轻量文本贴近节点，避免遮挡整个树。 */}
       {isSourceNode && sourceError && (
-        <div className="px-7 pt-0.5 text-[11px] text-error">
+        <div style={style} className="px-7 pt-0.5 text-[11px] text-error">
           {sourceError}
         </div>
       )}
-    </div>
+    </>
   );
 }

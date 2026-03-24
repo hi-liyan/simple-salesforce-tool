@@ -49,6 +49,8 @@ type UseSourceTreeStateResult = {
 // 创建空树状态：统一初始化所有分桶字段。
 function createEmptyTreeState(focusedSourceId: string): SourceTreeState {
   return {
+    // 初始进入页面时，默认选中当前 source 根节点，保持树有稳定高亮。
+    selectedNodeId: focusedSourceId ? `source:${focusedSourceId}` : "",
     focusedSourceId,
     expandedNodeIds: [],
     sourceObjectsById: {},
@@ -125,7 +127,12 @@ export function useSourceTreeState({
     }
     setTreeState((current) => {
       if (current.focusedSourceId && sourceMap.has(current.focusedSourceId)) return current;
-      return focusSourceNode(current, sources[0]?.id || "");
+      const fallbackSourceId = sources[0]?.id || "";
+      return {
+        ...focusSourceNode(current, fallbackSourceId),
+        // 旧选中节点已失效时，回退到首个 source 根节点，避免高亮丢失到空状态。
+        selectedNodeId: fallbackSourceId ? `source:${fallbackSourceId}` : ""
+      };
     });
   }, [sources, sourceMap]);
 
@@ -297,8 +304,13 @@ export function useSourceTreeState({
     [focusSource, loadSourceChildren, sourceMap, treeState.sourceLoadingById, treeState.sourceObjectsById, treeState.sourceTreeChildrenById]
   );
 
-  // 处理单击聚焦：source/object 单击只更新焦点，不立即打开右侧 tab。
+  // 处理单击聚焦：任何节点点击都先更新选中行；source/object 再同步聚焦数据源。
   const handleSingleClick = useCallback((node: QueryTreeNode) => {
+    setTreeState((current) => ({
+      ...current,
+      selectedNodeId: node.id
+    }));
+
     if (node.kind === "source") {
       focusSource(node.sourceId);
       return;
@@ -360,7 +372,7 @@ export function useSourceTreeState({
     focusedSourceId: treeState.focusedSourceId,
     treeData,
     treeState,
-    selectionId: treeState.focusedSourceId ? `source:${treeState.focusedSourceId}` : "",
+    selectionId: treeState.selectedNodeId,
     onNodeClick,
     onToggleNode: toggleNode,
     refreshFocusedSource

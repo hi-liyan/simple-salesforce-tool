@@ -6,6 +6,7 @@ import type { SourceTreeState } from "../../src/features/main/QueryPanel/types/t
 // 创建最小树状态：仅保留纯函数测试需要的字段。
 function createState(): SourceTreeState {
   return {
+    selectedNodeId: "",
     focusedSourceId: "",
     expandedNodeIds: [],
     sourceObjectsById: {},

@@ -45,12 +45,22 @@ export type QueryTreeProviderContext = {
 
 // 左侧树按数据源分桶状态：用于聚焦、高亮、刷新和错误提示。
 export type SourceTreeState = {
+  // 当前被点击选中的节点 ID：用于驱动整行浅蓝高亮。
+  selectedNodeId: string;
+  // 当前聚焦的数据源 ID：用于刷新、控制台等业务动作定位。
   focusedSourceId: string;
+  // 已展开的节点 ID 列表。
   expandedNodeIds: string[];
+  // 各数据源已缓存的对象列表。
   sourceObjectsById: Record<string, SalesforceObject[]>;
+  // 各数据源根子节点缓存。
   sourceTreeChildrenById: Record<string, QueryTreeNode[]>;
+  // 各数据源加载态。
   sourceLoadingById: Record<string, boolean>;
+  // 各数据源刷新态。
   sourceRefreshingById: Record<string, boolean>;
+  // 各数据源错误信息。
   sourceErrorById: Record<string, string>;
+  // 各数据源认证刷新中的标记。
   sourceAuthPendingById: Record<string, boolean>;
 };

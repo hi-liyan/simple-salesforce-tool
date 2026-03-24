@@ -46,12 +46,18 @@ export function resolveNodeClickOutcome(
 }
 
 type BuildTreeNodeInteractionClassNameInput = {
-  // 当前节点是否高亮（激活对象或聚焦数据源）。
+  // 当前节点是否被树正式选中。
+  selected: boolean;
+  // 当前节点是否处于兼容态高亮语义（例如当前激活对象）。
   active: boolean;
 };
 
 // 构建树节点交互样式：统一禁用文本选择并保持默认箭头光标。
-export function buildTreeNodeInteractionClassName({ active }: BuildTreeNodeInteractionClassNameInput): string {
-  const stateClassName = active ? "bg-base-200 text-base-content" : "text-base-content/80 hover:bg-base-200/70";
-  return `group flex min-h-[30px] cursor-default select-none items-center gap-1.5 rounded px-2 py-[3px] text-[12px] ${stateClassName}`;
+export function buildTreeNodeInteractionClassName({ selected, active }: BuildTreeNodeInteractionClassNameInput): string {
+  const stateClassName = selected
+    ? "bg-sky-100 text-sky-950 hover:bg-sky-100"
+    : active
+      ? "text-base-content hover:bg-base-200/70"
+      : "text-base-content/80 hover:bg-base-200/70";
+  return `group w-full cursor-default select-none rounded transition-colors ${stateClassName}`;
 }

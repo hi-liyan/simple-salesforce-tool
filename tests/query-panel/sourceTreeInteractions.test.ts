@@ -57,11 +57,23 @@ test("resolveNodeDoubleClickAction: source 与 group 应双击展开，object �
 
 test("buildTreeNodeInteractionClassName: 树节点应禁用文本选择并使用默认箭头光标", () => {
   const className = buildTreeNodeInteractionClassName({
+    selected: false,
     active: false
   });
 
   assert.match(className, /\bselect-none\b/);
   assert.match(className, /\bcursor-default\b/);
+  assert.match(className, /\bw-full\b/);
+});
+
+test("buildTreeNodeInteractionClassName: 选中节点应显示浅蓝色整行高亮", () => {
+  const className = buildTreeNodeInteractionClassName({
+    selected: true,
+    active: false
+  });
+
+  assert.match(className, /\bbg-sky-100\b/);
+  assert.match(className, /\btext-sky-950\b/);
 });
 
 test("resolveNodeClickOutcome: 同一节点在阈值内再次点击时应判定为双击", () => {
