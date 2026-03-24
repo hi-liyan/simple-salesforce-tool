@@ -2,7 +2,7 @@ import Editor from "@monaco-editor/react";
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import JsonView from "react18-json-view";
 import "react18-json-view/src/style.css";
-import { Braces, ChevronDown, Clipboard, Minimize2, Plus, RotateCcw, Sparkles, X } from "lucide-react";
+import { Braces, ChevronLeft, Clipboard, Maximize2, Minimize2, Plus, RotateCcw, Sparkles, X } from "lucide-react";
 import { MonacoEditorLoadingFallback } from "../../../../components/MonacoEditorLoadingFallback";
 import { NoticeAlert, NoticeTone } from "../../../../components/NoticeAlert";
 import { JsonFormatterTab, useJsonFormatterStore } from "../../../../store/useJsonFormatterStore";
@@ -174,6 +174,15 @@ function JsonFormatterTabPane({
     }));
   }
 
+  // 切换全部节点展开状态：将“全部展开 / 全部收起”合并为单一入口。
+  function toggleAllNodes() {
+    if (tab.viewerCollapsed) {
+      expandAllNodes(); // 当前为折叠态时，一键切换为全部展开。
+      return;
+    }
+    collapseAllNodes(); // 当前为展开态时，一键切换为全部收起。
+  }
+
   return (
     // 单个 JSON 工具页签：激活时展示，不激活时仅隐藏保留组件状态。
     <div className={active ? "absolute inset-0 z-10 flex h-full w-full flex-col" : "absolute inset-0 z-0 hidden h-full w-full"} aria-hidden={!active}>
@@ -261,25 +270,16 @@ function JsonFormatterTabPane({
               <h3 className="text-[14px] font-semibold text-neutral">格式化结果</h3>
               <p className="mt-1 text-[12px] text-neutral/60">支持节点手动折叠，同时也支持全部展开和全部收起。</p>
             </div>
-            {/* 树形控制按钮。 */}
+            {/* 树形控制按钮：统一使用单按钮切换全部展开/收起。 */}
             <div className="flex flex-wrap items-center justify-end gap-2">
               <button
                 type="button"
                 className="btn btn-ghost btn-sm h-8 min-h-8 gap-2 px-3 text-[12px]"
-                onClick={expandAllNodes}
+                onClick={toggleAllNodes}
                 disabled={!parseState.parsedValue}
               >
-                <ChevronDown size={14} />
-                全部展开
-              </button>
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm h-8 min-h-8 gap-2 px-3 text-[12px]"
-                onClick={collapseAllNodes}
-                disabled={!parseState.parsedValue}
-              >
-                <Minimize2 size={14} />
-                全部收起
+                {tab.viewerCollapsed ? <Maximize2 size={12} /> : <Minimize2 size={12} />}
+                {tab.viewerCollapsed ? "全部展开" : "全部收起"}
               </button>
             </div>
           </div>
@@ -435,11 +435,13 @@ export function JsonFormatterTool({ onBack }: JsonFormatterToolProps) {
       ) : null}
       {/* 顶部返回区：保留回到工具入口页的路径。 */}
       <div className="flex items-center justify-between gap-4 border-b border-base-300 bg-base-100 px-5 py-3">
-        <button type="button" className="btn btn-ghost btn-sm h-8 min-h-8 px-2 text-[12px]" onClick={onBack}>
+        <button type="button" className="btn btn-ghost btn-sm h-8 min-h-8 gap-1 px-2 text-[12px]" onClick={onBack}>
+          {/* 返回图标：与文字一起强化回退语义。 */}
+          <ChevronLeft size={14} />
           返回工具面板
         </button>
         {/* 工具说明：强调多页签与懒恢复行为。 */}
-        <p className="text-[12px] text-neutral/60">支持多 Tab 持续工作，关闭程序后会在下次进入该工具时懒恢复。</p>
+        <p className="text-[12px] text-neutral/60">支持多 Tab 持续工作，关闭程序后会在下次进入该工具时恢复。</p>
       </div>
       {/* 页签栏：行为参考 TerminalPanel。 */}
       <div className="flex overflow-x-auto border-b border-base-300 bg-base-100">
