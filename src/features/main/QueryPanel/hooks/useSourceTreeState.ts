@@ -104,6 +104,7 @@ export function useSourceTreeState({
             id: `object:${selectedSourceId}:${item.name}`,
             kind: "object" as const,
             sourceId: selectedSourceId,
+            sourceType: String(selectedSource.sourceType || "salesforce"),
             objectName: item.name,
             label: item.label || item.name,
             queryable: item.queryable,

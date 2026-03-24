@@ -27,7 +27,7 @@ export async function buildSalesforceRootChildren(
   context: QueryTreeProviderContext
 ): Promise<QueryTreeNode[]> {
   const objects = await context.listObjects(source.id);
-  return objects.map((item) => buildObjectNode(source.id, item));
+  return objects.map((item) => buildObjectNode(source.id, String(source.sourceType || "salesforce"), item));
 }
 
 // MySQL 根子节点：第一版先提供数据库客户端风格分组。
@@ -36,24 +36,25 @@ export async function buildMySqlRootChildren(
   _context: QueryTreeProviderContext
 ): Promise<QueryTreeNode[]> {
   return [
-    buildGroupNode(source.id, "tables", "tables"),
-    buildGroupNode(source.id, "collations", "collations"),
-    buildGroupNode(source.id, "users", "users"),
-    buildGroupNode(source.id, "virtual-views", "virtual views")
+    buildGroupNode(source.id, String(source.sourceType || "mysql"), "tables", "tables"),
+    buildGroupNode(source.id, String(source.sourceType || "mysql"), "collations", "collations"),
+    buildGroupNode(source.id, String(source.sourceType || "mysql"), "users", "users"),
+    buildGroupNode(source.id, String(source.sourceType || "mysql"), "virtual-views", "virtual views")
   ];
 }
 
 // MySQL tables 分组子节点：当前使用对象列表映射表节点，其余分组待后端能力补齐。
 export function buildMySqlTableChildren(sourceId: string, objects: SalesforceObject[]): QueryTreeNode[] {
-  return objects.map((item) => buildObjectNode(sourceId, item));
+  return objects.map((item) => buildObjectNode(sourceId, "mysql", item));
 }
 
 // 构造 group 节点：后续可继续补数量与深层 children。
-function buildGroupNode(sourceId: string, groupType: string, label: string): QueryTreeNode {
+function buildGroupNode(sourceId: string, sourceType: string, groupType: string, label: string): QueryTreeNode {
   return {
     id: `group:${sourceId}:${groupType}`,
     kind: "group",
     sourceId,
+    sourceType,
     groupType,
     label,
     expandable: true
@@ -61,11 +62,12 @@ function buildGroupNode(sourceId: string, groupType: string, label: string): Que
 }
 
 // 构造 object 节点：保留 queryable 信息供后续打开行为判定。
-function buildObjectNode(sourceId: string, objectItem: SalesforceObject): QueryTreeNode {
+function buildObjectNode(sourceId: string, sourceType: string, objectItem: SalesforceObject): QueryTreeNode {
   return {
     id: `object:${sourceId}:${objectItem.name}`,
     kind: "object",
     sourceId,
+    sourceType,
     objectName: objectItem.name,
     label: objectItem.label || objectItem.name,
     queryable: objectItem.queryable,

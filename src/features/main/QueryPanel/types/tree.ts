@@ -16,6 +16,7 @@ export type QueryTreeNode =
       id: string;
       kind: "group";
       sourceId: string;
+      sourceType: string;
       groupType: string;
       label: string;
       count?: number;
@@ -25,6 +26,7 @@ export type QueryTreeNode =
       id: string;
       kind: "object";
       sourceId: string;
+      sourceType: string;
       objectName: string;
       label: string;
       queryable: boolean;
