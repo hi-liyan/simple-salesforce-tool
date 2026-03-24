@@ -3,6 +3,7 @@ import type { MouseEvent as ReactMouseEvent } from "react";
 import { Tree } from "react-arborist";
 import type { RowRendererProps } from "react-arborist";
 import { api } from "../../../../api";
+import { ContextMenu, type ContextMenuEntry } from "../../../../components/ContextMenu";
 import type { SalesforceObject, SalesforceSource } from "../../../../types";
 import { useSourceTreeState } from "../hooks/useSourceTreeState.ts";
 import { buildSourceSurfacePalette, getSourceColor } from "../logic/sourceColor.ts";
@@ -23,6 +24,8 @@ type QuerySourceTreeProps = {
   activeTabObjectName: string;
   // 打开对象回调。
   onOpenObject: (item: SalesforceObject, source?: SalesforceSource) => void;
+  // 刷新指定 MySQL 表的字段元数据与 DDL。
+  onRefreshMysqlObjectMetadata: (objectName: string) => Promise<unknown>;
   // 不可查询对象提示。
   onNotQueryableObjectClick?: (item: SalesforceObject) => void;
   // 对外暴露刷新聚焦数据源能力。
@@ -61,6 +64,7 @@ export function QuerySourceTree({
   objectsLoading,
   activeTabObjectName,
   onOpenObject,
+  onRefreshMysqlObjectMetadata,
   onNotQueryableObjectClick,
   onReady
 }: QuerySourceTreeProps) {
@@ -184,7 +188,7 @@ export function QuerySourceTree({
     ].join("\n");
   }
 
-  // 打开右键菜单：仅 Salesforce Object 节点支持旧版菜单动作。
+  // 打开右键菜单：恢复旧版 Salesforce / MySQL 对象节点菜单能力。
   function handleObjectContextMenu(event: ReactMouseEvent<HTMLDivElement>, node: QueryTreeRenderNode) {
     event.preventDefault(); // 行内注释：阻止浏览器默认右键菜单。
     event.stopPropagation(); // 行内注释：避免右键时触发行选中链路的额外副作用。
@@ -192,7 +196,6 @@ export function QuerySourceTree({
     const source = sourceMap.get(node.sourceId);
     const objectItem = resolveObjectItemFromNode(node);
     if (!source || !objectItem) return;
-    if (String(source.sourceType || "salesforce").toLowerCase() !== "salesforce") return;
     setObjectContextMenu({
       x: event.clientX,
       y: event.clientY,
@@ -228,6 +231,69 @@ export function QuerySourceTree({
     setObjectContextMenu(null); // 行内注释：先关闭菜单，确保 UI 反馈及时。
     await api.openObjectEditPage(source.id, objectItem.name);
   }
+
+  // 右键菜单动作：强制刷新当前 MySQL 表的字段元数据与 DDL。
+  async function refreshMysqlObjectFromMenu() {
+    if (!objectContextMenu) return;
+    const { source, objectItem } = objectContextMenu;
+    setObjectContextMenu(null); // 行内注释：先关闭菜单，避免等待期间悬浮层残留。
+    if (String(source.sourceType || "salesforce").toLowerCase() !== "mysql") return;
+    await onRefreshMysqlObjectMetadata(objectItem.name);
+  }
+
+  // 对象右键菜单项：仅复用菜单 UI，具体动作仍在当前组件实现。
+  const objectContextMenuEntries = useMemo<ContextMenuEntry[]>(() => {
+    if (!objectContextMenu) return [];
+
+    const normalizedSourceType = String(objectContextMenu.source.sourceType || "salesforce").toLowerCase();
+    const baseEntries: ContextMenuEntry[] = [
+      {
+        id: "copy-object-name",
+        label: "复制表名",
+        onClick: () => {
+          void copyObjectNameFromMenu(); // 行内注释：复制对象名称并关闭菜单。
+        }
+      }
+    ];
+
+    if (normalizedSourceType === "mysql") {
+      return [
+        ...baseEntries,
+        { id: "mysql-separator", type: "separator" },
+        {
+          id: "refresh-mysql-object",
+          label: "刷新",
+          onClick: () => {
+            void refreshMysqlObjectFromMenu(); // 行内注释：刷新 MySQL 表的字段元数据与 DDL。
+          }
+        }
+      ];
+    }
+
+    if (normalizedSourceType === "salesforce") {
+      return [
+        ...baseEntries,
+        { id: "salesforce-separator", type: "separator" },
+        {
+          id: "open-salesforce-list-page",
+          label: "打开 Salesforce 列表页",
+          disabled: !objectContextMenu.objectItem.queryable,
+          onClick: () => {
+            void openSalesforceListPageFromMenu(); // 行内注释：打开 Salesforce 列表页。
+          }
+        },
+        {
+          id: "open-salesforce-object-edit-page",
+          label: "编辑 Object 页面",
+          onClick: () => {
+            void openSalesforceObjectEditPageFromMenu(); // 行内注释：打开 Object 管理页。
+          }
+        }
+      ];
+    }
+
+    return baseEntries;
+  }, [objectContextMenu]);
 
   if (sources.length === 0) {
     return (
@@ -273,40 +339,9 @@ export function QuerySourceTree({
           />
         )}
       </Tree>
-      {/* Object 右键菜单：恢复旧版 Salesforce 对象菜单能力。 */}
+      {/* Object 右键菜单：复用公共菜单容器，具体动作仍由树组件自己定义。 */}
       {objectContextMenu && (
-        <div
-          className="fixed z-[80] flex min-w-max flex-col rounded border border-base-300 bg-base-100 p-1 shadow-xl"
-          style={{ left: objectContextMenu.x, top: objectContextMenu.y }}
-          onClick={(event) => event.stopPropagation()}
-        >
-          <button
-            className="btn btn-ghost btn-xs w-full justify-start whitespace-nowrap px-2"
-            onClick={() => {
-              void copyObjectNameFromMenu(); // 行内注释：复制 Object 名称并关闭菜单。
-            }}
-          >
-            复制表名
-          </button>
-          <div className="my-1 border-t border-base-300" />
-          <button
-            className="btn btn-ghost btn-xs w-full justify-start whitespace-nowrap px-2"
-            disabled={!objectContextMenu.objectItem.queryable}
-            onClick={() => {
-              void openSalesforceListPageFromMenu(); // 行内注释：打开 Salesforce 列表页。
-            }}
-          >
-            打开 Salesforce 列表页
-          </button>
-          <button
-            className="btn btn-ghost btn-xs w-full justify-start whitespace-nowrap px-2"
-            onClick={() => {
-              void openSalesforceObjectEditPageFromMenu(); // 行内注释：打开 Object 管理页。
-            }}
-          >
-            编辑 Object 页面
-          </button>
-        </div>
+        <ContextMenu x={objectContextMenu.x} y={objectContextMenu.y} entries={objectContextMenuEntries} />
       )}
     </div>
   );

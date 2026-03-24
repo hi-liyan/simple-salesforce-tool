@@ -277,6 +277,7 @@ export function QuerySidebar({
           objects={objects}
           activeTabObjectName={activeTabObjectName}
           onOpenObject={onOpenObject}
+          onRefreshMysqlObjectMetadata={onRefreshMysqlObjectMetadata}
           onNotQueryableObjectClick={onNotQueryableObjectClick}
           onReady={setTreeActions}
         />

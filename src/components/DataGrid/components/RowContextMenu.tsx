@@ -1,3 +1,4 @@
+import { ContextMenu, type ContextMenuEntry } from "../../ContextMenu";
 import { RowContextMenuState } from "../types";
 
 type RowContextMenuProps = {
@@ -24,41 +25,38 @@ export function RowContextMenu({
   canOpenRecordPage,
   showOpenRecordPage
 }: RowContextMenuProps) {
-  return (
-    <div
-      className="fixed z-[80] min-w-[164px] rounded border border-base-300 bg-base-100 p-1 shadow-xl"
-      style={{ left: menuState.x, top: menuState.y }}
-      onClick={(event) => event.stopPropagation()}
-    >
-      <button
-        className="btn btn-ghost btn-xs w-full justify-start"
-        onClick={() => {
-          onCopyCell(); // 复制当前单元格数据并关闭菜单。
-        }}
-      >
-        复制
-      </button>
-      {menuState.canSetNullish && (
-        <button
-          className="btn btn-ghost btn-xs w-full justify-start"
-          onClick={() => {
+  // 菜单项列表：仅复用展示容器，动作仍由 DataGrid 自己提供。
+  const entries: ContextMenuEntry[] = [
+    {
+      id: "copy-cell",
+      label: "复制",
+      onClick: () => {
+        onCopyCell(); // 复制当前单元格数据并关闭菜单。
+      }
+    },
+    ...(menuState.canSetNullish
+      ? [{
+          id: "set-nullish",
+          label: menuState.nullishActionLabel,
+          onClick: () => {
             onSetNullish(); // 可空字段支持“一键置空”。
-          }}
-        >
-          {menuState.nullishActionLabel}
-        </button>
-      )}
-      {showOpenRecordPage && (
-        <button
-          className="btn btn-ghost btn-xs w-full justify-start"
-          disabled={!canOpenRecordPage}
-          onClick={() => {
+          }
+        } satisfies ContextMenuEntry]
+      : []),
+    ...(showOpenRecordPage
+      ? [{
+          id: "open-record-page",
+          label: "打开 Salesforce 记录页",
+          disabled: !canOpenRecordPage,
+          onClick: () => {
             onOpenRecordPage(); // 触发菜单动作并关闭菜单。
-          }}
-        >
-          打开 Salesforce 记录页
-        </button>
-      )}
-    </div>
+          }
+        } satisfies ContextMenuEntry]
+      : [])
+  ];
+
+  return (
+    /* DataGrid 行右键菜单：复用公共菜单容器，保留自身动作逻辑。 */
+    <ContextMenu x={menuState.x} y={menuState.y} entries={entries} />
   );
 }

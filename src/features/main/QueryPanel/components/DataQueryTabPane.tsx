@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { PanelRightOpen, Play, Plus, RotateCcw, ScrollText, Search, Trash2, X } from "lucide-react";
+import { ContextMenu, type ContextMenuEntry } from "../../../../components/ContextMenu";
 import { DataGrid } from "../../../../components/DataGrid";
 import { NoticeAlert } from "../../../../components/NoticeAlert";
 import { SoqlMonacoEditor } from "../../../../components/SoqlMonacoEditor";
@@ -828,61 +829,57 @@ export function DataQueryTabPane({
                   </button>
                   {/* Tab 右键菜单：提供常见批量关闭操作。 */}
                   {tabContextMenu?.objectName === tabIdentity && (
-                    <div
-                      className="fixed z-[80] min-w-[132px] rounded border border-base-300 bg-base-100 p-1 shadow-xl"
-                      style={{ left: tabContextMenu.x, top: tabContextMenu.y }}
-                      onClick={(event) => event.stopPropagation()}
-                    >
-                      <button
-                        className="btn btn-ghost btn-xs w-full justify-start"
-                        onClick={() => {
-                          onCloseCurrentTab(tabIdentity); // 关闭当前 Tab。
-                          setTabContextMenu(null); // 执行后关闭菜单。
-                        }}
-                      >
-                        关闭当前
-                      </button>
-                      <button
-                        className="btn btn-ghost btn-xs w-full justify-start"
-                        disabled={!hasLeftTabs}
-                        onClick={() => {
-                          onCloseLeftTabs(tabIdentity); // 关闭目标 Tab 左侧所有 Tab。
-                          setTabContextMenu(null); // 执行后关闭菜单。
-                        }}
-                      >
-                        关闭左侧
-                      </button>
-                      <button
-                        className="btn btn-ghost btn-xs w-full justify-start"
-                        disabled={!hasRightTabs}
-                        onClick={() => {
-                          onCloseRightTabs(tabIdentity); // 关闭目标 Tab 右侧所有 Tab。
-                          setTabContextMenu(null); // 执行后关闭菜单。
-                        }}
-                      >
-                        关闭右侧
-                      </button>
-                      <button
-                        className="btn btn-ghost btn-xs w-full justify-start"
-                        disabled={!hasOtherTabs}
-                        onClick={() => {
-                          onCloseOtherTabs(tabIdentity); // 仅保留目标 Tab，关闭其它 Tab。
-                          setTabContextMenu(null); // 执行后关闭菜单。
-                        }}
-                      >
-                        关闭其他
-                      </button>
-                      <button
-                        className="btn btn-ghost btn-xs w-full justify-start"
-                        disabled={tabs.length === 0}
-                        onClick={() => {
-                          onCloseAllTabs(); // 关闭全部 Tab。
-                          setTabContextMenu(null); // 执行后关闭菜单。
-                        }}
-                      >
-                        全部关闭
-                      </button>
-                    </div>
+                    <ContextMenu
+                      x={tabContextMenu.x}
+                      y={tabContextMenu.y}
+                      minWidthClassName="min-w-[132px]"
+                      entries={[
+                        {
+                          id: "close-current",
+                          label: "关闭当前",
+                          onClick: () => {
+                            onCloseCurrentTab(tabIdentity); // 关闭当前 Tab。
+                            setTabContextMenu(null); // 执行后关闭菜单。
+                          }
+                        },
+                        {
+                          id: "close-left",
+                          label: "关闭左侧",
+                          disabled: !hasLeftTabs,
+                          onClick: () => {
+                            onCloseLeftTabs(tabIdentity); // 关闭目标 Tab 左侧所有 Tab。
+                            setTabContextMenu(null); // 执行后关闭菜单。
+                          }
+                        },
+                        {
+                          id: "close-right",
+                          label: "关闭右侧",
+                          disabled: !hasRightTabs,
+                          onClick: () => {
+                            onCloseRightTabs(tabIdentity); // 关闭目标 Tab 右侧所有 Tab。
+                            setTabContextMenu(null); // 执行后关闭菜单。
+                          }
+                        },
+                        {
+                          id: "close-other",
+                          label: "关闭其他",
+                          disabled: !hasOtherTabs,
+                          onClick: () => {
+                            onCloseOtherTabs(tabIdentity); // 仅保留目标 Tab，关闭其它 Tab。
+                            setTabContextMenu(null); // 执行后关闭菜单。
+                          }
+                        },
+                        {
+                          id: "close-all",
+                          label: "全部关闭",
+                          disabled: tabs.length === 0,
+                          onClick: () => {
+                            onCloseAllTabs(); // 关闭全部 Tab。
+                            setTabContextMenu(null); // 执行后关闭菜单。
+                          }
+                        }
+                      ] satisfies ContextMenuEntry[]}
+                    />
                   )}
                 </div>
               );
