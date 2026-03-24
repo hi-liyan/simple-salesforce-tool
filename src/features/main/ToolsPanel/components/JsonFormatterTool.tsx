@@ -186,41 +186,6 @@ function JsonFormatterTabPane({
   return (
     // 单个 JSON 工具页签：激活时展示，不激活时仅隐藏保留组件状态。
     <div className={active ? "absolute inset-0 z-10 flex h-full w-full flex-col" : "absolute inset-0 z-0 hidden h-full w-full"} aria-hidden={!active}>
-      {/* 顶部操作栏：页签级常用操作统一放在这里。 */}
-      <div className="flex items-center justify-between gap-4 border-b border-base-300 bg-base-100 px-5 py-4">
-        <div className="min-w-0">
-          {/* 工具标题与说明。 */}
-          <div className="flex items-center gap-2">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
-              <Braces size={18} />
-            </div>
-            <div className="min-w-0">
-              <h2 className="text-[16px] font-semibold text-neutral">{tab.name}</h2>
-              <p className="mt-1 text-[12px] text-neutral/65">左侧输入原始 JSON，右侧查看格式化后的树形结果，并支持节点折叠与复制。</p>
-            </div>
-          </div>
-        </div>
-        {/* 操作按钮：聚合当前页签常用动作。 */}
-        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-          <button type="button" className="btn btn-outline btn-sm h-9 min-h-9 gap-2" onClick={loadSampleJson}>
-            <Sparkles size={14} />
-            示例
-          </button>
-          <button type="button" className="btn btn-outline btn-sm h-9 min-h-9 gap-2" onClick={formatInputText}>
-            <RotateCcw size={14} />
-            格式化输入
-          </button>
-          <button
-            type="button"
-            className="btn btn-outline btn-sm h-9 min-h-9 gap-2"
-            onClick={() => void copyFormattedJson()}
-            disabled={!parseState.formattedText}
-          >
-            <Clipboard size={14} />
-            复制结果
-          </button>
-        </div>
-      </div>
       {/* 双栏工作区：左侧输入，右侧格式化结果。 */}
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(360px,1fr)_minmax(420px,1fr)] gap-4 overflow-hidden p-4">
         {/* 左侧输入卡片。 */}
@@ -270,7 +235,7 @@ function JsonFormatterTabPane({
               <h3 className="text-[14px] font-semibold text-neutral">格式化结果</h3>
               <p className="mt-1 text-[12px] text-neutral/60">支持节点手动折叠，同时也支持全部展开和全部收起。</p>
             </div>
-            {/* 树形控制按钮：统一使用单按钮切换全部展开/收起。 */}
+            {/* 结果区功能按钮：将展开切换与常用操作统一收口到标题栏。 */}
             <div className="flex flex-wrap items-center justify-end gap-2">
               <button
                 type="button"
@@ -280,6 +245,23 @@ function JsonFormatterTabPane({
               >
                 {tab.viewerCollapsed ? <Maximize2 size={12} /> : <Minimize2 size={12} />}
                 {tab.viewerCollapsed ? "全部展开" : "全部收起"}
+              </button>
+              <button type="button" className="btn btn-ghost btn-sm h-8 min-h-8 gap-2 px-3 text-[12px]" onClick={loadSampleJson}>
+                <Sparkles size={14} />
+                示例
+              </button>
+              <button type="button" className="btn btn-ghost btn-sm h-8 min-h-8 gap-2 px-3 text-[12px]" onClick={formatInputText}>
+                <RotateCcw size={14} />
+                格式化输入
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm h-8 min-h-8 gap-2 px-3 text-[12px]"
+                onClick={() => void copyFormattedJson()}
+                disabled={!parseState.formattedText}
+              >
+                <Clipboard size={14} />
+                复制结果
               </button>
             </div>
           </div>
@@ -342,8 +324,14 @@ export function JsonFormatterTool({ onBack }: JsonFormatterToolProps) {
   const [hydrated, setHydrated] = useState(useJsonFormatterStore.persist.hasHydrated());
   // 已常驻挂载的页签集合：切换时不销毁内部编辑器与树组件状态。
   const [mountedTabIds, setMountedTabIds] = useState<string[]>([]);
+  // 当前进入重命名态的页签 ID：为空表示未编辑任何页签标题。
+  const [renamingTabId, setRenamingTabId] = useState("");
+  // 页签标题编辑草稿：输入框内容与 store 中正式标题分离，避免未提交前污染持久化状态。
+  const [renamingDraft, setRenamingDraft] = useState("");
   // 只执行一次的恢复标记：避免 StrictMode 下重复触发恢复流程。
   const hydrationStartedRef = useRef(false);
+  // 重命名输入框引用：进入编辑态后自动聚焦并全选，减少额外点击。
+  const renameInputRef = useRef<HTMLInputElement | null>(null);
 
   // 激活页签实体：为空时回退到第一个页签。
   const activeTab = useMemo(() => tabs.find((tab) => tab.id === activeTabId) || tabs[0] || null, [tabs, activeTabId]);
@@ -388,6 +376,24 @@ export function JsonFormatterTool({ onBack }: JsonFormatterToolProps) {
     setMountedTabIds((current) => current.filter((tabId) => aliveTabIdSet.has(tabId)));
   }, [tabs]);
 
+  // 被删除页签若正处于重命名态，则同步退出编辑，避免悬空状态残留。
+  useEffect(() => {
+    if (!renamingTabId) return;
+    const targetTabExists = tabs.some((tab) => tab.id === renamingTabId);
+    if (targetTabExists) return;
+    setRenamingTabId("");
+    setRenamingDraft("");
+  }, [tabs, renamingTabId]);
+
+  // 进入重命名态后自动聚焦并全选标题，方便用户直接覆盖原名称。
+  useEffect(() => {
+    if (!renamingTabId) return;
+    window.requestAnimationFrame(() => {
+      renameInputRef.current?.focus(); // 自动聚焦输入框，减少一次手动点击。
+      renameInputRef.current?.select(); // 全选旧标题，便于直接输入新名称。
+    });
+  }, [renamingTabId]);
+
   // 当前挂载中的页签：保持与 tabs 顺序一致。
   const mountedTabs = useMemo(() => tabs.filter((tab) => mountedTabIds.includes(tab.id)), [tabs, mountedTabIds]);
 
@@ -399,8 +405,56 @@ export function JsonFormatterTool({ onBack }: JsonFormatterToolProps) {
 
   // 关闭单个 JSON 页签。
   function handleCloseTab(tabId: string) {
+    if (renamingTabId === tabId) {
+      setRenamingTabId(""); // 关闭当前编辑页签时，顺手清理本地重命名状态。
+      setRenamingDraft("");
+    }
     closeTab(tabId);
     setNotice(null);
+  }
+
+  // 进入页签重命名态：双击标题时激活目标页签并回填当前名称。
+  function handleStartRename(tabId: string) {
+    const targetTab = tabs.find((tab) => tab.id === tabId);
+    if (!targetTab) return;
+    setActiveTabId(tabId); // 双击标题时顺手激活目标页签，保持交互一致。
+    setRenamingTabId(tabId);
+    setRenamingDraft(targetTab.name);
+    setNotice(null);
+  }
+
+  // 提交页签重命名：空白名称回退为原值，避免生成空标题。
+  function handleCommitRename(tabId: string) {
+    const targetTab = tabs.find((tab) => tab.id === tabId);
+    if (!targetTab) return;
+    const trimmedName = renamingDraft.trim();
+    const nextName = trimmedName || targetTab.name;
+    patchTab(tabId, (current) => ({
+      ...current,
+      name: nextName
+    }));
+    setRenamingTabId("");
+    setRenamingDraft("");
+  }
+
+  // 取消页签重命名：丢弃草稿并退出输入框。
+  function handleCancelRename() {
+    setRenamingTabId("");
+    setRenamingDraft("");
+  }
+
+  // 处理重命名输入框按键：回车提交，Esc 取消，避免事件冒泡触发 Tab 切换。
+  function handleRenameInputKeyDown(event: React.KeyboardEvent<HTMLInputElement>, tabId: string) {
+    event.stopPropagation(); // 输入态下拦截键盘事件，避免影响外围页签交互。
+    if (event.key === "Enter") {
+      event.preventDefault();
+      handleCommitRename(tabId); // 回车提交当前标题修改。
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      handleCancelRename(); // Esc 直接放弃修改，恢复原标题。
+    }
   }
 
   if (!hydrated) {
@@ -447,18 +501,36 @@ export function JsonFormatterTool({ onBack }: JsonFormatterToolProps) {
       <div className="flex overflow-x-auto border-b border-base-300 bg-base-100">
         {tabs.map((tab) => {
           const active = tab.id === activeTab?.id;
+          const renaming = tab.id === renamingTabId;
           return (
             // 单个 JSON 工具 Tab。
             <div key={tab.id} className={`flex select-none items-center border-r border-base-300 bg-base-100 ${active ? "ring-1 ring-inset ring-primary/25" : ""}`}>
-              {/* 激活页签按钮。 */}
-              <button
-                type="button"
-                className={`min-w-0 max-w-[240px] truncate px-3 py-2 text-[12px] ${active ? "text-primary" : "text-neutral/70"}`}
-                onClick={() => setActiveTabId(tab.id)}
-                title={tab.name}
-              >
-                {tab.name}
-              </button>
+              {renaming ? (
+                // 重命名输入框：双击标题后切换为就地编辑模式。
+                <input
+                  ref={renameInputRef}
+                  type="text"
+                  className="h-[32px] min-w-0 max-w-[240px] bg-transparent px-3 py-2 text-[12px] text-primary outline-none"
+                  value={renamingDraft}
+                  onChange={(event) => setRenamingDraft(event.target.value)}
+                  onBlur={() => handleCommitRename(tab.id)}
+                  onClick={(event) => event.stopPropagation()}
+                  onDoubleClick={(event) => event.stopPropagation()}
+                  onKeyDown={(event) => handleRenameInputKeyDown(event, tab.id)}
+                  title={tab.name}
+                />
+              ) : (
+                // 激活页签按钮：支持单击切换、双击进入重命名态。
+                <button
+                  type="button"
+                  className={`min-w-0 max-w-[240px] truncate px-3 py-2 text-[12px] ${active ? "text-primary" : "text-neutral/70"}`}
+                  onClick={() => setActiveTabId(tab.id)}
+                  onDoubleClick={() => handleStartRename(tab.id)}
+                  title="双击可重命名"
+                >
+                  {tab.name}
+                </button>
+              )}
               {/* 关闭页签按钮。 */}
               <button
                 type="button"
