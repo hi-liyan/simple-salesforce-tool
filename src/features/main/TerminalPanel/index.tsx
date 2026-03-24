@@ -32,6 +32,7 @@ import {
   X
 } from "lucide-react";
 import { api } from "../../../api";
+import { ReusableTabs } from "../../../components/tabs/ReusableTabs";
 import {
   TerminalClosedEvent,
   TerminalCommandGroup,
@@ -41,6 +42,7 @@ import {
   TerminalOutputEvent
 } from "../../../types";
 import { NoticeAlert } from "../../../components/NoticeAlert";
+import { sortTabsByOrder } from "../../../components/tabs/tabOrder";
 import { TerminalTab, useTerminalStore } from "../../../store/useTerminalStore";
 
 type TerminalPanelProps = {
@@ -282,8 +284,11 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
   // Store：终端 Tab 与会话操作能力。
   const tabs = useTerminalStore((state) => state.tabs);
   const activeTabId = useTerminalStore((state) => state.activeTabId);
+  const tabOrder = useTerminalStore((state) => state.tabOrder);
   const createTerminalTab = useTerminalStore((state) => state.createTerminalTab);
   const setActiveTabId = useTerminalStore((state) => state.setActiveTabId);
+  const renameTerminalTab = useTerminalStore((state) => state.renameTerminalTab);
+  const reorderTerminalTabs = useTerminalStore((state) => state.reorderTerminalTabs);
   const closeTerminalTab = useTerminalStore((state) => state.closeTerminalTab);
   // 平台标识：仅 Windows 显示“管理员终端”入口。
   const isWindowsPlatform = useMemo(() => /Win/i.test(navigator.platform || navigator.userAgent), []);
@@ -349,7 +354,8 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
   const terminalFitFrameRef = useRef<number | null>(null);
 
   // 激活终端 Tab 派生值。
-  const activeTab = useMemo(() => tabs.find((item) => item.id === activeTabId) || tabs[0] || null, [tabs, activeTabId]);
+  const orderedTabs = useMemo(() => sortTabsByOrder(tabOrder, tabs), [tabOrder, tabs]);
+  const activeTab = useMemo(() => orderedTabs.find((item) => item.id === activeTabId) || orderedTabs[0] || null, [orderedTabs, activeTabId]);
 
   // 当前选中命令组。
   const selectedGroup = useMemo(
@@ -655,7 +661,7 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
 
   // 初始化和回收终端资源：确保 Tab 与 PTY 生命周期一致。
   useEffect(() => {
-    const currentTabIds = tabs.map((item) => item.id);
+    const currentTabIds = orderedTabs.map((item) => item.id);
     const previousTabIds = previousTabIdsRef.current;
     const removedTabIds = previousTabIds.filter((tabId) => !currentTabIds.includes(tabId));
 
@@ -679,13 +685,13 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
     });
 
     // 为每个 Tab 挂载 xterm 并打开后端会话。
-    tabs.forEach((tab) => {
+    orderedTabs.forEach((tab) => {
       mountRuntimeToContainer(tab);
       void ensureBackendSession(tab);
     });
 
     previousTabIdsRef.current = currentTabIds;
-  }, [tabs, ensureBackendSession, mountRuntimeToContainer]);
+  }, [orderedTabs, ensureBackendSession, mountRuntimeToContainer]);
 
   // 监听后端 PTY 输出与关闭事件，实时刷新 xterm。
   useEffect(() => {
@@ -1063,6 +1069,19 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
     closeTerminalTab(tabId);
   }
 
+  // 批量关闭终端标签：逐个回收后端会话后再统一更新 UI。
+  async function handleCloseTerminalTabs(tabIds: string[]) {
+    if (tabIds.length === 0) return;
+    await Promise.all(
+      tabIds.map((tabId) =>
+        api.closeTerminalSession(tabId).catch(() => {
+          // 单个会话关闭失败不阻断其它标签回收。
+        })
+      )
+    );
+    useTerminalStore.getState().closeTerminalTabsByIds(tabIds);
+  }
+
   // 以管理员身份打开终端（Windows 下弹出 UAC，拉起新窗口）。
   async function handleOpenElevatedTerminal() {
     await api.openElevatedTerminal().catch((error) => {
@@ -1435,14 +1454,9 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
       <div className="flex min-h-0 min-w-0 flex-col overflow-hidden bg-base-100">
         {/* 顶部终端 Tab 栏。 */}
         <div className="flex items-center border-b border-base-300">
-          {/* 终端 Tab 滚动区域：保持新增按钮始终紧跟在最后一个 Tab 后。 */}
           <div className="min-w-0 flex-1 overflow-x-auto">
-            {/* 横向内容容器：承载空态提示、Tab 列表与新增按钮。 */}
-            <div className="flex min-w-max items-center">
-              {/* 空态提示：无终端 Tab 时引导用户就近创建终端。 */}
-              {tabs.length === 0 && <span className="px-2 py-1.5 text-[12px] text-neutral/70">请点击 + 新建终端</span>}
-              {tabs.map((tab) => {
-                const active = tab.id === activeTab?.id;
+            <ReusableTabs
+              tabs={orderedTabs.map((tab) => {
                 const processMeta = processMetaByTabId[tab.id];
                 const pidText = processMeta?.pid !== null && processMeta?.pid !== undefined ? String(processMeta.pid) : "-";
                 const commandText = processMeta?.commandLine || "-";
@@ -1450,42 +1464,29 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
                   ? `${processMeta.shellName || "Terminal"} ${processMeta.shellVersion}`
                   : "-";
                 const tooltipText = `进程 ID (PID): ${pidText}\n命令行: ${commandText}\n终端版本: ${terminalVersionText}`;
-
-                return (
-                  // 单个终端 Tab。
-                  <div
-                    key={tab.id}
-                    className={`flex select-none items-center border-r border-base-300 bg-base-100 ${active ? "ring-1 ring-inset ring-primary/25" : ""}`}
-                  >
-                    {/* 激活终端按钮。 */}
-                    <button
-                      className={`min-w-0 max-w-[240px] select-none truncate px-3 py-2 text-[12px] ${active ? "text-primary" : "text-neutral/70"}`}
-                      onClick={() => setActiveTabId(tab.id)}
-                      title={tooltipText}
-                    >
-                      {/* Tab 标题。 */}
-                      <span>{tab.name}</span>
-                      {/* 会话状态提示点。 */}
-                      {processMeta?.connected && <span className="ml-2 inline-block h-2 w-2 rounded-full bg-success" />}
-                      {processMeta?.opening && <span className="ml-2 inline-block h-2 w-2 animate-pulse rounded-full bg-warning" />}
-                    </button>
-                    {/* 关闭终端按钮。 */}
-                    <button
-                      className="btn btn-circle btn-ghost btn-xs mr-1 cursor-pointer"
-                      onClick={() => {
-                        void handleCloseTerminalTab(tab.id);
-                      }}
-                    >
-                      <X size={13} />
-                    </button>
-                  </div>
-                );
+                return {
+                  id: tab.id,
+                  title: tab.name,
+                  closable: true,
+                  renameable: true,
+                  titleTooltip: tooltipText,
+                  statusTone: processMeta?.opening ? "warning" : processMeta?.connected ? "success" : "idle"
+                };
               })}
-              {/* 新建终端按钮：始终显示在最后一个 Tab 后面。 */}
-              <button className="btn btn-ghost btn-sm mx-2 shrink-0" onClick={handleCreateTerminalTab} title="新建终端">
-                <Plus size={14} />
-              </button>
-            </div>
+              activeTabId={activeTab?.id || ""}
+              emptyText="请点击 + 新建终端"
+              createButtonTitle="新建终端"
+              onActivateTab={setActiveTabId}
+              onCreateTab={handleCreateTerminalTab}
+              onReorderTabs={reorderTerminalTabs}
+              onRenameTab={renameTerminalTab}
+              onCloseTab={(tabId) => {
+                void handleCloseTerminalTab(tabId);
+              }}
+              onCloseTabs={(tabIds) => {
+                void handleCloseTerminalTabs(tabIds);
+              }}
+            />
           </div>
           {/* Windows 管理员终端入口：管理员权限会在新窗口中打开。 */}
           {isWindowsPlatform && (

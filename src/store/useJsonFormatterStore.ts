@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
-import { tauriSqliteStorage } from "./tauriStorage";
+import { moveTabOrder, normalizeTabOrder } from "../components/tabs/tabOrder.ts";
+import { tauriSqliteStorage } from "./tauriStorage.ts";
 
 // JSON 格式化 Tab 状态：保存单个工具页签的输入与视图控制信息。
 export type JsonFormatterTab = {
@@ -20,6 +21,8 @@ export type JsonFormatterTab = {
 type JsonFormatterState = {
   // 当前全部 JSON 工具页签。
   tabs: JsonFormatterTab[];
+  // 标签展示顺序。
+  tabOrder: string[];
   // 当前激活页签 ID。
   activeTabId: string;
   // 设置激活页签。
@@ -28,6 +31,8 @@ type JsonFormatterState = {
   createTab: () => string;
   // 更新单个页签。
   patchTab: (tabId: string, updater: (tab: JsonFormatterTab) => JsonFormatterTab) => void;
+  // 拖拽排序页签。
+  reorderTabs: (activeTabId: string, overTabId: string) => void;
   // 关闭单个页签。
   closeTab: (tabId: string) => void;
   // 批量关闭页签。
@@ -73,6 +78,7 @@ export const useJsonFormatterStore = create<JsonFormatterState>()(
   persist(
     (set, get) => ({
       tabs: [],
+      tabOrder: [],
       activeTabId: "",
 
       setActiveTabId: (tabId) => {
@@ -86,6 +92,7 @@ export const useJsonFormatterStore = create<JsonFormatterState>()(
         const nextTab = createJsonFormatterTab(tabs.length + 1);
         set((state) => ({
           tabs: [...state.tabs, nextTab],
+          tabOrder: [...normalizeTabOrder(state.tabOrder, state.tabs), nextTab.id],
           activeTabId: nextTab.id
         }));
         return nextTab.id;
@@ -94,6 +101,12 @@ export const useJsonFormatterStore = create<JsonFormatterState>()(
       patchTab: (tabId, updater) => {
         set((state) => ({
           tabs: state.tabs.map((tab) => (tab.id === tabId ? updater(tab) : tab))
+        }));
+      },
+
+      reorderTabs: (activeTabId, overTabId) => {
+        set((state) => ({
+          tabOrder: moveTabOrder(normalizeTabOrder(state.tabOrder, state.tabs), activeTabId, overTabId)
         }));
       },
 
@@ -106,10 +119,12 @@ export const useJsonFormatterStore = create<JsonFormatterState>()(
         const closeSet = new Set(tabIds);
         set((state) => {
           const nextTabs = state.tabs.filter((tab) => !closeSet.has(tab.id));
+          const nextTabOrder = normalizeTabOrder(state.tabOrder, nextTabs);
           const activeExists = nextTabs.some((tab) => tab.id === state.activeTabId);
           return {
             tabs: nextTabs,
-            activeTabId: activeExists ? state.activeTabId : nextTabs[0]?.id || ""
+            tabOrder: nextTabOrder,
+            activeTabId: activeExists ? state.activeTabId : nextTabOrder[0] || ""
           };
         });
       },
@@ -117,6 +132,7 @@ export const useJsonFormatterStore = create<JsonFormatterState>()(
       resetTabs: () => {
         set(() => ({
           tabs: [],
+          tabOrder: [],
           activeTabId: ""
         }));
       }
@@ -128,20 +144,23 @@ export const useJsonFormatterStore = create<JsonFormatterState>()(
       skipHydration: true,
       partialize: (state) => ({
         tabs: state.tabs,
+        tabOrder: state.tabOrder,
         activeTabId: state.activeTabId
       }),
       merge: (persisted, current) => {
         const state = persisted as Partial<JsonFormatterState>;
         const tabs = Array.isArray(state.tabs) ? state.tabs.map((tab, index) => hydrateJsonFormatterTab(tab, index + 1)) : current.tabs;
+        const tabOrder = Array.isArray(state.tabOrder) ? normalizeTabOrder(state.tabOrder, tabs) : normalizeTabOrder([], tabs);
         const activeTabId =
           typeof state.activeTabId === "string" && tabs.some((tab) => tab.id === state.activeTabId)
             ? state.activeTabId
-            : tabs[0]?.id || "";
+            : tabOrder[0] || "";
 
         return {
           ...current,
           ...state,
           tabs,
+          tabOrder,
           activeTabId
         };
       }

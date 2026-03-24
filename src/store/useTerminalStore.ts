@@ -1,4 +1,7 @@
 import { create } from "zustand";
+import { createJSONStorage, persist } from "zustand/middleware";
+import { moveTabOrder, normalizeTabOrder } from "../components/tabs/tabOrder.ts";
+import { tauriSqliteStorage } from "./tauriStorage.ts";
 
 // 终端输出行：用于模拟终端历史输出。
 export type TerminalOutputLine = {
@@ -28,12 +31,18 @@ export type TerminalTab = {
 type TerminalState = {
   // 当前终端 Tabs：与 QueryPanel 数据源彻底解耦，全局只维护一份运行态。
   tabs: TerminalTab[];
+  // 终端标签顺序。
+  tabOrder: string[];
   // 当前激活终端 Tab ID。
   activeTabId: string;
   // 新建终端 Tab。
   createTerminalTab: (seedCommand?: string, seedTitle?: string) => string;
   // 激活终端 Tab。
   setActiveTabId: (tabId: string) => void;
+  // 重命名终端 Tab。
+  renameTerminalTab: (tabId: string, name: string) => void;
+  // 终端标签排序。
+  reorderTerminalTabs: (activeTabId: string, overTabId: string) => void;
   // 关闭终端 Tab。
   closeTerminalTab: (tabId: string) => void;
   // 批量关闭终端 Tab。
@@ -75,119 +84,146 @@ function createDefaultTerminalTab(index = 1): TerminalTab {
   };
 }
 
-// 终端 Store：仅维护进程运行期内的全局终端 Tab 状态（不持久化到 SQLite）。
-export const useTerminalStore = create<TerminalState>()((set, get) => ({
-  tabs: [],
-  activeTabId: "",
+// 终端 Store：持久化 UI tabs 与草稿状态，不持久化后端会话运行态。
+export const useTerminalStore = create<TerminalState>()(
+  persist(
+    (set, get) => ({
+      tabs: [],
+      tabOrder: [],
+      activeTabId: "",
 
-  createTerminalTab: (seedCommand, seedTitle) => {
-    const { tabs } = get();
-    const nextTab = createDefaultTerminalTab(tabs.length + 1);
-    const finalTab: TerminalTab = {
-      ...nextTab,
-      name: seedTitle?.trim() || nextTab.name,
-      inputDraft: seedCommand?.trim() || ""
-    };
-
-    set((state) => {
-      const nextTabs = [...state.tabs, finalTab];
-      return {
-        tabs: nextTabs,
-        activeTabId: finalTab.id
-      };
-    });
-
-    return finalTab.id;
-  },
-
-  setActiveTabId: (tabId) => {
-    set(() => ({
-      activeTabId: tabId
-    }));
-  },
-
-  closeTerminalTab: (tabId) => {
-    get().closeTerminalTabsByIds([tabId]);
-  },
-
-  closeTerminalTabsByIds: (tabIds) => {
-    if (tabIds.length === 0) return;
-    const closeSet = new Set(tabIds);
-
-    set((state) => {
-      const nextTabs = state.tabs.filter((tab) => !closeSet.has(tab.id));
-      const activeExists = nextTabs.some((tab) => tab.id === state.activeTabId);
-      const nextActiveId = activeExists ? state.activeTabId : nextTabs[0]?.id || "";
-
-      return {
-        tabs: nextTabs,
-        activeTabId: nextActiveId
-      };
-    });
-  },
-
-  setTerminalInputDraft: (tabId, draft) => {
-    set((state) => {
-      const nextTabs = state.tabs.map((tab) => {
-        if (tab.id !== tabId) return tab;
-        return {
-          ...tab,
-          inputDraft: draft
+      createTerminalTab: (seedCommand, seedTitle) => {
+        const { tabs } = get();
+        const nextTab = createDefaultTerminalTab(tabs.length + 1);
+        const finalTab: TerminalTab = {
+          ...nextTab,
+          name: seedTitle?.trim() || nextTab.name,
+          inputDraft: seedCommand?.trim() || ""
         };
-      });
-      return {
-        tabs: nextTabs
-      };
-    });
-  },
 
-  appendTerminalOutput: (tabId, line) => {
-    set((state) => {
-      const nextTabs = state.tabs.map((tab) => {
-        if (tab.id !== tabId) return tab;
+        set((state) => {
+          const nextTabs = [...state.tabs, finalTab];
+          return {
+            tabs: nextTabs,
+            tabOrder: [...normalizeTabOrder(state.tabOrder, state.tabs), finalTab.id],
+            activeTabId: finalTab.id
+          };
+        });
+
+        return finalTab.id;
+      },
+
+      setActiveTabId: (tabId) => {
+        set(() => ({
+          activeTabId: tabId
+        }));
+      },
+
+      renameTerminalTab: (tabId, name) => {
+        set((state) => ({
+          tabs: state.tabs.map((tab) => (tab.id === tabId ? { ...tab, name: name.trim() || tab.name } : tab))
+        }));
+      },
+
+      reorderTerminalTabs: (activeTabId, overTabId) => {
+        set((state) => ({
+          tabOrder: moveTabOrder(normalizeTabOrder(state.tabOrder, state.tabs), activeTabId, overTabId)
+        }));
+      },
+
+      closeTerminalTab: (tabId) => {
+        get().closeTerminalTabsByIds([tabId]);
+      },
+
+      closeTerminalTabsByIds: (tabIds) => {
+        if (tabIds.length === 0) return;
+        const closeSet = new Set(tabIds);
+
+        set((state) => {
+          const nextTabs = state.tabs.filter((tab) => !closeSet.has(tab.id));
+          const nextTabOrder = normalizeTabOrder(state.tabOrder, nextTabs);
+          const activeExists = nextTabs.some((tab) => tab.id === state.activeTabId);
+          const nextActiveId = activeExists ? state.activeTabId : nextTabOrder[0] || "";
+
+          return {
+            tabs: nextTabs,
+            tabOrder: nextTabOrder,
+            activeTabId: nextActiveId
+          };
+        });
+      },
+
+      setTerminalInputDraft: (tabId, draft) => {
+        set((state) => ({
+          tabs: state.tabs.map((tab) => (tab.id === tabId ? { ...tab, inputDraft: draft } : tab))
+        }));
+      },
+
+      appendTerminalOutput: (tabId, line) => {
+        set((state) => ({
+          tabs: state.tabs.map((tab) => {
+            if (tab.id !== tabId) return tab;
+            return {
+              ...tab,
+              outputs: [
+                ...tab.outputs,
+                {
+                  id: makeId("terminal-line"),
+                  createdAt: nowIso(),
+                  ...line
+                }
+              ]
+            };
+          })
+        }));
+      },
+
+      copyCommandToActiveTerminal: (command) => {
+        const normalized = command.trim();
+        if (!normalized) return;
+
+        set((state) => {
+          const activeId = state.activeTabId || normalizeTabOrder(state.tabOrder, state.tabs)[0];
+          if (!activeId) return state;
+
+          return {
+            tabs: state.tabs.map((tab) => (tab.id === activeId ? { ...tab, inputDraft: normalized } : tab))
+          };
+        });
+      },
+
+      copyCommandToNewTerminal: (command, commandName) => {
+        const normalized = command.trim();
+        if (!normalized) return "";
+        return get().createTerminalTab(normalized, commandName ? `Terminal · ${commandName}` : undefined);
+      }
+    }),
+    {
+      name: "ui.terminal-store",
+      storage: createJSONStorage(() => tauriSqliteStorage),
+      skipHydration: true,
+      partialize: (state) => ({
+        tabs: state.tabs,
+        tabOrder: state.tabOrder,
+        activeTabId: state.activeTabId
+      }),
+      merge: (persisted, current) => {
+        const state = persisted as Partial<TerminalState>;
+        const tabs = Array.isArray(state.tabs) ? state.tabs : current.tabs;
+        const tabOrder = Array.isArray(state.tabOrder) ? normalizeTabOrder(state.tabOrder, tabs) : normalizeTabOrder([], tabs);
+        const activeTabId =
+          typeof state.activeTabId === "string" && tabs.some((tab) => tab.id === state.activeTabId)
+            ? state.activeTabId
+            : tabOrder[0] || "";
+
         return {
-          ...tab,
-          outputs: [
-            ...tab.outputs,
-            {
-              id: makeId("terminal-line"),
-              createdAt: nowIso(),
-              ...line
-            }
-          ]
+          ...current,
+          ...state,
+          tabs,
+          tabOrder,
+          activeTabId
         };
-      });
-      return {
-        tabs: nextTabs
-      };
-    });
-  },
-
-  copyCommandToActiveTerminal: (command) => {
-    const normalized = command.trim();
-    if (!normalized) return;
-
-    set((state) => {
-      const activeId = state.activeTabId || state.tabs[0]?.id;
-      if (!activeId) return state;
-
-      const nextTabs = state.tabs.map((tab) => {
-        if (tab.id !== activeId) return tab;
-        return {
-          ...tab,
-          inputDraft: normalized
-        };
-      });
-
-      return {
-        tabs: nextTabs
-      };
-    });
-  },
-
-  copyCommandToNewTerminal: (command, commandName) => {
-    const normalized = command.trim();
-    if (!normalized) return "";
-    return get().createTerminalTab(normalized, commandName ? `Terminal · ${commandName}` : undefined);
-  }
-}));
+      }
+    }
+  )
+);

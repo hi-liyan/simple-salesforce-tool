@@ -361,6 +361,7 @@ export function useMainPageQueryPanel({
 
   // 统一工作区 Tab 状态：抽离 data/console 混合映射与焦点回退逻辑。
   const { workspaceTabs, activeWorkspaceTabId, setActiveWorkspaceTabId, reorderWorkspaceTabs, activeWorkspaceTabKind } = useWorkspaceTabs({
+    sourceId: selectedSourceId,
     dataTabs: tabs,
     consoleTabs: soqlTabs,
     activeDataObjectName: activeTabObjectName,

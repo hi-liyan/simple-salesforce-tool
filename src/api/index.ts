@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import {
+import type {
   AiCapabilities,
   AiChatTurnV2Request,
   AiChatTurnV2Response,
@@ -26,7 +26,7 @@ import {
   TerminalCommandUpsertPayload,
   TerminalSessionInfo,
   TerminalShellOption
-} from "../types";
+} from "../types/index.ts";
 
 // 统一调用封装，确保前后端错误在 UI 层可直接展示。
 async function invokeApi<T>(command: string, payload?: Record<string, unknown>): Promise<T> {
