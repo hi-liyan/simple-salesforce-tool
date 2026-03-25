@@ -36,7 +36,7 @@ export function QuerySidebarSearch({
   return (
     <div className="relative z-20 border-b border-base-300 px-3 py-2">
       {/* 搜索输入框容器：固定放在左树上方，便于始终快速触达。 */}
-      <label className="input input-bordered input-sm flex items-center gap-2">
+      <label className="peer input input-bordered input-sm flex items-center gap-2">
         {/* 搜索图标：弱化视觉存在感，只提示输入用途。 */}
         <Search size={14} className="shrink-0 text-base-content/45" />
         {/* 搜索输入框：实时搜索当前聚焦数据源下的 Object/表。 */}
@@ -65,7 +65,7 @@ export function QuerySidebarSearch({
       </label>
 
       {/* 搜索范围说明：明确当前是按聚焦数据源搜索，而不是跨全部数据源。 */}
-      <p className="mt-2 text-[11px] text-neutral/60">搜索范围：{focusedSourceName || "当前数据源"}</p>
+      <p className="mt-2 hidden text-[11px] text-neutral/60 peer-focus-within:block">搜索范围：{focusedSourceName || "当前数据源"}</p>
 
       {/* 搜索结果面板：仅在有关键字时出现，避免左侧结构常驻过于拥挤。 */}
       {showResultPanel && (
