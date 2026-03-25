@@ -75,7 +75,7 @@ test("buildInitialOpenState: 应将展开节点列表转换为 Arborist 初始�
   });
 });
 
-test("collectRestorableSourceIds: 应汇总展开、高亮、聚焦关联的数据源", () => {
+test("collectRestorableSourceIds: 应仅汇总展开节点与需要内容恢复的选中节点所属数据源", () => {
   const sources = [
     createSource({ id: "sf-1", name: "Salesforce" }),
     createSource({ id: "mysql-1", name: "MySQL" })
@@ -91,4 +91,22 @@ test("collectRestorableSourceIds: 应汇总展开、高亮、聚焦关联的数�
   );
 
   assert.deepEqual(next.sort(), ["mysql-1", "sf-1"]);
+});
+
+test("collectRestorableSourceIds: 仅聚焦或选中 source 根节点时不应触发预加载", () => {
+  const sources = [
+    createSource({ id: "sf-1", name: "Salesforce" }),
+    createSource({ id: "mysql-1", name: "MySQL" })
+  ];
+
+  const next = collectRestorableSourceIds(
+    {
+      selectedNodeId: "source:sf-1",
+      focusedSourceId: "sf-1",
+      expandedNodeIds: []
+    },
+    sources
+  );
+
+  assert.deepEqual(next, []);
 });

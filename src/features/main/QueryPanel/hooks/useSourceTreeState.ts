@@ -5,6 +5,7 @@ import { api } from "../../../../api";
 import type { SalesforceObject, SalesforceSource } from "../../../../types";
 import { useQuerySourceTreeStore } from "../../../../store/useQuerySourceTreeStore.ts";
 import { getSourceColor } from "../logic/sourceColor.ts";
+import { runQuerySourceRequestWithRetry } from "../logic/sourceTreeRetry.ts";
 import {
   buildSelectedNodeId,
   collectRestorableSourceIds,
@@ -101,6 +102,8 @@ export function useSourceTreeState({
   });
   // 最近一次节点点击快照：用于在 arborist 重绘场景下稳定识别双击。
   const latestClickStateRef = useRef<TreeNodeClickState | null>(null);
+  // 数据源请求版本：仅允许最后一次请求写回状态，避免旧请求结果覆盖新结果。
+  const sourceRequestVersionRef = useRef<Record<string, number>>({});
   // 持久化 UI 状态只恢复一次，避免后续用户交互被旧快照覆盖。
   const persistedUiAppliedRef = useRef(false);
 
@@ -240,6 +243,11 @@ export function useSourceTreeState({
     async (source: SalesforceSource, forceRefresh = false): Promise<SalesforceObject[]> => {
       const sourceId = source.id;
       if (!sourceId) return [];
+      const currentRequestVersion = (sourceRequestVersionRef.current[sourceId] || 0) + 1;
+      sourceRequestVersionRef.current[sourceId] = currentRequestVersion;
+
+      // 判断当前请求是否仍是该数据源的最新请求：避免并发场景下旧结果回写导致状态闪动。
+      const isLatestSourceRequest = () => sourceRequestVersionRef.current[sourceId] === currentRequestVersion;
 
       // 加载与刷新都统一映射到节点前缀 loading，便于 UI 直接展示。
       setTreeState((current) => {
@@ -258,11 +266,13 @@ export function useSourceTreeState({
       });
 
       try {
-        const objects = forceRefresh
-          ? await api.refreshObjects(sourceId)
-          : sourceId === selectedSourceId && !selectedSourceObjectsLoading
-            ? selectedSourceObjects
-            : await api.listObjects(sourceId);
+        const objects = await runQuerySourceRequestWithRetry(source, async () => {
+          return forceRefresh
+            ? await api.refreshObjects(sourceId)
+            : sourceId === selectedSourceId && !selectedSourceObjectsLoading
+              ? selectedSourceObjects
+              : await api.listObjects(sourceId);
+        });
         const context = {
           getSourceColor,
           listObjects: async () => objects,
@@ -272,6 +282,8 @@ export function useSourceTreeState({
         const children = normalizedSourceType === "mysql"
           ? await buildMySqlRootChildren(source, context)
           : await buildSalesforceRootChildren(source, context);
+
+        if (!isLatestSourceRequest()) return objects;
 
         setTreeState((current) => ({
           ...finishRefreshingSource(current, sourceId, ""),
@@ -290,6 +302,8 @@ export function useSourceTreeState({
         }));
         return objects;
       } catch (error) {
+        if (!isLatestSourceRequest()) return [];
+
         setTreeState((current) => ({
           ...finishRefreshingSource(current, sourceId, String(error)),
           sourceLoadingById: {

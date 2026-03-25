@@ -93,7 +93,7 @@ export function buildInitialOpenState(expandedNodeIds: string[]): Record<string,
   }, {});
 }
 
-// 汇总恢复树展示所需预加载的数据源：展开节点、高亮节点、聚焦节点都应尝试恢复。
+// 汇总恢复树展示所需预加载的数据源：仅在展开节点或选中需要内容的节点时才补拉 children。
 export function collectRestorableSourceIds(
   state: PersistedSourceTreeUiState,
   sources: SalesforceSource[]
@@ -101,12 +101,9 @@ export function collectRestorableSourceIds(
   const sourceIdSet = new Set(sources.map((source) => source.id));
   const sourceIds = new Set<string>();
 
-  if (state.focusedSourceId && sourceIdSet.has(state.focusedSourceId)) {
-    sourceIds.add(state.focusedSourceId);
-  }
-
   const selectedNodeSourceId = resolveSourceIdFromTreeNodeId(state.selectedNodeId);
-  if (selectedNodeSourceId && sourceIdSet.has(selectedNodeSourceId)) {
+  const selectedNodeNeedsChildren = state.selectedNodeId.startsWith("group:") || state.selectedNodeId.startsWith("object:");
+  if (selectedNodeNeedsChildren && selectedNodeSourceId && sourceIdSet.has(selectedNodeSourceId)) {
     sourceIds.add(selectedNodeSourceId);
   }
 

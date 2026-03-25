@@ -1,7 +1,8 @@
-import { ChevronRight, Folder } from "lucide-react";
+import { AlertCircle, ChevronRight, Folder } from "lucide-react";
 import type { NodeRendererProps } from "react-arborist";
-import type { MouseEvent as ReactMouseEvent } from "react";
+import { useState, type MouseEvent as ReactMouseEvent } from "react";
 import { buildObjectTabBindingKey } from "../../../../types";
+import { buildQuerySourceErrorPresentation } from "../logic/sourceTreeErrorPresentation.ts";
 import { buildTreeNodeInteractionClassName } from "../logic/sourceTreeInteractions.ts";
 import { resolveQueryTreeBadgeMeta, resolveQueryTreeVisualKind } from "../logic/queryTreeVisuals.ts";
 import type { QueryTreeRenderNode } from "../hooks/useSourceTreeState.ts";
@@ -58,6 +59,8 @@ export function QuerySourceTreeNode({
   onObjectContextMenu,
   getObjectTooltip
 }: QuerySourceTreeNodeProps) {
+  // 错误浮层坐标：用于让 hover 卡片跟随鼠标，而不是固定在图标下方。
+  const [errorTooltipPosition, setErrorTooltipPosition] = useState<{ x: number; y: number } | null>(null);
   const data = node.data;
   const sourceId = data.sourceId;
   const isSourceNode = data.kind === "source";
@@ -69,6 +72,8 @@ export function QuerySourceTreeNode({
   const sourceLoading = Boolean(treeState.sourceLoadingById[sourceId] || treeState.sourceRefreshingById[sourceId]);
   const sourceAuthPending = Boolean(treeState.sourceAuthPendingById[sourceId]);
   const sourceError = treeState.sourceErrorById[sourceId] || "";
+  const sourceErrorPresentation = buildQuerySourceErrorPresentation(sourceError);
+  const sourceHasVisibleError = isSourceNode && !sourceLoading && Boolean(sourceError);
   const visualKind = resolveQueryTreeVisualKind(data);
   const badgeMeta = resolveQueryTreeBadgeMeta(visualKind);
   const showFolderIcon = data.expandable && !isSourceNode;
@@ -121,11 +126,57 @@ export function QuerySourceTreeNode({
             )}
           </span>
 
-          {/* source 节点刷新时在名称前显示 loading，满足单源刷新反馈要求。 */}
+          {/* source 状态位：优先显示 loading；无 loading 且最终失败时显示红色叹号。 */}
           {isSourceNode && sourceLoading && <span className="loading loading-spinner shrink-0" style={{ width: 12, height: 12 }} />}
+          {sourceHasVisibleError && !sourceLoading && (
+            <span
+              className="relative inline-flex shrink-0"
+              onMouseEnter={(event) => {
+                setErrorTooltipPosition({ x: event.clientX, y: event.clientY }); // 行内注释：首次进入时记录鼠标位置，立即显示浮层。
+              }}
+              onMouseMove={(event) => {
+                setErrorTooltipPosition({ x: event.clientX, y: event.clientY }); // 行内注释：鼠标移动时同步更新浮层坐标，实现“跟随鼠标”。
+              }}
+              onMouseLeave={() => {
+                setErrorTooltipPosition(null); // 行内注释：移出叹号后立即关闭错误浮层。
+              }}
+            >
+              <span
+                className="inline-flex h-4 w-4 items-center justify-center rounded-full text-error"
+                aria-label={sourceErrorPresentation.title}
+              >
+                {/* 红色叹号图标：放在数据源名称前，复用原 loading 的视觉位置。 */}
+                <AlertCircle size={14} aria-hidden="true" />
+              </span>
 
-          {/* 名称主体：取消 truncate，让超长内容撑开整行并触发横向滚动。 */}
-          <span className={`whitespace-nowrap leading-[1.35] ${isFocusedSource ? "font-semibold" : ""}`}>{data.label}</span>
+              {/* 错误悬浮卡片：使用 fixed 定位跟随鼠标，避免固定在节点下方遮挡树内容。 */}
+              {errorTooltipPosition && (
+                <span
+                  className="pointer-events-none fixed z-30 w-[260px]"
+                  style={{
+                    left: Math.min(errorTooltipPosition.x + 14, Math.max(12, window.innerWidth - 280)),
+                    top: Math.max(12, errorTooltipPosition.y + 14)
+                  }}
+                >
+                  <span className="block rounded-md border border-[#f3c2c2] bg-[#fff6f6] px-2 py-1.5 text-left text-[#8b2a2a] shadow-md">
+                  {/* 错误标题：沿用之前的摘要标题，帮助用户快速理解失败类型。 */}
+                    <span className="block text-[11px] font-semibold leading-[1.3]">{sourceErrorPresentation.title}</span>
+                  {/* 错误说明：保持短说明风格，避免把树节点 hover 做成日志面板。 */}
+                    <span className="mt-0.5 block break-words text-[11px] leading-[1.4] text-[#a54848]">
+                      {sourceErrorPresentation.detail}
+                    </span>
+                  </span>
+                </span>
+              )}
+            </span>
+          )}
+
+          {/* 名称主体：错误时切换为红色，恢复成功后自动回到默认样式。 */}
+          <span
+            className={`whitespace-nowrap leading-[1.35] ${isFocusedSource ? "font-semibold" : ""} ${sourceHasVisibleError ? "text-error" : ""}`}
+          >
+            {data.label}
+          </span>
 
           {/* 认证刷新提示：当前 source 正在自动刷新 token 时显示轻量文案。 */}
           {isSourceNode && sourceAuthPending && (
@@ -141,12 +192,6 @@ export function QuerySourceTreeNode({
         </div>
       </div>
 
-      {/* source 错误提示：以轻量文本贴近节点，避免遮挡整个树。 */}
-      {isSourceNode && sourceError && (
-        <div style={style} className="px-7 pt-0.5 text-[11px] text-error">
-          {sourceError}
-        </div>
-      )}
     </>
   );
 }
