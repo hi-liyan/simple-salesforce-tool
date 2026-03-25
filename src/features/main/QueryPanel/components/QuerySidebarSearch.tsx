@@ -30,8 +30,11 @@ export function QuerySidebarSearch({
 }: QuerySidebarSearchProps) {
   const normalizedKeyword = keyword.trim();
   const showResultPanel = Boolean(normalizedKeyword);
+  const showSearchMeta = showResultPanel;
   const normalizedSourceType = String(focusedSourceType || "salesforce").toLowerCase();
   const objectAlias = normalizedSourceType === "mysql" ? "表" : "Object";
+  const searchPlaceholder = normalizedSourceType === "mysql" ? "搜索表名 / 注释 / table" : "搜索 Object 名称 / 标签 / object";
+  const searchHint = normalizedSourceType === "mysql" ? "支持名称、注释和 table 关键字搜索" : "支持名称、标签和 object 关键字搜索";
 
   return (
     <div className="relative z-20 border-b border-base-300 px-3 py-2">
@@ -44,7 +47,11 @@ export function QuerySidebarSearch({
           className="min-w-0 flex-1 bg-transparent text-[12px]"
           type="text"
           value={keyword}
-          placeholder={`搜索当前数据源的${objectAlias}`}
+          placeholder={searchPlaceholder}
+          autoComplete="off"
+          autoCorrect="off"
+          autoCapitalize="off"
+          spellCheck={false}
           onChange={(event) => {
             onKeywordChange(event.target.value); // 行内注释：同步侧边栏搜索关键字，驱动延迟搜索。
           }}
@@ -65,7 +72,9 @@ export function QuerySidebarSearch({
       </label>
 
       {/* 搜索范围说明：明确当前是按聚焦数据源搜索，而不是跨全部数据源。 */}
-      <p className="mt-2 hidden text-[11px] text-neutral/60 peer-focus-within:block">搜索范围：{focusedSourceName || "当前数据源"}</p>
+      <p className={`mt-2 text-[11px] text-neutral/60 ${showSearchMeta ? "block" : "hidden peer-focus-within:block"}`}>搜索范围：{focusedSourceName || "当前数据源"}</p>
+      {/* 搜索提示：说明支持的匹配维度，帮助用户理解 Object/Table 组合搜索能力。 */}
+      <p className={`mt-1 text-[11px] text-neutral/50 ${showSearchMeta ? "block" : "hidden peer-focus-within:block"}`}>{searchHint}</p>
 
       {/* 搜索结果面板：仅在有关键字时出现，避免左侧结构常驻过于拥挤。 */}
       {showResultPanel && (

@@ -32,6 +32,17 @@ function removeExpandedNode(expandedNodeIds: string[], nodeId: string): string[]
   return expandedNodeIds.filter((item) => item !== nodeId);
 }
 
+// 判断对象缓存是否已准备完成：避免把“尚未真正加载完成的空缓存”误判为可搜索结果。
+function hasPreparedSourceObjectsCache(treeState: SourceTreeState, sourceId: string): boolean {
+  const hasCachedObjects = Object.prototype.hasOwnProperty.call(treeState.sourceObjectsById, sourceId);
+  if (!hasCachedObjects) return false;
+
+  const cachedObjects = treeState.sourceObjectsById[sourceId] || [];
+  if (cachedObjects.length > 0) return true;
+
+  return Object.prototype.hasOwnProperty.call(treeState.sourceTreeChildrenById, sourceId);
+}
+
 type UseSourceTreeStateInput = {
   // 全部数据源。
   sources: SalesforceSource[];
@@ -45,6 +56,8 @@ type UseSourceTreeStateInput = {
   onOpenObject: (item: SalesforceObject, source?: SalesforceSource) => void;
   // 不可查询对象提示。
   onNotQueryableObjectClick?: (item: SalesforceObject) => void;
+  // 当前聚焦数据源变化通知：供侧边栏搜索范围与动作按钮实时同步。
+  onFocusedSourceChange?: (sourceId: string) => void;
 };
 
 type UseSourceTreeStateResult = {
@@ -93,7 +106,8 @@ export function useSourceTreeState({
   selectedSourceObjects,
   selectedSourceObjectsLoading,
   onOpenObject,
-  onNotQueryableObjectClick
+  onNotQueryableObjectClick,
+  onFocusedSourceChange
 }: UseSourceTreeStateInput): UseSourceTreeStateResult {
   // 左树持久化 UI 快照：跨 panel 切换与重启恢复展开/高亮状态。
   const persistedTreeUiState = useQuerySourceTreeStore((state) => state.treeUiState);
@@ -205,6 +219,11 @@ export function useSourceTreeState({
       };
     });
   }, [selectedSourceId, sources, sourceMap]);
+
+  // 将当前聚焦数据源同步给外层：确保搜索范围提示和动作按钮始终跟左树焦点一致。
+  useEffect(() => {
+    onFocusedSourceChange?.(treeState.focusedSourceId);
+  }, [onFocusedSourceChange, treeState.focusedSourceId]);
 
   useEffect(() => {
     let active = true;
@@ -339,8 +358,9 @@ export function useSourceTreeState({
 
   // 聚焦某个数据源：仅更新左树焦点，不触发右侧工作区切桶。
   const focusSource = useCallback((sourceId: string) => {
+    onFocusedSourceChange?.(sourceId); // 行内注释：点击左树节点时立刻同步焦点，避免侧边栏文案和搜索作用域晚一拍。
     setTreeState((current) => focusSourceNode(current, sourceId));
-  }, []);
+  }, [onFocusedSourceChange]);
 
   // 处理对象打开：严格使用节点自带 source 上下文。
   const openObjectNode = useCallback((node: QueryTreeNode) => {
@@ -519,7 +539,7 @@ export function useSourceTreeState({
       const source = sourceMap.get(sourceId);
       if (!source) return [];
 
-      const hasCachedObjects = Object.prototype.hasOwnProperty.call(treeState.sourceObjectsById, sourceId);
+      const hasCachedObjects = hasPreparedSourceObjectsCache(treeState, sourceId);
       const cachedObjects = treeState.sourceObjectsById[sourceId] || [];
       const objects = hasCachedObjects ? cachedObjects : await loadSourceChildren(source, false);
 
@@ -542,7 +562,7 @@ export function useSourceTreeState({
       const source = sourceMap.get(normalizedSourceId);
       if (!source) return;
 
-      const hasCachedObjects = Object.prototype.hasOwnProperty.call(treeState.sourceObjectsById, normalizedSourceId);
+      const hasCachedObjects = hasPreparedSourceObjectsCache(treeState, normalizedSourceId);
       const cachedObjects = treeState.sourceObjectsById[normalizedSourceId] || [];
       const objects = hasCachedObjects ? cachedObjects : await loadSourceChildren(source, false);
       const objectItem = objects.find((item) => item.name === normalizedObjectName);

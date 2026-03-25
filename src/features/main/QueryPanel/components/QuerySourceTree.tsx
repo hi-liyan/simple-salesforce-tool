@@ -27,6 +27,8 @@ type QuerySourceTreeProps = {
   onRefreshSourceWorkspace?: (sourceId: string) => Promise<void>;
   // 不可查询对象提示。
   onNotQueryableObjectClick?: (item: SalesforceObject) => void;
+  // 当前聚焦数据源变化：供上层侧边栏实时同步搜索范围与动作上下文。
+  onFocusedSourceChange?: (sourceId: string) => void;
   // 对外暴露刷新聚焦数据源能力。
   onReady?: (actions: {
     refreshFocusedSource: () => Promise<void>;
@@ -140,6 +142,7 @@ export function QuerySourceTree({
   onRefreshMysqlObjectMetadata,
   onRefreshSourceWorkspace,
   onNotQueryableObjectClick,
+  onFocusedSourceChange,
   onReady
 }: QuerySourceTreeProps) {
   // 树滚动容器：供横向/纵向滚动和定位节点时复用。
@@ -183,7 +186,8 @@ export function QuerySourceTree({
     selectedSourceObjects: objects,
     selectedSourceObjectsLoading: objectsLoading,
     onOpenObject,
-    onNotQueryableObjectClick
+    onNotQueryableObjectClick,
+    onFocusedSourceChange
   });
   // 已展开节点集合：把递归渲染中的 includes 查找降为 O(1)。
   const expandedNodeIdSet = useMemo(() => new Set(treeState.expandedNodeIds), [treeState.expandedNodeIds]);
