@@ -1,16 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
-import { Tree } from "react-arborist";
-import type { RowRendererProps, TreeApi } from "react-arborist";
 import { api } from "../../../../api";
 import { ContextMenu, type ContextMenuEntry } from "../../../../components/ContextMenu";
 import type { SalesforceObject, SalesforceSource } from "../../../../types";
-import { useSourceTreeState } from "../hooks/useSourceTreeState.ts";
+import { useSourceTreeState, type QueryTreeRenderNode } from "../hooks/useSourceTreeState.ts";
 import { buildSourceSurfacePalette, getSourceColor } from "../logic/sourceColor.ts";
-import { buildInitialOpenState } from "../logic/sourceTreePersistence.ts";
 import type { QuerySourceObjectSearchResult } from "../logic/sourceObjectSearch.ts";
 import { QuerySourceTreeNode } from "./QuerySourceTreeNode";
-import type { QueryTreeRenderNode } from "../hooks/useSourceTreeState.ts";
 
 type QuerySourceTreeProps = {
   // 全部数据源。
@@ -41,29 +37,95 @@ type QuerySourceTreeProps = {
   }) => void;
 };
 
-type QuerySourceTreeRowProps = RowRendererProps<QueryTreeRenderNode> & {
-  // 数据源浅色背景映射：用于把同一 source 的整块区域着色为连续背景。
+type QuerySourceTreeBranchProps = {
+  // 当前分支节点列表。
+  nodes: QueryTreeRenderNode[];
+  // 当前分支层级。
+  level: number;
+  // 数据源背景色映射：用于维持同一来源的连续背景区域。
   sourceSurfaceBackgroundById: Record<string, string>;
+  // 当前左树纯状态。
+  treeState: ReturnType<typeof useSourceTreeState>["treeState"];
+  // 当前激活对象身份。
+  activeTabObjectName: string;
+  // 单击节点。
+  onNodeClick: ReturnType<typeof useSourceTreeState>["onNodeClick"];
+  // 双击节点。
+  onNodeDoubleClick: ReturnType<typeof useSourceTreeState>["onNodeDoubleClick"];
+  // 点击展开箭头。
+  onToggleNode: ReturnType<typeof useSourceTreeState>["onToggleNode"];
+  // 右键 Object 节点。
+  onObjectContextMenu?: (event: ReactMouseEvent<HTMLDivElement>, node: QueryTreeRenderNode) => void;
+  // 解析 Object 节点 tooltip。
+  getObjectTooltip?: (node: QueryTreeRenderNode) => string;
+  // 注册节点 DOM：供外层滚动定位。
+  registerNodeElement: (nodeId: string, element: HTMLDivElement | null) => void;
 };
 
-// 树行容器：背景画在 row 层，而不是节点内容层，这样视觉上是一整块连续区域。
-function QuerySourceTreeRow({ node, innerRef, attrs, children, sourceSurfaceBackgroundById }: QuerySourceTreeRowProps) {
-  const sourceId = String(node.data?.sourceId || "");
-  const rowBackgroundColor = sourceSurfaceBackgroundById[sourceId] || "";
-
+// 递归树分支：改用受控 DOM 树渲染，避免虚拟树在当前布局下产生 hover 闪烁与事件丢失。
+function QuerySourceTreeBranch({
+  nodes,
+  level,
+  sourceSurfaceBackgroundById,
+  treeState,
+  activeTabObjectName,
+  onNodeClick,
+  onNodeDoubleClick,
+  onToggleNode,
+  onObjectContextMenu,
+  getObjectTooltip,
+  registerNodeElement
+}: QuerySourceTreeBranchProps) {
   return (
-    <div
-      ref={innerRef}
-      {...attrs}
-      style={{
-        ...(attrs.style || {}),
-        width: "max-content",
-        minWidth: "100%",
-        backgroundColor: rowBackgroundColor || undefined
-      }}
-    >
-      {children}
-    </div>
+    <>
+      {/* 当前层节点列表：按当前树状态逐个渲染，并在展开时递归输出子节点。 */}
+      {nodes.map((node) => {
+        const rowBackgroundColor = sourceSurfaceBackgroundById[node.sourceId] || "";
+        const isOpen = treeState.expandedNodeIds.includes(node.id);
+        const childNodes = node.children || [];
+
+        return (
+          <div key={node.id}>
+            {/* 当前节点行：统一复用节点渲染器，保持既有视觉样式。 */}
+            <QuerySourceTreeNode
+              node={node}
+              level={level}
+              isOpen={isOpen}
+              rowBackgroundColor={rowBackgroundColor}
+              treeState={treeState}
+              activeTabObjectName={activeTabObjectName}
+              onNodeClick={onNodeClick}
+              onNodeDoubleClick={(targetNode) => {
+                void onNodeDoubleClick(targetNode);
+              }}
+              onToggleNode={(targetNode) => {
+                void onToggleNode(targetNode);
+              }}
+              onObjectContextMenu={onObjectContextMenu}
+              getObjectTooltip={getObjectTooltip}
+              registerNodeElement={registerNodeElement}
+            />
+
+            {/* 子节点区域：仅在当前节点已展开时递归渲染。 */}
+            {isOpen && childNodes.length > 0 && (
+              <QuerySourceTreeBranch
+                nodes={childNodes}
+                level={level + 1}
+                sourceSurfaceBackgroundById={sourceSurfaceBackgroundById}
+                treeState={treeState}
+                activeTabObjectName={activeTabObjectName}
+                onNodeClick={onNodeClick}
+                onNodeDoubleClick={onNodeDoubleClick}
+                onToggleNode={onToggleNode}
+                onObjectContextMenu={onObjectContextMenu}
+                getObjectTooltip={getObjectTooltip}
+                registerNodeElement={registerNodeElement}
+              />
+            )}
+          </div>
+        );
+      })}
+    </>
   );
 }
 
@@ -80,11 +142,12 @@ export function QuerySourceTree({
   onNotQueryableObjectClick,
   onReady
 }: QuerySourceTreeProps) {
-  // 容器尺寸：react-arborist 需要明确高度。
+  // 树滚动容器：供横向/纵向滚动和定位节点时复用。
   const containerRef = useRef<HTMLDivElement | null>(null);
-  // 树实例引用：用于命令式展开与滚动定位目标节点。
-  const treeRef = useRef<TreeApi<QueryTreeRenderNode> | null>(null);
-  const [treeHeight, setTreeHeight] = useState(360);
+  // 节点 DOM 映射：用于按节点 ID 滚动定位到对应行。
+  const nodeElementMapRef = useRef<Record<string, HTMLDivElement | null>>({});
+  // 待滚动定位的节点 ID：在展开态更新后滚动到目标行。
+  const [pendingScrollNodeId, setPendingScrollNodeId] = useState("");
   // Object 右键菜单状态：记录菜单位置与目标对象。
   const [objectContextMenu, setObjectContextMenu] = useState<{
     x: number;
@@ -92,16 +155,7 @@ export function QuerySourceTree({
     objectItem: SalesforceObject;
     source: SalesforceSource;
   } | null>(null);
-  // 数据源颜色映射：供节点内部读取来源色（例如 source 根节点色点）。
-  const sourceColorById = useMemo(
-    () =>
-      sources.reduce<Record<string, string>>((acc, source) => {
-        acc[source.id] = getSourceColor(source);
-        return acc;
-      }, {}),
-    [sources]
-  );
-  // 数据源浅色背景映射：供 row 层形成连续的背景区块。
+  // 数据源浅色背景映射：供每一行形成连续的来源背景区块。
   const sourceSurfaceBackgroundById = useMemo(
     () =>
       sources.reduce<Record<string, string>>((acc, source) => {
@@ -116,8 +170,8 @@ export function QuerySourceTree({
   const {
     treeData,
     treeState,
-    selectionId,
     onNodeClick,
+    onNodeDoubleClick,
     onToggleNode,
     refreshFocusedSource,
     locateNodeByTarget: locateTreeNodeByTarget,
@@ -133,24 +187,10 @@ export function QuerySourceTree({
   });
   // 数据源索引：供 tooltip、右键菜单动作快速解析来源信息。
   const sourceMap = useMemo(() => new Map(sources.map((source) => [source.id, source])), [sources]);
-  // 树首次挂载时的展开映射：配合持久化状态恢复 source/group 展开态。
-  const initialOpenState = useMemo(() => buildInitialOpenState(treeState.expandedNodeIds), [treeState.expandedNodeIds]);
 
-  // 监听容器尺寸变化，保持树高度自适应。
-  useEffect(() => {
-    const element = containerRef.current;
-    if (!element) return;
-
-    const updateHeight = () => {
-      setTreeHeight(Math.max(240, Math.floor(element.clientHeight || 360)));
-    };
-    updateHeight();
-
-    const observer = new ResizeObserver(() => {
-      updateHeight();
-    });
-    observer.observe(element);
-    return () => observer.disconnect();
+  // 注册节点 DOM：供滚动定位复用。
+  const registerNodeElement = useCallback((nodeId: string, element: HTMLDivElement | null) => {
+    nodeElementMapRef.current[nodeId] = element;
   }, []);
 
   // 全局关闭对象右键菜单：点击空白、滚动、按下 ESC 时关闭。
@@ -176,6 +216,24 @@ export function QuerySourceTree({
     };
   }, [objectContextMenu]);
 
+  // 节点定位滚动：等待展开后的 DOM 完成挂载，再把目标节点滚动到可视区域。
+  useEffect(() => {
+    if (!pendingScrollNodeId) return;
+
+    const scrollToTargetNode = () => {
+      const targetElement = nodeElementMapRef.current[pendingScrollNodeId];
+      if (!targetElement) return;
+      targetElement.scrollIntoView({
+        block: "nearest",
+        inline: "nearest"
+      });
+      setPendingScrollNodeId(""); // 行内注释：本轮滚动完成后清空目标，避免后续重复滚动。
+    };
+
+    const frameId = window.requestAnimationFrame(scrollToTargetNode);
+    return () => window.cancelAnimationFrame(frameId);
+  }, [pendingScrollNodeId, treeData, treeState.expandedNodeIds]);
+
   // 从树节点解析完整对象信息：恢复旧版 tooltip/右键菜单依赖的对象元数据。
   function resolveObjectItemFromNode(node: QueryTreeRenderNode): SalesforceObject | null {
     if (node.kind !== "object") return null;
@@ -188,13 +246,7 @@ export function QuerySourceTree({
     async (target: { sourceId: string; objectName?: string }) => {
       const locateResult = await locateTreeNodeByTarget(target);
       if (!locateResult) return;
-
-      const sourceNodeId = `source:${String(target.sourceId || "").trim()}`;
-      treeRef.current?.open(sourceNodeId); // 行内注释：先展开 source，确保后续滚动可命中目标节点。
-      if (locateResult.groupNodeId) {
-        treeRef.current?.open(locateResult.groupNodeId); // 行内注释：MySQL 对象位于 tables 分组下，需要额外展开一层。
-      }
-      await treeRef.current?.scrollTo(locateResult.targetNodeId, "smart");
+      setPendingScrollNodeId(locateResult.targetNodeId); // 行内注释：展开态更新完成后再由副作用执行滚动定位。
     },
     [locateTreeNodeByTarget]
   );
@@ -360,47 +412,27 @@ export function QuerySourceTree({
   }
 
   return (
-    <div ref={containerRef} className="h-full w-full overflow-hidden bg-white">
-      {/* 横向滚动层：只负责超宽节点的底部横向滚动，纵向滚动仍交给 Tree 自己管理。 */}
-      <div className="h-full w-full overflow-x-auto overflow-y-hidden">
-        <div className="h-full min-w-full w-max">
-          <Tree
-            ref={treeRef}
-            data={treeData}
-            width="100%"
-            height={treeHeight}
-            rowHeight={36}
-            indent={18}
-            paddingTop={8}
-            paddingBottom={8}
-            openByDefault={false}
-            initialOpenState={initialOpenState}
-            disableDrag
-            selection={selectionId}
-            childrenAccessor="children"
-            idAccessor="id"
-            renderRow={(props) => (
-              <QuerySourceTreeRow
-                {...props}
-                sourceSurfaceBackgroundById={sourceSurfaceBackgroundById}
-              />
-            )}
-          >
-            {(props) => (
-              <QuerySourceTreeNode
-                {...props}
-                treeState={treeState}
-                activeTabObjectName={activeTabObjectName}
-                sourceColorById={sourceColorById}
-                onNodeClick={(node) => void onNodeClick(node, props.node)}
-                onToggleNode={(node) => void onToggleNode(node, props.node)}
-                onObjectContextMenu={handleObjectContextMenu}
-                getObjectTooltip={getObjectTooltip}
-              />
-            )}
-          </Tree>
+    <div className="h-full w-full overflow-hidden bg-white">
+      {/* 树滚动区域：同时承接纵向和横向滚动，不再依赖第三方虚拟树容器。 */}
+      <div ref={containerRef} className="h-full w-full overflow-auto">
+        {/* 树内容区域：允许超长节点真实撑开宽度，以显示底部横向滚动条。 */}
+        <div className="min-h-full min-w-full w-max py-2">
+          <QuerySourceTreeBranch
+            nodes={treeData}
+            level={0}
+            sourceSurfaceBackgroundById={sourceSurfaceBackgroundById}
+            treeState={treeState}
+            activeTabObjectName={activeTabObjectName}
+            onNodeClick={onNodeClick}
+            onNodeDoubleClick={onNodeDoubleClick}
+            onToggleNode={onToggleNode}
+            onObjectContextMenu={handleObjectContextMenu}
+            getObjectTooltip={getObjectTooltip}
+            registerNodeElement={registerNodeElement}
+          />
         </div>
       </div>
+
       {/* Object 右键菜单：复用公共菜单容器，具体动作仍由树组件自己定义。 */}
       {objectContextMenu && (
         <ContextMenu x={objectContextMenu.x} y={objectContextMenu.y} entries={objectContextMenuEntries} />

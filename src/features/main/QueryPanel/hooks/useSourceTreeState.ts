@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { NodeApi } from "react-arborist";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "../../../../api";
 import type { SalesforceObject, SalesforceSource } from "../../../../types";
@@ -12,10 +11,10 @@ import {
   normalizePersistedSourceTreeUiState,
   sanitizePersistedSourceTreeUiState
 } from "../logic/sourceTreePersistence.ts";
-import { resolveNodeClickOutcome, resolveNodeDoubleClickAction, type TreeNodeClickState } from "../logic/sourceTreeInteractions.ts";
+import { resolveNodeDoubleClickAction } from "../logic/sourceTreeInteractions.ts";
 import { searchSourceObjects, type QuerySourceObjectSearchResult } from "../logic/sourceObjectSearch.ts";
 import { buildMySqlRootChildren, buildMySqlTableChildren, buildSalesforceRootChildren, buildSourceRootNodes } from "../logic/sourceTreeProviders.ts";
-import { beginRefreshingSource, finishRefreshingSource, focusSourceNode, toggleExpandedNode } from "../logic/sourceTreeState.ts";
+import { beginRefreshingSource, finishRefreshingSource, focusSourceNode } from "../logic/sourceTreeState.ts";
 import type { QueryTreeNode, SourceTreeState } from "../types/tree.ts";
 
 // 树渲染节点：在纯逻辑节点基础上补齐 children，供 react-arborist 使用。
@@ -57,10 +56,12 @@ type UseSourceTreeStateResult = {
   treeState: SourceTreeState;
   // 树选择态：优先高亮聚焦数据源。
   selectionId: string;
-  // 点击节点：内部处理单击聚焦与稳定双击判定。
-  onNodeClick: (node: QueryTreeNode, treeNode: NodeApi<QueryTreeRenderNode>) => Promise<void>;
+  // 单击节点：内部处理高亮与聚焦。
+  onNodeClick: (node: QueryTreeNode) => void;
+  // 双击节点：source/group 切换展开，object 打开工作区。
+  onNodeDoubleClick: (node: QueryTreeNode) => Promise<void>;
   // 点击展开箭头。
-  onToggleNode: (node: QueryTreeNode, treeNode: NodeApi<QueryTreeRenderNode>) => Promise<void>;
+  onToggleNode: (node: QueryTreeNode) => Promise<void>;
   // 刷新聚焦数据源。
   refreshFocusedSource: () => Promise<void>;
   // 定位指定 source/object 到左侧树。
@@ -110,8 +111,6 @@ export function useSourceTreeState({
       expandedNodeIds: initialTreeUiState.expandedNodeIds
     };
   });
-  // 最近一次节点点击快照：用于在 arborist 重绘场景下稳定识别双击。
-  const latestClickStateRef = useRef<TreeNodeClickState | null>(null);
   // 数据源请求版本：仅允许最后一次请求写回状态，避免旧请求结果覆盖新结果。
   const sourceRequestVersionRef = useRef<Record<string, number>>({});
   // 数据源在途请求：同一 source 正在加载时直接复用同一个 Promise，避免重复打远端。
@@ -365,9 +364,12 @@ export function useSourceTreeState({
     onOpenObject(objectItem, source);
   }, [onNotQueryableObjectClick, onOpenObject, sourceMap, treeState.sourceObjectsById]);
 
-  // 确保 source/group 节点展开：先立刻打开节点，再异步补拉 children，避免双击时展开态与加载态互相打架。
+  // 判断节点当前是否已展开：统一基于本地树状态读取，避免渲染层和状态层各自维护一套展开真值。
+  const isNodeExpanded = useCallback((nodeId: string) => treeState.expandedNodeIds.includes(nodeId), [treeState.expandedNodeIds]);
+
+  // 确保 source/group 节点展开：先立刻写入展开态，再异步补拉 children，避免双击时展开态与加载态互相打架。
   const ensureNodeExpanded = useCallback(
-    async (node: QueryTreeNode, treeNode: NodeApi<QueryTreeRenderNode>) => {
+    async (node: QueryTreeNode) => {
       if (node.kind === "object") {
         return;
       }
@@ -388,30 +390,29 @@ export function useSourceTreeState({
         && !treeState.sourceObjectsById[node.sourceId]
         && !treeState.sourceLoadingById[node.sourceId];
 
-      if (!treeNode.isOpen) {
+      if (!isNodeExpanded(node.id)) {
         setTreeState((current) => ({
           ...current,
           expandedNodeIds: appendExpandedNode(current.expandedNodeIds, node.id)
         }));
-        treeNode.open(); // 行内注释：先显式展开节点，让后续连点看到的是“已展开”状态，而不是等待请求返回再 toggle。
 
         if (shouldLoadSourceChildren || shouldLoadMySqlTables) {
           await loadSourceChildren(source, false);
         }
       }
     },
-    [focusSource, loadSourceChildren, sourceMap, treeState.sourceLoadingById, treeState.sourceObjectsById, treeState.sourceTreeChildrenById]
+    [focusSource, isNodeExpanded, loadSourceChildren, sourceMap, treeState.sourceLoadingById, treeState.sourceObjectsById, treeState.sourceTreeChildrenById]
   );
 
   // 展开/折叠 source/group 节点：点击箭头时保持原有 toggle 交互。
   const toggleNode = useCallback(
-    async (node: QueryTreeNode, treeNode: NodeApi<QueryTreeRenderNode>) => {
+    async (node: QueryTreeNode) => {
       if (node.kind === "object") {
         return;
       }
 
-      if (!treeNode.isOpen) {
-        await ensureNodeExpanded(node, treeNode);
+      if (!isNodeExpanded(node.id)) {
+        await ensureNodeExpanded(node);
         return;
       }
 
@@ -423,9 +424,8 @@ export function useSourceTreeState({
         ...current,
         expandedNodeIds: removeExpandedNode(current.expandedNodeIds, node.id)
       }));
-      treeNode.close(); // 行内注释：显式收起当前节点，避免加载中的二次点击把内部 open 状态再次翻转。
     },
-    [ensureNodeExpanded, focusSource, sourceMap]
+    [ensureNodeExpanded, focusSource, isNodeExpanded, sourceMap]
   );
 
   // 处理单击聚焦：任何节点点击都先更新选中行；source/object 再同步聚焦数据源。
@@ -444,21 +444,20 @@ export function useSourceTreeState({
     }
   }, [focusSource]);
 
-  // 节点点击：先处理单击焦点，再基于时间窗把第二次点击提升为稳定双击动作。
-  const onNodeClick = useCallback(async (node: QueryTreeNode, treeNode: NodeApi<QueryTreeRenderNode>) => {
+  // 节点单击：仅负责高亮与聚焦，避免与原生双击事件竞争判定窗口。
+  const onNodeClick = useCallback((node: QueryTreeNode) => {
     handleSingleClick(node);
+  }, [handleSingleClick]);
 
-    const outcome = resolveNodeClickOutcome(latestClickStateRef.current, node.id, Date.now());
-    latestClickStateRef.current = outcome.nextState;
-    if (!outcome.isDoubleClick) return;
-
+  // 节点双击：交给浏览器原生双击事件判定，避免手工 260ms 阈值导致操作不灵敏。
+  const onNodeDoubleClick = useCallback(async (node: QueryTreeNode) => {
     const doubleClickAction = resolveNodeDoubleClickAction(node);
     if (doubleClickAction === "open") {
       openObjectNode(node);
       return;
     }
-    await toggleNode(node, treeNode);
-  }, [handleSingleClick, openObjectNode, toggleNode]);
+    await toggleNode(node);
+  }, [openObjectNode, toggleNode]);
 
   // 刷新当前聚焦数据源：仅刷新该 source，不做全量同步。
   const refreshFocusedSource = useCallback(async () => {
@@ -636,6 +635,7 @@ export function useSourceTreeState({
     treeState,
     selectionId: treeState.selectedNodeId,
     onNodeClick,
+    onNodeDoubleClick,
     onToggleNode: toggleNode,
     refreshFocusedSource,
     locateNodeByTarget,

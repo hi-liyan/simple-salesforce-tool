@@ -1,5 +1,4 @@
 import { AlertCircle, ChevronRight, Folder } from "lucide-react";
-import type { NodeRendererProps } from "react-arborist";
 import { useState, type MouseEvent as ReactMouseEvent } from "react";
 import { createPortal } from "react-dom";
 import { buildObjectTabBindingKey } from "../../../../types";
@@ -9,21 +8,31 @@ import { resolveQueryTreeBadgeMeta, resolveQueryTreeVisualKind } from "../logic/
 import type { QueryTreeRenderNode } from "../hooks/useSourceTreeState.ts";
 import type { SourceTreeState } from "../types/tree.ts";
 
-type QuerySourceTreeNodeProps = NodeRendererProps<QueryTreeRenderNode> & {
-  // 左树纯状态：用于渲染聚焦/刷新/错误态。
+type QuerySourceTreeNodeProps = {
+  // 当前树节点。
+  node: QueryTreeRenderNode;
+  // 当前节点层级：用于按树结构缩进显示。
+  level: number;
+  // 当前节点是否处于展开态。
+  isOpen: boolean;
+  // 当前节点所在来源区域背景色。
+  rowBackgroundColor: string;
+  // 左树纯状态：用于渲染聚焦、刷新和错误态。
   treeState: SourceTreeState;
   // 当前激活对象 Tab 身份。
   activeTabObjectName: string;
-  // 数据源颜色映射：用于让同一 source 的所有节点共享整块区域背景。
-  sourceColorById: Record<string, string>;
   // 单击节点。
   onNodeClick: (node: QueryTreeRenderNode) => void;
+  // 双击节点。
+  onNodeDoubleClick: (node: QueryTreeRenderNode) => void;
   // 点击展开箭头。
   onToggleNode: (node: QueryTreeRenderNode) => void;
   // 右键 Object 节点。
   onObjectContextMenu?: (event: ReactMouseEvent<HTMLDivElement>, node: QueryTreeRenderNode) => void;
   // 解析 Object 节点 tooltip。
   getObjectTooltip?: (node: QueryTreeRenderNode) => string;
+  // 注册节点 DOM：供父组件执行滚动定位。
+  registerNodeElement?: (nodeId: string, element: HTMLDivElement | null) => void;
 };
 
 // 文字小徽标：把树节点前缀收敛成紧凑的字母标签，避免大量图形图标造成视觉噪音。
@@ -48,28 +57,31 @@ function QueryTreeBadge({ text, tone }: { text: string; tone: "neutral" | "blue"
   );
 }
 
-// 树节点渲染器：统一封装 source/group/object 三类视觉与交互。
+// 左侧树节点渲染器：使用受控 DOM 树渲染，保留当前视觉与交互语义。
 export function QuerySourceTreeNode({
   node,
-  style,
+  level,
+  isOpen,
+  rowBackgroundColor,
   treeState,
   activeTabObjectName,
-  sourceColorById,
   onNodeClick,
+  onNodeDoubleClick,
   onToggleNode,
   onObjectContextMenu,
-  getObjectTooltip
+  getObjectTooltip,
+  registerNodeElement
 }: QuerySourceTreeNodeProps) {
   // 错误浮层坐标：固定锚定到红色叹号左下方，避免手动推算居中带来的偏移误差。
   const [errorTooltipPosition, setErrorTooltipPosition] = useState<{ left: number; top: number } | null>(null);
-  const data = node.data;
+  const data = node;
   const sourceId = data.sourceId;
   const isSourceNode = data.kind === "source";
   const isObjectNode = data.kind === "object";
   const objectBindingKey = isObjectNode ? buildObjectTabBindingKey(data.sourceId, data.objectName) : "";
   const isFocusedSource = isSourceNode && treeState.focusedSourceId === sourceId;
   const isActiveObject = isObjectNode && (activeTabObjectName === objectBindingKey || activeTabObjectName === data.objectName);
-  const isSelectedNode = node.isSelected;
+  const isSelectedNode = treeState.selectedNodeId === data.id;
   const sourceLoading = Boolean(treeState.sourceLoadingById[sourceId] || treeState.sourceRefreshingById[sourceId]);
   const sourceAuthPending = Boolean(treeState.sourceAuthPendingById[sourceId]);
   const sourceError = treeState.sourceErrorById[sourceId] || "";
@@ -85,17 +97,30 @@ export function QuerySourceTreeNode({
   const rowMinContentWidthClassName = isSourceNode && sourceAuthPending ? "min-w-[320px]" : "min-w-full";
 
   return (
-    <>
-      {/* 行容器：背景挂在带缩进 padding 的整行上，确保高亮铺满整行宽度而不是只包住内容区。 */}
+    // 节点外层：独立承接滚动定位 ref，并在同一数据源区域内维持连续背景色。
+    <div
+      ref={(element) => {
+        registerNodeElement?.(data.id, element);
+      }}
+      className="min-w-full"
+      style={{ backgroundColor: rowBackgroundColor || undefined }}
+    >
+      {/* 行容器：按层级缩进，并统一承接单击、双击与右键菜单。 */}
       <div
-        style={style}
+        style={{ paddingLeft: level * 18 }}
         className={buildTreeNodeInteractionClassName({
           // 真实选中态优先用于整行浅蓝背景；兼容态仅保留正常文字强调。
           selected: isSelectedNode,
           active: isActiveObject || isFocusedSource
         })}
         title={objectTooltip || undefined}
-        onClick={() => onNodeClick(data)}
+        onClick={() => {
+          onNodeClick(data); // 行内注释：单击仅处理高亮与聚焦，不自动展开节点。
+        }}
+        onDoubleClick={(event) => {
+          event.stopPropagation(); // 行内注释：双击只在当前节点内消费，避免外层容器收到重复事件。
+          void onNodeDoubleClick(data);
+        }}
         onContextMenu={(event) => {
           if (!isObjectNode || !onObjectContextMenu) return;
           onObjectContextMenu(event, data);
@@ -106,14 +131,14 @@ export function QuerySourceTreeNode({
           {/* 展开箭头：减弱存在感，只负责树结构层级提示。 */}
           <button
             type="button"
-            className={`flex h-4 w-4 shrink-0 items-center justify-center rounded ${node.isLeaf ? "invisible" : "visible hover:bg-base-300/50"}`}
+            className={`flex h-4 w-4 shrink-0 items-center justify-center rounded ${!data.expandable ? "invisible" : "visible hover:bg-base-300/50"}`}
             onClick={(event) => {
               event.stopPropagation();
-              onToggleNode(data); // 行内注释：仅切换当前节点展开态，不触发整行点击。
+              void onToggleNode(data); // 行内注释：仅切换当前节点展开态，不触发行点击。
             }}
-            aria-label={node.isOpen ? "折叠节点" : "展开节点"}
+            aria-label={isOpen ? "折叠节点" : "展开节点"}
           >
-            <ChevronRight size={12} className={`${node.isOpen ? "rotate-90" : ""} text-base-content/55 transition-transform`} />
+            <ChevronRight size={12} className={`${isOpen ? "rotate-90" : ""} text-base-content/55 transition-transform`} />
           </button>
 
           {/* 主图标：可展开节点改为文件夹图标，保持树结构语义更直观。 */}
@@ -169,9 +194,9 @@ export function QuerySourceTreeNode({
                     }}
                   >
                     <span className="block rounded-md border border-[#f3c2c2] bg-[#fff6f6] px-2 py-1.5 text-left text-[#8b2a2a] shadow-md">
-                    {/* 错误标题：沿用之前的摘要标题，帮助用户快速理解失败类型。 */}
+                      {/* 错误标题：沿用之前的摘要标题，帮助用户快速理解失败类型。 */}
                       <span className="block text-[11px] font-semibold leading-[1.3]">{sourceErrorPresentation.title}</span>
-                    {/* 错误说明：保持短说明风格，避免把树节点 hover 做成日志面板。 */}
+                      {/* 错误说明：保持短说明风格，避免把树节点 hover 做成日志面板。 */}
                       <span className="mt-0.5 block break-words text-[11px] leading-[1.4] text-[#a54848]">
                         {sourceErrorPresentation.detail}
                       </span>
@@ -203,7 +228,6 @@ export function QuerySourceTreeNode({
           )}
         </div>
       </div>
-
-    </>
+    </div>
   );
 }
