@@ -769,7 +769,9 @@ export function SettingsPanel() {
       </div>
 
       {/* 内容区：根据当前 Tab 渲染对应设置面板。 */}
-      <div className="min-h-0 flex-1 overflow-auto px-4 py-3">
+      <div
+        className={`min-h-0 flex-1 ${activeTab === "systemLogs" ? "flex flex-col overflow-hidden px-0 py-0" : "overflow-auto px-4 py-3"}`}
+      >
         {activeTab === "cli" ? (
           <>
             {/* CLI 标题区：包含刷新配置入口。 */}
