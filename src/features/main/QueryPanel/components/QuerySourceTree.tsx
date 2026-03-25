@@ -8,6 +8,7 @@ import type { SalesforceObject, SalesforceSource } from "../../../../types";
 import { useSourceTreeState } from "../hooks/useSourceTreeState.ts";
 import { buildSourceSurfacePalette, getSourceColor } from "../logic/sourceColor.ts";
 import { buildInitialOpenState } from "../logic/sourceTreePersistence.ts";
+import type { QuerySourceObjectSearchResult } from "../logic/sourceObjectSearch.ts";
 import { QuerySourceTreeNode } from "./QuerySourceTreeNode";
 import type { QueryTreeRenderNode } from "../hooks/useSourceTreeState.ts";
 
@@ -33,6 +34,8 @@ type QuerySourceTreeProps = {
     refreshFocusedSource: () => Promise<void>;
     getFocusedSourceId: () => string;
     locateNodeByTarget: (target: { sourceId: string; objectName?: string }) => Promise<void>;
+    searchFocusedSourceObjects: (keyword: string) => Promise<QuerySourceObjectSearchResult[]>;
+    openObjectByTarget: (target: { sourceId: string; objectName: string }) => Promise<void>;
   }) => void;
 };
 
@@ -112,7 +115,9 @@ export function QuerySourceTree({
     onNodeClick,
     onToggleNode,
     refreshFocusedSource,
-    locateNodeByTarget: locateTreeNodeByTarget
+    locateNodeByTarget: locateTreeNodeByTarget,
+    searchFocusedSourceObjects,
+    openObjectByTarget
   } = useSourceTreeState({
     sources,
     selectedSourceId,
@@ -194,9 +199,11 @@ export function QuerySourceTree({
     onReady?.({
       refreshFocusedSource,
       getFocusedSourceId: () => treeState.focusedSourceId,
-      locateNodeByTarget
+      locateNodeByTarget,
+      searchFocusedSourceObjects,
+      openObjectByTarget
     });
-  }, [locateNodeByTarget, onReady, refreshFocusedSource, treeState.focusedSourceId]);
+  }, [locateNodeByTarget, onReady, openObjectByTarget, refreshFocusedSource, searchFocusedSourceObjects, treeState.focusedSourceId]);
 
   // 构建对象 tooltip：MySQL 与 Salesforce 按各自元数据摘要展示。
   function getObjectTooltip(node: QueryTreeRenderNode): string {

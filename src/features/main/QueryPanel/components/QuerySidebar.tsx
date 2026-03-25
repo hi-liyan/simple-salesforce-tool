@@ -1,9 +1,11 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Braces, Crosshair, Plus, RefreshCw } from "lucide-react";
 import { api } from "../../../../api";
 import { DataSourceType, ObjectDdl, ObjectDescribe, SalesforceObject, SalesforceSource, SourceUpsertPayload } from "../../../../types";
+import type { QuerySourceObjectSearchResult } from "../logic/sourceObjectSearch.ts";
 import { resolveConsoleTargetSource } from "../logic/querySidebarConsoleSource.ts";
 import { QuerySidebarActions, type QuerySidebarActionItem } from "./QuerySidebarActions";
+import { QuerySidebarSearch } from "./QuerySidebarSearch";
 import { QuerySourceTree } from "./QuerySourceTree";
 
 type QuerySidebarProps = {
@@ -91,9 +93,24 @@ export function QuerySidebar({
     refreshFocusedSource: () => Promise<void>;
     getFocusedSourceId: () => string;
     locateNodeByTarget: (target: { sourceId: string; objectName?: string }) => Promise<void>;
+    searchFocusedSourceObjects: (keyword: string) => Promise<QuerySourceObjectSearchResult[]>;
+    openObjectByTarget: (target: { sourceId: string; objectName: string }) => Promise<void>;
   } | null>(null);
+  // 左侧搜索关键字：仅作用于当前聚焦数据源。
+  const [searchKeyword, setSearchKeyword] = useState("");
+  // 左侧搜索结果：展示当前聚焦数据源下的命中对象/表。
+  const [searchResults, setSearchResults] = useState<QuerySourceObjectSearchResult[]>([]);
+  // 左侧搜索加载态：首次搜索未缓存 source 时展示。
+  const [searchLoading, setSearchLoading] = useState(false);
   // 当前激活工作区是否具备可定位的左树目标。
   const canLocateActiveWorkspaceNode = Boolean(activeWorkspaceTreeTarget?.sourceId);
+  // 当前聚焦数据源 ID：左树已就绪时优先使用树内焦点，否则回退到页面选中源。
+  const focusedSourceId = treeActions?.getFocusedSourceId() || selectedSourceId;
+  // 当前聚焦数据源信息：用于搜索范围提示和结果打开时兜底。
+  const focusedSource = useMemo(
+    () => sources.find((source) => source.id === focusedSourceId) || null,
+    [focusedSourceId, sources]
+  );
 
   // 打开“选择数据源类型”弹窗。
   function openSourceTypeModal() {
@@ -219,6 +236,59 @@ export function QuerySidebar({
     onOpenAuthWindow();
   }
 
+  // 根据关键字搜索当前聚焦数据源：复用左树缓存并带轻量延迟，避免输入时抖动。
+  useEffect(() => {
+    const normalizedKeyword = searchKeyword.trim();
+    if (!normalizedKeyword) {
+      setSearchResults([]);
+      setSearchLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        setSearchLoading(true);
+        const results = await treeActions?.searchFocusedSourceObjects(normalizedKeyword) || [];
+        if (cancelled) return;
+        setSearchResults(results);
+        setSearchLoading(false);
+      })();
+    }, 180);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [searchKeyword, treeActions]);
+
+  // 点击搜索结果：优先复用左树能力完成定位和打开，保持左右区域状态一致。
+  function handleSelectSearchResult(item: QuerySourceObjectSearchResult) {
+    void (async () => {
+      setSearchKeyword("");
+      setSearchResults([]);
+      if (treeActions) {
+        await treeActions.openObjectByTarget({
+          sourceId: item.sourceId,
+          objectName: item.objectName
+        });
+        return;
+      }
+
+      const fallbackSource = sources.find((source) => source.id === item.sourceId) || focusedSource;
+      if (!fallbackSource) return;
+      onOpenObject({
+        name: item.objectName,
+        label: item.label,
+        comment: item.secondaryText,
+        queryable: item.queryable,
+        createable: false,
+        updateable: false,
+        deletable: false
+      }, fallbackSource);
+    })();
+  }
+
   // 左侧动作区：统一用配置项渲染，便于未来按数据库类型扩展更多动作。
   const actionItems: QuerySidebarActionItem[] = [
     {
@@ -280,12 +350,16 @@ export function QuerySidebar({
         <QuerySidebarActions actions={actionItems} disabled={pageLoading} />
       </div>
 
-      {/* 数据源标题区域。 */}
-      <div className="border-b border-base-300 px-3 py-2">
-        <div className="flex items-center justify-between">
-          <span className="text-[12px] text-neutral/70">数据源</span>
-        </div>
-      </div>
+      {/* 左侧快速搜索：针对当前聚焦数据源检索 Object/表。 */}
+      <QuerySidebarSearch
+        keyword={searchKeyword}
+        loading={searchLoading}
+        focusedSourceName={focusedSource?.name || ""}
+        focusedSourceType={String(focusedSource?.sourceType || "salesforce")}
+        results={searchResults}
+        onKeywordChange={setSearchKeyword}
+        onSelectResult={handleSelectSearchResult}
+      />
 
       {/* 统一树区域：直接展示全部数据源与类型化子节点。 */}
       <div className="min-h-0 flex-1 pb-2 pt-1">

@@ -12,6 +12,7 @@ import {
   sanitizePersistedSourceTreeUiState
 } from "../logic/sourceTreePersistence.ts";
 import { resolveNodeClickOutcome, resolveNodeDoubleClickAction, type TreeNodeClickState } from "../logic/sourceTreeInteractions.ts";
+import { searchSourceObjects, type QuerySourceObjectSearchResult } from "../logic/sourceObjectSearch.ts";
 import { buildMySqlRootChildren, buildMySqlTableChildren, buildSalesforceRootChildren, buildSourceRootNodes } from "../logic/sourceTreeProviders.ts";
 import { beginRefreshingSource, finishRefreshingSource, focusSourceNode, toggleExpandedNode } from "../logic/sourceTreeState.ts";
 import type { QueryTreeNode, SourceTreeState } from "../types/tree.ts";
@@ -53,6 +54,10 @@ type UseSourceTreeStateResult = {
   refreshFocusedSource: () => Promise<void>;
   // 定位指定 source/object 到左侧树。
   locateNodeByTarget: (target: { sourceId: string; objectName?: string }) => Promise<{ targetNodeId: string; groupNodeId?: string } | null>;
+  // 搜索当前聚焦数据源下的对象/表。
+  searchFocusedSourceObjects: (keyword: string) => Promise<QuerySourceObjectSearchResult[]>;
+  // 根据定位目标直接打开对象。
+  openObjectByTarget: (target: { sourceId: string; objectName: string }) => Promise<void>;
 };
 
 // 创建空树状态：统一初始化所有分桶字段。
@@ -232,9 +237,9 @@ export function useSourceTreeState({
 
   // 加载单个数据源的根子节点，并按类型缓存对象/分组数据。
   const loadSourceChildren = useCallback(
-    async (source: SalesforceSource, forceRefresh = false) => {
+    async (source: SalesforceSource, forceRefresh = false): Promise<SalesforceObject[]> => {
       const sourceId = source.id;
-      if (!sourceId) return;
+      if (!sourceId) return [];
 
       // 加载与刷新都统一映射到节点前缀 loading，便于 UI 直接展示。
       setTreeState((current) => {
@@ -283,6 +288,7 @@ export function useSourceTreeState({
             [sourceId]: children
           }
         }));
+        return objects;
       } catch (error) {
         setTreeState((current) => ({
           ...finishRefreshingSource(current, sourceId, String(error)),
@@ -291,6 +297,7 @@ export function useSourceTreeState({
             [sourceId]: false
           }
         }));
+        return [];
       }
     },
     [selectedSourceId, selectedSourceObjects, selectedSourceObjectsLoading]
@@ -439,6 +446,61 @@ export function useSourceTreeState({
     [loadSourceChildren, sourceMap, treeState.sourceLoadingById, treeState.sourceTreeChildrenById]
   );
 
+  // 搜索当前聚焦数据源：优先复用缓存对象列表，不足时自动补拉一次。
+  const searchFocusedSourceObjects = useCallback(
+    async (keyword: string) => {
+      const normalizedKeyword = String(keyword || "").trim();
+      if (!normalizedKeyword) return [];
+
+      const sourceId = treeState.focusedSourceId || selectedSourceId;
+      if (!sourceId) return [];
+      const source = sourceMap.get(sourceId);
+      if (!source) return [];
+
+      const hasCachedObjects = Object.prototype.hasOwnProperty.call(treeState.sourceObjectsById, sourceId);
+      const cachedObjects = treeState.sourceObjectsById[sourceId] || [];
+      const objects = hasCachedObjects ? cachedObjects : await loadSourceChildren(source, false);
+
+      return searchSourceObjects({
+        keyword: normalizedKeyword,
+        source,
+        objects
+      });
+    },
+    [loadSourceChildren, selectedSourceId, sourceMap, treeState.focusedSourceId, treeState.sourceObjectsById]
+  );
+
+  // 根据 source/object 直接打开对象：用于搜索结果命中后的快捷跳转。
+  const openObjectByTarget = useCallback(
+    async (target: { sourceId: string; objectName: string }) => {
+      const normalizedSourceId = String(target.sourceId || "").trim();
+      const normalizedObjectName = String(target.objectName || "").trim();
+      if (!normalizedSourceId || !normalizedObjectName) return;
+
+      const source = sourceMap.get(normalizedSourceId);
+      if (!source) return;
+
+      const hasCachedObjects = Object.prototype.hasOwnProperty.call(treeState.sourceObjectsById, normalizedSourceId);
+      const cachedObjects = treeState.sourceObjectsById[normalizedSourceId] || [];
+      const objects = hasCachedObjects ? cachedObjects : await loadSourceChildren(source, false);
+      const objectItem = objects.find((item) => item.name === normalizedObjectName);
+      if (!objectItem) return;
+
+      await locateNodeByTarget({
+        sourceId: normalizedSourceId,
+        objectName: normalizedObjectName
+      });
+
+      if (!objectItem.queryable) {
+        onNotQueryableObjectClick?.(objectItem);
+        return;
+      }
+
+      onOpenObject(objectItem, source);
+    },
+    [loadSourceChildren, locateNodeByTarget, onNotQueryableObjectClick, onOpenObject, sourceMap, treeState.sourceObjectsById]
+  );
+
   // 构建树数据：source 为根，按类型挂载对象或分组。
   const treeData = useMemo<QueryTreeRenderNode[]>(() => {
     const rootNodes = buildSourceRootNodes(sources, {
@@ -511,6 +573,8 @@ export function useSourceTreeState({
     onNodeClick,
     onToggleNode: toggleNode,
     refreshFocusedSource,
-    locateNodeByTarget
+    locateNodeByTarget,
+    searchFocusedSourceObjects,
+    openObjectByTarget
   };
 }
