@@ -1,5 +1,5 @@
 import { AlertCircle, ChevronRight, Folder } from "lucide-react";
-import { useState, type MouseEvent as ReactMouseEvent } from "react";
+import { memo, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { createPortal } from "react-dom";
 import { buildObjectTabBindingKey } from "../../../../types";
 import { buildQuerySourceErrorPresentation } from "../logic/sourceTreeErrorPresentation.ts";
@@ -24,9 +24,9 @@ type QuerySourceTreeNodeProps = {
   // 单击节点。
   onNodeClick: (node: QueryTreeRenderNode) => void;
   // 双击节点。
-  onNodeDoubleClick: (node: QueryTreeRenderNode) => void;
+  onNodeDoubleClick: (node: QueryTreeRenderNode) => void | Promise<void>;
   // 点击展开箭头。
-  onToggleNode: (node: QueryTreeRenderNode) => void;
+  onToggleNode: (node: QueryTreeRenderNode) => void | Promise<void>;
   // 右键 Object 节点。
   onObjectContextMenu?: (event: ReactMouseEvent<HTMLDivElement>, node: QueryTreeRenderNode) => void;
   // 解析 Object 节点 tooltip。
@@ -57,8 +57,51 @@ function QueryTreeBadge({ text, tone }: { text: string; tone: "neutral" | "blue"
   );
 }
 
+// 比较节点渲染所依赖的最小状态切片：避免某个无关 source 更新时整棵树一起重渲染。
+function areQuerySourceTreeNodePropsEqual(prevProps: QuerySourceTreeNodeProps, nextProps: QuerySourceTreeNodeProps): boolean {
+  const prevNode = prevProps.node;
+  const nextNode = nextProps.node;
+  const prevSourceId = prevNode.sourceId;
+  const nextSourceId = nextNode.sourceId;
+  const prevObjectBindingKey = prevNode.kind === "object" ? buildObjectTabBindingKey(prevNode.sourceId, prevNode.objectName) : "";
+  const nextObjectBindingKey = nextNode.kind === "object" ? buildObjectTabBindingKey(nextNode.sourceId, nextNode.objectName) : "";
+  const prevIsSelectedNode = prevProps.treeState.selectedNodeId === prevNode.id;
+  const nextIsSelectedNode = nextProps.treeState.selectedNodeId === nextNode.id;
+  const prevIsFocusedSource = prevNode.kind === "source" && prevProps.treeState.focusedSourceId === prevSourceId;
+  const nextIsFocusedSource = nextNode.kind === "source" && nextProps.treeState.focusedSourceId === nextSourceId;
+  const prevIsActiveObject = prevNode.kind === "object"
+    && (prevProps.activeTabObjectName === prevObjectBindingKey || prevProps.activeTabObjectName === prevNode.objectName);
+  const nextIsActiveObject = nextNode.kind === "object"
+    && (nextProps.activeTabObjectName === nextObjectBindingKey || nextProps.activeTabObjectName === nextNode.objectName);
+  const prevSourceLoading = Boolean(prevProps.treeState.sourceLoadingById[prevSourceId] || prevProps.treeState.sourceRefreshingById[prevSourceId]);
+  const nextSourceLoading = Boolean(nextProps.treeState.sourceLoadingById[nextSourceId] || nextProps.treeState.sourceRefreshingById[nextSourceId]);
+  const prevSourceAuthPending = Boolean(prevProps.treeState.sourceAuthPendingById[prevSourceId]);
+  const nextSourceAuthPending = Boolean(nextProps.treeState.sourceAuthPendingById[nextSourceId]);
+  const prevSourceError = prevProps.treeState.sourceErrorById[prevSourceId] || "";
+  const nextSourceError = nextProps.treeState.sourceErrorById[nextSourceId] || "";
+
+  return (
+    prevNode === nextNode
+    && prevProps.level === nextProps.level
+    && prevProps.isOpen === nextProps.isOpen
+    && prevProps.rowBackgroundColor === nextProps.rowBackgroundColor
+    && prevProps.onNodeClick === nextProps.onNodeClick
+    && prevProps.onNodeDoubleClick === nextProps.onNodeDoubleClick
+    && prevProps.onToggleNode === nextProps.onToggleNode
+    && prevProps.onObjectContextMenu === nextProps.onObjectContextMenu
+    && prevProps.getObjectTooltip === nextProps.getObjectTooltip
+    && prevProps.registerNodeElement === nextProps.registerNodeElement
+    && prevIsSelectedNode === nextIsSelectedNode
+    && prevIsFocusedSource === nextIsFocusedSource
+    && prevIsActiveObject === nextIsActiveObject
+    && prevSourceLoading === nextSourceLoading
+    && prevSourceAuthPending === nextSourceAuthPending
+    && prevSourceError === nextSourceError
+  );
+}
+
 // 左侧树节点渲染器：使用受控 DOM 树渲染，保留当前视觉与交互语义。
-export function QuerySourceTreeNode({
+function QuerySourceTreeNodeComponent({
   node,
   level,
   isOpen,
@@ -164,13 +207,6 @@ export function QuerySourceTreeNode({
                   top: Math.min(Math.max(12, iconRect.bottom + 8), Math.max(12, window.innerHeight - 84))
                 }); // 行内注释：错误卡片直接锚定叹号左下角，避免再做宽度居中计算。
               }}
-              onMouseMove={(event) => {
-                const iconRect = event.currentTarget.getBoundingClientRect();
-                setErrorTooltipPosition({
-                  left: Math.min(Math.max(12, iconRect.left), Math.max(12, window.innerWidth - 272)),
-                  top: Math.min(Math.max(12, iconRect.bottom + 8), Math.max(12, window.innerHeight - 84))
-                }); // 行内注释：滚动树或窗口变化时，持续按叹号真实位置校正浮层。
-              }}
               onMouseLeave={() => {
                 setErrorTooltipPosition(null); // 行内注释：移出叹号后立即关闭错误浮层。
               }}
@@ -231,3 +267,6 @@ export function QuerySourceTreeNode({
     </div>
   );
 }
+
+// 导出记忆化节点组件：把渲染范围收敛到真正受影响的节点。
+export const QuerySourceTreeNode = memo(QuerySourceTreeNodeComponent, areQuerySourceTreeNodePropsEqual);

@@ -1,7 +1,7 @@
 import { create } from "zustand";
-import { persist, createJSONStorage } from "zustand/middleware";
+import { persist } from "zustand/middleware";
 import { buildObjectTabBindingKey, type TabState } from "../types/index.ts";
-import { tauriSqliteStorage } from "./tauriStorage.ts";
+import { createDebouncedTauriJsonStorage } from "./tauriStorage.ts";
 import { hydrateTab } from "./queryTabHydration.ts";
 
 // 主页面视图模式：支持 Query 工作区、Terminal 工作区、工具页与设置页入口。
@@ -128,6 +128,15 @@ type AppState = {
   resetTabs: () => void;
 };
 
+// App 持久化切片：仅包含真正需要落盘的稳定 UI 状态。
+type PersistedAppState = {
+  selectedSourceId: string;
+  viewMode: MainViewMode;
+  soqlSidebarWidth: number;
+  tabs: TabState[];
+  activeTabObjectName: string;
+};
+
 // Zustand Store：提供简洁的状态更新 API，通过 persist 中间件自动持久化到 SQLite。
 export const useAppStore = create<AppState>()(
   persist(
@@ -184,7 +193,7 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: "ui.app-store",
-      storage: createJSONStorage(() => tauriSqliteStorage),
+      storage: createDebouncedTauriJsonStorage<PersistedAppState>(),
       // 跳过自动 hydration，由 MainPage 启动流程手动控制恢复时机，
       // 避免异步 hydration 与初始化逻辑竞态导致默认值覆盖已存储数据。
       skipHydration: true,
