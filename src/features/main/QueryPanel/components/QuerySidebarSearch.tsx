@@ -34,7 +34,7 @@ export function QuerySidebarSearch({
   const objectAlias = normalizedSourceType === "mysql" ? "表" : "Object";
 
   return (
-    <div className="border-b border-base-300 px-3 py-2">
+    <div className="relative z-20 border-b border-base-300 px-3 py-2">
       {/* 搜索输入框容器：固定放在左树上方，便于始终快速触达。 */}
       <label className="input input-bordered input-sm flex items-center gap-2">
         {/* 搜索图标：弱化视觉存在感，只提示输入用途。 */}
@@ -69,7 +69,7 @@ export function QuerySidebarSearch({
 
       {/* 搜索结果面板：仅在有关键字时出现，避免左侧结构常驻过于拥挤。 */}
       {showResultPanel && (
-        <div className="mt-2 rounded border border-base-300 bg-base-100/90">
+        <div className="absolute left-3 right-3 top-full mt-2 overflow-hidden rounded border border-base-300 bg-base-100 shadow-lg">
           {/* 加载态提示：首次补拉当前 source 对象列表时给出明确反馈。 */}
           {loading && <div className="px-3 py-2 text-[12px] text-neutral/60">正在搜索...</div>}
 
