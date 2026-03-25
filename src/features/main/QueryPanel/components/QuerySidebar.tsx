@@ -22,7 +22,7 @@ type QuerySidebarProps = {
   // 兼容层：新增数据源后仍可复用外层数据源更新逻辑。
   onChangeSource: (sourceId: string) => void;
   // 兼容层：新增数据源后刷新 source 列表。
-  onRefreshSources: (sourceId?: string) => void;
+  onRefreshSources: (sourceId?: string, options?: { skipObjectFetch?: boolean }) => void;
   // 打开查询控制台回调。
   onOpenConsole?: (source?: SalesforceSource) => void;
   // 当前页面已持有的对象列表：用于给树组件复用已缓存数据。
@@ -309,7 +309,7 @@ export function QuerySidebar({
         }
         void (async () => {
           await treeActions?.refreshFocusedSource();
-          onRefreshSources(focusedSourceId);
+          onRefreshSources(focusedSourceId, { skipObjectFetch: true });
         })();
       }
     },

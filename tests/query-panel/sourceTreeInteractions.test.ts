@@ -7,26 +7,26 @@ import {
 } from "../../src/features/main/QueryPanel/logic/sourceTreeInteractions.ts";
 import type { QueryTreeNode } from "../../src/features/main/QueryPanel/types/tree.ts";
 
-// 构造最小 source 节点：覆盖双击行为测试所需字段。
+// 创建最小 source 节点：用于验证双击动作分发。
 function createSourceNode(): QueryTreeNode {
   return {
     id: "source:sf-1",
     kind: "source",
     sourceId: "sf-1",
     sourceType: "salesforce",
-    sourceName: "Salesforce",
-    sourceColor: "",
-    label: "Salesforce",
+    sourceName: "Org A",
+    sourceColor: "#3b82f6",
+    label: "Org A",
     expandable: true
   };
 }
 
-// 构造最小 group 节点：覆盖双击行为测试所需字段。
+// 创建最小 group 节点：用于验证双击仍保持展开语义。
 function createGroupNode(): QueryTreeNode {
   return {
-    id: "group:mysql-1:tables",
+    id: "group:sf-1:tables",
     kind: "group",
-    sourceId: "mysql-1",
+    sourceId: "sf-1",
     sourceType: "mysql",
     groupType: "tables",
     label: "tables",
@@ -34,25 +34,30 @@ function createGroupNode(): QueryTreeNode {
   };
 }
 
-// 构造最小 object 节点：覆盖双击行为测试所需字段。
-function createObjectNode(sourceType: string, objectName: string): QueryTreeNode {
+// 创建最小 object 节点：用于验证双击打开对象工作区。
+function createObjectNode(): QueryTreeNode {
   return {
-    id: `object:${sourceType}:${objectName}`,
+    id: "object:sf-1:Account",
     kind: "object",
-    sourceId: sourceType === "mysql" ? "mysql-1" : "sf-1",
-    sourceType,
-    objectName,
-    label: objectName,
+    sourceId: "sf-1",
+    sourceType: "salesforce",
+    objectName: "Account",
+    label: "Account",
     queryable: true,
     expandable: false
   };
 }
 
-test("resolveNodeDoubleClickAction: source 与 group 应双击展开，object 应双击打开右侧 tab", () => {
-  assert.equal(resolveNodeDoubleClickAction(createSourceNode()), "toggle");
+test("resolveNodeDoubleClickAction: source 双击应触发刷新", () => {
+  assert.equal(resolveNodeDoubleClickAction(createSourceNode()), "refresh");
+});
+
+test("resolveNodeDoubleClickAction: group 双击应保持展开切换", () => {
   assert.equal(resolveNodeDoubleClickAction(createGroupNode()), "toggle");
-  assert.equal(resolveNodeDoubleClickAction(createObjectNode("mysql", "users")), "open");
-  assert.equal(resolveNodeDoubleClickAction(createObjectNode("salesforce", "Account")), "open");
+});
+
+test("resolveNodeDoubleClickAction: object 双击应打开对象工作区", () => {
+  assert.equal(resolveNodeDoubleClickAction(createObjectNode()), "open");
 });
 
 test("buildTreeNodeInteractionClassName: 树节点应禁用文本选择并使用默认箭头光标", () => {
@@ -76,22 +81,26 @@ test("buildTreeNodeInteractionClassName: 选中节点应显示浅蓝色整行高
   assert.match(className, /\btext-sky-950\b/);
 });
 
-test("resolveNodeClickOutcome: 同一节点在阈值内再次点击时应判定为双击", () => {
-  const firstClick = resolveNodeClickOutcome(null, "object:mysql:users", 1000);
+test("resolveNodeClickOutcome: 同一节点连续点击应判定为双击", () => {
+  const firstClick = resolveNodeClickOutcome(null, "source:sf-1", 1000, 260);
   assert.equal(firstClick.isDoubleClick, false);
+  assert.deepEqual(firstClick.nextState, {
+    nodeId: "source:sf-1",
+    timestamp: 1000
+  });
 
-  const secondClick = resolveNodeClickOutcome(firstClick.nextState, "object:mysql:users", 1180);
+  const secondClick = resolveNodeClickOutcome(firstClick.nextState, "source:sf-1", 1200, 260);
   assert.equal(secondClick.isDoubleClick, true);
   assert.equal(secondClick.nextState, null);
 });
 
 test("resolveNodeClickOutcome: 超过阈值或切换节点时不应判定为双击", () => {
-  const firstClick = resolveNodeClickOutcome(null, "object:salesforce:Account", 1000);
-  const timeoutClick = resolveNodeClickOutcome(firstClick.nextState, "object:salesforce:Account", 1400);
-  const otherNodeClick = resolveNodeClickOutcome(firstClick.nextState, "object:salesforce:Contact", 1100);
+  const firstClick = resolveNodeClickOutcome(null, "object:sf-1:Account", 1000, 260);
+  const timeoutClick = resolveNodeClickOutcome(firstClick.nextState, "object:sf-1:Account", 1400, 260);
+  const otherNodeClick = resolveNodeClickOutcome(firstClick.nextState, "object:sf-1:Contact", 1100, 260);
 
   assert.equal(timeoutClick.isDoubleClick, false);
-  assert.deepEqual(timeoutClick.nextState, { nodeId: "object:salesforce:Account", timestamp: 1400 });
+  assert.deepEqual(timeoutClick.nextState, { nodeId: "object:sf-1:Account", timestamp: 1400 });
   assert.equal(otherNodeClick.isDoubleClick, false);
-  assert.deepEqual(otherNodeClick.nextState, { nodeId: "object:salesforce:Contact", timestamp: 1100 });
+  assert.deepEqual(otherNodeClick.nextState, { nodeId: "object:sf-1:Contact", timestamp: 1100 });
 });

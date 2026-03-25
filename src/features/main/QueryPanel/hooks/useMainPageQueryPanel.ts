@@ -65,7 +65,7 @@ type UseMainPageQueryPanelResult = {
   // 重新加载恢复的 Tab。
   reloadRestoredTabs: (sourceId: string) => Promise<void>;
   // 刷新指定数据源对应的工作区缓存（对象列表 + 已打开 Tab）。
-  refreshWorkspaceSource: (sourceId?: string) => Promise<void>;
+  refreshWorkspaceSource: (sourceId?: string, options?: { skipObjectFetch?: boolean }) => Promise<void>;
   // 显示工作区提示。
   showWorkspaceNotice: (notice: Notice, durationMs?: number) => void;
 };
@@ -334,19 +334,23 @@ export function useMainPageQueryPanel({
 
   // 刷新工作区数据源：无参时沿用“同步 CLI 数据源”旧行为；传入 sourceId 时只同步该 source 的对象缓存与已打开 Tab。
   const refreshWorkspaceSource = useCallback(
-    async (sourceId?: string) => {
+    async (sourceId?: string, options?: { skipObjectFetch?: boolean }) => {
       const normalizedSourceId = String(sourceId || "").trim();
+      const skipObjectFetch = Boolean(options?.skipObjectFetch);
       if (!normalizedSourceId) {
         await refreshSources(true);
         return;
       }
 
       try {
-        await queryClient.fetchQuery({
-          queryKey: ["objects", normalizedSourceId],
-          staleTime: 0,
-          queryFn: () => api.listObjects(normalizedSourceId)
-        });
+        if (!skipObjectFetch) {
+          await queryClient.fetchQuery({
+            queryKey: ["objects", normalizedSourceId],
+            staleTime: 0,
+            retry: false,
+            queryFn: () => api.listObjects(normalizedSourceId)
+          });
+        }
         await reloadTabsForSource(normalizedSourceId);
         showWorkspaceNotice({ type: "success", message: "数据源元数据已刷新。" });
       } catch (error) {

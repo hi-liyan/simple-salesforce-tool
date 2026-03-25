@@ -1,6 +1,7 @@
 import { AlertCircle, ChevronRight, Folder } from "lucide-react";
 import type { NodeRendererProps } from "react-arborist";
 import { useState, type MouseEvent as ReactMouseEvent } from "react";
+import { createPortal } from "react-dom";
 import { buildObjectTabBindingKey } from "../../../../types";
 import { buildQuerySourceErrorPresentation } from "../logic/sourceTreeErrorPresentation.ts";
 import { buildTreeNodeInteractionClassName } from "../logic/sourceTreeInteractions.ts";
@@ -59,8 +60,8 @@ export function QuerySourceTreeNode({
   onObjectContextMenu,
   getObjectTooltip
 }: QuerySourceTreeNodeProps) {
-  // 错误浮层坐标：用于让 hover 卡片跟随鼠标，而不是固定在图标下方。
-  const [errorTooltipPosition, setErrorTooltipPosition] = useState<{ x: number; y: number } | null>(null);
+  // 错误浮层坐标：固定锚定到红色叹号左下方，避免手动推算居中带来的偏移误差。
+  const [errorTooltipPosition, setErrorTooltipPosition] = useState<{ left: number; top: number } | null>(null);
   const data = node.data;
   const sourceId = data.sourceId;
   const isSourceNode = data.kind === "source";
@@ -132,10 +133,18 @@ export function QuerySourceTreeNode({
             <span
               className="relative inline-flex shrink-0"
               onMouseEnter={(event) => {
-                setErrorTooltipPosition({ x: event.clientX, y: event.clientY }); // 行内注释：首次进入时记录鼠标位置，立即显示浮层。
+                const iconRect = event.currentTarget.getBoundingClientRect();
+                setErrorTooltipPosition({
+                  left: Math.min(Math.max(12, iconRect.left), Math.max(12, window.innerWidth - 272)),
+                  top: Math.min(Math.max(12, iconRect.bottom + 8), Math.max(12, window.innerHeight - 84))
+                }); // 行内注释：错误卡片直接锚定叹号左下角，避免再做宽度居中计算。
               }}
               onMouseMove={(event) => {
-                setErrorTooltipPosition({ x: event.clientX, y: event.clientY }); // 行内注释：鼠标移动时同步更新浮层坐标，实现“跟随鼠标”。
+                const iconRect = event.currentTarget.getBoundingClientRect();
+                setErrorTooltipPosition({
+                  left: Math.min(Math.max(12, iconRect.left), Math.max(12, window.innerWidth - 272)),
+                  top: Math.min(Math.max(12, iconRect.bottom + 8), Math.max(12, window.innerHeight - 84))
+                }); // 行内注释：滚动树或窗口变化时，持续按叹号真实位置校正浮层。
               }}
               onMouseLeave={() => {
                 setErrorTooltipPosition(null); // 行内注释：移出叹号后立即关闭错误浮层。
@@ -149,24 +158,27 @@ export function QuerySourceTreeNode({
                 <AlertCircle size={14} aria-hidden="true" />
               </span>
 
-              {/* 错误悬浮卡片：使用 fixed 定位跟随鼠标，避免固定在节点下方遮挡树内容。 */}
+              {/* 错误悬浮卡片：固定显示在叹号下方，并提升层级避免被侧边 panel tabs 遮挡。 */}
               {errorTooltipPosition && (
-                <span
-                  className="pointer-events-none fixed z-30 w-[260px]"
-                  style={{
-                    left: Math.min(errorTooltipPosition.x + 14, Math.max(12, window.innerWidth - 280)),
-                    top: Math.max(12, errorTooltipPosition.y + 14)
-                  }}
-                >
-                  <span className="block rounded-md border border-[#f3c2c2] bg-[#fff6f6] px-2 py-1.5 text-left text-[#8b2a2a] shadow-md">
-                  {/* 错误标题：沿用之前的摘要标题，帮助用户快速理解失败类型。 */}
-                    <span className="block text-[11px] font-semibold leading-[1.3]">{sourceErrorPresentation.title}</span>
-                  {/* 错误说明：保持短说明风格，避免把树节点 hover 做成日志面板。 */}
-                    <span className="mt-0.5 block break-words text-[11px] leading-[1.4] text-[#a54848]">
-                      {sourceErrorPresentation.detail}
+                createPortal(
+                  <span
+                    className="pointer-events-none fixed z-[140] w-[260px]"
+                    style={{
+                      left: errorTooltipPosition.left,
+                      top: errorTooltipPosition.top
+                    }}
+                  >
+                    <span className="block rounded-md border border-[#f3c2c2] bg-[#fff6f6] px-2 py-1.5 text-left text-[#8b2a2a] shadow-md">
+                    {/* 错误标题：沿用之前的摘要标题，帮助用户快速理解失败类型。 */}
+                      <span className="block text-[11px] font-semibold leading-[1.3]">{sourceErrorPresentation.title}</span>
+                    {/* 错误说明：保持短说明风格，避免把树节点 hover 做成日志面板。 */}
+                      <span className="mt-0.5 block break-words text-[11px] leading-[1.4] text-[#a54848]">
+                        {sourceErrorPresentation.detail}
+                      </span>
                     </span>
-                  </span>
-                </span>
+                  </span>,
+                  document.body
+                )
               )}
             </span>
           )}

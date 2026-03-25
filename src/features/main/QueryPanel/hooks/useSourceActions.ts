@@ -62,6 +62,7 @@ export function useSourceActions({
         } else {
           list = await queryClient.fetchQuery({
             queryKey: ["sources"],
+            retry: false,
             queryFn: () => api.listSources()
           });
         }
@@ -86,6 +87,7 @@ export function useSourceActions({
             queryKey: ["objects", nextSelectedSourceId],
             // 显式刷新时强制请求后端远端拉取接口，并回写数据库缓存。
             staleTime: 0,
+            retry: false,
             queryFn: () => api.refreshObjects(nextSelectedSourceId)
           });
         }

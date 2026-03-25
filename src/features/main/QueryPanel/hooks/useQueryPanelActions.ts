@@ -40,7 +40,7 @@ type UseQueryPanelActionsInput = {
   // 批量关闭控制台 Tabs。
   closeSoqlTabsByIds: (tabIds: string[]) => void;
   // 刷新数据源。
-  refreshSources: (sourceId?: string) => Promise<void>;
+  refreshSources: (sourceId?: string, options?: { skipObjectFetch?: boolean }) => Promise<void>;
   // 刷新指定 MySQL 对象的字段元数据与 DDL。
   refreshMysqlObjectMetadata: (objectName: string) => Promise<{ describe: ObjectDescribe; ddl: import("../../../../types").ObjectDdl }>;
   // 切换数据源。
@@ -201,7 +201,7 @@ export function useQueryPanelActions({
         }
       },
       onChangeSource: (sourceId) => void handleSourceChange(sourceId),
-      onRefreshSources: (sourceId) => void refreshSources(sourceId),
+      onRefreshSources: (sourceId, options) => void refreshSources(sourceId, options),
       onRefreshMysqlObjectMetadata: (objectName) => refreshMysqlObjectMetadata(objectName),
       onOpenObject: (item, source) => {
         const targetSourceId = source?.id || selectedSourceId;

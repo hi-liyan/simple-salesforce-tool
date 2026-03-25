@@ -21,12 +21,10 @@ function createSource(partial: Partial<SalesforceSource> = {}): SalesforceSource
 
 test("resolveQuerySourceRetryPolicy: Salesforce 应启用后台重试，MySQL 保持单次请求", () => {
   assert.deepEqual(resolveQuerySourceRetryPolicy(createSource({ sourceType: "salesforce" })), {
-    maxRetries: 2,
-    delayMs: 450
+    retryDelayMsList: [800, 1600, 3000]
   });
   assert.deepEqual(resolveQuerySourceRetryPolicy(createSource({ sourceType: "mysql" })), {
-    maxRetries: 0,
-    delayMs: 0
+    retryDelayMsList: []
   });
 });
 
@@ -34,14 +32,14 @@ test("runQuerySourceRequestWithRetry: Salesforce 临时失败后应在后台重�
   let callCount = 0;
   const result = await runQuerySourceRequestWithRetry(createSource({ sourceType: "salesforce" }), async () => {
     callCount += 1;
-    if (callCount < 3) {
+    if (callCount < 4) {
       throw new Error("token expired");
     }
     return "ok";
   });
 
   assert.equal(result, "ok");
-  assert.equal(callCount, 3);
+  assert.equal(callCount, 4);
 });
 
 test("runQuerySourceRequestWithRetry: 非 Salesforce 数据源失败时不应重复请求", async () => {
@@ -53,4 +51,16 @@ test("runQuerySourceRequestWithRetry: 非 Salesforce 数据源失败时不应重
     });
   });
   assert.equal(callCount, 1);
+});
+
+test("runQuerySourceRequestWithRetry: Salesforce 返回 420 时应走完后台阶梯重试后再失败", async () => {
+  let callCount = 0;
+  await assert.rejects(async () => {
+    await runQuerySourceRequestWithRetry(createSource({ sourceType: "salesforce" }), async () => {
+      callCount += 1;
+      throw new Error("Salesforce 调用失败，状态码 420: rate limited");
+    });
+  });
+
+  assert.equal(callCount, 4);
 });

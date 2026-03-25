@@ -2,10 +2,8 @@ import type { SalesforceSource } from "../../../../types/index.ts";
 
 // 数据源加载重试配置：统一控制不同 source 的后台重试次数与间隔。
 export type QuerySourceRetryPolicy = {
-  // 最大重试次数：不含首次请求。
-  maxRetries: number;
-  // 两次重试之间的等待时间。
-  delayMs: number;
+  // 每次重试前的等待时间列表：长度即为额外重试次数。
+  retryDelayMsList: number[];
 };
 
 // 睡眠指定毫秒：用于在后台重试之间留出短暂缓冲，避免连续闪烁。
@@ -20,13 +18,11 @@ export function resolveQuerySourceRetryPolicy(source: SalesforceSource): QuerySo
   const normalizedSourceType = String(source.sourceType || "salesforce").toLowerCase();
   if (normalizedSourceType === "salesforce") {
     return {
-      maxRetries: 2,
-      delayMs: 450
+      retryDelayMsList: [800, 1600, 3000]
     };
   }
   return {
-    maxRetries: 0,
-    delayMs: 0
+    retryDelayMsList: []
   };
 }
 
@@ -37,17 +33,19 @@ export async function runQuerySourceRequestWithRetry<T>(
 ): Promise<T> {
   const retryPolicy = resolveQuerySourceRetryPolicy(source);
   let latestError: unknown = null;
+  const totalAttempts = retryPolicy.retryDelayMsList.length + 1;
 
-  for (let attempt = 0; attempt <= retryPolicy.maxRetries; attempt += 1) {
+  for (let attempt = 0; attempt < totalAttempts; attempt += 1) {
     try {
       return await request();
     } catch (error) {
       latestError = error;
-      if (attempt >= retryPolicy.maxRetries) {
+      if (attempt >= totalAttempts - 1) {
         throw error;
       }
-      if (retryPolicy.delayMs > 0) {
-        await wait(retryPolicy.delayMs);
+      const retryDelayMs = retryPolicy.retryDelayMsList[attempt] || 0;
+      if (retryDelayMs > 0) {
+        await wait(retryDelayMs); // 行内注释：按阶梯间隔重试，减少短时间连续打远端。
       }
     }
   }

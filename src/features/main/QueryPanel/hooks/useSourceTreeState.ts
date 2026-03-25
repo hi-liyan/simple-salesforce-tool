@@ -104,6 +104,8 @@ export function useSourceTreeState({
   const latestClickStateRef = useRef<TreeNodeClickState | null>(null);
   // 数据源请求版本：仅允许最后一次请求写回状态，避免旧请求结果覆盖新结果。
   const sourceRequestVersionRef = useRef<Record<string, number>>({});
+  // 数据源在途请求：同一 source 正在加载时直接复用同一个 Promise，避免重复打远端。
+  const sourceLoadingPromiseRef = useRef<Record<string, Promise<SalesforceObject[]>>>({});
   // 持久化 UI 状态只恢复一次，避免后续用户交互被旧快照覆盖。
   const persistedUiAppliedRef = useRef(false);
 
@@ -243,6 +245,11 @@ export function useSourceTreeState({
     async (source: SalesforceSource, forceRefresh = false): Promise<SalesforceObject[]> => {
       const sourceId = source.id;
       if (!sourceId) return [];
+      const existingLoadingPromise = sourceLoadingPromiseRef.current[sourceId];
+      if (existingLoadingPromise) {
+        return existingLoadingPromise; // 行内注释：同一 source 的展开/刷新并发时复用同一轮请求结果。
+      }
+
       const currentRequestVersion = (sourceRequestVersionRef.current[sourceId] || 0) + 1;
       sourceRequestVersionRef.current[sourceId] = currentRequestVersion;
 
@@ -265,56 +272,62 @@ export function useSourceTreeState({
         };
       });
 
-      try {
-        const objects = await runQuerySourceRequestWithRetry(source, async () => {
-          return forceRefresh
-            ? await api.refreshObjects(sourceId)
-            : sourceId === selectedSourceId && !selectedSourceObjectsLoading
-              ? selectedSourceObjects
-              : await api.listObjects(sourceId);
-        });
-        const context = {
-          getSourceColor,
-          listObjects: async () => objects,
-          withSalesforceSourceReauth: async <T>(_source: SalesforceSource, action: () => Promise<T>) => action()
-        };
-        const normalizedSourceType = String(source.sourceType || "salesforce").toLowerCase();
-        const children = normalizedSourceType === "mysql"
-          ? await buildMySqlRootChildren(source, context)
-          : await buildSalesforceRootChildren(source, context);
+      const loadingPromise = (async () => {
+        try {
+          const objects = await runQuerySourceRequestWithRetry(source, async () => {
+            if (forceRefresh) {
+              return await api.refreshObjects(sourceId); // 行内注释：显式刷新始终强制回源拉取最新对象列表。
+            }
+            return await api.listObjects(sourceId); // 行内注释：节点首次展开优先复用 SQLite 持久化缓存，无缓存时再由后端自动回源。
+          });
+          const context = {
+            getSourceColor,
+            listObjects: async () => objects,
+            withSalesforceSourceReauth: async <T>(_source: SalesforceSource, action: () => Promise<T>) => action()
+          };
+          const normalizedSourceType = String(source.sourceType || "salesforce").toLowerCase();
+          const children = normalizedSourceType === "mysql"
+            ? await buildMySqlRootChildren(source, context)
+            : await buildSalesforceRootChildren(source, context);
 
-        if (!isLatestSourceRequest()) return objects;
+          if (!isLatestSourceRequest()) return objects;
 
-        setTreeState((current) => ({
-          ...finishRefreshingSource(current, sourceId, ""),
-          sourceLoadingById: {
-            ...current.sourceLoadingById,
-            [sourceId]: false
-          },
-          sourceObjectsById: {
-            ...current.sourceObjectsById,
-            [sourceId]: objects
-          },
-          sourceTreeChildrenById: {
-            ...current.sourceTreeChildrenById,
-            [sourceId]: children
-          }
-        }));
-        return objects;
-      } catch (error) {
-        if (!isLatestSourceRequest()) return [];
+          setTreeState((current) => ({
+            ...finishRefreshingSource(current, sourceId, ""),
+            sourceLoadingById: {
+              ...current.sourceLoadingById,
+              [sourceId]: false
+            },
+            sourceObjectsById: {
+              ...current.sourceObjectsById,
+              [sourceId]: objects
+            },
+            sourceTreeChildrenById: {
+              ...current.sourceTreeChildrenById,
+              [sourceId]: children
+            }
+          }));
+          return objects;
+        } catch (error) {
+          if (!isLatestSourceRequest()) return [];
 
-        setTreeState((current) => ({
-          ...finishRefreshingSource(current, sourceId, String(error)),
-          sourceLoadingById: {
-            ...current.sourceLoadingById,
-            [sourceId]: false
-          }
-        }));
-        return [];
-      }
+          setTreeState((current) => ({
+            ...finishRefreshingSource(current, sourceId, String(error)),
+            sourceLoadingById: {
+              ...current.sourceLoadingById,
+              [sourceId]: false
+            }
+          }));
+          return [];
+        } finally {
+          delete sourceLoadingPromiseRef.current[sourceId]; // 行内注释：当前轮请求结束后释放占位，允许后续再次手动刷新。
+        }
+      })();
+
+      sourceLoadingPromiseRef.current[sourceId] = loadingPromise;
+      return loadingPromise;
     },
-    [selectedSourceId, selectedSourceObjects, selectedSourceObjectsLoading]
+    []
   );
 
   // 聚焦某个数据源：仅更新左树焦点，不触发右侧工作区切桶。
@@ -394,6 +407,14 @@ export function useSourceTreeState({
     }
   }, [focusSource]);
 
+  // 刷新指定 source 节点：让节点双击与顶部刷新按钮复用同一条强刷链路。
+  const refreshSourceNode = useCallback(async (node: QueryTreeNode) => {
+    if (node.kind !== "source") return;
+    const source = sourceMap.get(node.sourceId);
+    if (!source) return;
+    await loadSourceChildren(source, true); // 行内注释：source 双击时直接强制回源，统一错误回显与结束态。
+  }, [loadSourceChildren, sourceMap]);
+
   // 节点点击：先处理单击焦点，再基于时间窗把第二次点击提升为稳定双击动作。
   const onNodeClick = useCallback(async (node: QueryTreeNode, treeNode: NodeApi<QueryTreeRenderNode>) => {
     handleSingleClick(node);
@@ -402,12 +423,17 @@ export function useSourceTreeState({
     latestClickStateRef.current = outcome.nextState;
     if (!outcome.isDoubleClick) return;
 
-    if (resolveNodeDoubleClickAction(node) === "open") {
+    const doubleClickAction = resolveNodeDoubleClickAction(node);
+    if (doubleClickAction === "open") {
       openObjectNode(node);
       return;
     }
+    if (doubleClickAction === "refresh") {
+      await refreshSourceNode(node);
+      return;
+    }
     await toggleNode(node, treeNode);
-  }, [handleSingleClick, openObjectNode, toggleNode]);
+  }, [handleSingleClick, openObjectNode, refreshSourceNode, toggleNode]);
 
   // 刷新当前聚焦数据源：仅刷新该 source，不做全量同步。
   const refreshFocusedSource = useCallback(async () => {
