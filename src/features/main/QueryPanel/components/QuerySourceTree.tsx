@@ -55,6 +55,8 @@ function QuerySourceTreeRow({ node, innerRef, attrs, children, sourceSurfaceBack
       {...attrs}
       style={{
         ...(attrs.style || {}),
+        width: "max-content",
+        minWidth: "100%",
         backgroundColor: rowBackgroundColor || undefined
       }}
     >
@@ -342,42 +344,47 @@ export function QuerySourceTree({
   }
 
   return (
-    <div ref={containerRef} className="h-full w-full bg-white">
-      <Tree
-        ref={treeRef}
-        data={treeData}
-        width="100%"
-        height={treeHeight}
-        rowHeight={36}
-        indent={18}
-        paddingTop={8}
-        paddingBottom={8}
-        openByDefault={false}
-        initialOpenState={initialOpenState}
-        disableDrag
-        selection={selectionId}
-        childrenAccessor="children"
-        idAccessor="id"
-        renderRow={(props) => (
-          <QuerySourceTreeRow
-            {...props}
-            sourceSurfaceBackgroundById={sourceSurfaceBackgroundById}
-          />
-        )}
-      >
-        {(props) => (
-          <QuerySourceTreeNode
-            {...props}
-            treeState={treeState}
-            activeTabObjectName={activeTabObjectName}
-            sourceColorById={sourceColorById}
-            onNodeClick={(node) => void onNodeClick(node, props.node)}
-            onToggleNode={(node) => void onToggleNode(node, props.node)}
-            onObjectContextMenu={handleObjectContextMenu}
-            getObjectTooltip={getObjectTooltip}
-          />
-        )}
-      </Tree>
+    <div ref={containerRef} className="h-full w-full overflow-hidden bg-white">
+      {/* 横向滚动层：只负责超宽节点的底部横向滚动，纵向滚动仍交给 Tree 自己管理。 */}
+      <div className="h-full w-full overflow-x-auto overflow-y-hidden">
+        <div className="h-full min-w-full w-max">
+          <Tree
+            ref={treeRef}
+            data={treeData}
+            width="100%"
+            height={treeHeight}
+            rowHeight={36}
+            indent={18}
+            paddingTop={8}
+            paddingBottom={8}
+            openByDefault={false}
+            initialOpenState={initialOpenState}
+            disableDrag
+            selection={selectionId}
+            childrenAccessor="children"
+            idAccessor="id"
+            renderRow={(props) => (
+              <QuerySourceTreeRow
+                {...props}
+                sourceSurfaceBackgroundById={sourceSurfaceBackgroundById}
+              />
+            )}
+          >
+            {(props) => (
+              <QuerySourceTreeNode
+                {...props}
+                treeState={treeState}
+                activeTabObjectName={activeTabObjectName}
+                sourceColorById={sourceColorById}
+                onNodeClick={(node) => void onNodeClick(node, props.node)}
+                onToggleNode={(node) => void onToggleNode(node, props.node)}
+                onObjectContextMenu={handleObjectContextMenu}
+                getObjectTooltip={getObjectTooltip}
+              />
+            )}
+          </Tree>
+        </div>
+      </div>
       {/* Object 右键菜单：复用公共菜单容器，具体动作仍由树组件自己定义。 */}
       {objectContextMenu && (
         <ContextMenu x={objectContextMenu.x} y={objectContextMenu.y} entries={objectContextMenuEntries} />

@@ -100,7 +100,7 @@ type AppState = {
   selectedSourceId: string;
   // 主页面视图模式。
   viewMode: MainViewMode;
-  // SOQL 执行器左侧栏宽度（像素）。
+  // Query 工作区左侧侧边栏宽度（像素）。
   soqlSidebarWidth: number;
   // 已打开的对象 Tab 列表：改为全局列表，不再按 source 分桶恢复。
   tabs: TabState[];
@@ -112,7 +112,7 @@ type AppState = {
   setSelectedSourceId: (sourceId: string) => void;
   // 更新视图模式。
   setViewMode: (viewMode: MainViewMode) => void;
-  // 更新 SOQL 侧栏宽度。
+  // 更新 Query 工作区左侧侧边栏宽度。
   setSoqlSidebarWidth: (width: number) => void;
   // 更新激活的 Tab。
   setActiveTabObjectName: (objectName: string) => void;

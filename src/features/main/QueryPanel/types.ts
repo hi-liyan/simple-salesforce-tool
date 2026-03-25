@@ -45,7 +45,7 @@ export type QueryWorkspaceTabItem = {
 export type QueryPanelViewState = {
   // 页面模式：Query/SOQL/设置。
   viewMode: MainViewMode;
-  // 左侧 SOQL 树模式侧栏宽度。
+  // Query 工作区左侧侧边栏宽度。
   soqlSidebarWidth: number;
   // 当前选中数据源 ID。
   selectedSourceId: string;
@@ -183,6 +183,6 @@ export type QueryPanelActions = {
   onCloseWorkspaceNotice: () => void;
   // 关闭激活 Tab 提示。
   onCloseActiveTabNotice: () => void;
-  // 设置 SOQL 模式侧栏宽度。
+  // 设置 Query 工作区左侧侧边栏宽度。
   onSetSoqlSidebarWidth: (width: number) => void;
 };

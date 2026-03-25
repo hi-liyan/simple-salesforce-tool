@@ -4,7 +4,7 @@ import { QuerySidebar } from "./components/QuerySidebar";
 import { DataQueryTabPane } from "./components/DataQueryTabPane";
 import { ConsoleTabPane } from "./components/ConsoleTabPane";
 import { useQueryPanelState } from "./hooks/useQueryPanelState";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { parseWorkspaceTabId } from "./logic/workspaceTabs";
 import { getVisibleColumns, hasPendingChanges } from "./logic/queryUtils";
 import { SoqlExecutorGlobalEffects } from "./components/SoqlExecutorWorkspace";
@@ -22,6 +22,18 @@ export function QueryPanel({ viewState, actions }: QueryPanelProps) {
   const { queryableObjectNames } = useQueryPanelState(viewState);
   // 已常驻挂载的工作区 Tab ID：首次访问时挂载，后续仅隐藏/显示，避免切换时销毁内部状态。
   const [mountedWorkspaceTabIds, setMountedWorkspaceTabIds] = useState<string[]>([]);
+  // 是否正在拖拽左侧栏宽度。
+  const [draggingSidebarResize, setDraggingSidebarResize] = useState(false);
+  // QueryPanel 根容器：用于按当前可用宽度约束左栏拖拽范围。
+  const panelContainerRef = useRef<HTMLDivElement | null>(null);
+  // 左栏拖拽起点 X 坐标。
+  const sidebarResizeStartXRef = useRef(0);
+  // 左栏拖拽起始宽度：使用持久化后的当前宽度作为基准。
+  const sidebarResizeStartWidthRef = useRef(viewState.soqlSidebarWidth);
+  // 拖拽前 body 的 user-select 样式，结束后恢复。
+  const prevBodyUserSelectRef = useRef("");
+  // 拖拽前 body 的 cursor 样式，结束后恢复。
+  const prevBodyCursorRef = useRef("");
 
   // 工作区焦点变化时：确保当前激活 Tab 被纳入常驻挂载集合。
   useEffect(() => {
@@ -46,6 +58,39 @@ export function QueryPanel({ viewState, actions }: QueryPanelProps) {
       return next;
     });
   }, [viewState.workspaceTabs]);
+
+  // 左侧侧边栏拖拽调整宽度：体验对齐“字段与 Field”抽屉的交互。
+  useEffect(() => {
+    if (!draggingSidebarResize) return;
+
+    // 进入拖拽时禁用文本选中，并统一鼠标样式，避免误选文字。
+    prevBodyUserSelectRef.current = document.body.style.userSelect;
+    prevBodyCursorRef.current = document.body.style.cursor;
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "col-resize";
+
+    const onMouseMove = (event: MouseEvent) => {
+      const deltaX = event.clientX - sidebarResizeStartXRef.current;
+      const rawWidth = sidebarResizeStartWidthRef.current + deltaX;
+      const containerWidth = panelContainerRef.current?.clientWidth || window.innerWidth;
+      const maxWidth = Math.min(560, Math.max(360, Math.floor(containerWidth * 0.5)));
+      const nextWidth = Math.max(240, Math.min(maxWidth, rawWidth));
+      actions.onSetSoqlSidebarWidth(nextWidth); // 行内注释：同步写入持久化 store，确保下次启动恢复宽度。
+    };
+
+    const onMouseUp = () => {
+      setDraggingSidebarResize(false); // 行内注释：鼠标释放后结束拖拽态。
+    };
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+      document.body.style.userSelect = prevBodyUserSelectRef.current;
+      document.body.style.cursor = prevBodyCursorRef.current;
+    };
+  }, [actions, draggingSidebarResize]);
 
   // 常驻挂载 Tab 集合：用于快速判断是否需要渲染对应 pane。
   const mountedWorkspaceTabIdSet = useMemo(() => new Set(mountedWorkspaceTabIds), [mountedWorkspaceTabIds]);
@@ -89,9 +134,12 @@ export function QueryPanel({ viewState, actions }: QueryPanelProps) {
 
   return (
     // Query 统一工作区：对象树 + 混合 Tab（data/console）。
-    <div className="grid h-full w-full grid-cols-[320px_1fr] overflow-hidden">
+    <div ref={panelContainerRef} className="flex h-full w-full overflow-hidden">
       {/* 左侧对象树侧栏。 */}
-      <div className="flex min-h-0 flex-col border-r border-base-300 bg-white">
+      <div
+        className="flex min-h-0 shrink-0 flex-col border-r border-base-300 bg-white"
+        style={{ width: viewState.soqlSidebarWidth, minWidth: viewState.soqlSidebarWidth }}
+      >
         <QuerySidebar
           sources={viewState.sources}
           selectedSourceId={viewState.selectedSourceId}
@@ -110,8 +158,21 @@ export function QueryPanel({ viewState, actions }: QueryPanelProps) {
           activeWorkspaceTreeTarget={activeWorkspaceTreeTarget}
         />
       </div>
+      {/* 左侧栏拖拽热区：允许用户按需调整对象树侧栏宽度。 */}
+      <div
+        className="relative z-20 -ml-[3px] w-[6px] shrink-0 cursor-col-resize bg-transparent"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="拖拽调整左侧侧边栏宽度"
+        onMouseDown={(event) => {
+          event.preventDefault(); // 行内注释：阻止拖拽起点触发文本选中。
+          sidebarResizeStartXRef.current = event.clientX; // 行内注释：记录本次拖拽起点 X。
+          sidebarResizeStartWidthRef.current = viewState.soqlSidebarWidth; // 行内注释：记录本次拖拽起始宽度。
+          setDraggingSidebarResize(true); // 行内注释：进入拖拽状态。
+        }}
+      />
       {/* 右侧工作区：Tab 栏 + 内容区。 */}
-      <div className="flex min-h-0 min-w-0 flex-col overflow-hidden">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         {/* 统一工作区 Tab 栏：data 与 console 混合显示。 */}
         <QueryWorkspaceTabs
           tabs={viewState.workspaceTabs}

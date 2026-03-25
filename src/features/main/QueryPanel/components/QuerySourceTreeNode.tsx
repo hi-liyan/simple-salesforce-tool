@@ -75,6 +75,8 @@ export function QuerySourceTreeNode({
   const folderIconClassName = visualKind === "group-views" ? "text-violet-400" : "text-primary/75";
   // Object 节点 tooltip：恢复旧版“鼠标经过显示对象元数据”的能力。
   const objectTooltip = isObjectNode ? getObjectTooltip?.(data) || "" : "";
+  // 节点行最小内容宽度：让超长名称真实撑开，交给父容器显示底部横向滚动条。
+  const rowMinContentWidthClassName = isSourceNode && sourceAuthPending ? "min-w-[320px]" : "min-w-full";
 
   return (
     <>
@@ -94,48 +96,48 @@ export function QuerySourceTreeNode({
         }}
       >
         {/* 节点主体：统一收紧箭头、图标、文字的间距，避免当前树看起来松散又凌乱。 */}
-        <div className="flex min-h-[30px] items-center gap-1.5 px-2 py-[3px] text-[12px]">
-        {/* 展开箭头：减弱存在感，只负责树结构层级提示。 */}
-        <button
-          type="button"
-          className={`flex h-4 w-4 shrink-0 items-center justify-center rounded ${node.isLeaf ? "invisible" : "visible hover:bg-base-300/50"}`}
-          onClick={(event) => {
-            event.stopPropagation();
-            onToggleNode(data);
-          }}
-          aria-label={node.isOpen ? "折叠节点" : "展开节点"}
-        >
-          <ChevronRight size={12} className={`${node.isOpen ? "rotate-90" : ""} text-base-content/55 transition-transform`} />
-        </button>
+        <div className={`flex min-h-[30px] w-max items-center gap-1.5 px-2 py-[3px] text-[12px] ${rowMinContentWidthClassName}`}>
+          {/* 展开箭头：减弱存在感，只负责树结构层级提示。 */}
+          <button
+            type="button"
+            className={`flex h-4 w-4 shrink-0 items-center justify-center rounded ${node.isLeaf ? "invisible" : "visible hover:bg-base-300/50"}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              onToggleNode(data); // 行内注释：仅切换当前节点展开态，不触发整行点击。
+            }}
+            aria-label={node.isOpen ? "折叠节点" : "展开节点"}
+          >
+            <ChevronRight size={12} className={`${node.isOpen ? "rotate-90" : ""} text-base-content/55 transition-transform`} />
+          </button>
 
-        {/* 主图标：可展开节点改为文件夹图标，保持树结构语义更直观。 */}
-        <span className="flex h-[15px] w-[18px] shrink-0 items-center justify-center">
-          {showFolderIcon ? (
-            /* 文件夹图标：仅用于可展开节点，替代原来的文字徽标。 */
-            <Folder size={15} className={folderIconClassName} aria-hidden="true" />
-          ) : (
-            /* 文字徽标：不可展开节点继续保留当前轻量视觉。 */
-            <QueryTreeBadge text={badgeMeta.text} tone={badgeMeta.tone} />
-          )}
-        </span>
-
-        {/* source 节点刷新时在名称前显示 loading，满足单源刷新反馈要求。 */}
-        {isSourceNode && sourceLoading && <span className="loading loading-spinner shrink-0" style={{ width: 12, height: 12 }} />}
-
-        {/* 名称主体：当前聚焦的数据源名称单独加粗，便于快速识别当前工作来源。 */}
-        <span className={`min-w-0 flex-1 truncate leading-[1.35] ${isFocusedSource ? "font-semibold" : ""}`}>{data.label}</span>
-
-        {/* 认证刷新提示：当前 source 正在自动刷新 token 时显示轻量文案。 */}
-        {isSourceNode && sourceAuthPending && (
-          <span className="rounded bg-warning/15 px-1.5 py-[2px] text-[10px] leading-[1] text-warning-content">
-            认证中
+          {/* 主图标：可展开节点改为文件夹图标，保持树结构语义更直观。 */}
+          <span className="flex h-[15px] w-[18px] shrink-0 items-center justify-center">
+            {showFolderIcon ? (
+              /* 文件夹图标：仅用于可展开节点，替代原来的文字徽标。 */
+              <Folder size={15} className={folderIconClassName} aria-hidden="true" />
+            ) : (
+              /* 文字徽标：不可展开节点继续保留当前轻量视觉。 */
+              <QueryTreeBadge text={badgeMeta.text} tone={badgeMeta.tone} />
+            )}
           </span>
-        )}
 
-        {/* 不可查询 badge：沿用旧对象列表的中性灰提示语义。 */}
-        {isObjectNode && !data.queryable && (
-          <span className="rounded bg-base-300 px-1.5 py-[2px] text-[10px] leading-[1] text-base-content/80">不可查询</span>
-        )}
+          {/* source 节点刷新时在名称前显示 loading，满足单源刷新反馈要求。 */}
+          {isSourceNode && sourceLoading && <span className="loading loading-spinner shrink-0" style={{ width: 12, height: 12 }} />}
+
+          {/* 名称主体：取消 truncate，让超长内容撑开整行并触发横向滚动。 */}
+          <span className={`whitespace-nowrap leading-[1.35] ${isFocusedSource ? "font-semibold" : ""}`}>{data.label}</span>
+
+          {/* 认证刷新提示：当前 source 正在自动刷新 token 时显示轻量文案。 */}
+          {isSourceNode && sourceAuthPending && (
+            <span className="shrink-0 rounded bg-warning/15 px-1.5 py-[2px] text-[10px] leading-[1] text-warning-content">
+              认证中
+            </span>
+          )}
+
+          {/* 不可查询 badge：沿用旧对象列表的中性灰提示语义。 */}
+          {isObjectNode && !data.queryable && (
+            <span className="shrink-0 rounded bg-base-300 px-1.5 py-[2px] text-[10px] leading-[1] text-base-content/80">不可查询</span>
+          )}
         </div>
       </div>
 
