@@ -17,7 +17,7 @@ import { buildMySqlRootChildren, buildMySqlTableChildren, buildSalesforceRootChi
 import { beginRefreshingSource, finishRefreshingSource, focusSourceNode } from "../logic/sourceTreeState.ts";
 import type { QueryTreeNode, SourceTreeState } from "../types/tree.ts";
 
-// 树渲染节点：在纯逻辑节点基础上补齐 children，供 react-arborist 使用。
+// 树渲染节点：在纯逻辑节点基础上补齐 children，供左侧递归树渲染使用。
 export type QueryTreeRenderNode = QueryTreeNode & {
   children?: QueryTreeRenderNode[];
 };
@@ -54,8 +54,6 @@ type UseSourceTreeStateResult = {
   treeData: QueryTreeRenderNode[];
   // 纯状态快照：供节点渲染读取 loading/error。
   treeState: SourceTreeState;
-  // 树选择态：优先高亮聚焦数据源。
-  selectionId: string;
   // 单击节点：内部处理高亮与聚焦。
   onNodeClick: (node: QueryTreeNode) => void;
   // 双击节点：source/group 切换展开，object 打开工作区。
@@ -633,7 +631,6 @@ export function useSourceTreeState({
     focusedSourceId: treeState.focusedSourceId,
     treeData,
     treeState,
-    selectionId: treeState.selectedNodeId,
     onNodeClick,
     onNodeDoubleClick,
     onToggleNode: toggleNode,

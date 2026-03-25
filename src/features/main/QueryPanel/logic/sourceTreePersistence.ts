@@ -84,15 +84,6 @@ export function sanitizePersistedSourceTreeUiState(
   };
 }
 
-// 生成 Arborist 初始展开映射：仅在树首次挂载时注入。
-export function buildInitialOpenState(expandedNodeIds: string[]): Record<string, boolean> {
-  return expandedNodeIds.reduce<Record<string, boolean>>((acc, nodeId) => {
-    if (!nodeId) return acc;
-    acc[nodeId] = true;
-    return acc;
-  }, {});
-}
-
 // 汇总恢复树展示所需预加载的数据源：仅在展开节点或选中需要内容的节点时才补拉 children。
 export function collectRestorableSourceIds(
   state: PersistedSourceTreeUiState,

@@ -1,7 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  buildInitialOpenState,
   collectRestorableSourceIds,
   normalizePersistedSourceTreeUiState,
   resolveSourceIdFromTreeNodeId,
@@ -65,13 +64,6 @@ test("sanitizePersistedSourceTreeUiState: 应过滤失效节点并回退到排�
     selectedNodeId: "source:a-first",
     focusedSourceId: "a-first",
     expandedNodeIds: ["group:a-first:tables"]
-  });
-});
-
-test("buildInitialOpenState: 应将展开节点列表转换为 Arborist 初始映射", () => {
-  assert.deepEqual(buildInitialOpenState(["source:sf-1", "group:mysql-1:tables"]), {
-    "source:sf-1": true,
-    "group:mysql-1:tables": true
   });
 });
 
