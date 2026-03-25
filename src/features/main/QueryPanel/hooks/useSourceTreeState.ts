@@ -23,6 +23,16 @@ export type QueryTreeRenderNode = QueryTreeNode & {
   children?: QueryTreeRenderNode[];
 };
 
+// 添加展开节点：避免节点在异步加载期间被重复 toggle 导致展开态来回翻转。
+function appendExpandedNode(expandedNodeIds: string[], nodeId: string): string[] {
+  return expandedNodeIds.includes(nodeId) ? expandedNodeIds : [...expandedNodeIds, nodeId];
+}
+
+// 移除展开节点：用于显式收起节点，避免继续依赖 toggle 造成竞态。
+function removeExpandedNode(expandedNodeIds: string[], nodeId: string): string[] {
+  return expandedNodeIds.filter((item) => item !== nodeId);
+}
+
 type UseSourceTreeStateInput = {
   // 全部数据源。
   sources: SalesforceSource[];
@@ -355,8 +365,8 @@ export function useSourceTreeState({
     onOpenObject(objectItem, source);
   }, [onNotQueryableObjectClick, onOpenObject, sourceMap, treeState.sourceObjectsById]);
 
-  // 展开/折叠 source/group 节点：首次展开时先拉取子节点。
-  const toggleNode = useCallback(
+  // 确保 source/group 节点展开：先立刻打开节点，再异步补拉 children，避免双击时展开态与加载态互相打架。
+  const ensureNodeExpanded = useCallback(
     async (node: QueryTreeNode, treeNode: NodeApi<QueryTreeRenderNode>) => {
       if (node.kind === "object") {
         return;
@@ -378,17 +388,44 @@ export function useSourceTreeState({
         && !treeState.sourceObjectsById[node.sourceId]
         && !treeState.sourceLoadingById[node.sourceId];
 
-      if (!treeNode.isOpen && (shouldLoadSourceChildren || shouldLoadMySqlTables)) {
-        await loadSourceChildren(source, false);
+      if (!treeNode.isOpen) {
+        setTreeState((current) => ({
+          ...current,
+          expandedNodeIds: appendExpandedNode(current.expandedNodeIds, node.id)
+        }));
+        treeNode.open(); // 行内注释：先显式展开节点，让后续连点看到的是“已展开”状态，而不是等待请求返回再 toggle。
+
+        if (shouldLoadSourceChildren || shouldLoadMySqlTables) {
+          await loadSourceChildren(source, false);
+        }
       }
+    },
+    [focusSource, loadSourceChildren, sourceMap, treeState.sourceLoadingById, treeState.sourceObjectsById, treeState.sourceTreeChildrenById]
+  );
+
+  // 展开/折叠 source/group 节点：点击箭头时保持原有 toggle 交互。
+  const toggleNode = useCallback(
+    async (node: QueryTreeNode, treeNode: NodeApi<QueryTreeRenderNode>) => {
+      if (node.kind === "object") {
+        return;
+      }
+
+      if (!treeNode.isOpen) {
+        await ensureNodeExpanded(node, treeNode);
+        return;
+      }
+
+      const source = sourceMap.get(node.sourceId);
+      if (!source) return;
+      focusSource(node.sourceId);
 
       setTreeState((current) => ({
         ...current,
-        expandedNodeIds: toggleExpandedNode(current.expandedNodeIds, node.id)
+        expandedNodeIds: removeExpandedNode(current.expandedNodeIds, node.id)
       }));
-      treeNode.toggle();
+      treeNode.close(); // 行内注释：显式收起当前节点，避免加载中的二次点击把内部 open 状态再次翻转。
     },
-    [focusSource, loadSourceChildren, sourceMap, treeState.sourceLoadingById, treeState.sourceObjectsById, treeState.sourceTreeChildrenById]
+    [ensureNodeExpanded, focusSource, sourceMap]
   );
 
   // 处理单击聚焦：任何节点点击都先更新选中行；source/object 再同步聚焦数据源。
@@ -407,14 +444,6 @@ export function useSourceTreeState({
     }
   }, [focusSource]);
 
-  // 刷新指定 source 节点：让节点双击与顶部刷新按钮复用同一条强刷链路。
-  const refreshSourceNode = useCallback(async (node: QueryTreeNode) => {
-    if (node.kind !== "source") return;
-    const source = sourceMap.get(node.sourceId);
-    if (!source) return;
-    await loadSourceChildren(source, true); // 行内注释：source 双击时直接强制回源，统一错误回显与结束态。
-  }, [loadSourceChildren, sourceMap]);
-
   // 节点点击：先处理单击焦点，再基于时间窗把第二次点击提升为稳定双击动作。
   const onNodeClick = useCallback(async (node: QueryTreeNode, treeNode: NodeApi<QueryTreeRenderNode>) => {
     handleSingleClick(node);
@@ -428,12 +457,8 @@ export function useSourceTreeState({
       openObjectNode(node);
       return;
     }
-    if (doubleClickAction === "refresh") {
-      await refreshSourceNode(node);
-      return;
-    }
     await toggleNode(node, treeNode);
-  }, [handleSingleClick, openObjectNode, refreshSourceNode, toggleNode]);
+  }, [handleSingleClick, openObjectNode, toggleNode]);
 
   // 刷新当前聚焦数据源：仅刷新该 source，不做全量同步。
   const refreshFocusedSource = useCallback(async () => {

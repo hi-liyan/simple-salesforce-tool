@@ -6,10 +6,10 @@ export type TreeNodeClickState = {
   timestamp: number;
 };
 
-// 树节点双击动作：source 双击刷新，group 双击展开，object 双击打开右侧工作区。
-export function resolveNodeDoubleClickAction(node: QueryTreeNode): "refresh" | "toggle" | "open" {
+// 树节点双击动作：source/group 双击切换展开，object 双击打开右侧工作区。
+export function resolveNodeDoubleClickAction(node: QueryTreeNode): "toggle" | "open" {
   if (node.kind === "source") {
-    return "refresh";
+    return "toggle";
   }
   return node.kind === "object" ? "open" : "toggle";
 }

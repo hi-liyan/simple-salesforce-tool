@@ -27,6 +27,8 @@ type QuerySourceTreeProps = {
   onOpenObject: (item: SalesforceObject, source?: SalesforceSource) => void;
   // 刷新指定 MySQL 表的字段元数据与 DDL。
   onRefreshMysqlObjectMetadata: (objectName: string) => Promise<unknown>;
+  // 强刷指定数据源后同步工作区缓存与已打开 Tab。
+  onRefreshSourceWorkspace?: (sourceId: string) => Promise<void>;
   // 不可查询对象提示。
   onNotQueryableObjectClick?: (item: SalesforceObject) => void;
   // 对外暴露刷新聚焦数据源能力。
@@ -74,6 +76,7 @@ export function QuerySourceTree({
   activeTabObjectName,
   onOpenObject,
   onRefreshMysqlObjectMetadata,
+  onRefreshSourceWorkspace,
   onNotQueryableObjectClick,
   onReady
 }: QuerySourceTreeProps) {
@@ -199,13 +202,26 @@ export function QuerySourceTree({
   // 将刷新动作回传给侧边栏顶部按钮，避免继续走“全量刷新 source 列表”旧逻辑。
   useEffect(() => {
     onReady?.({
-      refreshFocusedSource,
+      refreshFocusedSource: async () => {
+        const focusedSourceId = treeState.focusedSourceId;
+        await refreshFocusedSource(); // 行内注释：先由左树完成对象列表强刷与节点更新。
+        if (!focusedSourceId || !onRefreshSourceWorkspace) return;
+        await onRefreshSourceWorkspace(focusedSourceId); // 行内注释：工作区只复用这轮强刷结果做后续同步，不再重复拉对象列表。
+      },
       getFocusedSourceId: () => treeState.focusedSourceId,
       locateNodeByTarget,
       searchFocusedSourceObjects,
       openObjectByTarget
     });
-  }, [locateNodeByTarget, onReady, openObjectByTarget, refreshFocusedSource, searchFocusedSourceObjects, treeState.focusedSourceId]);
+  }, [
+    locateNodeByTarget,
+    onReady,
+    onRefreshSourceWorkspace,
+    openObjectByTarget,
+    refreshFocusedSource,
+    searchFocusedSourceObjects,
+    treeState.focusedSourceId
+  ]);
 
   // 构建对象 tooltip：MySQL 与 Salesforce 按各自元数据摘要展示。
   function getObjectTooltip(node: QueryTreeRenderNode): string {

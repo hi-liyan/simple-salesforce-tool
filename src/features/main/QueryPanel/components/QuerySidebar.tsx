@@ -308,8 +308,11 @@ export function QuerySidebar({
           return;
         }
         void (async () => {
-          await treeActions?.refreshFocusedSource();
-          onRefreshSources(focusedSourceId, { skipObjectFetch: true });
+          if (treeActions) {
+            await treeActions.refreshFocusedSource(); // 行内注释：顶部按钮统一复用树内单次强刷链路，避免按钮层串两段刷新。
+            return;
+          }
+          await onRefreshSources(focusedSourceId);
         })();
       }
     },
@@ -371,6 +374,9 @@ export function QuerySidebar({
           activeTabObjectName={activeTabObjectName}
           onOpenObject={onOpenObject}
           onRefreshMysqlObjectMetadata={onRefreshMysqlObjectMetadata}
+          onRefreshSourceWorkspace={async (sourceId) => {
+            await onRefreshSources(sourceId, { skipObjectFetch: true }); // 行内注释：工作区同步阶段只复用已刷新的对象缓存，不重复拉取列表。
+          }}
           onNotQueryableObjectClick={onNotQueryableObjectClick}
           onReady={setTreeActions}
         />

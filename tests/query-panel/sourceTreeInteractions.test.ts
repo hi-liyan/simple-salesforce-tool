@@ -48,8 +48,8 @@ function createObjectNode(): QueryTreeNode {
   };
 }
 
-test("resolveNodeDoubleClickAction: source 双击应触发刷新", () => {
-  assert.equal(resolveNodeDoubleClickAction(createSourceNode()), "refresh");
+test("resolveNodeDoubleClickAction: source 双击应切换数据源节点展开态", () => {
+  assert.equal(resolveNodeDoubleClickAction(createSourceNode()), "toggle");
 });
 
 test("resolveNodeDoubleClickAction: group 双击应保持展开切换", () => {
