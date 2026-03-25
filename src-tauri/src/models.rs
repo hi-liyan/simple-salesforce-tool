@@ -9,6 +9,15 @@ pub struct SalesforceSource {
     pub id: String,
     /// 数据源显示名称（用于前端下拉与提示）。
     pub name: String,
+    /// 数据源序号（用于稳定排序与拖拽重排）。
+    #[serde(default)]
+    pub sort_order: i64,
+    /// 数据源类型（如 salesforce/mysql）。
+    #[serde(default = "default_source_type")]
+    pub source_type: String,
+    /// 通用配置 JSON（为后续多类型数据源扩展预留）。
+    #[serde(default = "default_source_config")]
+    pub config_json: Value,
     /// Salesforce 实例地址（如 https://xxx.my.salesforce.com）。
     pub instance_url: String,
     /// OAuth 访问令牌（当前版本直接持久化存储）。
@@ -21,11 +30,34 @@ pub struct SalesforceSource {
     pub updated_at: String,
 }
 
+impl SalesforceSource {
+    /// 当前数据源是否为 Salesforce 类型。
+    pub fn is_salesforce(&self) -> bool {
+        self.source_type.eq_ignore_ascii_case("salesforce")
+    }
+}
+
+/// 默认数据源类型：保持历史版本行为不变，未显式指定时按 Salesforce 处理。
+fn default_source_type() -> String {
+    "salesforce".to_string()
+}
+
+/// 默认配置对象：保证新字段在旧数据读取时也有稳定结构。
+fn default_source_config() -> Value {
+    Value::Object(serde_json::Map::new())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceUpsertPayload {
     /// 数据源名称。
     pub name: String,
+    /// 数据源类型（M1 阶段默认 salesforce）。
+    #[serde(default = "default_source_type")]
+    pub source_type: String,
+    /// 通用配置 JSON（M1 阶段可为空对象）。
+    #[serde(default = "default_source_config")]
+    pub config_json: Value,
     /// 实例地址。
     pub instance_url: String,
     /// 访问令牌。
@@ -41,6 +73,9 @@ pub struct SalesforceObject {
     pub name: String,
     /// Object Label（可读名称）。
     pub label: String,
+    /// MySQL 表注释；Salesforce 对象为空。
+    #[serde(default)]
+    pub comment: Option<String>,
     /// 是否可查询。
     pub queryable: bool,
     /// 是否可新增。
@@ -98,11 +133,31 @@ pub struct ObjectChildRelationship {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CurrentUserContext {
+    /// Salesforce 当前用户时区（如 America/Los_Angeles）。
+    pub timezone_sid_key: Option<String>,
+    /// Salesforce 当前用户地区设置（如 zh_CN）。
+    pub locale_sid_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct QueryResult {
     /// 查询返回总条数（Salesforce totalSize）。
     pub total_size: usize,
     /// 记录列表（键为字段名，值为 JSON 值）。
     pub records: Vec<HashMap<String, Value>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ObjectDdl {
+    /// 建表 DDL（SHOW CREATE TABLE）。
+    pub create_table_ddl: String,
+    /// 索引 DDL 列表（不含主键）。
+    pub index_ddls: Vec<String>,
+    /// 约束 DDL 列表（如 UNIQUE/FOREIGN KEY）。
+    pub constraint_ddls: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -138,13 +193,87 @@ pub struct RecordSavePayload {
     pub updates: Vec<RecordUpdatePayload>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordSaveWithDeletePayload {
+    /// 数据源 ID。
+    pub source_id: String,
+    /// 目标对象名称。
+    pub object_name: String,
+    /// 待新增记录列表。
+    pub creates: Vec<HashMap<String, Value>>,
+    /// 待更新记录列表。
+    pub updates: Vec<RecordUpdatePayload>,
+    /// 待删除记录 Id 列表。
+    pub deletes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalCommandItem {
+    /// 命令主键。
+    pub id: String,
+    /// 命令名称。
+    pub name: String,
+    /// 命令正文（执行时直接透传给终端会话）。
+    pub command: String,
+    /// 命令描述（可选）。
+    pub description: String,
+    /// 创建时间（RFC3339 字符串）。
+    pub created_at: String,
+    /// 最后更新时间（RFC3339 字符串）。
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalCommandGroup {
+    /// 命令组主键。
+    pub id: String,
+    /// 命令组名称。
+    pub name: String,
+    /// 组内命令列表（按 sort_order 升序）。
+    pub commands: Vec<TerminalCommandItem>,
+    /// 创建时间（RFC3339 字符串）。
+    pub created_at: String,
+    /// 最后更新时间（RFC3339 字符串）。
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalCommandUpsertPayload {
+    /// 所属命令组 ID。
+    pub group_id: String,
+    /// 命令名称。
+    pub name: String,
+    /// 命令正文。
+    pub command: String,
+    /// 命令描述（可空）。
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalCommandReorderPayload {
+    /// 命令组 ID。
+    pub group_id: String,
+    /// 组内命令 ID 顺序列表。
+    pub command_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalCommandGroupUpsertPayload {
+    /// 命令组名称。
+    pub name: String,
+}
+
 /// 对象列表缓存行（SQLite 内部结构）。
 #[derive(Debug)]
 pub struct CachedObjects {
     /// 缓存内容 JSON 字符串。
     pub payload: String,
-    /// 缓存写入时间（Unix 秒）。
-    pub updated_at: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

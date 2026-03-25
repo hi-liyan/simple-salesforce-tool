@@ -1,4 +1,4 @@
-﻿import { useState } from "react";
+import { useState } from "react";
 import { api } from "../api";
 
 // 登录窗口页面：处理 Salesforce CLI 授权登录。

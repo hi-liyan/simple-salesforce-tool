@@ -94,7 +94,13 @@ export function formatFieldMetadataValue(value: unknown): string {
 }
 
 // reference 字段类型细分：保持与对象树展开页一致。
-function getDisplayFieldTypeByMetadata(metadata: Record<string, unknown>): string {
+function getDisplayFieldTypeByMetadata(metadata: Record<string, unknown>, sourceType?: string): string {
+  // MySQL 下优先展示 mysqlDataType，便于与实际表结构保持一致。
+  const normalizedSourceType = (sourceType || "salesforce").toLowerCase();
+  if (normalizedSourceType === "mysql") {
+    const mysqlDataType = typeof metadata.mysqlDataType === "string" ? metadata.mysqlDataType.trim() : "";
+    if (mysqlDataType) return mysqlDataType;
+  }
   const rawType = typeof metadata.type === "string" ? metadata.type : "";
   if (rawType !== "reference") return rawType;
   const hasRelationshipOrder = typeof metadata.relationshipOrder === "number";
@@ -107,10 +113,13 @@ function getDisplayFieldTypeByMetadata(metadata: Record<string, unknown>): strin
 }
 
 // 元数据展示加工：覆盖 type，并规范 childRelationshipName。
-export function buildDisplayMetadataFromRaw(metadata: Record<string, unknown>): Record<string, unknown> {
+export function buildDisplayMetadataFromRaw(
+  metadata: Record<string, unknown>,
+  sourceType?: string
+): Record<string, unknown> {
   const next = { ...(metadata || {}) };
   const rawType = typeof next.type === "string" ? next.type : "";
-  next.type = getDisplayFieldTypeByMetadata(next);
+  next.type = getDisplayFieldTypeByMetadata(next, sourceType);
   if (rawType === "reference") {
     const resolvedValue = typeof next.childRelationshipName === "string" ? next.childRelationshipName.trim() : "";
     next.childRelationshipName = resolvedValue;
@@ -119,8 +128,8 @@ export function buildDisplayMetadataFromRaw(metadata: Record<string, unknown>): 
 }
 
 // 对象树字段元数据加工入口：与数据表 info icon 共享同一加工逻辑。
-export function buildDisplayMetadataFromField(field: ObjectField): Record<string, unknown> {
-  return buildDisplayMetadataFromRaw(field.metadata || {});
+export function buildDisplayMetadataFromField(field: ObjectField, sourceType?: string): Record<string, unknown> {
+  return buildDisplayMetadataFromRaw(field.metadata || {}, sourceType);
 }
 
 // 元数据排序：优先展示高价值字段，其余按键名稳定排序。

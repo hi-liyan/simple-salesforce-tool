@@ -1,9 +1,10 @@
-﻿@tailwind base;
+@tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* 全局字体栈：优先中文可读性，兼容 Ubuntu / macOS / Windows 常见中文字体。 */
 :root {
-  font-family: "JetBrains Mono", "Consolas", "Microsoft YaHei", monospace;
+  font-family: "Noto Sans CJK SC", "Noto Sans SC", "WenQuanYi Micro Hei", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "DejaVu Sans", sans-serif;
   color: #16325c;
   background: #eef4ff;
 }

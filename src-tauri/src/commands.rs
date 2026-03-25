@@ -1,10 +1,14 @@
 use serde::Serialize;
+use serde_json::Value;
 use std::collections::{HashMap, HashSet};
+#[cfg(target_os = "windows")]
+use std::process::Command as StdCommand;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::Emitter;
 use tauri::Manager;
 use tauri::State;
+use tauri_plugin_opener::OpenerExt;
 
 use crate::ai::orchestrator::AiOrchestrator;
 use crate::app_state::AppState;
@@ -12,11 +16,19 @@ use crate::db;
 use crate::error::AppError;
 use crate::models::{
     AiCapabilities, AiChatTurnV2Request, AiChatTurnV2Response, CliPathProbe, CliPathSettings,
-    CliPathStatus, LlmSettings, LlmSettingsView, ObjectDescribe, QueryResult,
-    RecordMutationPayload, RecordSavePayload, SalesforceObject, SalesforceSource,
-    SaveLlmSettingsPayload, SourceUpsertPayload, SystemLogPage,
+    CliPathStatus, CurrentUserContext, LlmSettings, LlmSettingsView, ObjectDdl, ObjectDescribe,
+    QueryResult, RecordMutationPayload, RecordSavePayload, RecordSaveWithDeletePayload,
+    RecordUpdatePayload, SalesforceObject, SalesforceSource, SaveLlmSettingsPayload,
+    SourceUpsertPayload, SystemLogPage,
+    TerminalCommandGroup, TerminalCommandGroupUpsertPayload, TerminalCommandItem,
+    TerminalCommandReorderPayload, TerminalCommandUpsertPayload,
+};
+use crate::providers::{
+    preview_create_record_sql, preview_delete_record_sql, preview_save_records_sql,
+    preview_save_records_with_deletes_sql, preview_update_record_sql, provider_for_source,
 };
 use crate::sf_cli;
+use crate::terminal::{self as terminal_runtime, TerminalSessionInfo, TerminalShellOption};
 
 /// 写系统日志的统一入口。
 /// 说明:日志写入失败不应影响主流程,因此这里吞掉错误。
@@ -48,6 +60,10 @@ fn write_system_log(
 
 const SF_CLI_PATH_SETTING_KEY: &str = "sf_cli_path";
 const LLM_SETTINGS_KEY: &str = "llm.settings.openai";
+const TERMINAL_SHELL_COMMAND_KEY: &str = "terminal.shell.command";
+const LEGACY_TERMINAL_SHELL_PREFERENCE_KEY: &str = "terminal.shell.preference";
+const METADATA_TYPE_OBJECT_DESCRIBE: &str = "object_describe";
+const METADATA_TYPE_OBJECT_DDL: &str = "object_ddl";
 
 /// 读取已配置的自定义 Salesforce CLI 路径。
 fn read_configured_cli_path(state: &State<'_, AppState>) -> Option<String> {
@@ -68,6 +84,15 @@ fn set_main_window_enabled(app: &tauri::AppHandle, enabled: bool) {
     if let Some(main_window) = app.get_webview_window("main") {
         let _ = main_window.set_enabled(enabled);
     }
+}
+
+/// 生成跨平台窗口标题：Linux 缺少中文系统字体时回退英文，避免标题栏出现方框。
+fn resolve_window_title(zh_title: &str, en_title: &str) -> String {
+    // Linux 标题栏由系统窗口管理器绘制，不使用 WebView 内嵌字体。
+    if cfg!(target_os = "linux") {
+        return en_title.to_string();
+    }
+    zh_title.to_string()
 }
 
 fn create_cli_login_cancel_token(state: &State<'_, AppState>) -> Arc<AtomicBool> {
@@ -107,6 +132,134 @@ fn is_unauthorized_error(error: &AppError) -> bool {
                 || message.contains("status code 401")
                 || message.contains("401 Unauthorized")
     )
+}
+
+/// 按数据源类型返回系统日志分类。
+fn resolve_log_category(source: &SalesforceSource) -> &'static str {
+    if source.is_salesforce() {
+        "SALESFORCE_API"
+    } else {
+        "MYSQL_DB"
+    }
+}
+
+/// MySQL 原始 SQL 预览失败时的兜底文案，避免日志构造影响主流程。
+fn fallback_mysql_log_detail(error: &AppError) -> String {
+    format!("-- 原始 SQL 预览失败：{error}")
+}
+
+/// 构造 Salesforce 查询日志详情。
+fn build_salesforce_query_detail(api_version: &str, soql: &str) -> String {
+    format!("api=GET /services/data/{api_version}/query\nsoql={soql}")
+}
+
+/// 构造 MySQL 查询日志详情。
+fn build_mysql_query_detail(sql: &str) -> String {
+    format!("raw_sql:\n{sql}")
+}
+
+/// 构造 Salesforce 可选 trace_soql 附加信息，明确标记其仅用于辅助排查。
+fn build_salesforce_optional_trace_detail(trace_soql: Option<String>) -> Option<String> {
+    trace_soql.map(|item| {
+        format!("optional_trace_soql={item}\ntrace_soql_note=辅助排查语句，非实际执行请求")
+    })
+}
+
+/// 构造 Salesforce 新增日志详情：仅记录真实执行的 API 请求，trace_soql 为可选辅助信息。
+fn build_salesforce_create_detail(
+    api_version: &str,
+    object_name: &str,
+    values: &HashMap<String, Value>,
+    trace_soql: Option<String>,
+) -> String {
+    let payload = serde_json::to_string(values).unwrap_or_else(|_| "{}".to_string());
+    let mut detail =
+        format!("api=POST /services/data/{api_version}/sobjects/{object_name}\npayload={payload}");
+    // 仅在显式需要白盒追踪时附加辅助语句，避免与真实执行请求混淆。
+    if let Some(trace_detail) = build_salesforce_optional_trace_detail(trace_soql) {
+        detail.push('\n');
+        detail.push_str(&trace_detail);
+    }
+    detail
+}
+
+/// 构造 Salesforce 更新日志详情：仅记录真实执行的 API 请求，trace_soql 为可选辅助信息。
+fn build_salesforce_update_detail(
+    api_version: &str,
+    object_name: &str,
+    record_id: &str,
+    values: &HashMap<String, Value>,
+    trace_soql: Option<String>,
+) -> String {
+    let payload = serde_json::to_string(values).unwrap_or_else(|_| "{}".to_string());
+    let mut detail = format!(
+        "api=PATCH /services/data/{api_version}/sobjects/{object_name}/{record_id}\npayload={payload}"
+    );
+    // 仅在显式需要白盒追踪时附加辅助语句，避免与真实执行请求混淆。
+    if let Some(trace_detail) = build_salesforce_optional_trace_detail(trace_soql) {
+        detail.push('\n');
+        detail.push_str(&trace_detail);
+    }
+    detail
+}
+
+/// 构造 Salesforce 删除日志详情：仅记录真实执行的 API 请求，trace_soql 为可选辅助信息。
+fn build_salesforce_delete_detail(
+    api_version: &str,
+    object_name: &str,
+    record_id: &str,
+    trace_soql: Option<String>,
+) -> String {
+    let mut detail =
+        format!("api=DELETE /services/data/{api_version}/sobjects/{object_name}/{record_id}");
+    // 仅在显式需要白盒追踪时附加辅助语句，避免与真实执行请求混淆。
+    if let Some(trace_detail) = build_salesforce_optional_trace_detail(trace_soql) {
+        detail.push('\n');
+        detail.push_str(&trace_detail);
+    }
+    detail
+}
+
+/// 构造 Salesforce 批量保存日志详情：记录真实执行的 Composite API 请求体。
+fn build_salesforce_save_detail(
+    api_version: &str,
+    object_name: &str,
+    creates: &[HashMap<String, Value>],
+    updates: &[RecordUpdatePayload],
+    trace_soql: Option<String>,
+) -> String {
+    let mut composite_request: Vec<Value> = Vec::with_capacity(creates.len() + updates.len());
+    // 新增请求逐条映射为实际 Composite 子请求。
+    for (index, item) in creates.iter().enumerate() {
+        composite_request.push(serde_json::json!({
+            "method": "POST",
+            "url": format!("/services/data/{api_version}/sobjects/{object_name}"),
+            "referenceId": format!("create_{index}"),
+            "body": item,
+        }));
+    }
+    // 更新请求逐条映射为实际 Composite 子请求。
+    for (index, item) in updates.iter().enumerate() {
+        composite_request.push(serde_json::json!({
+            "method": "PATCH",
+            "url": format!("/services/data/{api_version}/sobjects/{object_name}/{}", item.record_id),
+            "referenceId": format!("update_{index}"),
+            "body": item.values,
+        }));
+    }
+    let payload = serde_json::json!({
+        "allOrNone": true,
+        "compositeRequest": composite_request,
+    });
+    let payload_text = serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string());
+    let mut detail =
+        format!("api=POST /services/data/{api_version}/composite\npayload={payload_text}");
+    // 仅在显式需要白盒追踪时附加辅助语句，避免与真实执行请求混淆。
+    if let Some(trace_detail) = build_salesforce_optional_trace_detail(trace_soql) {
+        detail.push('\n');
+        detail.push_str(&trace_detail);
+    }
+    detail
 }
 
 /// 仅针对 CLI 数据源:发生 401 后通过 CLI 刷新 token,并回写本地数据源。
@@ -357,7 +510,8 @@ pub async fn open_auth_window(app: tauri::AppHandle) -> Result<(), String> {
         "sf-auth",
         tauri::WebviewUrl::App("index.html".into()),
     )
-    .title("Salesforce 登录")
+    // 认证窗口标题：Linux 使用英文避免系统标题栏缺字导致方框。
+    .title(resolve_window_title("Salesforce 登录", "Salesforce Login"))
     .inner_size(480.0, 360.0)
     .resizable(false)
     .focused(true)
@@ -424,6 +578,61 @@ pub fn close_auth_window(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// 调用 tauri-plugin-opener 打开 URL（跨平台：Windows/macOS/Linux）。
+fn open_url_with_system_browser(app: &tauri::AppHandle, url: &str) -> Result<(), String> {
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|error| error.to_string())
+}
+
+/// 打开外部 URL(系统默认浏览器)。
+#[tauri::command]
+pub fn open_external_url(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    url: String,
+) -> Result<(), String> {
+    let normalized_url = url.trim().to_string();
+    if normalized_url.is_empty() {
+        return Err("URL 不能为空".to_string());
+    }
+
+    let parsed_url =
+        reqwest::Url::parse(&normalized_url).map_err(|error| format!("URL 格式不正确: {error}"))?;
+    // 仅允许网页协议，避免误执行本地协议。
+    if !matches!(parsed_url.scheme(), "http" | "https") {
+        return Err("仅支持 http/https 链接".to_string());
+    }
+
+    if let Err(detail) = open_url_with_system_browser(&app, parsed_url.as_str()) {
+        write_system_log(
+            &state,
+            "ERROR",
+            "SYSTEM",
+            "open_external_url",
+            None,
+            Some(parsed_url.as_str()),
+            false,
+            "调用系统浏览器打开外部链接失败。",
+            Some(&detail),
+        );
+        return Err(format!("打开外部链接失败: {detail}"));
+    }
+
+    write_system_log(
+        &state,
+        "INFO",
+        "SYSTEM",
+        "open_external_url",
+        None,
+        Some(parsed_url.as_str()),
+        true,
+        "已调用系统默认浏览器打开外部链接。",
+        None,
+    );
+    Ok(())
+}
+
 #[derive(Clone, Serialize)]
 struct FieldMetaWindowPayload {
     /// 字段 API 名称。
@@ -457,7 +666,12 @@ pub async fn open_field_meta_window(
         "sf-field-meta",
         tauri::WebviewUrl::App("index.html".into()),
     )
-    .title(format!("{field_name} 字段元数据"))
+    // 字段元数据窗口标题：Linux 下改用英文后缀，避免系统标题栏中文方框。
+    .title(if cfg!(target_os = "linux") {
+        format!("Field Metadata - {field_name}")
+    } else {
+        format!("{field_name} 字段元数据")
+    })
     .inner_size(860.0, 620.0)
     .resizable(true)
     .build()
@@ -502,6 +716,46 @@ pub fn create_source(
         .lock()
         .map_err(|error| format!("Database lock failed: {error}"))?;
     db::create_source(&connection, payload).map_err(AppError::to_string_error)
+}
+
+/// 按前端传入顺序重排数据源序号。
+#[tauri::command]
+pub fn reorder_sources(
+    state: State<'_, AppState>,
+    ordered_ids: Vec<String>,
+) -> Result<Vec<SalesforceSource>, String> {
+    let connection = state
+        .db
+        .lock()
+        .map_err(|error| format!("Database lock failed: {error}"))?;
+    db::reorder_sources(&connection, &ordered_ids).map_err(AppError::to_string_error)
+}
+
+/// 测试数据源连接可用性（不写库）。
+#[tauri::command]
+pub async fn test_source_connection(
+    state: State<'_, AppState>,
+    payload: SourceUpsertPayload,
+) -> Result<(), String> {
+    validate_payload(&payload)?;
+    let probe_source = SalesforceSource {
+        id: "probe".to_string(),
+        name: payload.name.clone(),
+        sort_order: 0,
+        source_type: payload.source_type.clone(),
+        config_json: payload.config_json.clone(),
+        instance_url: payload.instance_url.clone(),
+        access_token: payload.access_token.clone(),
+        api_version: payload.api_version.clone(),
+        created_at: "".to_string(),
+        updated_at: "".to_string(),
+    };
+    let provider =
+        provider_for_source(state.inner(), &probe_source).map_err(AppError::to_string_error)?;
+    provider
+        .test_connection(&probe_source)
+        .await
+        .map_err(AppError::to_string_error)
 }
 
 /// 更新数据源。
@@ -568,6 +822,13 @@ pub async fn list_objects(
     state: State<'_, AppState>,
     source_id: String,
 ) -> Result<Vec<SalesforceObject>, String> {
+    let source = {
+        let connection = state
+            .db
+            .lock()
+            .map_err(|error| format!("Database lock failed: {error}"))?;
+        db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
+    };
     let cached_objects = {
         let connection = state
             .db
@@ -575,8 +836,29 @@ pub async fn list_objects(
             .map_err(|error| format!("Database lock failed: {error}"))?;
         db::read_object_cache(&connection, &source_id).map_err(AppError::to_string_error)?
     };
+    let is_mysql_source = source.source_type.eq_ignore_ascii_case("mysql");
 
     if let Some(cached) = cached_objects {
+        // MySQL 旧缓存可能没有 comment 字段；若整批缓存都缺注释，则自动回源刷新。
+        let should_reuse_cache = !is_mysql_source
+            || cached.is_empty()
+            || cached
+                .iter()
+                .any(|item| item.comment.as_deref().is_some_and(|comment| !comment.trim().is_empty()));
+        if should_reuse_cache {
+            write_system_log(
+                &state,
+                "INFO",
+                "SALESFORCE_API",
+                "list_objects",
+                Some(&source_id),
+                None,
+                true,
+                &format!("命中对象缓存,共 {} 个。", cached.len()),
+                None,
+            );
+            return Ok(cached);
+        }
         write_system_log(
             &state,
             "INFO",
@@ -585,28 +867,23 @@ pub async fn list_objects(
             Some(&source_id),
             None,
             true,
-            &format!("命中对象缓存,共 {} 个。", cached.len()),
+            "检测到 MySQL 对象缓存缺少表注释，已自动回源刷新。",
             None,
         );
-        return Ok(cached);
     }
+    let provider =
+        provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
 
-    let source = {
-        let connection = state
-            .db
-            .lock()
-            .map_err(|error| format!("Database lock failed: {error}"))?;
-        db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
-    };
-
-    let objects_result = match state.sf_client.list_objects(&source).await {
+    let objects_result = match provider.list_objects(&source).await {
         Ok(items) => Ok(items),
         Err(error) if is_unauthorized_error(&error) && source_id.starts_with("cli-") => {
             let refreshed_source =
                 refresh_cli_source_token(&app, &state, &source_id, "list_objects", None)
                     .await
                     .map_err(AppError::to_string_error)?;
-            state.sf_client.list_objects(&refreshed_source).await
+            let refreshed_provider = provider_for_source(state.inner(), &refreshed_source)
+                .map_err(AppError::to_string_error)?;
+            refreshed_provider.list_objects(&refreshed_source).await
         }
         Err(error) => Err(error),
     };
@@ -819,15 +1096,19 @@ pub async fn refresh_objects(
             .map_err(|error| format!("Database lock failed: {error}"))?;
         db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
     };
+    let provider =
+        provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
 
-    let objects_result = match state.sf_client.list_objects(&source).await {
+    let objects_result = match provider.list_objects(&source).await {
         Ok(items) => Ok(items),
         Err(error) if is_unauthorized_error(&error) && source_id.starts_with("cli-") => {
             let refreshed_source =
                 refresh_cli_source_token(&app, &state, &source_id, "refresh_objects", None)
                     .await
                     .map_err(AppError::to_string_error)?;
-            state.sf_client.list_objects(&refreshed_source).await
+            let refreshed_provider = provider_for_source(state.inner(), &refreshed_source)
+                .map_err(AppError::to_string_error)?;
+            refreshed_provider.list_objects(&refreshed_source).await
         }
         Err(error) => Err(error),
     };
@@ -856,8 +1137,10 @@ pub async fn refresh_objects(
             .db
             .lock()
             .map_err(|error| format!("Database lock failed: {error}"))?;
-        // 强制刷新成功后覆盖缓存,保证后续列表读取为最新远端快照。
+        // 强制刷新成功后覆盖对象列表缓存，并失效该数据源的对象级元数据缓存。
         db::write_object_cache(&connection, &source_id, &objects)
+            .map_err(AppError::to_string_error)?;
+        db::clear_source_metadata_cache(&connection, &source_id)
             .map_err(AppError::to_string_error)?;
     }
 
@@ -876,14 +1159,110 @@ pub async fn refresh_objects(
     Ok(objects)
 }
 
-/// 打开 Salesforce 对象列表页(混合方案:CLI 数据源优先走 CLI,非 CLI 走 frontdoor URL)。
+/// 构建 frontdoor URL：`{instance}/secur/frontdoor.jsp?sid={token}&retURL={path}`。
+fn build_frontdoor_url(source: &SalesforceSource, path: &str) -> String {
+    let instance = source.instance_url.trim_end_matches('/');
+    let sid = urlencoding::encode(&source.access_token);
+    let ret_url = urlencoding::encode(path);
+    format!("{instance}/secur/frontdoor.jsp?sid={sid}&retURL={ret_url}")
+}
+
+/// 快速校验 token → 无效则刷新 → 构建 frontdoor URL → 打开系统浏览器。
+/// 统一走 frontdoor URL 方案,跳过缓慢的 CLI 子进程调用。
+async fn open_salesforce_page(
+    app: &tauri::AppHandle,
+    state: &State<'_, AppState>,
+    source_id: &str,
+    source: &SalesforceSource,
+    path: &str,
+    action: &str,
+    target: Option<&str>,
+) -> Result<(), String> {
+    if !source.is_salesforce() {
+        return Err("当前数据源不支持打开 Salesforce 页面。".to_string());
+    }
+    let provider = provider_for_source(state.inner(), source).map_err(AppError::to_string_error)?;
+    // 快速校验:通过轻量级 API 请求检测 token 是否仍然有效。
+    let token_valid = provider.validate_token(source).await;
+
+    let effective_source = if token_valid {
+        source.clone()
+    } else if source_id.starts_with("cli-") {
+        // Token 无效且为 CLI 数据源:尝试刷新 token。
+        write_system_log(
+            state,
+            "INFO",
+            "SALESFORCE_CLI",
+            action,
+            Some(source_id),
+            target,
+            true,
+            "Token 校验失败(401),开始通过 CLI 刷新 token。",
+            None,
+        );
+        match refresh_cli_source_token(app, state, source_id, action, target).await {
+            Ok(refreshed) => refreshed,
+            Err(error) => {
+                let detail = error.to_string();
+                write_system_log(
+                    state,
+                    "WARN",
+                    "SALESFORCE_CLI",
+                    action,
+                    Some(source_id),
+                    target,
+                    false,
+                    "刷新 token 失败,回退使用本地 token 构建 frontdoor 地址。",
+                    Some(&detail),
+                );
+                source.clone()
+            }
+        }
+    } else {
+        // Token 无效且为非 CLI 数据源:使用缓存 token(用户可能看到登录页)。
+        source.clone()
+    };
+
+    let final_url = build_frontdoor_url(&effective_source, path);
+
+    if let Err(detail) = open_url_with_system_browser(app, &final_url) {
+        write_system_log(
+            state,
+            "ERROR",
+            "SYSTEM",
+            action,
+            Some(source_id),
+            target,
+            false,
+            "调用系统浏览器打开 Salesforce 页面失败。",
+            Some(&detail),
+        );
+        return Err(format!("打开浏览器失败: {detail}"));
+    }
+
+    write_system_log(
+        state,
+        "INFO",
+        "SALESFORCE_API",
+        action,
+        Some(source_id),
+        target,
+        true,
+        "已通过系统浏览器打开 Salesforce 页面。",
+        None,
+    );
+
+    Ok(())
+}
+
+/// 打开 Salesforce 对象列表页(快速校验 token 后直接打开浏览器)。
 #[tauri::command]
 pub async fn open_object_list_page(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     source_id: String,
     object_name: String,
-) -> Result<Option<String>, String> {
+) -> Result<(), String> {
     let normalized_object_name = object_name.trim().to_string();
     if normalized_object_name.is_empty() {
         return Err("Object 名称不能为空".to_string());
@@ -900,126 +1279,26 @@ pub async fn open_object_list_page(
         db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
     };
 
-    // CLI 数据源:后端直接调用 CLI 打开系统浏览器。
-    if source_id.starts_with("cli-") {
-        let source_id_cloned = source_id.clone();
-        let list_path_cloned = list_path.clone();
-        let preferred_cli_path = read_configured_cli_path(&state);
-        let cli_open_result = tauri::async_runtime::spawn_blocking(move || {
-            sf_cli::open_org_path(
-                &source_id_cloned,
-                &list_path_cloned,
-                preferred_cli_path.as_deref(),
-            )
-        })
-        .await
-        .map_err(|error| format!("打开 Salesforce 页面线程失败: {error}"));
-
-        match cli_open_result {
-            Ok(Ok(())) => {
-                write_system_log(
-                    &state,
-                    "INFO",
-                    "SALESFORCE_CLI",
-                    "open_object_list_page",
-                    Some(&source_id),
-                    Some(&normalized_object_name),
-                    true,
-                    "已通过 Salesforce CLI 打开对象列表页。",
-                    None,
-                );
-                return Ok(None);
-            }
-            Ok(Err(error)) => {
-                let detail = error.to_string();
-                write_system_log(
-                    &state,
-                    "WARN",
-                    "SALESFORCE_CLI",
-                    "open_object_list_page",
-                    Some(&source_id),
-                    Some(&normalized_object_name),
-                    false,
-                    "通过 Salesforce CLI 打开对象列表页失败,回退 frontdoor URL。",
-                    Some(&detail),
-                );
-            }
-            Err(error) => {
-                write_system_log(
-                    &state,
-                    "WARN",
-                    "SALESFORCE_CLI",
-                    "open_object_list_page",
-                    Some(&source_id),
-                    Some(&normalized_object_name),
-                    false,
-                    "通过 Salesforce CLI 打开对象列表页线程失败,回退 frontdoor URL。",
-                    Some(&error),
-                );
-            }
-        }
-    }
-
-    // 回退策略:构建 frontdoor URL,交由前端打开(仍可自动带登录态)。
-    let effective_source = if source_id.starts_with("cli-") {
-        match refresh_cli_source_token(
-            &app,
-            &state,
-            &source_id,
-            "open_object_list_page",
-            Some(&normalized_object_name),
-        )
-        .await
-        {
-            Ok(refreshed) => refreshed,
-            Err(error) => {
-                let detail = error.to_string();
-                write_system_log(
-                    &state,
-                    "WARN",
-                    "SALESFORCE_CLI",
-                    "open_object_list_page",
-                    Some(&source_id),
-                    Some(&normalized_object_name),
-                    false,
-                    "刷新 token 失败,回退使用本地 token 构建 frontdoor 地址。",
-                    Some(&detail),
-                );
-                source.clone()
-            }
-        }
-    } else {
-        source.clone()
-    };
-
-    let instance = effective_source.instance_url.trim_end_matches('/');
-    let sid = urlencoding::encode(&effective_source.access_token);
-    let ret_url_encoded = urlencoding::encode(&list_path);
-    let final_url = format!("{instance}/secur/frontdoor.jsp?sid={sid}&retURL={ret_url_encoded}");
-
-    write_system_log(
+    open_salesforce_page(
+        &app,
         &state,
-        "INFO",
-        "SALESFORCE_API",
+        &source_id,
+        &source,
+        &list_path,
         "open_object_list_page",
-        Some(&source_id),
         Some(&normalized_object_name),
-        true,
-        "已生成 frontdoor 对象列表页地址。",
-        None,
-    );
-
-    Ok(Some(final_url))
+    )
+    .await
 }
 
-/// 打开 Salesforce Object 管理页(混合方案:CLI 数据源优先走 CLI,非 CLI 走 frontdoor URL)。
+/// 打开 Salesforce Object 管理页(快速校验 token 后直接打开浏览器)。
 #[tauri::command]
 pub async fn open_object_edit_page(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     source_id: String,
     object_name: String,
-) -> Result<Option<String>, String> {
+) -> Result<(), String> {
     let normalized_object_name = object_name.trim().to_string();
     if normalized_object_name.is_empty() {
         return Err("Object 名称不能为空".to_string());
@@ -1036,119 +1315,19 @@ pub async fn open_object_edit_page(
         db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
     };
 
-    // CLI 数据源:后端直接调用 CLI 打开系统浏览器。
-    if source_id.starts_with("cli-") {
-        let source_id_cloned = source_id.clone();
-        let edit_path_cloned = edit_path.clone();
-        let preferred_cli_path = read_configured_cli_path(&state);
-        let cli_open_result = tauri::async_runtime::spawn_blocking(move || {
-            sf_cli::open_org_path(
-                &source_id_cloned,
-                &edit_path_cloned,
-                preferred_cli_path.as_deref(),
-            )
-        })
-        .await
-        .map_err(|error| format!("打开 Salesforce 页面线程失败: {error}"));
-
-        match cli_open_result {
-            Ok(Ok(())) => {
-                write_system_log(
-                    &state,
-                    "INFO",
-                    "SALESFORCE_CLI",
-                    "open_object_edit_page",
-                    Some(&source_id),
-                    Some(&normalized_object_name),
-                    true,
-                    "已通过 Salesforce CLI 打开 Object 管理页。",
-                    None,
-                );
-                return Ok(None);
-            }
-            Ok(Err(error)) => {
-                let detail = error.to_string();
-                write_system_log(
-                    &state,
-                    "WARN",
-                    "SALESFORCE_CLI",
-                    "open_object_edit_page",
-                    Some(&source_id),
-                    Some(&normalized_object_name),
-                    false,
-                    "通过 Salesforce CLI 打开 Object 管理页失败,回退 frontdoor URL。",
-                    Some(&detail),
-                );
-            }
-            Err(error) => {
-                write_system_log(
-                    &state,
-                    "WARN",
-                    "SALESFORCE_CLI",
-                    "open_object_edit_page",
-                    Some(&source_id),
-                    Some(&normalized_object_name),
-                    false,
-                    "通过 Salesforce CLI 打开 Object 管理页线程失败,回退 frontdoor URL。",
-                    Some(&error),
-                );
-            }
-        }
-    }
-
-    // 回退策略:构建 frontdoor URL,交由前端打开(仍可自动带登录态)。
-    let effective_source = if source_id.starts_with("cli-") {
-        match refresh_cli_source_token(
-            &app,
-            &state,
-            &source_id,
-            "open_object_edit_page",
-            Some(&normalized_object_name),
-        )
-        .await
-        {
-            Ok(refreshed) => refreshed,
-            Err(error) => {
-                let detail = error.to_string();
-                write_system_log(
-                    &state,
-                    "WARN",
-                    "SALESFORCE_CLI",
-                    "open_object_edit_page",
-                    Some(&source_id),
-                    Some(&normalized_object_name),
-                    false,
-                    "刷新 token 失败,回退使用本地 token 构建 frontdoor 地址。",
-                    Some(&detail),
-                );
-                source.clone()
-            }
-        }
-    } else {
-        source.clone()
-    };
-
-    let instance = effective_source.instance_url.trim_end_matches('/');
-    let sid = urlencoding::encode(&effective_source.access_token);
-    let ret_url_encoded = urlencoding::encode(&edit_path);
-    let final_url = format!("{instance}/secur/frontdoor.jsp?sid={sid}&retURL={ret_url_encoded}");
-
-    write_system_log(
+    open_salesforce_page(
+        &app,
         &state,
-        "INFO",
-        "SALESFORCE_API",
+        &source_id,
+        &source,
+        &edit_path,
         "open_object_edit_page",
-        Some(&source_id),
         Some(&normalized_object_name),
-        true,
-        "已生成 frontdoor Object 管理页地址。",
-        None,
-    );
-
-    Ok(Some(final_url))
+    )
+    .await
 }
 
-/// 打开 Salesforce 记录详情页(混合方案:CLI 数据源优先走 CLI,非 CLI 走 frontdoor URL)。
+/// 打开 Salesforce 记录详情页(快速校验 token 后直接打开浏览器)。
 #[tauri::command]
 pub async fn open_record_page(
     app: tauri::AppHandle,
@@ -1156,7 +1335,7 @@ pub async fn open_record_page(
     source_id: String,
     object_name: String,
     record_id: String,
-) -> Result<Option<String>, String> {
+) -> Result<(), String> {
     let normalized_object_name = object_name.trim().to_string();
     if normalized_object_name.is_empty() {
         return Err("Object 名称不能为空".to_string());
@@ -1178,116 +1357,16 @@ pub async fn open_record_page(
         db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
     };
 
-    // CLI 数据源:后端直接调用 CLI 打开系统浏览器。
-    if source_id.starts_with("cli-") {
-        let source_id_cloned = source_id.clone();
-        let record_path_cloned = record_path.clone();
-        let preferred_cli_path = read_configured_cli_path(&state);
-        let cli_open_result = tauri::async_runtime::spawn_blocking(move || {
-            sf_cli::open_org_path(
-                &source_id_cloned,
-                &record_path_cloned,
-                preferred_cli_path.as_deref(),
-            )
-        })
-        .await
-        .map_err(|error| format!("打开 Salesforce 页面线程失败: {error}"));
-
-        match cli_open_result {
-            Ok(Ok(())) => {
-                write_system_log(
-                    &state,
-                    "INFO",
-                    "SALESFORCE_CLI",
-                    "open_record_page",
-                    Some(&source_id),
-                    Some(&normalized_record_id),
-                    true,
-                    "已通过 Salesforce CLI 打开记录详情页。",
-                    None,
-                );
-                return Ok(None);
-            }
-            Ok(Err(error)) => {
-                let detail = error.to_string();
-                write_system_log(
-                    &state,
-                    "WARN",
-                    "SALESFORCE_CLI",
-                    "open_record_page",
-                    Some(&source_id),
-                    Some(&normalized_record_id),
-                    false,
-                    "通过 Salesforce CLI 打开记录详情页失败,回退 frontdoor URL。",
-                    Some(&detail),
-                );
-            }
-            Err(error) => {
-                write_system_log(
-                    &state,
-                    "WARN",
-                    "SALESFORCE_CLI",
-                    "open_record_page",
-                    Some(&source_id),
-                    Some(&normalized_record_id),
-                    false,
-                    "通过 Salesforce CLI 打开记录详情页线程失败,回退 frontdoor URL。",
-                    Some(&error),
-                );
-            }
-        }
-    }
-
-    // 回退策略:构建 frontdoor URL,交由前端打开(仍可自动带登录态)。
-    let effective_source = if source_id.starts_with("cli-") {
-        match refresh_cli_source_token(
-            &app,
-            &state,
-            &source_id,
-            "open_record_page",
-            Some(&normalized_record_id),
-        )
-        .await
-        {
-            Ok(refreshed) => refreshed,
-            Err(error) => {
-                let detail = error.to_string();
-                write_system_log(
-                    &state,
-                    "WARN",
-                    "SALESFORCE_CLI",
-                    "open_record_page",
-                    Some(&source_id),
-                    Some(&normalized_record_id),
-                    false,
-                    "刷新 token 失败,回退使用本地 token 构建 frontdoor 地址。",
-                    Some(&detail),
-                );
-                source.clone()
-            }
-        }
-    } else {
-        source.clone()
-    };
-
-    let instance = effective_source.instance_url.trim_end_matches('/');
-    let sid = urlencoding::encode(&effective_source.access_token);
-    let ret_url_encoded = urlencoding::encode(&record_path);
-    let final_url = format!("{instance}/secur/frontdoor.jsp?sid={sid}&retURL={ret_url_encoded}");
-
-    write_system_log(
+    open_salesforce_page(
+        &app,
         &state,
-        "INFO",
-        "SALESFORCE_API",
+        &source_id,
+        &source,
+        &record_path,
         "open_record_page",
-        Some(&source_id),
         Some(&normalized_record_id),
-        true,
-        "已生成 frontdoor 记录详情页地址。",
-        None,
-    );
-
-    Ok(Some(final_url))
+    )
+    .await
 }
 
 /// 读取对象字段元数据(Describe)。
@@ -1300,15 +1379,16 @@ async fn load_object_describe_with_auto_refresh(
     object_name: &str,
     action: &str,
 ) -> Result<ObjectDescribe, AppError> {
-    match state.sf_client.describe_object(source, object_name).await {
+    let provider = provider_for_source(state.inner(), source)?;
+    match provider.describe_object(source, object_name).await {
         Ok(describe) => Ok(describe),
         Err(error) if is_unauthorized_error(&error) && source_id.starts_with("cli-") => {
             let refreshed_source =
                 refresh_cli_source_token(app, state, source_id, action, Some(object_name)).await?;
             // 刷新成功后覆盖当前 source,确保后续父对象 describe 复用最新 token。
             *source = refreshed_source.clone();
-            state
-                .sf_client
+            let refreshed_provider = provider_for_source(state.inner(), &refreshed_source)?;
+            refreshed_provider
                 .describe_object(&refreshed_source, object_name)
                 .await
         }
@@ -1412,6 +1492,52 @@ pub async fn describe_object(
     source_id: String,
     object_name: String,
 ) -> Result<ObjectDescribe, String> {
+    // 先读 SQLite 元数据缓存，命中时直接返回，避免重复请求远端。
+    let cached_describe = {
+        let connection = state
+            .db
+            .lock()
+            .map_err(|error| format!("Database lock failed: {error}"))?;
+        db::read_source_metadata_cache(
+            &connection,
+            &source_id,
+            METADATA_TYPE_OBJECT_DESCRIBE,
+            Some(&object_name),
+        )
+        .map_err(AppError::to_string_error)?
+    };
+    if let Some(payload) = cached_describe {
+        match serde_json::from_str::<ObjectDescribe>(&payload) {
+            Ok(describe) => {
+                write_system_log(
+                    &state,
+                    "INFO",
+                    "SALESFORCE_API",
+                    "describe_object",
+                    Some(&source_id),
+                    Some(&object_name),
+                    true,
+                    "命中对象字段元数据缓存。",
+                    None,
+                );
+                return Ok(describe);
+            }
+            Err(parse_error) => {
+                write_system_log(
+                    &state,
+                    "ERROR",
+                    "SALESFORCE_API",
+                    "describe_object",
+                    Some(&source_id),
+                    Some(&object_name),
+                    false,
+                    "对象字段元数据缓存解析失败，将回源重拉。",
+                    Some(&parse_error.to_string()),
+                );
+            }
+        }
+    }
+
     let mut source = {
         let connection = state
             .db
@@ -1441,6 +1567,22 @@ pub async fn describe_object(
             )
             .await
             {}
+            {
+                let connection = state
+                    .db
+                    .lock()
+                    .map_err(|error| format!("Database lock failed: {error}"))?;
+                let payload = serde_json::to_string(&describe)
+                    .map_err(|error| AppError::Serde(error.to_string()).to_string_error())?;
+                db::write_source_metadata_cache(
+                    &connection,
+                    &source_id,
+                    METADATA_TYPE_OBJECT_DESCRIBE,
+                    Some(&object_name),
+                    &payload,
+                )
+                .map_err(AppError::to_string_error)?;
+            }
             write_system_log(
                 &state,
                 "INFO",
@@ -1472,6 +1614,97 @@ pub async fn describe_object(
     }
 }
 
+/// 读取对象 DDL（MySQL 返回建表/索引/约束 DDL）。
+#[tauri::command]
+pub async fn get_object_ddl(
+    state: State<'_, AppState>,
+    source_id: String,
+    object_name: String,
+) -> Result<ObjectDdl, String> {
+    // 先读 SQLite 元数据缓存，命中时直接返回，避免重复请求数据库/远端。
+    let cached_ddl = {
+        let connection = state
+            .db
+            .lock()
+            .map_err(|error| format!("Database lock failed: {error}"))?;
+        db::read_source_metadata_cache(
+            &connection,
+            &source_id,
+            METADATA_TYPE_OBJECT_DDL,
+            Some(&object_name),
+        )
+        .map_err(AppError::to_string_error)?
+    };
+    if let Some(payload) = cached_ddl {
+        if let Ok(ddl) = serde_json::from_str::<ObjectDdl>(&payload) {
+            return Ok(ddl);
+        }
+    }
+
+    let source = {
+        let connection = state
+            .db
+            .lock()
+            .map_err(|error| format!("Database lock failed: {error}"))?;
+        db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
+    };
+    let provider =
+        provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
+    let log_category = if source.is_salesforce() {
+        "SALESFORCE_API"
+    } else {
+        "MYSQL_DB"
+    };
+
+    match provider.get_object_ddl(&source, &object_name).await {
+        Ok(ddl) => {
+            {
+                let connection = state
+                    .db
+                    .lock()
+                    .map_err(|error| format!("Database lock failed: {error}"))?;
+                let payload = serde_json::to_string(&ddl)
+                    .map_err(|error| AppError::Serde(error.to_string()).to_string_error())?;
+                db::write_source_metadata_cache(
+                    &connection,
+                    &source_id,
+                    METADATA_TYPE_OBJECT_DDL,
+                    Some(&object_name),
+                    &payload,
+                )
+                .map_err(AppError::to_string_error)?;
+            }
+            write_system_log(
+                &state,
+                "INFO",
+                log_category,
+                "get_object_ddl",
+                Some(&source_id),
+                Some(&object_name),
+                true,
+                "读取对象 DDL 成功。",
+                None,
+            );
+            Ok(ddl)
+        }
+        Err(error) => {
+            let message = AppError::to_string_error(error);
+            write_system_log(
+                &state,
+                "ERROR",
+                log_category,
+                "get_object_ddl",
+                Some(&source_id),
+                Some(&object_name),
+                false,
+                "读取对象 DDL 失败。",
+                Some(&message),
+            );
+            Err(message)
+        }
+    }
+}
+
 /// 解析字段配置的 Child Relationship Name(优先使用 Tooling API)。
 #[tauri::command]
 pub async fn resolve_field_child_relationship_name(
@@ -1494,9 +1727,10 @@ pub async fn resolve_field_child_relationship_name(
             .map_err(|error| format!("Database lock failed: {error}"))?;
         db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
     };
+    let provider =
+        provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
 
-    let resolve_result = match state
-        .sf_client
+    let resolve_result = match provider
         .resolve_field_child_relationship_name(
             &source,
             &normalized_object_name,
@@ -1515,8 +1749,9 @@ pub async fn resolve_field_child_relationship_name(
             )
             .await
             .map_err(AppError::to_string_error)?;
-            state
-                .sf_client
+            let refreshed_provider = provider_for_source(state.inner(), &refreshed_source)
+                .map_err(AppError::to_string_error)?;
+            refreshed_provider
                 .resolve_field_child_relationship_name(
                     &refreshed_source,
                     &normalized_object_name,
@@ -1573,8 +1808,9 @@ pub async fn query_records(
     soql: String,
 ) -> Result<QueryResult, String> {
     if soql.trim().is_empty() {
-        return Err("SOQL cannot be empty".to_string());
+        return Err("查询语句不能为空".to_string());
     }
+    let query_text = soql.trim().to_string();
 
     let source = {
         let connection = state
@@ -1583,17 +1819,26 @@ pub async fn query_records(
             .map_err(|error| format!("Database lock failed: {error}"))?;
         db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
     };
+    let provider =
+        provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
+    let log_category = resolve_log_category(&source);
+    let query_detail = if source.is_salesforce() {
+        build_salesforce_query_detail(&source.api_version, &query_text)
+    } else {
+        build_mysql_query_detail(&query_text)
+    };
 
-    let query_result = match state.sf_client.query_records(&source, &soql).await {
+    let query_result = match provider.query_records(&source, &query_text).await {
         Ok(result) => Ok(result),
         Err(error) if is_unauthorized_error(&error) && source_id.starts_with("cli-") => {
             let refreshed_source =
                 refresh_cli_source_token(&app, &state, &source_id, "query_records", None)
                     .await
                     .map_err(AppError::to_string_error)?;
-            state
-                .sf_client
-                .query_records(&refreshed_source, &soql)
+            let refreshed_provider = provider_for_source(state.inner(), &refreshed_source)
+                .map_err(AppError::to_string_error)?;
+            refreshed_provider
+                .query_records(&refreshed_source, &query_text)
                 .await
         }
         Err(error) => Err(error),
@@ -1604,15 +1849,91 @@ pub async fn query_records(
             write_system_log(
                 &state,
                 "INFO",
-                "SALESFORCE_API",
+                log_category,
                 "query_records",
                 Some(&source_id),
                 None,
                 true,
                 &format!("执行查询成功,返回 {} 条。", result.total_size),
-                Some(&soql),
+                Some(&query_detail),
             );
             Ok(result)
+        }
+        Err(error) => {
+            let message = AppError::to_string_error(error);
+            let detail = format!("{query_detail}\nerror={message}");
+            write_system_log(
+                &state,
+                "ERROR",
+                log_category,
+                "query_records",
+                Some(&source_id),
+                None,
+                false,
+                "执行查询失败。",
+                Some(&detail),
+            );
+            Err(message)
+        }
+    }
+}
+
+/// 获取当前登录用户上下文（时区/地区），用于前端按 Salesforce 用户时区展示 datetime。
+#[tauri::command]
+pub async fn get_current_user_context(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    source_id: String,
+) -> Result<CurrentUserContext, String> {
+    let source = {
+        let connection = state
+            .db
+            .lock()
+            .map_err(|error| format!("Database lock failed: {error}"))?;
+        db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
+    };
+    let provider =
+        provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
+
+    let context_result = match provider.get_current_user_context(&source).await {
+        Ok(context) => Ok(context),
+        Err(error) if is_unauthorized_error(&error) && source_id.starts_with("cli-") => {
+            let refreshed_source = refresh_cli_source_token(
+                &app,
+                &state,
+                &source_id,
+                "get_current_user_context",
+                None,
+            )
+            .await
+            .map_err(AppError::to_string_error)?;
+            let refreshed_provider = provider_for_source(state.inner(), &refreshed_source)
+                .map_err(AppError::to_string_error)?;
+            refreshed_provider
+                .get_current_user_context(&refreshed_source)
+                .await
+        }
+        Err(error) => Err(error),
+    };
+
+    match context_result {
+        Ok(context) => {
+            write_system_log(
+                &state,
+                "INFO",
+                "SALESFORCE_API",
+                "get_current_user_context",
+                Some(&source_id),
+                None,
+                true,
+                "获取当前用户上下文成功。",
+                Some(&format!(
+                    "timezoneSidKey={} localeSidKey={}",
+                    context.timezone_sid_key.clone().unwrap_or_default(),
+                    context.locale_sid_key.clone().unwrap_or_default()
+                )),
+            );
+            Ok(context)
         }
         Err(error) => {
             let message = AppError::to_string_error(error);
@@ -1620,11 +1941,11 @@ pub async fn query_records(
                 &state,
                 "ERROR",
                 "SALESFORCE_API",
-                "query_records",
+                "get_current_user_context",
                 Some(&source_id),
                 None,
                 false,
-                "执行查询失败。",
+                "获取当前用户上下文失败。",
                 Some(&message),
             );
             Err(message)
@@ -1646,11 +1967,21 @@ pub async fn create_record(
             .map_err(|error| format!("Database lock failed: {error}"))?;
         db::get_source(&connection, &payload.source_id).map_err(AppError::to_string_error)?
     };
+    let provider =
+        provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
+    let log_category = resolve_log_category(&source);
 
     let object_name = payload.object_name.clone();
     let values = payload.values.clone();
-    let create_result = match state
-        .sf_client
+    let operation_detail = if source.is_salesforce() {
+        build_salesforce_create_detail(&source.api_version, &object_name, &values, None)
+    } else {
+        match preview_create_record_sql(&source, &object_name, values.clone()).await {
+            Ok(detail) => detail,
+            Err(error) => fallback_mysql_log_detail(&error),
+        }
+    };
+    let create_result = match provider
         .create_record(&source, &object_name, values.clone())
         .await
     {
@@ -1665,8 +1996,9 @@ pub async fn create_record(
             )
             .await
             .map_err(AppError::to_string_error)?;
-            state
-                .sf_client
+            let refreshed_provider = provider_for_source(state.inner(), &refreshed_source)
+                .map_err(AppError::to_string_error)?;
+            refreshed_provider
                 .create_record(&refreshed_source, &object_name, values.clone())
                 .await
         }
@@ -1678,28 +2010,29 @@ pub async fn create_record(
             write_system_log(
                 &state,
                 "INFO",
-                "SALESFORCE_API",
+                log_category,
                 "create_record",
                 Some(&payload.source_id),
                 Some(&payload.object_name),
                 true,
                 "新增记录成功。",
-                Some(&format!("recordId={record_id}")),
+                Some(&format!("recordId={record_id}\n{operation_detail}")),
             );
             Ok(record_id)
         }
         Err(error) => {
             let message = AppError::to_string_error(error);
+            let detail = format!("{operation_detail}\nerror={message}");
             write_system_log(
                 &state,
                 "ERROR",
-                "SALESFORCE_API",
+                log_category,
                 "create_record",
                 Some(&payload.source_id),
                 Some(&payload.object_name),
                 false,
                 "新增记录失败。",
-                Some(&message),
+                Some(&detail),
             );
             Err(message)
         }
@@ -1724,14 +2057,26 @@ pub async fn save_records(
             .map_err(|error| format!("Database lock failed: {error}"))?;
         db::get_source(&connection, &payload.source_id).map_err(AppError::to_string_error)?
     };
+    let provider =
+        provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
+    let log_category = resolve_log_category(&source);
 
     let create_count = payload.creates.len();
     let update_count = payload.updates.len();
     let object_name = payload.object_name.clone();
     let creates = payload.creates.clone();
     let updates = payload.updates.clone();
-    let save_result = match state
-        .sf_client
+    let operation_detail = if source.is_salesforce() {
+        build_salesforce_save_detail(&source.api_version, &object_name, &creates, &updates, None)
+    } else {
+        match preview_save_records_sql(&source, &object_name, creates.clone(), updates.clone())
+            .await
+        {
+            Ok(detail) => detail,
+            Err(error) => fallback_mysql_log_detail(&error),
+        }
+    };
+    let save_result = match provider
         .save_records(&source, &object_name, creates.clone(), updates.clone())
         .await
     {
@@ -1746,8 +2091,9 @@ pub async fn save_records(
             )
             .await
             .map_err(AppError::to_string_error)?;
-            state
-                .sf_client
+            let refreshed_provider = provider_for_source(state.inner(), &refreshed_source)
+                .map_err(AppError::to_string_error)?;
+            refreshed_provider
                 .save_records(
                     &refreshed_source,
                     &object_name,
@@ -1764,7 +2110,7 @@ pub async fn save_records(
             write_system_log(
                 &state,
                 "INFO",
-                "SALESFORCE_API",
+                log_category,
                 "save_records",
                 Some(&payload.source_id),
                 Some(&payload.object_name),
@@ -1773,22 +2119,134 @@ pub async fn save_records(
                     "批量保存成功,新增 {} 条,更新 {} 条。",
                     create_count, update_count
                 ),
-                None,
+                Some(&operation_detail),
             );
             Ok(())
         }
         Err(error) => {
             let message = AppError::to_string_error(error);
+            let detail = format!("{operation_detail}\nerror={message}");
             write_system_log(
                 &state,
                 "ERROR",
-                "SALESFORCE_API",
+                log_category,
                 "save_records",
                 Some(&payload.source_id),
                 Some(&payload.object_name),
                 false,
                 "批量保存失败。",
-                Some(&message),
+                Some(&detail),
+            );
+            Err(message)
+        }
+    }
+}
+
+/// 批量保存记录（新增+更新+删除，单事务）。
+#[tauri::command]
+pub async fn save_records_with_deletes(
+    _app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    payload: RecordSaveWithDeletePayload,
+) -> Result<(), String> {
+    if payload.creates.is_empty() && payload.updates.is_empty() && payload.deletes.is_empty() {
+        return Ok(());
+    }
+
+    let source = {
+        let connection = state
+            .db
+            .lock()
+            .map_err(|error| format!("Database lock failed: {error}"))?;
+        db::get_source(&connection, &payload.source_id).map_err(AppError::to_string_error)?
+    };
+    let provider =
+        provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
+    let log_category = resolve_log_category(&source);
+
+    if source.is_salesforce() {
+        // Salesforce 暂不支持单事务批量提交，直接返回错误并落日志。
+        let message = "Salesforce 暂不支持单事务批量提交（含删除）。".to_string();
+        write_system_log(
+            &state,
+            "ERROR",
+            log_category,
+            "save_records_with_deletes",
+            Some(&payload.source_id),
+            Some(&payload.object_name),
+            false,
+            "批量保存失败。",
+            Some(&message),
+        );
+        return Err(message);
+    }
+
+    let create_count = payload.creates.len();
+    let update_count = payload.updates.len();
+    let delete_count = payload.deletes.len();
+    let object_name = payload.object_name.clone();
+    let creates = payload.creates.clone();
+    let updates = payload.updates.clone();
+    let deletes = payload.deletes.clone();
+    let operation_detail = match preview_save_records_with_deletes_sql(
+        &source,
+        &object_name,
+        creates.clone(),
+        updates.clone(),
+        deletes.clone(),
+    )
+    .await
+    {
+        Ok(detail) => detail,
+        Err(error) => fallback_mysql_log_detail(&error),
+    };
+
+    // MySQL 下执行单事务提交，失败时直接返回错误信息。
+    let save_result = match provider
+        .save_records_with_deletes(
+            &source,
+            &object_name,
+            creates.clone(),
+            updates.clone(),
+            deletes.clone(),
+        )
+        .await
+    {
+        Ok(()) => Ok(()),
+        Err(error) => Err(error),
+    };
+
+    match save_result {
+        Ok(()) => {
+            write_system_log(
+                &state,
+                "INFO",
+                log_category,
+                "save_records_with_deletes",
+                Some(&payload.source_id),
+                Some(&payload.object_name),
+                true,
+                &format!(
+                    "批量保存成功,新增 {} 条,更新 {} 条,删除 {} 条。",
+                    create_count, update_count, delete_count
+                ),
+                Some(&operation_detail),
+            );
+            Ok(())
+        }
+        Err(error) => {
+            let message = AppError::to_string_error(error);
+            let detail = format!("{operation_detail}\nerror={message}");
+            write_system_log(
+                &state,
+                "ERROR",
+                log_category,
+                "save_records_with_deletes",
+                Some(&payload.source_id),
+                Some(&payload.object_name),
+                false,
+                "批量保存失败。",
+                Some(&detail),
             );
             Err(message)
         }
@@ -1812,9 +2270,19 @@ pub async fn update_record(
             .map_err(|error| format!("Database lock failed: {error}"))?;
         db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
     };
+    let provider =
+        provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
+    let log_category = resolve_log_category(&source);
+    let operation_detail = if source.is_salesforce() {
+        build_salesforce_update_detail(&source.api_version, &object_name, &record_id, &values, None)
+    } else {
+        match preview_update_record_sql(&source, &object_name, &record_id, values.clone()).await {
+            Ok(detail) => detail,
+            Err(error) => fallback_mysql_log_detail(&error),
+        }
+    };
 
-    let update_result = match state
-        .sf_client
+    let update_result = match provider
         .update_record(&source, &object_name, &record_id, values.clone())
         .await
     {
@@ -1829,8 +2297,9 @@ pub async fn update_record(
             )
             .await
             .map_err(AppError::to_string_error)?;
-            state
-                .sf_client
+            let refreshed_provider = provider_for_source(state.inner(), &refreshed_source)
+                .map_err(AppError::to_string_error)?;
+            refreshed_provider
                 .update_record(&refreshed_source, &object_name, &record_id, values.clone())
                 .await
         }
@@ -1842,28 +2311,29 @@ pub async fn update_record(
             write_system_log(
                 &state,
                 "INFO",
-                "SALESFORCE_API",
+                log_category,
                 "update_record",
                 Some(&source_id),
                 Some(&object_name),
                 true,
                 "更新记录成功。",
-                Some(&format!("recordId={record_id}")),
+                Some(&format!("recordId={record_id}\n{operation_detail}")),
             );
             Ok(())
         }
         Err(error) => {
             let message = AppError::to_string_error(error);
+            let detail = format!("{operation_detail}\nerror={message}");
             write_system_log(
                 &state,
                 "ERROR",
-                "SALESFORCE_API",
+                log_category,
                 "update_record",
                 Some(&source_id),
                 Some(&object_name),
                 false,
                 "更新记录失败。",
-                Some(&message),
+                Some(&detail),
             );
             Err(message)
         }
@@ -1886,9 +2356,19 @@ pub async fn delete_record(
             .map_err(|error| format!("Database lock failed: {error}"))?;
         db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
     };
+    let provider =
+        provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
+    let log_category = resolve_log_category(&source);
+    let operation_detail = if source.is_salesforce() {
+        build_salesforce_delete_detail(&source.api_version, &object_name, &record_id, None)
+    } else {
+        match preview_delete_record_sql(&source, &object_name, &record_id).await {
+            Ok(detail) => detail,
+            Err(error) => fallback_mysql_log_detail(&error),
+        }
+    };
 
-    let delete_result = match state
-        .sf_client
+    let delete_result = match provider
         .delete_record(&source, &object_name, &record_id)
         .await
     {
@@ -1903,8 +2383,9 @@ pub async fn delete_record(
             )
             .await
             .map_err(AppError::to_string_error)?;
-            state
-                .sf_client
+            let refreshed_provider = provider_for_source(state.inner(), &refreshed_source)
+                .map_err(AppError::to_string_error)?;
+            refreshed_provider
                 .delete_record(&refreshed_source, &object_name, &record_id)
                 .await
         }
@@ -1916,28 +2397,29 @@ pub async fn delete_record(
             write_system_log(
                 &state,
                 "INFO",
-                "SALESFORCE_API",
+                log_category,
                 "delete_record",
                 Some(&source_id),
                 Some(&object_name),
                 true,
                 "删除记录成功。",
-                Some(&format!("recordId={record_id}")),
+                Some(&format!("recordId={record_id}\n{operation_detail}")),
             );
             Ok(())
         }
         Err(error) => {
             let message = AppError::to_string_error(error);
+            let detail = format!("{operation_detail}\nerror={message}");
             write_system_log(
                 &state,
                 "ERROR",
-                "SALESFORCE_API",
+                log_category,
                 "delete_record",
                 Some(&source_id),
                 Some(&object_name),
                 false,
                 "删除记录失败。",
-                Some(&message),
+                Some(&detail),
             );
             Err(message)
         }
@@ -2017,19 +2499,425 @@ const TOOL_GET_FIELD_METADATA: &str = "get_salesforce_field_metadata";
 /// LLM 工具:获取对象关系图。
 const TOOL_GET_OBJECT_RELATIONSHIP_GRAPH: &str = "get_salesforce_object_relationship_graph";
 
+/// 读取全局终端命令组（含命令列表）。
+#[tauri::command]
+pub fn list_terminal_command_groups(
+    state: State<'_, AppState>,
+) -> Result<Vec<TerminalCommandGroup>, String> {
+    let connection = state
+        .db
+        .lock()
+        .map_err(|error| format!("Database lock failed: {error}"))?;
+    db::list_terminal_command_groups(&connection).map_err(AppError::to_string_error)
+}
+
+/// 创建终端命令组。
+#[tauri::command]
+pub fn create_terminal_command_group(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<TerminalCommandGroup, String> {
+    let normalized_name = name.trim().to_string();
+    if normalized_name.is_empty() {
+        return Err("命令组名称不能为空".to_string());
+    }
+
+    let connection = state
+        .db
+        .lock()
+        .map_err(|error| format!("Database lock failed: {error}"))?;
+    db::create_terminal_command_group(&connection, &normalized_name)
+        .map_err(AppError::to_string_error)
+}
+
+/// 更新终端命令组名称。
+#[tauri::command]
+pub fn update_terminal_command_group(
+    state: State<'_, AppState>,
+    group_id: String,
+    payload: TerminalCommandGroupUpsertPayload,
+) -> Result<TerminalCommandGroup, String> {
+    let normalized_group_id = group_id.trim().to_string();
+    if normalized_group_id.is_empty() {
+        return Err("groupId 不能为空".to_string());
+    }
+
+    let connection = state
+        .db
+        .lock()
+        .map_err(|error| format!("Database lock failed: {error}"))?;
+    db::update_terminal_command_group(&connection, &normalized_group_id, &payload.name)
+        .map_err(AppError::to_string_error)
+}
+
+/// 创建终端命令。
+#[tauri::command]
+pub fn create_terminal_command(
+    state: State<'_, AppState>,
+    payload: TerminalCommandUpsertPayload,
+) -> Result<TerminalCommandItem, String> {
+    let connection = state
+        .db
+        .lock()
+        .map_err(|error| format!("Database lock failed: {error}"))?;
+    db::create_terminal_command(&connection, &payload).map_err(AppError::to_string_error)
+}
+
+/// 更新终端命令。
+#[tauri::command]
+pub fn update_terminal_command(
+    state: State<'_, AppState>,
+    command_id: String,
+    payload: TerminalCommandUpsertPayload,
+) -> Result<TerminalCommandItem, String> {
+    let normalized_command_id = command_id.trim().to_string();
+    if normalized_command_id.is_empty() {
+        return Err("commandId 不能为空".to_string());
+    }
+
+    let connection = state
+        .db
+        .lock()
+        .map_err(|error| format!("Database lock failed: {error}"))?;
+    db::update_terminal_command(&connection, &normalized_command_id, &payload)
+        .map_err(AppError::to_string_error)
+}
+
+/// 删除终端命令。
+#[tauri::command]
+pub fn delete_terminal_command(
+    state: State<'_, AppState>,
+    group_id: String,
+    command_id: String,
+) -> Result<(), String> {
+    let normalized_group_id = group_id.trim().to_string();
+    let normalized_command_id = command_id.trim().to_string();
+    if normalized_group_id.is_empty() {
+        return Err("groupId 不能为空".to_string());
+    }
+    if normalized_command_id.is_empty() {
+        return Err("commandId 不能为空".to_string());
+    }
+
+    let connection = state
+        .db
+        .lock()
+        .map_err(|error| format!("Database lock failed: {error}"))?;
+    db::delete_terminal_command(&connection, &normalized_group_id, &normalized_command_id)
+        .map_err(AppError::to_string_error)
+}
+
+/// 删除终端命令组。
+#[tauri::command]
+pub fn delete_terminal_command_group(
+    state: State<'_, AppState>,
+    group_id: String,
+) -> Result<(), String> {
+    let normalized_group_id = group_id.trim().to_string();
+    if normalized_group_id.is_empty() {
+        return Err("groupId 不能为空".to_string());
+    }
+
+    let connection = state
+        .db
+        .lock()
+        .map_err(|error| format!("Database lock failed: {error}"))?;
+    db::delete_terminal_command_group(&connection, &normalized_group_id)
+        .map_err(AppError::to_string_error)
+}
+
+/// 调整终端命令排序。
+#[tauri::command]
+pub fn reorder_terminal_commands(
+    state: State<'_, AppState>,
+    payload: TerminalCommandReorderPayload,
+) -> Result<(), String> {
+    let normalized_group_id = payload.group_id.trim().to_string();
+    if normalized_group_id.is_empty() {
+        return Err("groupId 不能为空".to_string());
+    }
+
+    if payload.command_ids.is_empty() {
+        return Err("commandIds 不能为空".to_string());
+    }
+
+    let connection = state
+        .db
+        .lock()
+        .map_err(|error| format!("Database lock failed: {error}"))?;
+    db::reorder_terminal_commands(&connection, &payload).map_err(AppError::to_string_error)
+}
+
+/// 打开终端会话：每个前端 Tab 对应一个系统终端进程。
+#[tauri::command]
+pub fn open_terminal_session(
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+    tab_id: String,
+    cols: Option<u16>,
+    rows: Option<u16>,
+    initial_command: Option<String>,
+) -> Result<TerminalSessionInfo, String> {
+    let normalized_tab_id = tab_id.trim();
+    if normalized_tab_id.is_empty() {
+        return Err("Tab ID 不能为空".to_string());
+    }
+    // 读取终端首选 shell 命令配置（动态路径，不限制固定版本）。
+    let preferred_shell_command = read_terminal_shell_command(&state);
+
+    terminal_runtime::open_terminal_session(
+        &app_handle,
+        &state.terminal_sessions,
+        normalized_tab_id,
+        cols.unwrap_or(120),
+        rows.unwrap_or(36),
+        preferred_shell_command.as_deref(),
+        initial_command.as_deref(),
+    )
+}
+
+/// 列出当前系统可用终端 Shell（用于设置页下拉选择）。
+#[tauri::command]
+pub fn list_available_terminal_shells() -> Result<Vec<TerminalShellOption>, String> {
+    Ok(terminal_runtime::list_available_terminal_shells())
+}
+
+/// 向终端会话写入输入（真实终端键盘输入透传）。
+#[tauri::command]
+pub fn write_terminal_input(
+    state: State<'_, AppState>,
+    tab_id: String,
+    input: String,
+) -> Result<(), String> {
+    let normalized_tab_id = tab_id.trim();
+    if normalized_tab_id.is_empty() {
+        return Err("Tab ID 不能为空".to_string());
+    }
+    terminal_runtime::write_terminal_input(&state.terminal_sessions, normalized_tab_id, &input)
+}
+
+/// 调整终端会话尺寸（与 xterm cols/rows 同步）。
+#[tauri::command]
+pub fn resize_terminal_session(
+    state: State<'_, AppState>,
+    tab_id: String,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String> {
+    let normalized_tab_id = tab_id.trim();
+    if normalized_tab_id.is_empty() {
+        return Err("Tab ID 不能为空".to_string());
+    }
+    terminal_runtime::resize_terminal_session(
+        &state.terminal_sessions,
+        normalized_tab_id,
+        cols,
+        rows,
+    )
+}
+
+/// 关闭终端会话并终止对应进程。
+#[tauri::command]
+pub fn close_terminal_session(state: State<'_, AppState>, tab_id: String) -> Result<(), String> {
+    let normalized_tab_id = tab_id.trim();
+    if normalized_tab_id.is_empty() {
+        return Err("Tab ID 不能为空".to_string());
+    }
+    terminal_runtime::close_terminal_session(&state.terminal_sessions, normalized_tab_id)
+}
+
+/// 以管理员身份打开系统终端（仅 Windows）。
+/// 说明：管理员进程受 UAC 隔离，无法附着到当前 PTY Tab，因此以新窗口方式打开。
+#[tauri::command]
+pub fn open_elevated_terminal(_state: State<'_, AppState>) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        // 管理员终端同样遵循数据库中保存的终端 Shell 配置。
+        let elevated_program = read_terminal_shell_command(&_state)
+            .ok_or_else(|| "未配置终端 Shell，请到“设置-终端设置”中重新选择 Shell。".to_string())?;
+        let escaped_program = elevated_program.replace('\'', "''");
+        let guard_script = terminal_runtime::build_windows_parent_guard_script(std::process::id());
+        let escaped_guard_script = guard_script.replace('\'', "''");
+        let elevate_command = format!(
+            "Start-Process -FilePath '{}' -Verb RunAs -ArgumentList '-NoExit','-NoLogo','-Command','{}'",
+            escaped_program, escaped_guard_script
+        );
+        let output = StdCommand::new("powershell.exe")
+            .arg("-NoProfile")
+            .arg("-ExecutionPolicy")
+            .arg("Bypass")
+            .arg("-Command")
+            .arg(elevate_command)
+            .output()
+            .map_err(|error| format!("拉起管理员终端失败: {error}"))?;
+
+        if output.status.success() {
+            return Ok(());
+        }
+
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        return Err(format!(
+            "拉起管理员终端失败，exit={:?}, stderr={stderr}, stdout={stdout}",
+            output.status.code()
+        ));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("当前平台不支持“以管理员身份打开终端”".to_string())
+    }
+}
+
+/// 读取终端 shell 命令配置；兼容旧版 `terminal.shell.preference`（pwsh/powershell）。
+fn read_terminal_shell_command(state: &State<'_, AppState>) -> Option<String> {
+    let connection = state.db.lock().ok()?;
+    // 优先读取新版完整命令配置。
+    let command = db::read_app_setting(&connection, TERMINAL_SHELL_COMMAND_KEY)
+        .ok()
+        .flatten()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    if command.is_some() {
+        return command;
+    }
+
+    // 回退读取旧版偏好配置，避免历史用户升级后失效。
+    let legacy = db::read_app_setting(&connection, LEGACY_TERMINAL_SHELL_PREFERENCE_KEY)
+        .ok()
+        .flatten()
+        .map(|value| value.trim().to_lowercase())
+        .filter(|value| !value.is_empty())?;
+    if legacy == "powershell" {
+        return Some("powershell.exe".to_string());
+    }
+    if legacy == "pwsh" {
+        return Some("pwsh.exe".to_string());
+    }
+    Some(legacy)
+}
+
+/// 读取 UI 持久化状态（通用键值）。
+#[tauri::command]
+pub fn get_ui_state(state: State<'_, AppState>, key: String) -> Result<Option<String>, String> {
+    let connection = state
+        .db
+        .lock()
+        .map_err(|error| format!("Database lock failed: {error}"))?;
+    db::read_app_setting(&connection, &key).map_err(AppError::to_string_error)
+}
+
+/// 写入 UI 持久化状态（通用键值）。
+#[tauri::command]
+pub fn save_ui_state(state: State<'_, AppState>, key: String, value: String) -> Result<(), String> {
+    let connection = state
+        .db
+        .lock()
+        .map_err(|error| format!("Database lock failed: {error}"))?;
+    db::write_app_setting(&connection, &key, &value).map_err(AppError::to_string_error)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        build_salesforce_create_detail, build_salesforce_query_detail, build_salesforce_save_detail,
+    };
+    use crate::models::RecordUpdatePayload;
+    use serde_json::json;
+    use std::collections::HashMap;
+
+    /// 构造测试用字段映射，减少重复样板代码。
+    fn build_values(entries: &[(&str, serde_json::Value)]) -> HashMap<String, serde_json::Value> {
+        entries
+            .iter()
+            .map(|(key, value)| ((*key).to_string(), value.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn salesforce_query_detail_logs_real_query_api_path() {
+        let detail = build_salesforce_query_detail("v61.0", "SELECT Id FROM Account LIMIT 1");
+
+        assert_eq!(
+            detail,
+            "api=GET /services/data/v61.0/query\nsoql=SELECT Id FROM Account LIMIT 1"
+        );
+    }
+
+    #[test]
+    fn salesforce_create_detail_omits_trace_soql_by_default() {
+        let detail = build_salesforce_create_detail(
+            "v61.0",
+            "Account",
+            &build_values(&[("Name", json!("Acme"))]),
+            None,
+        );
+
+        assert!(detail.contains("api=POST /services/data/v61.0/sobjects/Account"));
+        assert!(detail.contains("payload={\"Name\":\"Acme\"}"));
+        assert!(!detail.contains("trace_soql"));
+    }
+
+    #[test]
+    fn salesforce_save_detail_logs_real_composite_request_payload() {
+        let creates = vec![build_values(&[("Name", json!("Acme"))])];
+        let updates = vec![RecordUpdatePayload {
+            record_id: "001xx000003DHP0AAO".to_string(),
+            values: build_values(&[("Name", json!("Acme Updated"))]),
+        }];
+        let detail = build_salesforce_save_detail("v61.0", "Account", &creates, &updates, None);
+
+        assert!(detail.contains("api=POST /services/data/v61.0/composite"));
+        assert!(detail.contains("\"allOrNone\":true"));
+        assert!(detail.contains("\"referenceId\":\"create_0\""));
+        assert!(detail.contains("\"referenceId\":\"update_0\""));
+        assert!(detail.contains("/services/data/v61.0/sobjects/Account"));
+        assert!(detail.contains("/services/data/v61.0/sobjects/Account/001xx000003DHP0AAO"));
+        assert!(!detail.contains("trace_soql"));
+    }
+}
+
 /// 校验数据源写入参数,避免保存明显非法值。
 fn validate_payload(payload: &SourceUpsertPayload) -> Result<(), String> {
+    let source_type = payload.source_type.trim().to_lowercase();
     if payload.name.trim().is_empty() {
         return Err("Source name cannot be empty".to_string());
     }
-    if payload.instance_url.trim().is_empty() {
-        return Err("Instance URL cannot be empty".to_string());
+    if source_type == "salesforce" {
+        if payload.instance_url.trim().is_empty() {
+            return Err("Instance URL cannot be empty".to_string());
+        }
+        if payload.access_token.trim().is_empty() {
+            return Err("Access token cannot be empty".to_string());
+        }
+        if !payload.api_version.starts_with('v') {
+            return Err("API version must start with v, e.g. v61.0".to_string());
+        }
+        return Ok(());
     }
-    if payload.access_token.trim().is_empty() {
-        return Err("Access token cannot be empty".to_string());
+    if source_type == "mysql" {
+        let host = payload
+            .config_json
+            .get("host")
+            .and_then(|item| item.as_str())
+            .unwrap_or("")
+            .trim();
+        let database = payload
+            .config_json
+            .get("database")
+            .and_then(|item| item.as_str())
+            .unwrap_or("")
+            .trim();
+        let username = payload
+            .config_json
+            .get("username")
+            .and_then(|item| item.as_str())
+            .unwrap_or("")
+            .trim();
+        if host.is_empty() || database.is_empty() || username.is_empty() {
+            return Err("MySQL config 缺少必填项：host/database/username".to_string());
+        }
+        return Ok(());
     }
-    if !payload.api_version.starts_with('v') {
-        return Err("API version must start with v, e.g. v61.0".to_string());
-    }
-    Ok(())
+    return Err(format!("当前版本不支持该数据源类型: {source_type}"));
 }

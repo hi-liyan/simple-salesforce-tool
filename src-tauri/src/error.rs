@@ -1,4 +1,4 @@
-﻿use thiserror::Error;
+use thiserror::Error;
 
 /// 统一错误定义，便于 Tauri command 返回一致错误消息。
 #[derive(Debug, Error)]

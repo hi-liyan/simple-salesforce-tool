@@ -1,26 +1,15 @@
-﻿import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, MessageSquare, Play, Plus, Table2, WandSparkles, X } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
-import { DataGrid } from "../../components/DataGrid";
-import { NoticeAlert } from "../../components/NoticeAlert";
-import { SoqlMonacoEditor } from "../../components/SoqlMonacoEditor";
-import { api } from "../../api";
-import { AiChatTurnV2Response, Notice, QueryResult, SalesforceObject, TabLog } from "../../types";
-
-type AiConversationItem = {
-  // 消息唯一标识，用于流式更新定位。
-  id: string;
-  // 消息发送方：user=用户输入，assistant=AI 回复。
-  role: "user" | "assistant";
-  // 消息正文。
-  content: string;
-  // AI 回复状态：clarify=继续澄清，ready=可应用 SOQL。
-  status?: "clarify" | "ready";
-  // AI 引导问题列表（仅 clarify 时展示）。
-  questions?: string[];
-  // AI 产出的 SOQL（仅 ready 时展示）。
-  soql?: string;
-};
+import { ContextMenu, type ContextMenuEntry } from "../../../../components/ContextMenu";
+import { DataGrid } from "../../../../components/DataGrid";
+import { NoticeAlert } from "../../../../components/NoticeAlert";
+import { SoqlMonacoEditor } from "../../../../components/SoqlMonacoEditor";
+import { SqlMonacoEditor } from "../../../../components/SqlMonacoEditor";
+import { api } from "../../../../api";
+import { useObjectsQuery } from "../../../../queries/salesforce";
+import { useSoqlExecutorStore, createSoqlExecutorTab, type SoqlExecutorTab, type AiConversationItem } from "../../../../store/useSoqlExecutorStore";
+import type { AiChatTurnV2Response, Notice, ObjectDescribe, QueryResult, SalesforceObject, TabLog } from "../../../../types";
 
 type AiStreamChunkPayload = {
   // 流式请求 ID。
@@ -29,36 +18,13 @@ type AiStreamChunkPayload = {
   chunk: string;
 };
 
-type SoqlExecutorTab = {
-  id: string;
-  name: string;
-  soqlDraft: string;
-  // 当前编辑器选中文本：用于“仅执行选中内容”。
-  selectedSoqlText: string;
-  result: QueryResult;
-  loading: boolean;
-  notice: Notice | null;
-  logs: TabLog[];
-  selectedRecordIds: string[];
-  // 是否显示底部结果/日志区域：默认新建 Tab 隐藏，查询成功后展示。
-  showBottomPanel: boolean;
-  // AI 多轮会话 ID：为空时由后端创建。
-  aiConversationId: string;
-  // AI 对话输入草稿。
-  aiPromptDraft: string;
-  // AI 会话消息列表（用户与助手交替展示）。
-  aiMessages: AiConversationItem[];
-  // AI 请求加载状态。
-  aiLoading: boolean;
-  // AI 模式开关：开启后用聊天界面替代 SOQL 编辑器。
-  aiMode: boolean;
-  // 当前流式请求 ID：用于把 chunk 路由到当前 Tab 对话。
-  aiStreamRequestId: string;
-};
-
 type SoqlExecutorWorkspaceProps = {
   // 当前选中的数据源 ID。
   selectedSourceId: string;
+  // 当前选中数据源类型（salesforce/mysql）。
+  selectedSourceType?: string;
+  // Salesforce 当前用户时区（IANA），用于 datetime 与 Salesforce Web 一致显示。
+  salesforceTimezone?: string | null;
   // 加载遮罩文案。
   loadingText: string;
   // 当前数据源对象列表：用于对象名补全。
@@ -67,6 +33,14 @@ type SoqlExecutorWorkspaceProps = {
   workspaceNotice: Notice | null;
   // 关闭工作区全局提示回调。
   onCloseWorkspaceNotice: () => void;
+  // 是否隐藏内置 Tab 栏：用于统一工作区模式下由外层渲染混合 Tab。
+  hideTabBar?: boolean;
+  // 强制绑定到指定 console Tab：用于“每个工作区 Tab 独立实例常驻挂载”场景。
+  // 传入后将忽略 store 的 activeTabId，仅渲染目标 tabId 的工作区视图。
+  forcedTabId?: string;
+  // 是否启用全局副作用（流式事件监听、等待文案轮询）。
+  // 统一工作区下会同时挂载多个实例，为避免重复注册，需要在父层只挂载一次全局副作用。
+  enableGlobalEffects?: boolean;
 };
 
 type BottomView = "result" | "logs";
@@ -81,18 +55,87 @@ const AI_STREAMING_COPY_POOL = [
   "马上就好，正在做最后一轮推理"
 ];
 
+// SOQL 执行器全局副作用：用于在多实例常驻挂载时只注册一次流式监听与占位文案轮询。
+export function SoqlExecutorGlobalEffects() {
+  // SOQL 执行器 Tabs：用于判断是否存在进行中的 AI 流式任务。
+  const tabs = useSoqlExecutorStore((state) => state.tabs);
+  // 写入 Tabs：用于推进指定 requestId 的等待文案。
+  const setTabs = useSoqlExecutorStore((state) => state.setTabs);
+
+  // 是否存在任意进行中的 AI 流式任务：用于控制等待文案轮换定时器。
+  const hasLoadingAiTask = useMemo(
+    () => tabs.some((tab) => tab.aiLoading && Boolean(tab.aiStreamRequestId)),
+    [tabs]
+  );
+
+  useEffect(() => {
+    // 监听后端流式事件：按 requestId 路由到对应 Tab 的 AI 回复气泡。
+    let alive = true;
+    let unlisten: (() => void) | null = null;
+    void listen<AiStreamChunkPayload>("llm:soql-stream-chunk", (event) => {
+      if (!alive) return;
+      const requestId = event.payload?.requestId || "";
+      const chunk = event.payload?.chunk || "";
+      if (!requestId || !chunk) return;
+      setTabs((current) =>
+        current.map((tab) => {
+          if (tab.aiStreamRequestId !== requestId) return tab;
+          return advanceStreamingPlaceholderForTab(tab, requestId);
+        })
+      );
+    }).then((dispose) => {
+      unlisten = dispose;
+    });
+
+    return () => {
+      alive = false;
+      unlisten?.();
+    };
+  }, [setTabs]);
+
+  useEffect(() => {
+    if (!hasLoadingAiTask) return;
+    // 定时轮换等待文案：即使后端暂时没有新 chunk，也能持续反馈“AI 正在工作”。
+    const timer = window.setInterval(() => {
+      setTabs((current) => {
+        let changed = false;
+        const next = current.map((tab) => {
+          if (!tab.aiLoading || !tab.aiStreamRequestId) return tab;
+          const nextTab = advanceStreamingPlaceholderForTab(tab, tab.aiStreamRequestId);
+          if (nextTab !== tab) changed = true;
+          return nextTab;
+        });
+        return changed ? next : current;
+      });
+    }, 950);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [hasLoadingAiTask, setTabs]);
+
+  return null;
+}
+
 // SOQL 执行器工作区：支持多 Tab、执行、结果展示与查询日志。
 export function SoqlExecutorWorkspace({
   selectedSourceId,
+  selectedSourceType,
+  salesforceTimezone,
   loadingText,
   objects,
   workspaceNotice,
-  onCloseWorkspaceNotice
+  onCloseWorkspaceNotice,
+  hideTabBar = false,
+  forcedTabId,
+  enableGlobalEffects = true
 }: SoqlExecutorWorkspaceProps) {
-  // SOQL 执行器的多标签状态。
-  const [tabs, setTabs] = useState<SoqlExecutorTab[]>(() => [createSoqlExecutorTab(1)]);
-  // 当前激活标签 ID。
-  const [activeTabId, setActiveTabId] = useState<string>(() => tabs[0]?.id || "");
+  // SOQL 执行器的多标签状态（通过 Zustand persist 自动持久化到 SQLite）。
+  const tabs = useSoqlExecutorStore((state) => state.tabs);
+  const setTabs = useSoqlExecutorStore((state) => state.setTabs);
+  const activeTabId = useSoqlExecutorStore((state) => state.activeTabId);
+  const setActiveTabId = useSoqlExecutorStore((state) => state.setActiveTabId);
+  // 当前实例的目标 Tab：forcedTabId 存在时以其为准，避免切换工作区 Tab 后误操作其它 console tab。
+  const effectiveActiveTabId = forcedTabId || activeTabId;
   // 底部展示模式：结果 / 日志。
   const [bottomView, setBottomView] = useState<BottomView>("result");
   // 底部结果日志区高度：支持鼠标拖拽调整。
@@ -109,23 +152,32 @@ export function SoqlExecutorWorkspace({
   const selectedSoqlTextRef = useRef("");
   // 对象字段缓存：按需 describe 后用于上下文补全，避免重复请求。
   const [objectFieldsMap, setObjectFieldsMap] = useState<Record<string, string[]>>({});
+  // 对象 describe 缓存：用于结果表字段 label/type 映射，保证显示与 Query 页面一致。
+  const [objectDescribeMap, setObjectDescribeMap] = useState<Record<string, ObjectDescribe>>({});
+  // 当前激活标签数据。
+  const activeTab = useMemo(
+    () => tabs.find((item) => item.id === effectiveActiveTabId) || null,
+    [tabs, effectiveActiveTabId]
+  );
+  // 当前控制台实例的实际数据源：优先使用 console tab 自身 source，上层 props 仅作为新建默认值。
+  const effectiveSourceId = activeTab?.sourceId || selectedSourceId;
+  // 当前控制台实例的实际数据源类型：优先使用 console tab 自身 sourceType。
+  const effectiveSourceType = activeTab?.sourceType || selectedSourceType || "salesforce";
+  // 是否是 MySQL 数据源：用于在控制台切换 SQL/SOQL 编辑器能力。
+  const isMysqlSource = effectiveSourceType.toLowerCase() === "mysql";
+  // 查询语言标签：按数据源类型显示 SQL/SOQL 文案。
+  const queryLanguageLabel = isMysqlSource ? "SQL" : "SOQL";
+  // 当前控制台数据源对象列表：按 console tab 自身 sourceId 拉取，避免多 source console 串补全。
+  const { data: effectiveSourceObjects = [] } = useObjectsQuery(effectiveSourceId);
   // 当前数据源可查询对象名集合：用于 FROM 子句对象补全。
-  const objectNames = useMemo(() => objects.filter((item) => item.queryable).map((item) => item.name), [objects]);
+  const objectNames = useMemo(
+    () => (effectiveSourceId ? effectiveSourceObjects : objects).filter((item) => item.queryable).map((item) => item.name),
+    [effectiveSourceId, effectiveSourceObjects, objects]
+  );
   // 缓存中的字段总集合：作为 FROM 未确定时的回退补全候选。
   const fallbackFieldNames = useMemo(
     () => Array.from(new Set(Object.values(objectFieldsMap).flatMap((fields) => fields))),
     [objectFieldsMap]
-  );
-
-  // 当前激活标签数据。
-  const activeTab = useMemo(
-    () => tabs.find((item) => item.id === activeTabId) || null,
-    [tabs, activeTabId]
-  );
-  // 是否存在任意进行中的 AI 流式任务：用于控制等待文案轮换定时器。
-  const hasLoadingAiTask = useMemo(
-    () => tabs.some((tab) => tab.aiLoading && Boolean(tab.aiStreamRequestId)),
-    [tabs]
   );
   // 平台检测：用于区分 Mac 的 Command 键与 Windows 的 Alt 键发送快捷键。
   const isMacPlatform = useMemo(() => {
@@ -169,7 +221,10 @@ export function SoqlExecutorWorkspace({
     };
   }, [tabContextMenu]);
 
+  // 多实例常驻挂载场景下，全局副作用由 SoqlExecutorGlobalEffects 统一处理，避免重复注册。
+  // 这里保留原逻辑作为兜底：当仅挂载单一实例时仍可正常工作。
   useEffect(() => {
+    if (!enableGlobalEffects) return;
     // 监听后端流式事件：按 requestId 路由到对应 Tab 的 AI 回复气泡。
     let alive = true;
     let unlisten: (() => void) | null = null;
@@ -192,9 +247,11 @@ export function SoqlExecutorWorkspace({
       alive = false;
       unlisten?.();
     };
-  }, []);
+  }, [enableGlobalEffects, setTabs]);
 
   useEffect(() => {
+    if (!enableGlobalEffects) return;
+    const hasLoadingAiTask = tabs.some((tab) => tab.aiLoading && Boolean(tab.aiStreamRequestId));
     if (!hasLoadingAiTask) return;
     // 定时轮换等待文案：即使后端暂时没有新 chunk，也能持续反馈“AI 正在工作”。
     const timer = window.setInterval(() => {
@@ -212,7 +269,7 @@ export function SoqlExecutorWorkspace({
     return () => {
       window.clearInterval(timer);
     };
-  }, [hasLoadingAiTask]);
+  }, [enableGlobalEffects, tabs, setTabs]);
 
   useEffect(() => {
     // 切换 Tab 或状态更新时同步 ref，保证执行入口读取到当前激活 Tab 的选区文本。
@@ -221,7 +278,8 @@ export function SoqlExecutorWorkspace({
 
   useEffect(() => {
     setObjectFieldsMap({}); // 切换数据源后清空旧缓存，避免跨源字段污染。
-  }, [selectedSourceId]);
+    setObjectDescribeMap({}); // 同步清理 describe 缓存，避免跨源元数据污染。
+  }, [effectiveSourceId]);
 
   useEffect(() => {
     if (!draggingBottomResize) return;
@@ -246,11 +304,11 @@ export function SoqlExecutorWorkspace({
   }, [draggingBottomResize]);
 
   useEffect(() => {
-    if (!selectedSourceId || !activeTab) return;
+    if (!effectiveSourceId || !activeTab) return;
     const fromObjectNames = extractFromObjectNames(activeTab.soqlDraft);
     if (fromObjectNames.length === 0) return;
     const queryableObjectNameSet = new Set(objectNames.map((name) => name.toLowerCase()));
-    const loadedObjectNameSet = new Set(Object.keys(objectFieldsMap).map((name) => name.toLowerCase()));
+    const loadedObjectNameSet = new Set(Object.keys(objectDescribeMap).map((name) => name.toLowerCase()));
     const unloadedObjectNames = fromObjectNames.filter((objectName) => {
       if (!queryableObjectNameSet.has(objectName.toLowerCase())) return false; // 仅加载当前数据源可查询对象。
       return !loadedObjectNameSet.has(objectName.toLowerCase());
@@ -261,10 +319,10 @@ export function SoqlExecutorWorkspace({
     void Promise.all(
       unloadedObjectNames.map(async (objectName) => {
         try {
-          const describe = await api.describeObject(selectedSourceId, objectName);
+          const describe = await api.describeObject(effectiveSourceId, objectName);
           return {
             objectName,
-            fields: describe.fields.map((field) => field.name)
+            describe
           };
         } catch {
           return null; // describe 失败时忽略，不阻塞其它对象字段加载。
@@ -272,12 +330,19 @@ export function SoqlExecutorWorkspace({
       })
     ).then((describes) => {
       if (cancelled) return;
-      const loadedEntries = describes.filter((item): item is { objectName: string; fields: string[] } => Boolean(item));
+      const loadedEntries = describes.filter((item): item is { objectName: string; describe: ObjectDescribe } => Boolean(item));
       if (loadedEntries.length === 0) return;
       setObjectFieldsMap((current) => {
         const next = { ...current };
         loadedEntries.forEach((item) => {
-          next[item.objectName] = item.fields; // 写入缓存，供编辑器上下文补全读取。
+          next[item.objectName] = item.describe.fields.map((field) => field.name); // 写入缓存，供编辑器上下文补全读取。
+        });
+        return next;
+      });
+      setObjectDescribeMap((current) => {
+        const next = { ...current };
+        loadedEntries.forEach((item) => {
+          next[item.objectName] = item.describe; // 写入完整 describe，供结果表字段 label/type 映射。
         });
         return next;
       });
@@ -286,102 +351,85 @@ export function SoqlExecutorWorkspace({
     return () => {
       cancelled = true; // 避免异步返回后写入已失效状态。
     };
-  }, [selectedSourceId, activeTab, objectNames, objectFieldsMap]);
+  }, [effectiveSourceId, activeTab, objectNames, objectDescribeMap]);
 
-  // 结果表专用数据：关系字段扁平化 + 子查询展开为多行。
+  // 结果表专用数据：Salesforce 走关系字段扁平化；MySQL 保持原始列结构（JSON 不拆列）。
   const gridResult = useMemo<QueryResult>(() => {
     if (!activeTab) return { totalSize: 0, records: [] };
+    // MySQL 执行器结果与对象查询页保持一致：按后端返回原字段渲染。
+    if (isMysqlSource) {
+      return normalizeQueryResult(activeTab.result);
+    }
     return {
       totalSize: activeTab.result.totalSize,
       records: activeTab.result.records.flatMap((record) => expandRecordForGridRows(record))
     };
-  }, [activeTab]);
+  }, [activeTab, isMysqlSource]);
 
-  // 当前标签可见列：从扁平化后的结果记录动态抽取字段。
+  // 当前标签可见列：从结果记录动态抽取字段。
   const visibleColumns = useMemo(() => {
     if (!activeTab) return [];
-    return extractVisibleColumns(gridResult.records);
-  }, [activeTab, gridResult.records]);
+    return extractVisibleColumns(gridResult.records, isMysqlSource);
+  }, [activeTab, gridResult.records, isMysqlSource]);
 
-  // 当前标签字段元数据映射：执行器模式统一只读，避免误编辑。
+  // 当前标签字段元数据映射：优先使用 describe 的 label/type，再降级到值推断。
   const fieldMetadataMap = useMemo(() => {
+    const primaryObjectName = extractPrimaryObjectName(activeTab?.soqlDraft || "");
     return visibleColumns.reduce((acc, fieldName) => {
-      acc[fieldName] = {
-        // 禁止更新：DataGrid 将据此禁用编辑。
-        updateable: false,
-        // 禁止创建：DataGrid 将据此禁用新建场景编辑。
-        createable: false
-      };
+      const resolvedMetadata = resolveFieldMetadataForExecutor(
+        fieldName,
+        primaryObjectName,
+        objectDescribeMap,
+        gridResult.records
+      );
+      acc[fieldName] = resolvedMetadata || {};
       return acc;
     }, {} as Record<string, Record<string, unknown>>);
-  }, [visibleColumns]);
+  }, [activeTab?.soqlDraft, visibleColumns, objectDescribeMap, gridResult.records]);
 
-  // 新建一个 SOQL 标签。
-  function createTab() {
-    const nextIndex = tabs.length + 1;
-    const nextTab = createSoqlExecutorTab(nextIndex);
-    setTabs((current) => [...current, nextTab]);
-    setActiveTabId(nextTab.id);
-  }
-
-  // 批量关闭 Tab：统一处理激活项收敛，保持菜单动作行为一致。
-  function closeTabsByIds(tabIds: string[]) {
-    if (tabIds.length === 0) return;
-    const closeSet = new Set(tabIds);
-    setTabs((current) => {
-      const nextTabs = current.filter((item) => !closeSet.has(item.id));
-      if (nextTabs.length === 0) {
-        const fallback = createSoqlExecutorTab(1);
-        setActiveTabId(fallback.id); // 关闭到最后一个时，自动创建并激活一个全新 Tab。
-        return [fallback];
-      }
-      setActiveTabId((currentActiveId) => (closeSet.has(currentActiveId) ? nextTabs[0].id : currentActiveId)); // 当前激活项被关闭时切到第一个剩余 Tab。
-      return nextTabs;
-    });
-  }
-
-  // 关闭指定标签，并收敛激活项到可用标签。
-  function closeTab(tabId: string) {
-    closeTabsByIds([tabId]); // 单个关闭复用批量逻辑，避免分支行为不一致。
-  }
+  // Store actions：Tab 管理操作委托给 Zustand store。
+  const storeCreateTab = useSoqlExecutorStore((state) => state.createTab);
+  const storeCloseTab = useSoqlExecutorStore((state) => state.closeTab);
+  const storeCloseTabsByIds = useSoqlExecutorStore((state) => state.closeTabsByIds);
+  const storePatchTab = useSoqlExecutorStore((state) => state.patchTab);
 
   // 右键动作：关闭目标 Tab 左侧全部。
   function closeLeftTabs(tabId: string) {
     const index = tabs.findIndex((tab) => tab.id === tabId);
     if (index <= 0) return;
-    closeTabsByIds(tabs.slice(0, index).map((tab) => tab.id));
+    storeCloseTabsByIds(tabs.slice(0, index).map((tab) => tab.id));
   }
 
   // 右键动作：关闭目标 Tab 右侧全部。
   function closeRightTabs(tabId: string) {
     const index = tabs.findIndex((tab) => tab.id === tabId);
     if (index < 0 || index >= tabs.length - 1) return;
-    closeTabsByIds(tabs.slice(index + 1).map((tab) => tab.id));
+    storeCloseTabsByIds(tabs.slice(index + 1).map((tab) => tab.id));
   }
 
   // 右键动作：关闭除目标 Tab 外的其它 Tab。
   function closeOtherTabs(tabId: string) {
-    closeTabsByIds(tabs.filter((tab) => tab.id !== tabId).map((tab) => tab.id));
+    storeCloseTabsByIds(tabs.filter((tab) => tab.id !== tabId).map((tab) => tab.id));
   }
 
   // 右键动作：关闭全部 Tab。
   function closeAllTabs() {
-    closeTabsByIds(tabs.map((tab) => tab.id));
+    storeCloseTabsByIds(tabs.map((tab) => tab.id));
   }
 
   // 更新当前激活标签（复用函数式更新，避免并发状态覆盖）。
   function patchActiveTab(updater: (tab: SoqlExecutorTab) => SoqlExecutorTab) {
     if (!activeTab) return;
-    setTabs((current) => current.map((tab) => (tab.id === activeTab.id ? updater(tab) : tab)));
+    storePatchTab(activeTab.id, updater);
   }
 
   // 执行当前标签中的 SOQL 并写入结果与日志。
   async function executeActiveTabSoql() {
     if (!activeTab) return;
-    if (!selectedSourceId) {
+    if (!effectiveSourceId) {
       patchActiveTab((tab) => ({
         ...tab,
-        notice: { type: "error", message: "请先在左侧选择数据源。" }
+        notice: { type: "error", message: "请先为当前控制台绑定数据源。" }
       }));
       return;
     }
@@ -392,7 +440,7 @@ export function SoqlExecutorWorkspace({
     if (!executeSoql) {
       patchActiveTab((tab) => ({
         ...tab,
-        notice: { type: "error", message: "SOQL 不能为空。" }
+        notice: { type: "error", message: `${queryLanguageLabel} 不能为空。` }
       }));
       return;
     }
@@ -401,7 +449,7 @@ export function SoqlExecutorWorkspace({
 
     try {
       // 调用后端统一查询命令，支持常规查询与复杂子查询。
-      const result = await api.queryRecords(selectedSourceId, executeSoql);
+      const result = await api.queryRecords(effectiveSourceId, executeSoql);
       const normalizedResult = normalizeQueryResult(result);
 
       patchActiveTab((tab) => ({
@@ -424,7 +472,7 @@ export function SoqlExecutorWorkspace({
         loading: false,
         notice: { type: "error", message: `执行失败：${String(error)}` },
         logs: [
-          buildSoqlLog(false, executeSoql, "执行 SOQL 失败。", String(error)),
+          buildSoqlLog(false, executeSoql, `执行 ${queryLanguageLabel} 失败。`, String(error)),
           ...tab.logs
         ].slice(0, 200)
       }));
@@ -436,10 +484,10 @@ export function SoqlExecutorWorkspace({
   // 向 AI 发送一轮消息：支持澄清追问和最终 SOQL 生成。
   async function sendAiPrompt() {
     if (!activeTab) return;
-    if (!selectedSourceId) {
+    if (!effectiveSourceId) {
       patchActiveTab((tab) => ({
         ...tab,
-        notice: { type: "error", message: "请先在左侧选择数据源。" }
+        notice: { type: "error", message: "请先为当前控制台绑定数据源。" }
       }));
       return;
     }
@@ -469,7 +517,7 @@ export function SoqlExecutorWorkspace({
 
     try {
       const response = await api.aiChatTurnV2({
-        sourceId: selectedSourceId,
+        sourceId: effectiveSourceId,
         conversationId: activeTab.aiConversationId || undefined,
         message: prompt,
         streamRequestId,
@@ -530,15 +578,25 @@ export function SoqlExecutorWorkspace({
     patchActiveTab((tab) => ({
       ...tab,
       soqlDraft: soql,
-      notice: { type: "success", message: "已将 AI 生成的 SOQL 回填到编辑器。" }
+      notice: { type: "success", message: `已将 AI 生成的${queryLanguageLabel}回填到编辑器。` }
     }));
+  }
+
+  // 解析新建 console tab 的默认来源：优先复用当前激活 tab，其次回退到父层传入的当前数据源。
+  function getNextTabSourceMeta() {
+    return {
+      sourceId: activeTab?.sourceId || selectedSourceId,
+      sourceType: activeTab?.sourceType || selectedSourceType || "",
+      sourceName: activeTab?.sourceName || "",
+      sourceColor: activeTab?.sourceColor || ""
+    };
   }
 
   // 创建新 Tab 并将 AI 生成的 SOQL 应用到新 Tab。
   function createTabAndApplyAiSoql(soql: string) {
     const nextIndex = tabs.length + 1;
     const nextTab = {
-      ...createSoqlExecutorTab(nextIndex),
+      ...createSoqlExecutorTab(nextIndex, getNextTabSourceMeta()),
       soqlDraft: soql,
       aiMode: false // 创建后回到传统编辑模式，便于直接执行与调整。
     };
@@ -550,9 +608,9 @@ export function SoqlExecutorWorkspace({
     return (
       // 防御分支：理论上不会触发，兜底给出可操作入口。
       <div className="flex h-full items-center justify-center">
-        <button className="btn btn-primary btn-sm" onClick={createTab}>
+        <button className="btn btn-primary btn-sm" onClick={() => storeCreateTab(getNextTabSourceMeta())}>
           <Plus size={14} />
-          新建 SOQL Tab
+          {`新建 ${queryLanguageLabel} Tab`}
         </button>
       </div>
     );
@@ -571,100 +629,104 @@ export function SoqlExecutorWorkspace({
         />
       )}
 
-      {/* Tab 栏：支持切换、关闭与右侧新增。 */}
-      <div className="flex items-center border-b border-base-300">
-        <div className="flex min-w-0 flex-1 overflow-x-auto">
-          {tabs.map((tab) => {
-            const active = tab.id === activeTabId;
-            const tabIndex = tabs.findIndex((item) => item.id === tab.id);
-            const hasLeftTabs = tabIndex > 0;
-            const hasRightTabs = tabIndex >= 0 && tabIndex < tabs.length - 1;
-            const hasOtherTabs = tabs.length > 1;
-            return (
-              <div
-                key={tab.id}
-                className={`flex items-center border-r border-base-300 ${active ? "bg-base-100" : ""}`}
-                onContextMenu={(event) => {
-                  event.preventDefault(); // 阻止浏览器默认右键菜单。
-                  setActiveTabId(tab.id); // 右键时先切换到目标 Tab，避免操作目标不一致。
-                  setTabContextMenu({ x: event.clientX, y: event.clientY, tabId: tab.id }); // 打开自定义菜单。
-                }}
-              >
-                <button
-                  className={`min-w-0 px-3 py-2 text-[12px] ${active ? "text-primary" : "text-neutral/70"}`}
-                  onClick={() => setActiveTabId(tab.id)}
-                >
-                  {tab.name}
-                </button>
-                <button className="btn btn-circle btn-ghost btn-xs mr-1" onClick={() => closeTab(tab.id)} aria-label={`关闭 ${tab.name}`}>
-                  <X size={13} />
-                </button>
-                {/* Tab 右键菜单：提供常见批量关闭操作。 */}
-                {tabContextMenu?.tabId === tab.id && (
+      {!hideTabBar && (
+        <>
+          {/* Tab 栏：支持切换、关闭与右侧新增。 */}
+          <div className="flex items-center border-b border-base-300">
+            <div className="flex min-w-0 flex-1 overflow-x-auto">
+              {tabs.map((tab) => {
+                const active = tab.id === activeTabId;
+                const tabIndex = tabs.findIndex((item) => item.id === tab.id);
+                const hasLeftTabs = tabIndex > 0;
+                const hasRightTabs = tabIndex >= 0 && tabIndex < tabs.length - 1;
+                const hasOtherTabs = tabs.length > 1;
+                return (
                   <div
-                    className="fixed z-[80] min-w-[132px] rounded border border-base-300 bg-base-100 p-1 shadow-xl"
-                    style={{ left: tabContextMenu.x, top: tabContextMenu.y }}
-                    onClick={(event) => event.stopPropagation()}
+                    key={tab.id}
+                    className={`flex items-center border-r border-base-300 ${active ? "bg-base-100" : ""}`}
+                    onContextMenu={(event) => {
+                      event.preventDefault(); // 阻止浏览器默认右键菜单。
+                      setActiveTabId(tab.id); // 右键时先切换到目标 Tab，避免操作目标不一致。
+                      setTabContextMenu({ x: event.clientX, y: event.clientY, tabId: tab.id }); // 打开自定义菜单。
+                    }}
                   >
                     <button
-                      className="btn btn-ghost btn-xs w-full justify-start"
-                      onClick={() => {
-                        closeTab(tab.id); // 关闭当前 Tab。
-                        setTabContextMenu(null); // 执行后关闭菜单。
-                      }}
+                      className={`min-w-0 px-3 py-2 text-[12px] ${active ? "text-primary" : "text-neutral/70"}`}
+                      onClick={() => setActiveTabId(tab.id)}
                     >
-                      关闭当前
+                      {tab.name}
                     </button>
-                    <button
-                      className="btn btn-ghost btn-xs w-full justify-start"
-                      disabled={!hasLeftTabs}
-                      onClick={() => {
-                        closeLeftTabs(tab.id); // 关闭目标 Tab 左侧所有 Tab。
-                        setTabContextMenu(null); // 执行后关闭菜单。
-                      }}
-                    >
-                      关闭左侧
+                    <button className="btn btn-circle btn-ghost btn-xs mr-1" onClick={() => storeCloseTab(tab.id)} aria-label={`关闭 ${tab.name}`}>
+                      <X size={13} />
                     </button>
-                    <button
-                      className="btn btn-ghost btn-xs w-full justify-start"
-                      disabled={!hasRightTabs}
-                      onClick={() => {
-                        closeRightTabs(tab.id); // 关闭目标 Tab 右侧所有 Tab。
-                        setTabContextMenu(null); // 执行后关闭菜单。
-                      }}
-                    >
-                      关闭右侧
-                    </button>
-                    <button
-                      className="btn btn-ghost btn-xs w-full justify-start"
-                      disabled={!hasOtherTabs}
-                      onClick={() => {
-                        closeOtherTabs(tab.id); // 仅保留目标 Tab，关闭其它 Tab。
-                        setTabContextMenu(null); // 执行后关闭菜单。
-                      }}
-                    >
-                      关闭其他
-                    </button>
-                    <button
-                      className="btn btn-ghost btn-xs w-full justify-start"
-                      disabled={tabs.length === 0}
-                      onClick={() => {
-                        closeAllTabs(); // 关闭全部 Tab。
-                        setTabContextMenu(null); // 执行后关闭菜单。
-                      }}
-                    >
-                      全部关闭
-                    </button>
+                    {/* Tab 右键菜单：提供常见批量关闭操作。 */}
+                    {tabContextMenu?.tabId === tab.id && (
+                      <ContextMenu
+                        x={tabContextMenu.x}
+                        y={tabContextMenu.y}
+                        minWidthClassName="min-w-[132px]"
+                        entries={[
+                          {
+                            id: "close-current",
+                            label: "关闭当前",
+                            onClick: () => {
+                              storeCloseTab(tab.id); // 关闭当前 Tab。
+                              setTabContextMenu(null); // 执行后关闭菜单。
+                            }
+                          },
+                          {
+                            id: "close-left",
+                            label: "关闭左侧",
+                            disabled: !hasLeftTabs,
+                            onClick: () => {
+                              closeLeftTabs(tab.id); // 关闭目标 Tab 左侧所有 Tab。
+                              setTabContextMenu(null); // 执行后关闭菜单。
+                            }
+                          },
+                          {
+                            id: "close-right",
+                            label: "关闭右侧",
+                            disabled: !hasRightTabs,
+                            onClick: () => {
+                              closeRightTabs(tab.id); // 关闭目标 Tab 右侧所有 Tab。
+                              setTabContextMenu(null); // 执行后关闭菜单。
+                            }
+                          },
+                          {
+                            id: "close-other",
+                            label: "关闭其他",
+                            disabled: !hasOtherTabs,
+                            onClick: () => {
+                              closeOtherTabs(tab.id); // 仅保留目标 Tab，关闭其它 Tab。
+                              setTabContextMenu(null); // 执行后关闭菜单。
+                            }
+                          },
+                          {
+                            id: "close-all",
+                            label: "全部关闭",
+                            disabled: tabs.length === 0,
+                            onClick: () => {
+                              closeAllTabs(); // 关闭全部 Tab。
+                              setTabContextMenu(null); // 执行后关闭菜单。
+                            }
+                          }
+                        ] satisfies ContextMenuEntry[]}
+                      />
+                    )}
                   </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-        <button className="btn btn-ghost btn-sm mx-1" onClick={createTab} aria-label="新建 SOQL Tab">
-          <Plus size={14} />
-        </button>
-      </div>
+                );
+              })}
+            </div>
+            <button
+              className="btn btn-ghost btn-sm mx-1"
+              onClick={() => storeCreateTab(getNextTabSourceMeta())}
+              aria-label={`新建 ${queryLanguageLabel} Tab`}
+            >
+              <Plus size={14} />
+            </button>
+          </div>
+        </>
+      )}
 
       {/* 当前标签提示。 */}
       {activeTab.notice && (
@@ -696,7 +758,9 @@ export function SoqlExecutorWorkspace({
           </button>
           {/* 中间说明文本。 */}
           <span className="text-[12px] text-neutral/70">
-            {activeTab.aiMode ? "AI 模式：通过对话生成 SOQL，可一键新建 Tab 应用。" : "支持复杂 SOQL（含子查询），结果展示在底部。"}
+            {activeTab.aiMode
+              ? `AI 模式：通过对话生成 ${queryLanguageLabel}，可一键新建 Tab 应用。`
+              : `支持复杂 ${queryLanguageLabel}（含子查询），结果展示在底部。`}
           </span>
           {/* 占位弹性空间，将 AI 模式按钮推到右侧。 */}
           <div className="flex-1" />
@@ -722,7 +786,7 @@ export function SoqlExecutorWorkspace({
             <div className="min-h-0 flex-1 overflow-auto rounded border border-base-300 bg-base-100 p-3">
               {activeTab.aiMessages.length === 0 ? (
                 <div className="flex h-full items-center justify-center text-[12px] text-neutral/60">
-                  请输入你的问题，AI 会先对话，明确后再生成 SOQL。
+                  {`请输入你的问题，AI 会先对话，明确后再生成${queryLanguageLabel}。`}
                 </div>
               ) : (
                 activeTab.aiMessages.map((item, index) => {
@@ -784,7 +848,7 @@ export function SoqlExecutorWorkspace({
                 <textarea
                   className="textarea textarea-bordered textarea-sm w-full min-h-[84px] max-h-40 resize-y leading-5"
                   value={activeTab.aiPromptDraft}
-                  placeholder="输入问题或明确说“请生成 SOQL”"
+                  placeholder={`输入问题或明确说“请生成 ${queryLanguageLabel}”`}
                   rows={3}
                   wrap="soft"
                   onChange={(event) => {
@@ -819,22 +883,42 @@ export function SoqlExecutorWorkspace({
           <>
             {/* SOQL 编辑器区域：始终占剩余空间，底部面板显示时会随拖拽动态伸缩。 */}
             <div className={activeTab.showBottomPanel ? "min-h-0 flex-1 border-b border-base-300 p-3" : "min-h-0 flex-1 p-3"}>
-              {/* SOQL 编辑器：统一复用 Monaco 组件，保持与主工作区一致的编辑体验。 */}
-              <SoqlMonacoEditor
-                value={activeTab.soqlDraft}
-                onChange={(value) => {
-                  patchActiveTab((tab) => ({ ...tab, soqlDraft: value })); // 同步当前标签草稿。
-                }}
-                onSelectionTextChange={(selectionText) => {
-                  selectedSoqlTextRef.current = selectionText; // 同步更新 ref，确保“点执行”的同一时刻可读取到最新选区。
-                  patchActiveTab((tab) => ({ ...tab, selectedSoqlText: selectionText })); // 同步当前标签选区文本。
-                }}
-                fieldNames={fallbackFieldNames}
-                objectNames={objectNames}
-                objectFieldsMap={objectFieldsMap}
-                height="100%"
-                className="h-full"
-              />
+              {/* 查询编辑器：按数据源类型切换 SQL/SOQL 语言模块。 */}
+              {isMysqlSource ? (
+                <SqlMonacoEditor
+                  value={activeTab.soqlDraft}
+                  onChange={(value) => {
+                    patchActiveTab((tab) => ({ ...tab, soqlDraft: value })); // 同步当前标签草稿。
+                  }}
+                  onSelectionTextChange={(selectionText) => {
+                    selectedSoqlTextRef.current = selectionText; // 同步更新 ref，确保“点执行”的同一时刻可读取到最新选区。
+                    patchActiveTab((tab) => ({ ...tab, selectedSoqlText: selectionText })); // 同步当前标签选区文本。
+                  }}
+                  fieldNames={fallbackFieldNames}
+                  objectNames={objectNames}
+                  objectFieldsMap={objectFieldsMap}
+                  placeholder={`输入 ${queryLanguageLabel}，支持多行与选区执行`}
+                  height="100%"
+                  className="h-full"
+                />
+              ) : (
+                <SoqlMonacoEditor
+                  value={activeTab.soqlDraft}
+                  onChange={(value) => {
+                    patchActiveTab((tab) => ({ ...tab, soqlDraft: value })); // 同步当前标签草稿。
+                  }}
+                  onSelectionTextChange={(selectionText) => {
+                    selectedSoqlTextRef.current = selectionText; // 同步更新 ref，确保“点执行”的同一时刻可读取到最新选区。
+                    patchActiveTab((tab) => ({ ...tab, selectedSoqlText: selectionText })); // 同步当前标签选区文本。
+                  }}
+                  fieldNames={fallbackFieldNames}
+                  objectNames={objectNames}
+                  objectFieldsMap={objectFieldsMap}
+                  placeholder={`输入 ${queryLanguageLabel}，支持多行与选区执行`}
+                  height="100%"
+                  className="h-full"
+                />
+              )}
             </div>
 
             {/* 底部结果日志区：默认新建 Tab 不显示，查询成功后显示并支持拖拽高度。 */}
@@ -884,11 +968,14 @@ export function SoqlExecutorWorkspace({
                     result={gridResult}
                     visibleColumns={visibleColumns}
                     fieldMetadataMap={fieldMetadataMap}
+                    readOnlyMode={true}
                     dirtyCellKeys={[]}
                     selectedRecordIds={activeTab.selectedRecordIds}
+                    salesforceTimezone={salesforceTimezone}
+                    selectedSourceType={selectedSourceType}
                     pendingDeleteRecordIds={[]}
-                    showHeaderMetadata={false}
                     enableReadonlyCellHint={false}
+                    allowReadonlyOverlay={true}
                     showSelectionColumn={false}
                     onToggleRecord={(recordId, checked) => {
                       patchActiveTab((tab) => ({
@@ -1016,28 +1103,6 @@ function buildAiErrorQuestions(errorText: string): string[] {
   return ["请补充你的查询目标对象和字段，我会继续协助生成 SOQL。"];
 }
 
-// 创建新的 SOQL 执行器标签默认值。
-function createSoqlExecutorTab(index: number): SoqlExecutorTab {
-  return {
-    id: `soql-tab-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    name: `SOQL ${index}`,
-    soqlDraft: "",
-    selectedSoqlText: "",
-    result: { totalSize: 0, records: [] },
-    loading: false,
-    notice: null,
-    logs: [],
-    selectedRecordIds: [],
-    showBottomPanel: false,
-    aiConversationId: "",
-    aiPromptDraft: "",
-    aiMessages: [],
-    aiLoading: false,
-    aiMode: false,
-    aiStreamRequestId: ""
-  };
-}
-
 // 构建 SOQL 执行日志条目。
 function buildSoqlLog(success: boolean, request: string, summary: string, errorMessage?: string): TabLog {
   return {
@@ -1094,6 +1159,104 @@ function applyAiResponseToTab(
   };
 }
 
+// 提取主查询对象：用于优先匹配字段 label/type。
+function extractPrimaryObjectName(soql: string): string {
+  const objectNames = extractFromObjectNames(soql);
+  return objectNames[0] || "";
+}
+
+// 执行器字段 metadata 解析：优先复用 describe 原始 metadata（与 Query 页面同源），其次按结果样本推断类型。
+function resolveFieldMetadataForExecutor(
+  fieldName: string,
+  primaryObjectName: string,
+  objectDescribeMap: Record<string, ObjectDescribe>,
+  records: Record<string, unknown>[]
+): Record<string, unknown> | null {
+  const exactField = resolveObjectFieldMetadataByName(fieldName, primaryObjectName, objectDescribeMap);
+  if (exactField) {
+    return {
+      ...(exactField.metadata || {}),
+      // 补齐统一 type，确保执行器结果表对 MySQL 类型也能走正确渲染策略。
+      type: exactField.dataType || (exactField.metadata?.type as string) || ""
+    };
+  }
+
+  // 对点路径列（如 Owner.Name）回退取末段字段名做弱匹配。
+  if (fieldName.includes(".")) {
+    const suffixFieldName = fieldName.split(".").pop() || "";
+    const suffixField = resolveObjectFieldMetadataByName(suffixFieldName, primaryObjectName, objectDescribeMap);
+    if (suffixField) {
+      return {
+        ...(suffixField.metadata || {}),
+        // 点路径字段回退时同样补齐统一 type。
+        type: suffixField.dataType || (suffixField.metadata?.type as string) || ""
+      };
+    }
+  }
+
+  // describe 未命中时回退为值推断，确保 datetime/date 在结果表仍可按规则展示。
+  const inferredType = inferFieldTypeFromRecords(fieldName, records);
+  if (!inferredType) return null;
+  return { type: inferredType };
+}
+
+// 按字段名从 describe 缓存中解析字段定义（先主对象，再全量兜底）。
+function resolveObjectFieldMetadataByName(
+  fieldName: string,
+  primaryObjectName: string,
+  objectDescribeMap: Record<string, ObjectDescribe>
+): ObjectDescribe["fields"][number] | null {
+  const normalizedFieldName = fieldName.trim().toLowerCase();
+  if (!normalizedFieldName) return null;
+
+  const primaryDescribe = primaryObjectName ? objectDescribeMap[primaryObjectName] : undefined;
+  if (primaryDescribe) {
+    const matched = primaryDescribe.fields.find((field) => field.name.toLowerCase() === normalizedFieldName);
+    if (matched) return matched;
+  }
+
+  // 主对象未命中时在已缓存对象中找唯一字段，避免错误映射同名字段。
+  let uniqueMatched: ObjectDescribe["fields"][number] | null = null;
+  let matchedCount = 0;
+  Object.values(objectDescribeMap).forEach((describe) => {
+    const matched = describe.fields.find((field) => field.name.toLowerCase() === normalizedFieldName);
+    if (!matched) return;
+    matchedCount += 1;
+    uniqueMatched = matched;
+  });
+  if (matchedCount > 1) return null; // 多对象同名字段时放弃自动映射，避免误导。
+  return uniqueMatched;
+}
+
+// 基于结果样本推断字段类型：用于 describe 缺失时的展示兜底。
+function inferFieldTypeFromRecords(fieldName: string, records: Record<string, unknown>[]): string | null {
+  const samples = records
+    .map((record) => record[fieldName])
+    .filter((value) => value !== null && value !== undefined)
+    .slice(0, 20);
+  if (samples.length === 0) return null;
+
+  const allBoolean = samples.every((value) => typeof value === "boolean");
+  if (allBoolean) return "boolean";
+
+  const allNumber = samples.every((value) => typeof value === "number");
+  if (allNumber) return "double";
+
+  const allDate = samples.every((value) => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value.trim()));
+  if (allDate) return "date";
+
+  const allDatetime = samples.every((value) => {
+    if (typeof value !== "string") return false;
+    const text = value.trim();
+    if (!text) return false;
+    // Salesforce 常见 datetime：2026-03-02T18:30:00.000+0000 / ISO 8601。
+    return /^(\d{4}-\d{2}-\d{2})T/.test(text);
+  });
+  if (allDatetime) return "datetime";
+
+  return null;
+}
+
 // 从 SOQL 中提取所有 FROM 后对象名（包含子查询），用于按需加载字段元数据。
 function extractFromObjectNames(soql: string): string[] {
   const objectNames: string[] = [];
@@ -1106,7 +1269,7 @@ function extractFromObjectNames(soql: string): string[] {
 }
 
 // 抽取可见列：合并所有记录的顶层键，并过滤 Salesforce attributes。
-function extractVisibleColumns(records: Record<string, unknown>[]): string[] {
+function extractVisibleColumns(records: Record<string, unknown>[], isMysqlSource = false): string[] {
   const columnSet = new Set<string>();
   records.forEach((record) => {
     Object.keys(record).forEach((key) => {
@@ -1126,6 +1289,8 @@ function extractVisibleColumns(records: Record<string, unknown>[]): string[] {
     if (key.endsWith(".records") || key.endsWith(".totalSize") || key.endsWith(".done")) {
       return false;
     }
+    // MySQL 查询结果不做关系列折叠，完整保留原始列名。
+    if (isMysqlSource) return true;
     // 若已存在 `Contact.Id` 这类列，则隐藏同名前缀占位列 `Contact`。
     if (!key.includes(".") && relationPrefixSet.has(key)) {
       return false;

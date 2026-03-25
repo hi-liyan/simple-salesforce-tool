@@ -10,10 +10,12 @@ const objectsKey = (sourceId: string) => ["objects", sourceId] as const;
 const systemLogsKey = (page: number, pageSize: number) => ["system-logs", page, pageSize] as const;
 
 // 数据源列表查询（普通刷新）。
-export function useSourcesQuery() {
+export function useSourcesQuery(enabled = true) {
   return useQuery<SalesforceSource[]>({
     queryKey: sourcesKey,
-    queryFn: () => api.listSources()
+    queryFn: () => api.listSources(),
+    // 启动阶段允许由外层手动注入首屏数据，避免 Query 再次重复拉本地列表。
+    enabled
   });
 }
 
@@ -33,7 +35,9 @@ export function useObjectsQuery(sourceId: string) {
   return useQuery<SalesforceObject[]>({
     queryKey: objectsKey(sourceId),
     queryFn: () => api.listObjects(sourceId),
-    enabled: Boolean(sourceId)
+    enabled: Boolean(sourceId),
+    // Objects 列表改为“手动刷新”模式：会话内命中后不再自动判旧，切换数据源时优先复用本地缓存。
+    staleTime: Number.POSITIVE_INFINITY
   });
 }
 

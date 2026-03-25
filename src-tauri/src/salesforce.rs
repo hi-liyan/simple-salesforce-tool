@@ -5,8 +5,8 @@ use std::collections::HashMap;
 
 use crate::error::AppError;
 use crate::models::{
-    ObjectChildRelationship, ObjectDescribe, ObjectField, QueryResult, RecordUpdatePayload,
-    SalesforceObject, SalesforceSource,
+    CurrentUserContext, ObjectChildRelationship, ObjectDescribe, ObjectField, QueryResult,
+    RecordUpdatePayload, SalesforceObject, SalesforceSource,
 };
 
 /// Salesforce API 客户端，负责所有外部 HTTP 通讯。
@@ -54,6 +54,7 @@ impl SalesforceClient {
             .map(|item| SalesforceObject {
                 name: item.name,
                 label: item.label,
+                comment: None,
                 queryable: item.queryable,
                 createable: item.createable,
                 updateable: item.updateable,
@@ -232,6 +233,77 @@ impl SalesforceClient {
         })
     }
 
+    /// 获取当前登录用户上下文（时区/地区），用于前端按 Salesforce 用户时区显示 datetime。
+    pub async fn get_current_user_context(
+        &self,
+        source: &SalesforceSource,
+    ) -> Result<CurrentUserContext, AppError> {
+        #[derive(Deserialize)]
+        struct QueryResponse {
+            #[serde(default)]
+            records: Vec<HashMap<String, Value>>,
+        }
+
+        // 优先通过 userinfo 拿当前用户 Id，再精确查询 User.TimeZoneSidKey。
+        let mut timezone_sid_key: Option<String> = None;
+        let mut locale_sid_key: Option<String> = None;
+
+        if let Some(user_id) = self.fetch_current_user_id(source).await {
+            let user_id_literal = escape_soql_literal(&user_id);
+            let soql = format!(
+                "SELECT TimeZoneSidKey, LocaleSidKey FROM User WHERE Id = '{user_id_literal}' LIMIT 1"
+            );
+            let encoded = urlencoding::encode(&soql);
+            let url = build_url(source, &format!("query/?q={encoded}"));
+            if let Ok(body) = self
+                .request_json::<QueryResponse>(source, Method::GET, &url, None)
+                .await
+            {
+                if let Some(record) = body.records.into_iter().next() {
+                    timezone_sid_key = record
+                        .get("TimeZoneSidKey")
+                        .and_then(Value::as_str)
+                        .map(|item| item.trim().to_string())
+                        .filter(|item| !item.is_empty());
+                    locale_sid_key = record
+                        .get("LocaleSidKey")
+                        .and_then(Value::as_str)
+                        .map(|item| item.trim().to_string())
+                        .filter(|item| !item.is_empty());
+                }
+            }
+        }
+
+        // 兜底：尝试从 chatter/users/me 读取 timezone 字段，避免 userinfo 无权限时完全拿不到时区。
+        if timezone_sid_key.is_none() || locale_sid_key.is_none() {
+            let me_url = build_url(source, "chatter/users/me");
+            if let Ok(me) = self
+                .request_json::<Value>(source, Method::GET, &me_url, None)
+                .await
+            {
+                if timezone_sid_key.is_none() {
+                    timezone_sid_key = me
+                        .get("timezone")
+                        .and_then(Value::as_str)
+                        .map(|item| item.trim().to_string())
+                        .filter(|item| !item.is_empty());
+                }
+                if locale_sid_key.is_none() {
+                    locale_sid_key = me
+                        .get("locale")
+                        .and_then(Value::as_str)
+                        .map(|item| item.trim().to_string())
+                        .filter(|item| !item.is_empty());
+                }
+            }
+        }
+
+        Ok(CurrentUserContext {
+            timezone_sid_key,
+            locale_sid_key,
+        })
+    }
+
     /// 新增单条记录，返回新记录 Id。
     pub async fn create_record(
         &self,
@@ -395,6 +467,28 @@ impl SalesforceClient {
         Ok(())
     }
 
+    /// 轻量级 token 校验：向需要认证的 `/services/data/{version}/limits` 发 GET 请求。
+    /// 返回 `true` 表示 token 有效，`false` 表示 401 无效。
+    /// 网络超时或其他错误视为"可能有效"，避免因网络抖动触发不必要的刷新。
+    pub async fn validate_token(&self, source: &SalesforceSource) -> bool {
+        let url = format!(
+            "{}/services/data/{}/limits",
+            source.instance_url.trim_end_matches('/'),
+            source.api_version
+        );
+        let result = self
+            .http
+            .get(&url)
+            .bearer_auth(&source.access_token)
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+            .await;
+        match result {
+            Ok(resp) if resp.status() == StatusCode::UNAUTHORIZED => false,
+            _ => true,
+        }
+    }
+
     /// 发起并解析 JSON 请求（用于有返回体的接口）。
     async fn request_json<T: for<'de> serde::Deserialize<'de>>(
         &self,
@@ -453,6 +547,37 @@ impl SalesforceClient {
         Err(AppError::Http(format!(
             "Salesforce 调用失败，状态码 {status}: {text}"
         )))
+    }
+}
+
+impl SalesforceClient {
+    /// 调用 OAuth userinfo 解析当前用户 Id（失败时返回 None，不中断主流程）。
+    async fn fetch_current_user_id(&self, source: &SalesforceSource) -> Option<String> {
+        let userinfo_url = format!(
+            "{}/services/oauth2/userinfo",
+            source.instance_url.trim_end_matches('/')
+        );
+        let value = self
+            .request_json::<Value>(source, Method::GET, &userinfo_url, None)
+            .await
+            .ok()?;
+
+        // 兼容两种字段：user_id 或 sub(url 末段 userId)。
+        if let Some(user_id) = value
+            .get("user_id")
+            .and_then(Value::as_str)
+            .map(|item| item.trim().to_string())
+            .filter(|item| !item.is_empty())
+        {
+            return Some(user_id);
+        }
+
+        let sub = value.get("sub").and_then(Value::as_str)?.trim();
+        let user_id = sub.rsplit('/').next()?.trim();
+        if user_id.is_empty() {
+            return None;
+        }
+        Some(user_id.to_string())
     }
 }
 

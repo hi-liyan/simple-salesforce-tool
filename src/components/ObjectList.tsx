@@ -1,7 +1,7 @@
-﻿import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
-import { ObjectDescribe, SalesforceObject } from "../types";
+import { ObjectDdl, ObjectDescribe, SalesforceObject } from "../types";
 import {
   buildDisplayMetadataFromField,
   formatFieldMetadataValue,
@@ -14,18 +14,33 @@ type Props = {
   objects: SalesforceObject[];
   // 当前选中的数据源 ID：用于拉取对象字段描述。
   sourceId: string;
+  // 当前数据源类型：用于控制右键菜单能力项展示。
+  sourceType?: string;
   // 当前激活对象名称。
   activeObjectName: string;
   // 打开对象回调。
   onOpenObject: (objectItem: SalesforceObject) => void;
   // 不可查询徽标点击回调：用于提示当前对象不可查询。
   onNotQueryableClick?: (objectItem: SalesforceObject) => void;
+  // 刷新指定 MySQL 对象的字段元数据与 DDL。
+  onRefreshMysqlObjectMetadata?: (objectName: string) => Promise<{ describe: ObjectDescribe; ddl: ObjectDdl }>;
   // 是否使用树形模式：false 为传统列表，true 为对象-字段树。
   treeMode?: boolean;
 };
 
 // 对象列表：树形模式（对象 -> 字段 -> 字段元数据）。
-export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, onNotQueryableClick, treeMode = false }: Props) {
+export function ObjectList({
+  objects,
+  sourceId,
+  sourceType,
+  activeObjectName,
+  onOpenObject,
+  onNotQueryableClick,
+  onRefreshMysqlObjectMetadata,
+  treeMode = false
+}: Props) {
+  // 仅 Salesforce 数据源显示 Salesforce 专属菜单。
+  const isSalesforceSource = (sourceType || "salesforce").toLowerCase() === "salesforce";
   // 关键字：用于对象过滤。
   const [keyword, setKeyword] = useState("");
   // 已展开对象集合。
@@ -38,6 +53,14 @@ export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, 
   const [loadingByObjectName, setLoadingByObjectName] = useState<Record<string, boolean>>({});
   // 对象字段加载错误信息。
   const [errorByObjectName, setErrorByObjectName] = useState<Record<string, string>>({});
+  // MySQL DDL 缓存：用于渲染“外键/索引/检查”结构节点。
+  const [ddlByObjectName, setDdlByObjectName] = useState<Record<string, ObjectDdl>>({});
+  // MySQL DDL 加载状态。
+  const [ddlLoadingByObjectName, setDdlLoadingByObjectName] = useState<Record<string, boolean>>({});
+  // MySQL DDL 加载错误信息。
+  const [ddlErrorByObjectName, setDdlErrorByObjectName] = useState<Record<string, string>>({});
+  // MySQL 分类节点展开集合（key: objectName:category）。
+  const [expandedMysqlCategoryKeys, setExpandedMysqlCategoryKeys] = useState<string[]>([]);
   // 对象右键菜单状态：记录菜单位置与目标对象。
   const [objectContextMenu, setObjectContextMenu] = useState<{ x: number; y: number; objectItem: SalesforceObject } | null>(null);
 
@@ -75,11 +98,16 @@ export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, 
   function buildFieldKey(objectName: string, fieldName: string): string {
     return `${objectName}.${fieldName}`;
   }
+  // MySQL 分类节点 key 生成器。
+  function buildMysqlCategoryKey(objectName: string, categoryName: string): string {
+    return `${objectName}:${categoryName}`;
+  }
 
-  // 展开/折叠对象节点，并在首次展开时懒加载字段列表。
+  // 展开/折叠对象节点，并在首次展开时懒加载对象结构信息。
   async function toggleObjectNode(objectItem: SalesforceObject) {
     const objectName = objectItem.name;
     const alreadyExpanded = expandedObjectNames.includes(objectName);
+    const isMysqlSource = (sourceType || "salesforce").toLowerCase() === "mysql";
 
     // 已展开则直接折叠，避免多余请求。
     if (alreadyExpanded) {
@@ -90,8 +118,10 @@ export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, 
     // 先更新为展开状态，提升交互响应速度。
     setExpandedObjectNames((current) => [...current, objectName]);
 
-    // 已有缓存时不再重复请求 describe。
-    if (describeByObjectName[objectName]) {
+    // 已有缓存时不再重复请求结构。
+    const hasDescribeCache = Boolean(describeByObjectName[objectName]);
+    const hasDdlCache = !isMysqlSource || Boolean(ddlByObjectName[objectName]);
+    if (hasDescribeCache && hasDdlCache) {
       return;
     }
     if (loadingByObjectName[objectName]) return;
@@ -105,12 +135,23 @@ export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, 
 
     try {
       // 调用后端对象描述接口，后端已补齐 reference 字段 childRelationshipName。
-      const describe = await api.describeObject(sourceId, objectName);
+      const describe = hasDescribeCache ? describeByObjectName[objectName] : await api.describeObject(sourceId, objectName);
       setDescribeByObjectName((current) => ({ ...current, [objectName]: describe }));
+      if (!isMysqlSource || hasDdlCache) return;
+      setDdlLoadingByObjectName((current) => ({ ...current, [objectName]: true }));
+      setDdlErrorByObjectName((current) => ({ ...current, [objectName]: "" }));
+      const ddl = await api.getObjectDdl(sourceId, objectName);
+      setDdlByObjectName((current) => ({ ...current, [objectName]: ddl }));
     } catch (error) {
       setErrorByObjectName((current) => ({ ...current, [objectName]: `加载字段失败：${String(error)}` }));
+      if (isMysqlSource) {
+        setDdlErrorByObjectName((current) => ({ ...current, [objectName]: `加载 DDL 失败：${String(error)}` }));
+      }
     } finally {
       setLoadingByObjectName((current) => ({ ...current, [objectName]: false }));
+      if (isMysqlSource) {
+        setDdlLoadingByObjectName((current) => ({ ...current, [objectName]: false }));
+      }
     }
   }
 
@@ -121,28 +162,94 @@ export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, 
       current.includes(key) ? current.filter((item) => item !== key) : [...current, key]
     );
   }
+  // 展开/折叠 MySQL 分类节点。
+  function toggleMysqlCategoryNode(objectName: string, categoryName: string) {
+    const key = buildMysqlCategoryKey(objectName, categoryName);
+    setExpandedMysqlCategoryKeys((current) => (current.includes(key) ? current.filter((item) => item !== key) : [...current, key]));
+  }
+
+  // 树模式对象名双击：直接打开数据 Tab（单击不触发任何行为）。
+  function handleTreeObjectDoubleClick(objectItem: SalesforceObject) {
+    if (!objectItem.queryable) {
+      onNotQueryableClick?.(objectItem); // 不可查询对象：提示并阻断打开行为。
+      return;
+    }
+    onOpenObject(objectItem); // 可查询对象：双击直接打开（已存在则激活）。
+  }
+
+  // 提取 MySQL 键信息（覆盖主键/唯一键/普通键；优先使用 DDL，describe 仅作兜底）。
+  function buildMysqlKeyItems(describe: ObjectDescribe | undefined, ddl: ObjectDdl | undefined): string[] {
+    const keySet = new Set<string>();
+
+    // 1) PRIMARY KEY：优先从建表语句解析，保留多列主键信息。
+    if (ddl?.createTableDdl) {
+      const primaryKeyMatch = ddl.createTableDdl.match(/PRIMARY\s+KEY\s*\(([^)]+)\)/i);
+      if (primaryKeyMatch && primaryKeyMatch[1]) {
+        keySet.add(`PRIMARY KEY (${primaryKeyMatch[1].trim()})`);
+      }
+    }
+
+    // 2) UNIQUE KEY：来自约束 DDL（UNIQUE）。
+    (ddl?.constraintDdls || [])
+      .filter((item) => /add\s+constraint/i.test(item) && /unique\s*\(/i.test(item))
+      .forEach((item) => keySet.add(item.trim()));
+
+    // 3) 普通/唯一索引键：来自索引 DDL（CREATE [UNIQUE] INDEX）。
+    (ddl?.indexDdls || [])
+      .filter((item) => /create\s+(unique\s+)?index/i.test(item))
+      .forEach((item) => keySet.add(item.trim()));
+
+    // 4) describe 兜底：当 DDL 无法提供完整键定义时，至少展示字段键标记。
+    if (keySet.size === 0 && describe) {
+      describe.fields.forEach((field) => {
+        const rawKey = String(field.metadata?.columnKey || "").trim().toUpperCase();
+        if (!rawKey) return;
+        const keyType = rawKey === "PRI" ? "PRIMARY KEY" : rawKey === "UNI" ? "UNIQUE KEY" : "KEY";
+        keySet.add(`${field.name} (${keyType})`);
+      });
+    }
+
+    return Array.from(keySet);
+  }
+
+  // 提取 MySQL 外键信息（来自约束 DDL）。
+  function buildMysqlForeignKeyItems(ddl: ObjectDdl | undefined): string[] {
+    if (!ddl) return [];
+    return ddl.constraintDdls.filter((item) => /foreign\s+key/i.test(item));
+  }
+
+  // 提取 MySQL 索引信息（来自索引 DDL）。
+  function buildMysqlIndexItems(ddl: ObjectDdl | undefined): string[] {
+    if (!ddl) return [];
+    return ddl.indexDdls;
+  }
+
+  // 提取 MySQL 检查约束信息（优先 constraint DDL，其次建表语句中的 CHECK 行）。
+  function buildMysqlCheckItems(ddl: ObjectDdl | undefined): string[] {
+    if (!ddl) return [];
+    const fromConstraints = ddl.constraintDdls.filter((item) => /check\s*\(/i.test(item)).map((item) => item.trim());
+    if (fromConstraints.length > 0) return fromConstraints;
+    const fromCreateTable = ddl.createTableDdl
+      .split("\n")
+      .map((line) => line.trim().replace(/,$/, ""))
+      .filter((line) => /check\s*\(/i.test(line));
+    return fromCreateTable;
+  }
 
   // 右键菜单动作：打开当前组织的 Salesforce 对象列表页（自动登录）。
   async function openSalesforceListPageFromMenu() {
     if (!objectContextMenu) return;
     const { objectItem } = objectContextMenu;
-    if (!sourceId) {
-      setObjectContextMenu(null);
-      return;
-    }
+    setObjectContextMenu(null); // 立即关闭菜单，避免等待后端响应期间 UI 无反馈。
+    if (!sourceId) return;
     if (!objectItem.queryable) {
-      onNotQueryableClick?.(objectItem); // 不可查询对象保持原有提示行为。
-      setObjectContextMenu(null);
+      onNotQueryableClick?.(objectItem);
       return;
     }
     try {
-      // 混合策略：CLI 数据源由后端直接打开；非 CLI 返回 frontdoor URL 由前端打开。
-      const openUrl = await api.openObjectListPage(sourceId, objectItem.name);
-      if (openUrl) {
-        window.open(openUrl, "_blank", "noopener,noreferrer"); // 在系统浏览器打开目标列表页。
-      }
-    } finally {
-      setObjectContextMenu(null); // 执行后关闭菜单。
+      await api.openObjectListPage(sourceId, objectItem.name);
+    } catch (error) {
+      console.error("[ObjectList] 打开 Salesforce 列表页失败:", error);
     }
   }
 
@@ -150,18 +257,12 @@ export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, 
   async function openSalesforceObjectEditPageFromMenu() {
     if (!objectContextMenu) return;
     const { objectItem } = objectContextMenu;
-    if (!sourceId) {
-      setObjectContextMenu(null);
-      return;
-    }
+    setObjectContextMenu(null); // 立即关闭菜单，避免等待后端响应期间 UI 无反馈。
+    if (!sourceId) return;
     try {
-      // 混合策略：CLI 数据源由后端直接打开；非 CLI 返回 frontdoor URL 由前端打开。
-      const openUrl = await api.openObjectEditPage(sourceId, objectItem.name);
-      if (openUrl) {
-        window.open(openUrl, "_blank", "noopener,noreferrer"); // 在系统浏览器打开目标页面。
-      }
-    } finally {
-      setObjectContextMenu(null); // 执行后关闭菜单。
+      await api.openObjectEditPage(sourceId, objectItem.name);
+    } catch (error) {
+      console.error("[ObjectList] 打开 Object 编辑页失败:", error);
     }
   }
 
@@ -188,16 +289,69 @@ export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, 
     }
   }
 
+  // 右键菜单动作：强制刷新当前 MySQL 表的 describe 与 DDL，并同步左侧树缓存。
+  async function refreshMysqlObjectFromMenu() {
+    if (!objectContextMenu) return;
+    const objectName = objectContextMenu.objectItem.name;
+    const isMysqlSource = (sourceType || "salesforce").toLowerCase() === "mysql";
+    if (!isMysqlSource || !sourceId) {
+      setObjectContextMenu(null); // 非 MySQL 或未选中数据源时直接关闭菜单。
+      return;
+    }
+
+    setObjectContextMenu(null); // 先关闭菜单，避免等待期间悬浮层残留。
+    setLoadingByObjectName((current) => ({ ...current, [objectName]: true }));
+    setErrorByObjectName((current) => ({ ...current, [objectName]: "" }));
+    setDdlLoadingByObjectName((current) => ({ ...current, [objectName]: true }));
+    setDdlErrorByObjectName((current) => ({ ...current, [objectName]: "" }));
+
+    try {
+      // 优先走外层统一刷新链路，确保 Query 缓存、已打开 Tab 与对象树缓存保持一致。
+      const refreshedMetadata = onRefreshMysqlObjectMetadata
+        ? await onRefreshMysqlObjectMetadata(objectName)
+        : {
+            describe: await api.describeObject(sourceId, objectName),
+            ddl: await api.getObjectDdl(sourceId, objectName)
+          };
+      setDescribeByObjectName((current) => ({ ...current, [objectName]: refreshedMetadata.describe }));
+      setDdlByObjectName((current) => ({ ...current, [objectName]: refreshedMetadata.ddl }));
+      setExpandedObjectNames((current) => (current.includes(objectName) ? current : [...current, objectName]));
+    } catch (error) {
+      const errorMessage = `刷新表元数据失败：${String(error)}`;
+      setErrorByObjectName((current) => ({ ...current, [objectName]: errorMessage }));
+      setDdlErrorByObjectName((current) => ({ ...current, [objectName]: errorMessage }));
+    } finally {
+      setLoadingByObjectName((current) => ({ ...current, [objectName]: false }));
+      setDdlLoadingByObjectName((current) => ({ ...current, [objectName]: false }));
+    }
+  }
+
   return (
     // 容器：输入框 + 可滚动树形列表。
     <div className="flex h-full min-h-0 flex-col">
-      {/* 筛选输入框。 */}
-      <input
-        className="input input-bordered input-sm w-full"
-        placeholder="筛选 Object"
-        value={keyword}
-        onChange={(event) => setKeyword(event.target.value)}
-      />
+      {/* 筛选输入区域：支持输入关键字并一键清空。 */}
+      <div className="relative">
+        {/* 筛选输入框。 */}
+        <input
+          className="input input-bordered input-sm w-full pr-8"
+          placeholder="筛选 Object"
+          value={keyword}
+          onChange={(event) => setKeyword(event.target.value)}
+        />
+        {/* 清空按钮：仅在存在筛选关键字时展示，便于快速恢复完整列表。 */}
+        {keyword ? (
+          <button
+            className="btn btn-circle btn-ghost btn-xs absolute right-1 top-1/2 -translate-y-1/2"
+            type="button"
+            aria-label="清空 Object 筛选"
+            onClick={() => {
+              setKeyword(""); // 点击后立即清空筛选关键字。
+            }}
+          >
+            <X size={13} />
+          </button>
+        ) : null}
+      </div>
 
       {/* 列表容器：支持滚动。 */}
       <div className="mt-2 min-h-0 flex-1 overflow-auto border-t border-base-300">
@@ -247,6 +401,7 @@ export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, 
 
         {treeMode && filtered.map((item) => {
           const objectName = item.name;
+          const isMysqlSource = (sourceType || "salesforce").toLowerCase() === "mysql";
           const tooltip = `名称: ${objectName}\n标签: ${item.label}\n可查询: ${item.queryable}\n可新增: ${item.createable}\n可更新: ${item.updateable}\n可删除: ${item.deletable}`;
           const selected = objectName === activeObjectName;
           const expanded = expandedObjectNames.includes(objectName);
@@ -254,6 +409,21 @@ export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, 
           const objectFields = objectDescribe?.fields || [];
           const objectLoading = loadingByObjectName[objectName] === true;
           const objectError = errorByObjectName[objectName];
+          const objectDdl = ddlByObjectName[objectName];
+          const objectDdlLoading = ddlLoadingByObjectName[objectName] === true;
+          const objectDdlError = ddlErrorByObjectName[objectName];
+          const mysqlColumns = objectFields.map((field) => `${field.name} (${field.dataType})`);
+          const mysqlKeys = buildMysqlKeyItems(objectDescribe, objectDdl);
+          const mysqlForeignKeys = buildMysqlForeignKeyItems(objectDdl);
+          const mysqlIndexes = buildMysqlIndexItems(objectDdl);
+          const mysqlChecks = buildMysqlCheckItems(objectDdl);
+          const mysqlCategoryItems = [
+            { name: "列", items: mysqlColumns },
+            { name: "键", items: mysqlKeys },
+            { name: "外键", items: mysqlForeignKeys },
+            { name: "索引", items: mysqlIndexes },
+            { name: "检查", items: mysqlChecks }
+          ];
 
           return (
             <div key={objectName}>
@@ -279,7 +449,10 @@ export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, 
                     setObjectContextMenu({ x: event.clientX, y: event.clientY, objectItem: item }); // 打开对象右键菜单。
                   }}
                   onClick={() => {
-                    void toggleObjectNode(item); // 点击对象名时展开/折叠字段。
+                    // 对象名单击无行为：按交互要求仅允许双击打开数据查询。
+                  }}
+                  onDoubleClick={() => {
+                    handleTreeObjectDoubleClick(item); // 双击对象名：直接打开数据 Tab。
                   }}
                 >
                   <div className="truncate text-[12px]">{objectName}</div>
@@ -296,7 +469,7 @@ export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, 
                 )}
               </div>
 
-              {/* 对象节点下的字段树。 */}
+              {/* 对象节点下的结构树。 */}
               {expanded && (
                 <div className="mb-1 pl-6 pr-2">
                   {objectLoading && <p className="py-1 text-[12px] text-neutral/70">加载字段中...</p>}
@@ -305,7 +478,48 @@ export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, 
                     <p className="py-1 text-[12px] text-neutral/70">暂无字段信息。</p>
                   )}
 
-                  {!objectLoading &&
+                  {isMysqlSource && !objectLoading && !objectError && (
+                    <div>
+                      {objectDdlLoading && <p className="py-1 text-[12px] text-neutral/70">加载 DDL 中...</p>}
+                      {!objectDdlLoading && objectDdlError && <p className="py-1 text-[12px] text-error">{objectDdlError}</p>}
+                      {!objectDdlLoading &&
+                        !objectDdlError &&
+                        mysqlCategoryItems.map((category) => {
+                          const categoryKey = buildMysqlCategoryKey(objectName, category.name);
+                          const categoryExpanded = expandedMysqlCategoryKeys.includes(categoryKey);
+                          return (
+                            <div key={categoryKey} className="mb-1 rounded border border-base-300 bg-base-100">
+                              {/* MySQL 分类节点：单击展开“列/键/外键/索引/检查”。 */}
+                              <button
+                                className="flex w-full items-center gap-1 px-2 py-1 text-left hover:bg-base-200/50"
+                                type="button"
+                                onClick={() => {
+                                  toggleMysqlCategoryNode(objectName, category.name); // 切换分类展开状态。
+                                }}
+                              >
+                                {categoryExpanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+                                <span className="truncate text-[11px] font-medium">{category.name}</span>
+                                <span className="ml-auto shrink-0 text-[10px] text-neutral/60">{category.items.length}</span>
+                              </button>
+                              {/* 分类明细列表。 */}
+                              {categoryExpanded && (
+                                <div className="border-t border-base-300 px-2 py-1.5 text-[11px]">
+                                  {category.items.length === 0 && <p className="text-neutral/70">暂无信息。</p>}
+                                  {category.items.map((entry, index) => (
+                                    <p key={`${categoryKey}-${index}`} className="break-all">
+                                      {entry}
+                                    </p>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                    </div>
+                  )}
+
+                  {!isMysqlSource &&
+                    !objectLoading &&
                     !objectError &&
                     objectFields.map((field) => {
                       const fieldKey = buildFieldKey(objectName, field.name);
@@ -369,27 +583,42 @@ export function ObjectList({ objects, sourceId, activeObjectName, onOpenObject, 
               void copyObjectNameFromMenu(); // 复制对象名称并关闭菜单。
             }}
           >
-            复制 Object 名称
+            复制表名
           </button>
-          <div className="my-1 border-t border-base-300" />
-          <button
-            className="btn btn-ghost btn-xs w-full justify-start whitespace-nowrap px-2"
-            disabled={!sourceId || !objectContextMenu.objectItem.queryable}
-            onClick={() => {
-              void openSalesforceListPageFromMenu(); // 触发菜单动作并关闭菜单。
-            }}
-          >
-            打开 Salesforce 列表页
-          </button>
-          <button
-            className="btn btn-ghost btn-xs w-full justify-start whitespace-nowrap px-2"
-            disabled={!sourceId}
-            onClick={() => {
-              void openSalesforceObjectEditPageFromMenu(); // 触发菜单动作并关闭菜单。
-            }}
-          >
-            编辑 Object 页面
-          </button>
+          {!isSalesforceSource && (
+            <button
+              className="btn btn-ghost btn-xs w-full justify-start whitespace-nowrap px-2"
+              disabled={!sourceId}
+              onClick={() => {
+                void refreshMysqlObjectFromMenu(); // 强制刷新当前 MySQL 表的字段元数据与 DDL。
+              }}
+            >
+              刷新
+            </button>
+          )}
+          {isSalesforceSource && (
+            <>
+              <div className="my-1 border-t border-base-300" />
+              <button
+                className="btn btn-ghost btn-xs w-full justify-start whitespace-nowrap px-2"
+                disabled={!sourceId || !objectContextMenu.objectItem.queryable}
+                onClick={() => {
+                  void openSalesforceListPageFromMenu(); // 触发菜单动作并关闭菜单。
+                }}
+              >
+                打开 Salesforce 列表页
+              </button>
+              <button
+                className="btn btn-ghost btn-xs w-full justify-start whitespace-nowrap px-2"
+                disabled={!sourceId}
+                onClick={() => {
+                  void openSalesforceObjectEditPageFromMenu(); // 触发菜单动作并关闭菜单。
+                }}
+              >
+                编辑 Object 页面
+              </button>
+            </>
+          )}
         </div>
       )}
     </div>
