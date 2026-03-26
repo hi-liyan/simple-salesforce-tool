@@ -1,7 +1,7 @@
 import { create } from "zustand";
-import { persist, createJSONStorage } from "zustand/middleware";
+import { persist } from "zustand/middleware";
 import type { Notice, QueryResult, SourceBindingMeta, TabLog } from "../types/index.ts";
-import { tauriSqliteStorage } from "./tauriStorage.ts";
+import { createDebouncedTauriJsonStorage } from "./tauriStorage.ts";
 
 // AI 对话单条消息。
 export type AiConversationItem = {
@@ -175,6 +175,12 @@ type SoqlExecutorState = {
   resetTabs: () => void;
 };
 
+// 控制台持久化切片：仅保存标签快照与当前激活项。
+type PersistedSoqlExecutorState = {
+  tabs: SoqlExecutorTab[];
+  activeTabId: string;
+};
+
 export const useSoqlExecutorStore = create<SoqlExecutorState>()(
   persist(
     (set, get) => ({
@@ -232,7 +238,7 @@ export const useSoqlExecutorStore = create<SoqlExecutorState>()(
     }),
     {
       name: "ui.soql-executor-store",
-      storage: createJSONStorage(() => tauriSqliteStorage),
+      storage: createDebouncedTauriJsonStorage<PersistedSoqlExecutorState>(),
       // 跳过自动 hydration，由 MainPage 启动流程手动控制恢复时机。
       skipHydration: true,
       partialize: (state) => ({

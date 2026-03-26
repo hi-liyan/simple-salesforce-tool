@@ -15,7 +15,6 @@ import { arrayMove, SortableContext, useSortable, verticalListSortingStrategy } 
 import { CSS } from "@dnd-kit/utilities";
 import { getVersion } from "@tauri-apps/api/app";
 import { api } from "../../../api";
-import { NoticeAlert } from "../../../components/NoticeAlert";
 import { CliPathProbe, CliPathSettings, CliPathStatus, LlmSettings, SalesforceSource, TerminalShellOption } from "../../../types";
 import { checkGithubLatestVersion } from "../../../utils/versionUpdate";
 import { SystemLogsPanel } from "./SystemLogs";
@@ -98,8 +97,10 @@ export function SettingsPanel() {
   const [checkingAppUpdate, setCheckingAppUpdate] = useState(false);
   // 手动检查更新结果：用于展示版本检查反馈。
   const [appUpdateNotice, setAppUpdateNotice] = useState<{ tone: "success" | "info" | "error"; message: string } | null>(null);
-  // 手动检查到的新版本信息：命中更新时显示“前往更新”按钮。
-  const [appUpdateResult, setAppUpdateResult] = useState<{ latestVersion: string; releasePageUrl: string } | null>(null);
+  // 手动检查到的新版本信息：命中更新时显示最新版本与下载地址。
+  const [appUpdateResult, setAppUpdateResult] = useState<{ currentVersion: string; latestVersion: string; releasePageUrl: string } | null>(
+    null
+  );
   // 数据源列表：用于“数据源”Tab 展示完整信息（含 token）。
   const [sources, setSources] = useState<SalesforceSource[]>([]);
   // 当前拖拽中的数据源 ID：用于渲染拖拽态样式。
@@ -634,22 +635,19 @@ export function SettingsPanel() {
   async function checkAppUpdate() {
     setCheckingAppUpdate(true);
     setAppUpdateNotice(null);
+    setAppUpdateResult(null);
     try {
       const result = await checkGithubLatestVersion();
       if (!result) {
-        setAppUpdateResult(null);
         setAppUpdateNotice({ tone: "error", message: "检查更新失败：未能读取当前版本或最新发布信息。" });
         return;
       }
 
       if (result.hasUpdate) {
         setAppUpdateResult({
+          currentVersion: result.currentVersion,
           latestVersion: result.latestVersion,
           releasePageUrl: result.releasePageUrl
-        });
-        setAppUpdateNotice({
-          tone: "success",
-          message: `发现新版本：当前 ${result.currentVersion}，最新 ${result.latestVersion}。`
         });
         return;
       }
@@ -660,10 +658,18 @@ export function SettingsPanel() {
         message: `当前已是最新版本：${result.currentVersion}。`
       });
     } catch (error) {
-      setAppUpdateResult(null);
       setAppUpdateNotice({ tone: "error", message: `检查更新失败：${String(error)}` });
     } finally {
       setCheckingAppUpdate(false);
+    }
+  }
+
+  // 打开新版本下载地址：统一走后端命令，失败时在页面内给出明确提示。
+  async function openAppUpdateReleasePage(releasePageUrl: string) {
+    try {
+      await api.openExternalUrl(releasePageUrl); // 统一走后端命令打开 Releases 页面。
+    } catch (error) {
+      setAppUpdateNotice({ tone: "error", message: `打开下载地址失败：${String(error)}` });
     }
   }
 
@@ -1041,31 +1047,46 @@ export function SettingsPanel() {
                 软件版本:
                 <span className="ml-1 font-semibold">{appVersion}</span>
               </p>
-              {/* 检查更新操作区：支持手动检查并在命中新版本时前往发布页。 */}
+              {/* 检查更新操作区：支持手动检查并在命中新版本时展示下载地址。 */}
               <div className="mt-3 flex flex-wrap items-center gap-2">
                 <button className="btn btn-outline btn-sm" type="button" disabled={checkingAppUpdate} onClick={() => void checkAppUpdate()}>
                   {checkingAppUpdate ? "检查中..." : "检查更新"}
                 </button>
-                {appUpdateResult && (
-                  <button
-                    className="btn btn-primary btn-sm"
-                    type="button"
-                    onClick={() => {
-                      void api.openExternalUrl(appUpdateResult.releasePageUrl); // 统一走后端命令打开 Releases 页面。
-                    }}
-                  >
-                    前往更新
-                  </button>
-                )}
               </div>
-              {/* 手动检查结果提示：展示是否有新版本或失败原因。 */}
+              {appUpdateResult && (
+                // 新版本信息区：去掉独立色卡，仅保留普通文本结果与下载按钮。
+                <div className="mt-3 space-y-2 text-[12px] leading-5 text-neutral/80">
+                  {/* 版本摘要：直接展示当前版本与最新版本。 */}
+                  <p>
+                    当前版本:
+                    <span className="ml-1 font-semibold text-neutral">{appUpdateResult.currentVersion}</span>
+                    <span className="mx-2 text-neutral/40">/</span>
+                    最新版本:
+                    <span className="ml-1 font-semibold text-neutral">{appUpdateResult.latestVersion}</span>
+                  </p>
+                  {/* 下载结果行：直接展示下载地址并提供前往下载按钮。 */}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="break-all">下载地址：{appUpdateResult.releasePageUrl}</span>
+                    <button className="btn btn-primary btn-sm" type="button" onClick={() => void openAppUpdateReleasePage(appUpdateResult.releasePageUrl)}>
+                      <ExternalLink size={14} />
+                      前往下载
+                    </button>
+                  </div>
+                </div>
+              )}
+              {/* 手动检查结果提示：使用普通文本展示，不再使用卡片通知样式。 */}
               {appUpdateNotice && (
-                <NoticeAlert
-                  tone={appUpdateNotice.tone}
-                  message={appUpdateNotice.message}
-                  onClose={() => setAppUpdateNotice(null)}
-                  className="mt-3 max-w-full"
-                />
+                <p
+                  className={`mt-3 text-[12px] leading-5 ${
+                    appUpdateNotice.tone === "error"
+                      ? "text-error"
+                      : appUpdateNotice.tone === "success"
+                        ? "text-success"
+                        : "text-neutral/80"
+                  }`}
+                >
+                  {appUpdateNotice.message}
+                </p>
               )}
               <p className="mt-1 text-[12px] text-neutral/80">© 2026 李炎</p>
             </div>

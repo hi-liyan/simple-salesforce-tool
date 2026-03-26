@@ -1,6 +1,6 @@
 import { create } from "zustand";
-import { createJSONStorage, persist } from "zustand/middleware";
-import { tauriSqliteStorage } from "./tauriStorage.ts";
+import { persist } from "zustand/middleware";
+import { createDebouncedTauriJsonStorage } from "./tauriStorage.ts";
 import { normalizePersistedSourceTreeUiState, type PersistedSourceTreeUiState } from "../features/main/QueryPanel/logic/sourceTreePersistence.ts";
 
 type QuerySourceTreeStoreState = {
@@ -14,6 +14,11 @@ type QuerySourceTreeStoreState = {
   ) => void;
   // 重置左树 UI 状态。
   resetTreeUiState: () => void;
+};
+
+// 左树持久化切片：仅保存可恢复的 UI 展示态。
+type PersistedQuerySourceTreeStoreState = {
+  treeUiState: PersistedSourceTreeUiState;
 };
 
 // QueryPanel 左树持久化 store：用于跨 panel 切换与重启恢复展开/高亮状态。
@@ -36,7 +41,7 @@ export const useQuerySourceTreeStore = create<QuerySourceTreeStoreState>()(
     }),
     {
       name: "ui.query-source-tree-store",
-      storage: createJSONStorage(() => tauriSqliteStorage),
+      storage: createDebouncedTauriJsonStorage<PersistedQuerySourceTreeStoreState>(),
       skipHydration: true,
       partialize: (state) => ({
         treeUiState: state.treeUiState

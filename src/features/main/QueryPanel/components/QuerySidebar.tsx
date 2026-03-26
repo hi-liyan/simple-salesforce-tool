@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Braces, Crosshair, Plus, RefreshCw } from "lucide-react";
 import { api } from "../../../../api";
 import { DataSourceType, ObjectDdl, ObjectDescribe, SalesforceObject, SalesforceSource, SourceUpsertPayload } from "../../../../types";
@@ -59,6 +59,14 @@ export function QuerySidebar({
   objectListMode = "list",
   activeWorkspaceTreeTarget = null
 }: QuerySidebarProps) {
+  type QuerySourceTreeActions = {
+    refreshFocusedSource: () => Promise<void>;
+    getFocusedSourceId: () => string;
+    locateNodeByTarget: (target: { sourceId: string; objectName?: string }) => Promise<void>;
+    searchFocusedSourceObjects: (keyword: string) => Promise<QuerySourceObjectSearchResult[]>;
+    openObjectByTarget: (target: { sourceId: string; objectName: string }) => Promise<void>;
+  };
+
   // 数据源类型选择弹窗开关。
   const [showSourceTypeModal, setShowSourceTypeModal] = useState(false);
   // Salesforce 配置弹窗开关。
@@ -89,28 +97,31 @@ export function QuerySidebar({
     primaryKey: ""
   });
   // 左侧树动作句柄：由树组件回传“刷新聚焦数据源/读取聚焦源”能力。
-  const [treeActions, setTreeActions] = useState<{
-    refreshFocusedSource: () => Promise<void>;
-    getFocusedSourceId: () => string;
-    locateNodeByTarget: (target: { sourceId: string; objectName?: string }) => Promise<void>;
-    searchFocusedSourceObjects: (keyword: string) => Promise<QuerySourceObjectSearchResult[]>;
-    openObjectByTarget: (target: { sourceId: string; objectName: string }) => Promise<void>;
-  } | null>(null);
+  const treeActionsRef = useRef<QuerySourceTreeActions | null>(null);
   // 左侧搜索关键字：仅作用于当前聚焦数据源。
   const [searchKeyword, setSearchKeyword] = useState("");
   // 左侧搜索结果：展示当前聚焦数据源下的命中对象/表。
   const [searchResults, setSearchResults] = useState<QuerySourceObjectSearchResult[]>([]);
   // 左侧搜索加载态：首次搜索未缓存 source 时展示。
   const [searchLoading, setSearchLoading] = useState(false);
+  // 左树当前聚焦数据源：由树组件实时回传，避免搜索范围依赖滞后 getter。
+  const [treeFocusedSourceId, setTreeFocusedSourceId] = useState("");
+  // 搜索请求序号：仅允许最后一轮搜索写回结果，避免旧请求覆盖新关键字或新数据源。
+  const searchRequestSeqRef = useRef(0);
   // 当前激活工作区是否具备可定位的左树目标。
   const canLocateActiveWorkspaceNode = Boolean(activeWorkspaceTreeTarget?.sourceId);
   // 当前聚焦数据源 ID：左树已就绪时优先使用树内焦点，否则回退到页面选中源。
-  const focusedSourceId = treeActions?.getFocusedSourceId() || selectedSourceId;
+  const focusedSourceId = treeFocusedSourceId || selectedSourceId;
   // 当前聚焦数据源信息：用于搜索范围提示和结果打开时兜底。
   const focusedSource = useMemo(
     () => sources.find((source) => source.id === focusedSourceId) || null,
     [focusedSourceId, sources]
   );
+
+  // 接收左树动作句柄：使用 ref 承接，避免内部回调身份变化触发整块侧边栏反复重渲染。
+  function handleTreeReady(actions: QuerySourceTreeActions) {
+    treeActionsRef.current = actions;
+  }
 
   // 打开“选择数据源类型”弹窗。
   function openSourceTypeModal() {
@@ -240,19 +251,45 @@ export function QuerySidebar({
   useEffect(() => {
     const normalizedKeyword = searchKeyword.trim();
     if (!normalizedKeyword) {
+      searchRequestSeqRef.current += 1; // 行内注释：清空关键字时主动使历史请求失效，避免延迟结果回写。
       setSearchResults([]);
       setSearchLoading(false);
       return;
     }
 
+    const normalizedFocusedSourceId = String(focusedSourceId || "").trim();
+    if (!normalizedFocusedSourceId) {
+      searchRequestSeqRef.current += 1; // 行内注释：当前没有可搜索的数据源时，终止本轮搜索并使旧请求失效。
+      setSearchResults([]);
+      setSearchLoading(false);
+      return;
+    }
+
+    const currentTreeActions = treeActionsRef.current;
+    if (!currentTreeActions) {
+      setSearchLoading(false); // 行内注释：树动作句柄未就绪时不能视为“正在搜索”，否则 loading 会卡住。
+      return;
+    }
+
+    const currentSearchRequestSeq = searchRequestSeqRef.current + 1;
+    searchRequestSeqRef.current = currentSearchRequestSeq;
+    setSearchResults([]);
+    setSearchLoading(true);
+
     let cancelled = false;
     const timer = window.setTimeout(() => {
       void (async () => {
-        setSearchLoading(true);
-        const results = await treeActions?.searchFocusedSourceObjects(normalizedKeyword) || [];
-        if (cancelled) return;
-        setSearchResults(results);
-        setSearchLoading(false);
+        try {
+          const results = await currentTreeActions.searchFocusedSourceObjects(normalizedKeyword);
+          if (cancelled || searchRequestSeqRef.current !== currentSearchRequestSeq) return;
+          setSearchResults(results);
+        } catch (_error) {
+          if (cancelled || searchRequestSeqRef.current !== currentSearchRequestSeq) return;
+          setSearchResults([]);
+        } finally {
+          if (cancelled || searchRequestSeqRef.current !== currentSearchRequestSeq) return;
+          setSearchLoading(false);
+        }
       })();
     }, 180);
 
@@ -260,15 +297,15 @@ export function QuerySidebar({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [searchKeyword, treeActions]);
+  }, [focusedSourceId, searchKeyword]);
 
   // 点击搜索结果：优先复用左树能力完成定位和打开，保持左右区域状态一致。
   function handleSelectSearchResult(item: QuerySourceObjectSearchResult) {
     void (async () => {
       setSearchKeyword("");
       setSearchResults([]);
-      if (treeActions) {
-        await treeActions.openObjectByTarget({
+      if (treeActionsRef.current) {
+        await treeActionsRef.current.openObjectByTarget({
           sourceId: item.sourceId,
           objectName: item.objectName
         });
@@ -302,14 +339,14 @@ export function QuerySidebar({
       icon: RefreshCw,
       ariaLabel: "刷新数据源",
       onClick: () => {
-        const focusedSourceId = treeActions?.getFocusedSourceId() || selectedSourceId;
+        const focusedSourceId = treeFocusedSourceId || selectedSourceId;
         if (!focusedSourceId) {
           onRefreshSources();
           return;
         }
         void (async () => {
-          if (treeActions) {
-            await treeActions.refreshFocusedSource(); // 行内注释：顶部按钮统一复用树内单次强刷链路，避免按钮层串两段刷新。
+          if (treeActionsRef.current) {
+            await treeActionsRef.current.refreshFocusedSource(); // 行内注释：顶部按钮统一复用树内单次强刷链路，避免按钮层串两段刷新。
             return;
           }
           await onRefreshSources(focusedSourceId);
@@ -324,7 +361,7 @@ export function QuerySidebar({
         if (!onOpenConsole) return;
         const targetSource = resolveConsoleTargetSource({
           sources,
-          focusedSourceId: treeActions?.getFocusedSourceId() || "",
+          focusedSourceId: treeFocusedSourceId,
           selectedSourceId
         });
         onOpenConsole(targetSource || undefined); // 点击后按聚焦源优先创建对应来源的控制台 Tab。
@@ -337,7 +374,7 @@ export function QuerySidebar({
       disabled: !canLocateActiveWorkspaceNode,
       onClick: () => {
         if (!activeWorkspaceTreeTarget) return;
-        void treeActions?.locateNodeByTarget({
+        void treeActionsRef.current?.locateNodeByTarget({
           sourceId: activeWorkspaceTreeTarget.sourceId,
           objectName: activeWorkspaceTreeTarget.kind === "data" ? activeWorkspaceTreeTarget.objectName : undefined
         }); // 点击后将左树滚动到当前激活工作区对应的 source/object 节点。
@@ -378,7 +415,8 @@ export function QuerySidebar({
             await onRefreshSources(sourceId, { skipObjectFetch: true }); // 行内注释：工作区同步阶段只复用已刷新的对象缓存，不重复拉取列表。
           }}
           onNotQueryableObjectClick={onNotQueryableObjectClick}
-          onReady={setTreeActions}
+          onFocusedSourceChange={setTreeFocusedSourceId}
+          onReady={handleTreeReady}
         />
       </div>
 

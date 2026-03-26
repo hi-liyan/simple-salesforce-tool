@@ -1,7 +1,7 @@
 import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { Settings, SquareTerminal, Table2, Wrench } from "lucide-react";
-import { api } from "../api";
+import { NoticeAlert } from "../components/NoticeAlert";
 import { useMainPageQueryPanel } from "../features/main/QueryPanel/hooks/useMainPageQueryPanel";
 import { MainLayout } from "../layouts/MainLayout";
 import { useAppStore } from "../store/useAppStore";
@@ -11,7 +11,7 @@ import { useQueryWorkspaceTabsStore } from "../store/useQueryWorkspaceTabsStore"
 import { useQuerySourceTreeStore } from "../store/useQuerySourceTreeStore";
 import { enableStorageWrite } from "../store/tauriStorage";
 import { checkGithubLatestVersion, waitForUiIdleFrame } from "../utils/versionUpdate";
-// 启动版本检查标志：避免 React StrictMode 在开发环境重复触发弹窗。
+// 启动版本检查标志：避免 React StrictMode 在开发环境重复触发新版本通知。
 let startupVersionCheckTriggered = false;
 
 // 启动阶段标识：用于驱动遮罩进度条与当前动作文案。
@@ -124,8 +124,8 @@ export function MainPage() {
   const [startupStage, setStartupStage] = useState<StartupStage>(STARTUP_STAGE_MAP.rehydrate);
   // 启动完成标记：用于在 QueryPanel 聚合层触发“数据源切换重置 Tab”逻辑。
   const [startupComplete, setStartupComplete] = useState(false);
-  // 新版本提示模态框状态：有值时显示升级弹窗。
-  const [versionUpdateModal, setVersionUpdateModal] = useState<VersionUpdateModalState | null>(null);
+  // 新版本提示通知状态：有值时在右上角显示升级通知。
+  const [versionUpdateNotice, setVersionUpdateNotice] = useState<VersionUpdateNoticeState | null>(null);
   // Terminal 面板是否已初始化：首次进入 Terminal 后保持挂载，避免切页时重建会话。
   const [terminalPanelMounted, setTerminalPanelMounted] = useState(viewMode === "terminal");
 
@@ -202,8 +202,8 @@ export function MainPage() {
       if (!startupVersionCheckTriggered) {
         startupVersionCheckTriggered = true;
         void restoredTabsPromise.finally(() => {
-          // 等恢复 Tab 的重任务收尾后再做版本检查，避免弹窗按钮点击被启动任务阻塞。
-          void checkLatestVersionOnStartup(showVersionUpdateModal);
+          // 等恢复 Tab 的重任务收尾后再做版本检查，避免启动阶段的重任务影响通知交互。
+          void checkLatestVersionOnStartup(showVersionUpdateNotice);
         });
       }
     };
@@ -290,31 +290,14 @@ export function MainPage() {
     };
   }, []);
 
-  // 版本检查命中时展示升级模态框。
-  function showVersionUpdateModal(payload: VersionUpdateModalState) {
-    setVersionUpdateModal(payload);
+  // 版本检查命中时展示右上角升级通知。
+  function showVersionUpdateNotice(payload: VersionUpdateNoticeState) {
+    setVersionUpdateNotice(payload);
   }
 
-  // 关闭升级模态框。
-  function closeVersionUpdateModal() {
-    setVersionUpdateModal(null);
-  }
-
-  // 点击“前往更新”：由后端调用系统浏览器打开发布页，避免 window.open。
-  async function handleConfirmVersionUpdateModal() {
-    if (!versionUpdateModal) return;
-    try {
-      await api.openExternalUrl(versionUpdateModal.releasePageUrl);
-      setVersionUpdateModal(null);
-    } catch (error) {
-      showWorkspaceNotice(
-        {
-          type: "error",
-          message: `打开发布页失败：${String(error)}`
-        },
-        5000
-      );
-    }
+  // 关闭升级通知。
+  function closeVersionUpdateNotice() {
+    setVersionUpdateNotice(null);
   }
 
   return (
@@ -394,39 +377,14 @@ export function MainPage() {
           </>
         }
       />
-      {versionUpdateModal && (
-        // 新版本提示模态框：统一替代 confirm + 通知的双提示流程。
-        <div className="fixed inset-0 z-[130] flex items-center justify-center bg-base-300/45 p-4 backdrop-blur-[2px]">
-          {/* 模态框卡片：展示版本信息与更新入口。 */}
-          <div className="w-full max-w-xl rounded-xl border border-base-300 bg-base-100 p-6 shadow-2xl">
-            {/* 标题区：强调发现新版本。 */}
-            <div className="mb-3">
-              <h3 className="text-lg font-semibold">检测到新版本</h3>
-              <p className="mt-1 text-sm text-neutral/70">发现可用更新，是否现在前往 GitHub Releases 页面查看并下载？</p>
-            </div>
-            {/* 版本信息：便于快速确认升级差异。 */}
-            <div className="rounded-lg border border-base-300 bg-base-200/60 p-3 text-sm">
-              <p>
-                <span className="text-neutral/70">当前版本：</span>
-                <span className="font-medium">{versionUpdateModal.currentVersion}</span>
-              </p>
-              <p className="mt-1">
-                <span className="text-neutral/70">最新版本：</span>
-                <span className="font-medium text-primary">{versionUpdateModal.latestVersion}</span>
-              </p>
-              <p className="mt-1 break-all text-xs text-neutral/70">{versionUpdateModal.releasePageUrl}</p>
-            </div>
-            {/* 操作区：支持暂不更新或立即前往发布页。 */}
-            <div className="mt-5 flex justify-end gap-2">
-              <button className="btn btn-ghost" onClick={closeVersionUpdateModal}>
-                稍后再说
-              </button>
-              <button className="btn btn-primary" onClick={() => void handleConfirmVersionUpdateModal()}>
-                前往更新
-              </button>
-            </div>
-          </div>
-        </div>
+      {versionUpdateNotice && (
+        <NoticeAlert
+          // 启动更新通知：仅提示存在新版本，引导用户到设置页查看下载信息。
+          tone="success"
+          message={`发现新版本：当前 ${versionUpdateNotice.currentVersion}，最新 ${versionUpdateNotice.latestVersion}。可前往 设置 -> 关于与反馈 查看下载信息。`}
+          onClose={closeVersionUpdateNotice}
+          className="fixed right-4 top-4 z-[70] max-w-[380px] shadow-lg"
+        />
       )}
       {startupLoading && (
         // 启动遮罩：初始化期间覆盖全屏并拦截鼠标事件。
@@ -480,24 +438,22 @@ export function MainPage() {
   );
 }
 
-// 新版本提示模态框载荷：包含版本差异与发布页地址。
-type VersionUpdateModalState = {
+// 新版本提示通知载荷：包含版本差异与发布页地址。
+type VersionUpdateNoticeState = {
   currentVersion: string;
   latestVersion: string;
-  releasePageUrl: string;
 };
 
-// 启动时检查 GitHub 最新版本；若有更新则触发升级模态框。
-async function checkLatestVersionOnStartup(onFoundNewVersion: (payload: VersionUpdateModalState) => void): Promise<void> {
+// 启动时检查 GitHub 最新版本；若有更新则触发右上角升级通知。
+async function checkLatestVersionOnStartup(onFoundNewVersion: (payload: VersionUpdateNoticeState) => void): Promise<void> {
   try {
     const result = await checkGithubLatestVersion();
     if (!result?.hasUpdate) return;
-    // 命中新版本后先让出 UI 一帧，减少弹窗出现瞬间的点击排队。
+    // 命中新版本后先让出 UI 一帧，减少通知出现瞬间与启动尾任务竞争主线程。
     await waitForUiIdleFrame();
     onFoundNewVersion({
       currentVersion: result.currentVersion,
-      latestVersion: result.latestVersion,
-      releasePageUrl: result.releasePageUrl
+      latestVersion: result.latestVersion
     });
   } catch (error) {
     // 版本检查失败不影响业务启动，只打印调试日志。

@@ -27,6 +27,8 @@ type QuerySourceTreeProps = {
   onRefreshSourceWorkspace?: (sourceId: string) => Promise<void>;
   // 不可查询对象提示。
   onNotQueryableObjectClick?: (item: SalesforceObject) => void;
+  // 当前聚焦数据源变化：供上层侧边栏实时同步搜索范围与动作上下文。
+  onFocusedSourceChange?: (sourceId: string) => void;
   // 对外暴露刷新聚焦数据源能力。
   onReady?: (actions: {
     refreshFocusedSource: () => Promise<void>;
@@ -42,6 +44,8 @@ type QuerySourceTreeBranchProps = {
   nodes: QueryTreeRenderNode[];
   // 当前分支层级。
   level: number;
+  // 已展开节点集合：用 Set 降低递归树渲染时的展开态查询成本。
+  expandedNodeIdSet: ReadonlySet<string>;
   // 数据源背景色映射：用于维持同一来源的连续背景区域。
   sourceSurfaceBackgroundById: Record<string, string>;
   // 当前左树纯状态。
@@ -51,9 +55,9 @@ type QuerySourceTreeBranchProps = {
   // 单击节点。
   onNodeClick: ReturnType<typeof useSourceTreeState>["onNodeClick"];
   // 双击节点。
-  onNodeDoubleClick: ReturnType<typeof useSourceTreeState>["onNodeDoubleClick"];
+  onNodeDoubleClick: (node: QueryTreeRenderNode) => void | Promise<void>;
   // 点击展开箭头。
-  onToggleNode: ReturnType<typeof useSourceTreeState>["onToggleNode"];
+  onToggleNode: (node: QueryTreeRenderNode) => void | Promise<void>;
   // 右键 Object 节点。
   onObjectContextMenu?: (event: ReactMouseEvent<HTMLDivElement>, node: QueryTreeRenderNode) => void;
   // 解析 Object 节点 tooltip。
@@ -66,6 +70,7 @@ type QuerySourceTreeBranchProps = {
 function QuerySourceTreeBranch({
   nodes,
   level,
+  expandedNodeIdSet,
   sourceSurfaceBackgroundById,
   treeState,
   activeTabObjectName,
@@ -81,7 +86,7 @@ function QuerySourceTreeBranch({
       {/* 当前层节点列表：按当前树状态逐个渲染，并在展开时递归输出子节点。 */}
       {nodes.map((node) => {
         const rowBackgroundColor = sourceSurfaceBackgroundById[node.sourceId] || "";
-        const isOpen = treeState.expandedNodeIds.includes(node.id);
+        const isOpen = expandedNodeIdSet.has(node.id);
         const childNodes = node.children || [];
 
         return (
@@ -95,12 +100,8 @@ function QuerySourceTreeBranch({
               treeState={treeState}
               activeTabObjectName={activeTabObjectName}
               onNodeClick={onNodeClick}
-              onNodeDoubleClick={(targetNode) => {
-                void onNodeDoubleClick(targetNode);
-              }}
-              onToggleNode={(targetNode) => {
-                void onToggleNode(targetNode);
-              }}
+              onNodeDoubleClick={onNodeDoubleClick}
+              onToggleNode={onToggleNode}
               onObjectContextMenu={onObjectContextMenu}
               getObjectTooltip={getObjectTooltip}
               registerNodeElement={registerNodeElement}
@@ -111,6 +112,7 @@ function QuerySourceTreeBranch({
               <QuerySourceTreeBranch
                 nodes={childNodes}
                 level={level + 1}
+                expandedNodeIdSet={expandedNodeIdSet}
                 sourceSurfaceBackgroundById={sourceSurfaceBackgroundById}
                 treeState={treeState}
                 activeTabObjectName={activeTabObjectName}
@@ -140,6 +142,7 @@ export function QuerySourceTree({
   onRefreshMysqlObjectMetadata,
   onRefreshSourceWorkspace,
   onNotQueryableObjectClick,
+  onFocusedSourceChange,
   onReady
 }: QuerySourceTreeProps) {
   // 树滚动容器：供横向/纵向滚动和定位节点时复用。
@@ -183,8 +186,11 @@ export function QuerySourceTree({
     selectedSourceObjects: objects,
     selectedSourceObjectsLoading: objectsLoading,
     onOpenObject,
-    onNotQueryableObjectClick
+    onNotQueryableObjectClick,
+    onFocusedSourceChange
   });
+  // 已展开节点集合：把递归渲染中的 includes 查找降为 O(1)。
+  const expandedNodeIdSet = useMemo(() => new Set(treeState.expandedNodeIds), [treeState.expandedNodeIds]);
   // 数据源索引：供 tooltip、右键菜单动作快速解析来源信息。
   const sourceMap = useMemo(() => new Map(sources.map((source) => [source.id, source])), [sources]);
 
@@ -235,11 +241,11 @@ export function QuerySourceTree({
   }, [pendingScrollNodeId, treeData, treeState.expandedNodeIds]);
 
   // 从树节点解析完整对象信息：恢复旧版 tooltip/右键菜单依赖的对象元数据。
-  function resolveObjectItemFromNode(node: QueryTreeRenderNode): SalesforceObject | null {
+  const resolveObjectItemFromNode = useCallback((node: QueryTreeRenderNode): SalesforceObject | null => {
     if (node.kind !== "object") return null;
     const objectItems = treeState.sourceObjectsById[node.sourceId] || [];
     return objectItems.find((item) => item.name === node.objectName) || null;
-  }
+  }, [treeState.sourceObjectsById]);
 
   // 定位当前工作区目标：data Tab 定位对象节点，console Tab 定位所属数据源根节点。
   const locateNodeByTarget = useCallback(
@@ -276,7 +282,7 @@ export function QuerySourceTree({
   ]);
 
   // 构建对象 tooltip：MySQL 与 Salesforce 按各自元数据摘要展示。
-  function getObjectTooltip(node: QueryTreeRenderNode): string {
+  const getObjectTooltip = useCallback((node: QueryTreeRenderNode): string => {
     const objectItem = resolveObjectItemFromNode(node);
     if (!objectItem) return "";
     const normalizedSourceType = String(node.sourceType || "salesforce").toLowerCase();
@@ -294,10 +300,10 @@ export function QuerySourceTree({
       `可更新: ${objectItem.updateable ? "是" : "否"}`,
       `可删除: ${objectItem.deletable ? "是" : "否"}`
     ].join("\n");
-  }
+  }, [resolveObjectItemFromNode]);
 
   // 打开右键菜单：恢复旧版 Salesforce / MySQL 对象节点菜单能力。
-  function handleObjectContextMenu(event: ReactMouseEvent<HTMLDivElement>, node: QueryTreeRenderNode) {
+  const handleObjectContextMenu = useCallback((event: ReactMouseEvent<HTMLDivElement>, node: QueryTreeRenderNode) => {
     event.preventDefault(); // 行内注释：阻止浏览器默认右键菜单。
     event.stopPropagation(); // 行内注释：避免右键时触发行选中链路的额外副作用。
     if (node.kind !== "object") return;
@@ -310,7 +316,7 @@ export function QuerySourceTree({
       objectItem,
       source
     });
-  }
+  }, [resolveObjectItemFromNode, sourceMap]);
 
   // 右键菜单动作：复制 Object 名称。
   async function copyObjectNameFromMenu() {
@@ -420,6 +426,7 @@ export function QuerySourceTree({
           <QuerySourceTreeBranch
             nodes={treeData}
             level={0}
+            expandedNodeIdSet={expandedNodeIdSet}
             sourceSurfaceBackgroundById={sourceSurfaceBackgroundById}
             treeState={treeState}
             activeTabObjectName={activeTabObjectName}

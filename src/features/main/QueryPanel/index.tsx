@@ -22,6 +22,8 @@ export function QueryPanel({ viewState, actions }: QueryPanelProps) {
   const { queryableObjectNames } = useQueryPanelState(viewState);
   // 已常驻挂载的工作区 Tab ID：首次访问时挂载，后续仅隐藏/显示，避免切换时销毁内部状态。
   const [mountedWorkspaceTabIds, setMountedWorkspaceTabIds] = useState<string[]>([]);
+  // 左侧侧边栏拖拽中的本地宽度：拖拽期间只更新本地状态，避免每一帧都写持久化 store。
+  const [sidebarWidthDraft, setSidebarWidthDraft] = useState(viewState.soqlSidebarWidth);
   // 是否正在拖拽左侧栏宽度。
   const [draggingSidebarResize, setDraggingSidebarResize] = useState(false);
   // QueryPanel 根容器：用于按当前可用宽度约束左栏拖拽范围。
@@ -30,6 +32,8 @@ export function QueryPanel({ viewState, actions }: QueryPanelProps) {
   const sidebarResizeStartXRef = useRef(0);
   // 左栏拖拽起始宽度：使用持久化后的当前宽度作为基准。
   const sidebarResizeStartWidthRef = useRef(viewState.soqlSidebarWidth);
+  // 左栏拖拽中的最新宽度引用：供 mouseup 时提交最终结果，避免读取到异步 state 旧值。
+  const sidebarWidthDraftRef = useRef(viewState.soqlSidebarWidth);
   // 拖拽前 body 的 user-select 样式，结束后恢复。
   const prevBodyUserSelectRef = useRef("");
   // 拖拽前 body 的 cursor 样式，结束后恢复。
@@ -59,6 +63,13 @@ export function QueryPanel({ viewState, actions }: QueryPanelProps) {
     });
   }, [viewState.workspaceTabs]);
 
+  // 外部持久化宽度变化时同步本地草稿；拖拽过程中保留本地实时宽度，避免被外部值打断手感。
+  useEffect(() => {
+    if (draggingSidebarResize) return;
+    sidebarWidthDraftRef.current = viewState.soqlSidebarWidth;
+    setSidebarWidthDraft(viewState.soqlSidebarWidth);
+  }, [draggingSidebarResize, viewState.soqlSidebarWidth]);
+
   // 左侧侧边栏拖拽调整宽度：体验对齐“字段与 Field”抽屉的交互。
   useEffect(() => {
     if (!draggingSidebarResize) return;
@@ -75,10 +86,15 @@ export function QueryPanel({ viewState, actions }: QueryPanelProps) {
       const containerWidth = panelContainerRef.current?.clientWidth || window.innerWidth;
       const maxWidth = Math.min(560, Math.max(360, Math.floor(containerWidth * 0.5)));
       const nextWidth = Math.max(240, Math.min(maxWidth, rawWidth));
-      actions.onSetSoqlSidebarWidth(nextWidth); // 行内注释：同步写入持久化 store，确保下次启动恢复宽度。
+      sidebarWidthDraftRef.current = nextWidth;
+      setSidebarWidthDraft(nextWidth); // 行内注释：拖拽中仅更新本地宽度，避免每一帧都触发持久化写入。
     };
 
     const onMouseUp = () => {
+      const nextWidth = sidebarWidthDraftRef.current;
+      if (nextWidth !== viewState.soqlSidebarWidth) {
+        actions.onSetSoqlSidebarWidth(nextWidth); // 行内注释：仅在拖拽结束时提交最终宽度，保留持久化能力同时减少阻塞。
+      }
       setDraggingSidebarResize(false); // 行内注释：鼠标释放后结束拖拽态。
     };
 
@@ -90,7 +106,7 @@ export function QueryPanel({ viewState, actions }: QueryPanelProps) {
       document.body.style.userSelect = prevBodyUserSelectRef.current;
       document.body.style.cursor = prevBodyCursorRef.current;
     };
-  }, [actions, draggingSidebarResize]);
+  }, [actions, draggingSidebarResize, viewState.soqlSidebarWidth]);
 
   // 常驻挂载 Tab 集合：用于快速判断是否需要渲染对应 pane。
   const mountedWorkspaceTabIdSet = useMemo(() => new Set(mountedWorkspaceTabIds), [mountedWorkspaceTabIds]);
@@ -138,7 +154,7 @@ export function QueryPanel({ viewState, actions }: QueryPanelProps) {
       {/* 左侧对象树侧栏。 */}
       <div
         className="flex min-h-0 shrink-0 flex-col border-r border-base-300 bg-white"
-        style={{ width: viewState.soqlSidebarWidth, minWidth: viewState.soqlSidebarWidth }}
+        style={{ width: sidebarWidthDraft, minWidth: sidebarWidthDraft }}
       >
         <QuerySidebar
           sources={viewState.sources}
@@ -167,7 +183,7 @@ export function QueryPanel({ viewState, actions }: QueryPanelProps) {
         onMouseDown={(event) => {
           event.preventDefault(); // 行内注释：阻止拖拽起点触发文本选中。
           sidebarResizeStartXRef.current = event.clientX; // 行内注释：记录本次拖拽起点 X。
-          sidebarResizeStartWidthRef.current = viewState.soqlSidebarWidth; // 行内注释：记录本次拖拽起始宽度。
+          sidebarResizeStartWidthRef.current = sidebarWidthDraftRef.current; // 行内注释：记录当前可见宽度，保证连续拖拽时手感稳定。
           setDraggingSidebarResize(true); // 行内注释：进入拖拽状态。
         }}
       />
