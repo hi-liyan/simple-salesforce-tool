@@ -19,3 +19,5 @@
 
 ## GIT规则
 用户要求提交代码时，仅根据修改内容生成中文 commit message（`type(scope): message` 的格式）。
+每次用户要求提交代码时，默认使用以下身份：`Author: LiYan <721748889@qq.com>`、`Committer: LiYan <721748889@qq.com>`。
+用户要求以指定名义或邮箱提交代码时，必须使用一次性的 `GIT_AUTHOR_NAME`、`GIT_AUTHOR_EMAIL`、`GIT_COMMITTER_NAME`、`GIT_COMMITTER_EMAIL` 完成提交或重写提交，不得修改当前仓库或全局的 git 用户配置。

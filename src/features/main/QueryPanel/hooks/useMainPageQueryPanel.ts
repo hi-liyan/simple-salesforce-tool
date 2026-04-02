@@ -290,13 +290,15 @@ export function useMainPageQueryPanel({
     queryLanguageLabel,
     patchTab,
     appendTabLog,
+    loadColumnVisibilityFromDb,
     persistColumnVisibility,
     buildQueryStatement,
     normalizeQueryResult,
     buildVisibilityFromSoql,
     extractWhereClause,
     buildBaselineRecords,
-    getSortableFieldNames
+    getSortableFieldNames,
+    pickDefaultSortField
   });
 
   // QueryPanel 运行时行为：对象打开、恢复查询、抽屉切换与 DDL 加载。

@@ -35,6 +35,8 @@ type TerminalState = {
   tabOrder: string[];
   // 当前激活终端 Tab ID。
   activeTabId: string;
+  // 重置终端工作区：用于启动阶段丢弃上次会话残留。
+  resetTerminalWorkspace: () => void;
   // 新建终端 Tab。
   createTerminalTab: (seedCommand?: string, seedTitle?: string) => string;
   // 激活终端 Tab。
@@ -91,6 +93,14 @@ export const useTerminalStore = create<TerminalState>()(
       tabs: [],
       tabOrder: [],
       activeTabId: "",
+
+      resetTerminalWorkspace: () => {
+        set(() => ({
+          tabs: [],
+          tabOrder: [],
+          activeTabId: ""
+        }));
+      },
 
       createTerminalTab: (seedCommand, seedTitle) => {
         const { tabs } = get();

@@ -60,6 +60,30 @@ test("resolveQueryExecutionContext: 新建 tab 尚未进入闭包 tabs 时，应
   assert.equal(context?.tabObjectName, "users");
 });
 
+test("resolveQueryExecutionContext: 同名对象跨数据源打开时，应优先命中当前 bindingKey 对应的 tab", () => {
+  const firstTab = createTab({
+    sourceId: "sf-1",
+    sourceType: "salesforce",
+    objectName: "Account"
+  });
+  const secondTab = createTab({
+    sourceId: "mysql-1",
+    sourceType: "mysql",
+    objectName: "Account"
+  });
+
+  const context = resolveQueryExecutionContext({
+    tabs: [firstTab, secondTab],
+    tabIdentity: secondTab.bindingKey,
+    selectedSourceId: "sf-1",
+    selectedSourceType: "salesforce"
+  });
+
+  assert.equal(context?.resolvedSourceId, "mysql-1");
+  assert.equal(context?.resolvedSourceType, "mysql");
+  assert.equal(context?.tabBindingKey, secondTab.bindingKey);
+});
+
 test("resolveQueryExecutionContext: 无 tab 且无 fallbackTab 时应返回 null", () => {
   const context = resolveQueryExecutionContext({
     tabs: [],

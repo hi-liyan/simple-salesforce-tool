@@ -47,6 +47,7 @@ import { NoticeAlert } from "../../../components/NoticeAlert";
 import { sortTabsByOrder } from "../../../components/tabs/tabOrder";
 import { TerminalTab, useTerminalStore } from "../../../store/useTerminalStore";
 import { buildTerminalInlineNotice, buildTerminalTabTooltip, TerminalProcessMeta } from "./uiState.ts";
+import { fitTerminalViewportToContainer } from "./viewport.ts";
 
 type TerminalPanelProps = {
   // 当前 Terminal 面板是否可见：用于控制激活时的 fit/focus。
@@ -568,16 +569,13 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
         const container = terminalContainerByTabIdRef.current[tab.id];
         const runtime = terminalRuntimeByTabIdRef.current[tab.id];
         if (!container || !runtime) return;
-
-        const rect = container.getBoundingClientRect();
-        if (rect.width <= 0 || rect.height <= 0) return; // 隐藏态或未完成布局时跳过本次同步。
-
-        runtime.fitAddon.fit(); // 先按容器最终尺寸执行 fit。
+        const nextViewport = fitTerminalViewportToContainer(container, runtime);
+        if (!nextViewport.fitted) return; // 隐藏态或未完成布局时跳过本次同步。
         if (options?.focus) {
           runtime.terminal.focus(); // 仅在激活切换时恢复焦点，避免 resize 抢焦点。
         }
         if (!openedSessionTabIdRef.current.has(tab.id)) return;
-        void api.resizeTerminalSession(tab.id, runtime.terminal.cols || 120, runtime.terminal.rows || 36);
+        void api.resizeTerminalSession(tab.id, nextViewport.cols || 120, nextViewport.rows || 36);
       });
     },
     [cancelScheduledTerminalFit]
@@ -592,8 +590,11 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
 
       const nextOpeningPromise = (async () => {
         const runtime = ensureTerminalRuntime(tab);
-        const cols = runtime.terminal.cols || 120;
-        const rows = runtime.terminal.rows || 36;
+        const container = terminalContainerByTabIdRef.current[tab.id];
+        // 对可见终端先执行一次 fit，再按 fit 后列宽打开 PTY，避免交互型 CLI 因初始 cols 错误出现光标错位。
+        const nextViewport = fitTerminalViewportToContainer(container, runtime);
+        const cols = nextViewport.cols || 120;
+        const rows = nextViewport.rows || 36;
 
         setProcessMetaByTabId((state) => ({
           ...state,

@@ -85,7 +85,8 @@ type UseQueryPanelActionsInput = {
     sortFieldOverride?: string,
     limitOverride?: number,
     directionOverride?: "ASC" | "DESC",
-    sortClauseOverride?: string
+    sortClauseOverride?: string,
+    fallbackTab?: TabState
   ) => Promise<void>;
   // 执行自定义 SQL/SOQL。
   executeCustomSoql: () => Promise<void>;
@@ -282,13 +283,14 @@ export function useQueryPanelActions({
         const sortFieldOverride = overrides?.sortField;
         const sortDirectionOverride = overrides?.sortDirection;
         void queryTabData(
-          activeTab.objectName,
+          activeTab.bindingKey || activeTab.objectName,
           activeTab.describe || undefined,
           whereClauseOverride ?? activeTab.whereClause,
           sortFieldOverride ?? activeTab.sortField,
           limitOverride ?? activeTab.limit,
           sortDirectionOverride ?? activeTab.sortDirection,
-          sortClauseOverride ?? activeTab.sortClause
+          sortClauseOverride ?? activeTab.sortClause,
+          activeTab
         );
       },
       onToggleRecord: (recordId, checked) => {
