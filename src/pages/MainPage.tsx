@@ -168,9 +168,11 @@ export function MainPage() {
       // 终端工作区不参与启动恢复：每次启动都从空白标签开始。
       resetTerminalWorkspace();
       // 同步移除历史终端快照，避免后续误触发恢复旧 Tab。
-      await useTerminalStore.persist.clearStorage().catch(() => {
+      try {
+        await Promise.resolve(useTerminalStore.persist.clearStorage());
+      } catch {
         // 清理失败不阻断主界面启动，其它面板仍应继续恢复。
-      });
+      }
 
       // 启动第三阶段：恢复本地数据源与上次选择结果。
       setStartupStage(STARTUP_STAGE_MAP["restore-sources"]);
