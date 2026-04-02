@@ -117,6 +117,7 @@ export function MainPage() {
   const setViewMode = useAppStore((state) => state.setViewMode);
   const soqlSidebarWidth = useAppStore((state) => state.soqlSidebarWidth);
   const setSoqlSidebarWidth = useAppStore((state) => state.setSoqlSidebarWidth);
+  const resetTerminalWorkspace = useTerminalStore((state) => state.resetTerminalWorkspace);
 
   // 启动画面状态：首次初始化完成前显示全屏遮罩，避免用户误以为卡死。
   const [startupLoading, setStartupLoading] = useState(true);
@@ -156,8 +157,7 @@ export function MainPage() {
         useAppStore.persist.rehydrate(),
         useSoqlExecutorStore.persist.rehydrate(),
         useQueryWorkspaceTabsStore.persist.rehydrate(),
-        useQuerySourceTreeStore.persist.rehydrate(),
-        useTerminalStore.persist.rehydrate()
+        useQuerySourceTreeStore.persist.rehydrate()
       ]);
       if (!active) return;
 
@@ -165,6 +165,12 @@ export function MainPage() {
       setStartupStage(STARTUP_STAGE_MAP["enable-storage"]);
       // rehydrate 完成且确认组件仍存活后，才开启写入门控。
       enableStorageWrite();
+      // 终端工作区不参与启动恢复：每次启动都从空白标签开始。
+      resetTerminalWorkspace();
+      // 同步移除历史终端快照，避免后续误触发恢复旧 Tab。
+      await useTerminalStore.persist.clearStorage().catch(() => {
+        // 清理失败不阻断主界面启动，其它面板仍应继续恢复。
+      });
 
       // 启动第三阶段：恢复本地数据源与上次选择结果。
       setStartupStage(STARTUP_STAGE_MAP["restore-sources"]);

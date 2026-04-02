@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { useTerminalStore } from "../../src/store/useTerminalStore.ts";
 
 // 重置终端 store：保证各测试之间彼此独立，避免共享运行态污染断言。
@@ -62,4 +63,28 @@ test("Terminal store 应支持重命名与拖拽排序，并保持顺序状态�
   assert.equal(renamedTab?.name, "已重命名终端");
   assert.deepEqual(state.tabOrder.slice(0, 2), [secondTabId, firstTabId]);
   assert.equal(typeof (state as Record<string, unknown>).sourceId, "undefined");
+});
+
+test("Terminal store 应支持清空全部终端状态，供启动阶段丢弃上次终端快照", () => {
+  resetTerminalStore();
+
+  const firstTabId = useTerminalStore.getState().createTerminalTab("echo 1", "Terminal 1");
+  useTerminalStore.getState().createTerminalTab("echo 2", "Terminal 2");
+  useTerminalStore.getState().appendTerminalOutput(firstTabId, {
+    kind: "stdout",
+    text: "ready"
+  });
+
+  useTerminalStore.getState().resetTerminalWorkspace();
+
+  const state = useTerminalStore.getState();
+  assert.deepEqual(state.tabs, []);
+  assert.deepEqual(state.tabOrder, []);
+  assert.equal(state.activeTabId, "");
+});
+
+test("MainPage 启动流程不应再恢复 Terminal store", () => {
+  const source = readFileSync(new URL("../../src/pages/MainPage.tsx", import.meta.url), "utf8");
+
+  assert.equal(source.includes("useTerminalStore.persist.rehydrate()"), false);
 });
