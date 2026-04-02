@@ -2,6 +2,7 @@ import { useCallback } from "react";
 import { api } from "../../../../api";
 import { buildObjectTabBindingKey, ObjectDescribe, QueryResult, TabLog, TabState } from "../../../../types";
 import { resolveQueryExecutionContext } from "../logic/queryExecutionContext.ts";
+import { ensureQueryTabReady } from "../logic/queryExecutionPreflight.ts";
 
 type UseQueryExecutionInput = {
   // 当前选中数据源 ID。
@@ -18,6 +19,12 @@ type UseQueryExecutionInput = {
   patchTab: (tabIdentity: string, updater: (tab: TabState) => TabState) => void;
   // 追加 Tab 日志。
   appendTabLog: (tabIdentity: string, nextLog: Omit<TabLog, "id" | "timestamp">) => void;
+  // 从 DB 读取字段可见性。
+  loadColumnVisibilityFromDb: (
+    sourceId: string,
+    objectName: string,
+    describe: ObjectDescribe
+  ) => Promise<Record<string, boolean>>;
   // 持久化字段可见性。
   persistColumnVisibility: (sourceId: string, objectName: string, visibility: Record<string, boolean>) => Promise<void>;
   // 构建 SQL/SOQL 语句。
@@ -48,6 +55,8 @@ type UseQueryExecutionInput = {
   ) => Record<string, Record<string, unknown>>;
   // 获取可排序字段集合。
   getSortableFieldNames: (describe: ObjectDescribe) => string[];
+  // 选择默认排序字段。
+  pickDefaultSortField: (sortableFieldNames: string[]) => string;
 };
 
 // 查询执行行为：统一封装对象查询与自定义 SQL/SOQL 执行流程。
@@ -59,13 +68,15 @@ export function useQueryExecution({
   queryLanguageLabel,
   patchTab,
   appendTabLog,
+  loadColumnVisibilityFromDb,
   persistColumnVisibility,
   buildQueryStatement,
   normalizeQueryResult,
   buildVisibilityFromSoql,
   extractWhereClause,
   buildBaselineRecords,
-  getSortableFieldNames
+  getSortableFieldNames,
+  pickDefaultSortField
 }: UseQueryExecutionInput) {
   // 执行对象查询：根据可见字段和筛选条件构建语句并回写结果。
   const queryTabData = useCallback(
@@ -88,14 +99,42 @@ export function useQueryExecution({
       });
       if (!executionContext && !describeOverride) return;
 
-      const tab = executionContext?.tab || fallbackTab || null;
-      const describe = describeOverride ?? tab?.describe;
-      if (!describe) return;
-      const tabObjectName = executionContext?.tabObjectName || tab?.objectName || objectName;
-      const resolvedSourceId = executionContext?.resolvedSourceId || tab?.sourceId || selectedSourceId;
-      if (!resolvedSourceId) return;
-      const resolvedSourceType = executionContext?.resolvedSourceType || String(tab?.sourceType || selectedSourceType || "salesforce");
-      const tabBindingKey = executionContext?.tabBindingKey || tab?.bindingKey || buildObjectTabBindingKey(resolvedSourceId, tabObjectName);
+      const matchedTab = executionContext?.tab || fallbackTab || null;
+      const tabObjectName = executionContext?.tabObjectName || matchedTab?.objectName || objectName;
+      const resolvedSourceId = executionContext?.resolvedSourceId || matchedTab?.sourceId || selectedSourceId;
+      const resolvedSourceType = executionContext?.resolvedSourceType || String(matchedTab?.sourceType || selectedSourceType || "salesforce");
+      const tabBindingKey = executionContext?.tabBindingKey || matchedTab?.bindingKey || buildObjectTabBindingKey(resolvedSourceId, tabObjectName);
+      if (!matchedTab) {
+        patchTab(tabBindingKey, (item) => ({
+          ...item,
+          loading: false,
+          notice: { type: "error", message: `当前查询标签不存在，无法执行 ${tabObjectName} 查询。` }
+        }));
+        return;
+      }
+      if (!resolvedSourceId) {
+        patchTab(tabBindingKey, (item) => ({
+          ...item,
+          loading: false,
+          notice: { type: "error", message: `未找到 ${tabObjectName} 绑定的数据源，请先重新选择数据源。` }
+        }));
+        return;
+      }
+      const readyState = await ensureQueryTabReady({
+        tab: matchedTab,
+        tabBindingKey,
+        tabObjectName,
+        resolvedSourceId,
+        resolvedSourceType,
+        describeOverride,
+        loadDescribe: (sourceId, nextObjectName) => api.describeObject(sourceId, nextObjectName),
+        loadColumnVisibility: loadColumnVisibilityFromDb,
+        getSortableFieldNames,
+        pickDefaultSortField,
+        patchTab
+      });
+      const tab = readyState.tab;
+      const describe = readyState.describe;
 
       const whereClause = (whereOverride ?? tab?.whereClause ?? "").trim();
       const limit = Math.max(1, Math.min(2000, limitOverride ?? tab?.limit ?? 200));
@@ -191,6 +230,8 @@ export function useQueryExecution({
       selectedSourceId,
       selectedSourceType,
       getSortableFieldNames,
+      pickDefaultSortField,
+      loadColumnVisibilityFromDb,
       patchTab,
       buildQueryStatement,
       normalizeQueryResult,
