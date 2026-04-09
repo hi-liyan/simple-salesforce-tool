@@ -353,7 +353,7 @@ export function useQueryPanelRuntime({
           limit,
           sortClause
         );
-        const rawResult = await api.queryRecords(resolvedSourceId, soql);
+        const rawResult = await api.queryRecords(resolvedSourceId, soql, freshTab.objectName);
         const result = normalizeQueryResult(rawResult);
 
         storePatchTab(tabBindingKey, (t) => ({

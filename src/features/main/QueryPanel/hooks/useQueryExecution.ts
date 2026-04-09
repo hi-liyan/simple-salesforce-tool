@@ -184,7 +184,7 @@ export function useQueryExecution({
           limit,
           sortClause
         );
-        const rawResult = await api.queryRecords(resolvedSourceId, soql);
+        const rawResult = await api.queryRecords(resolvedSourceId, soql, tabObjectName);
         const result = normalizeQueryResult(rawResult);
 
         patchTab(tabBindingKey, (item) => ({
@@ -260,7 +260,7 @@ export function useQueryExecution({
       const mysqlPrimaryKeyField = normalizedType === "mysql"
         ? activeTab.describe?.fields.find((field) => String(field.metadata?.columnKey || "").toUpperCase() === "PRI")?.name || ""
         : "";
-      const rawResult = await api.queryRecords(resolvedSourceId, activeTab.soqlDraft);
+      const rawResult = await api.queryRecords(resolvedSourceId, activeTab.soqlDraft, activeTab.objectName);
       const result = normalizeQueryResult(rawResult);
       const nextVisibility = buildVisibilityFromSoql(activeTab.soqlDraft, activeTab.describe, activeTab.columnVisibility);
 

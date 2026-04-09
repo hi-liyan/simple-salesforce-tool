@@ -336,6 +336,7 @@ impl MySqlProvider {
         &self,
         source: &SalesforceSource,
         query_text: &str,
+        describe: Option<&ObjectDescribe>,
     ) -> Result<QueryResult, AppError> {
         ensure_readonly_query(query_text)?;
         let config = MySqlSourceConfig::from_source(source)?;
@@ -349,6 +350,7 @@ impl MySqlProvider {
         } else {
             None
         };
+        let inferred_column_types = build_column_type_map_from_describe(describe);
 
         let rows = sqlx::query(query_text)
             .fetch_all(&pool)
@@ -357,7 +359,7 @@ impl MySqlProvider {
 
         let mut records = Vec::with_capacity(rows.len());
         for row in rows {
-            let mut item = row_to_json_record(&row);
+            let mut item = row_to_json_record(&row, inferred_column_types.as_ref());
             // 与现有前端兼容：补齐 Id 字段，确保选中/编辑/删除逻辑可复用。
             if !item.contains_key("Id") {
                 if let Some(pk) = inferred_primary_key.as_ref() {
@@ -836,6 +838,7 @@ async fn resolve_primary_key_column(
     ensure_safe_identifier(&primary_key, "主键列名")
 }
 
+/// 读取表字段真实类型（column_type），供查询结果按实际表结构解码。
 /// 归一化新增字段：兼容前端传入 Id，并映射到真实主键列。
 fn normalize_create_values(
     mut values: HashMap<String, Value>,
@@ -1080,15 +1083,51 @@ fn push_bind_json_value(builder: &mut QueryBuilder<'_, MySql>, value: &Value) {
 }
 
 /// 将数据库行转换为 JSON 记录。
-fn row_to_json_record(row: &MySqlRow) -> HashMap<String, Value> {
+fn row_to_json_record(
+    row: &MySqlRow,
+    actual_column_types: Option<&HashMap<String, String>>,
+) -> HashMap<String, Value> {
     let mut item = HashMap::new();
     for column in row.columns() {
         let name = column.name().to_string();
-        let mysql_type = column.type_info().name().to_string();
+        let runtime_type = column.type_info().name().to_string();
+        let mysql_type = resolve_mysql_result_type(&name, &runtime_type, actual_column_types);
         let value = row_try_get_json_value(row, &name, &mysql_type);
         item.insert(name, value);
     }
     item
+}
+
+/// 为结果列选择最终解码类型：优先使用表字段真实类型，避免 sqlx 将 tinyint(1) 报成 BOOLEAN。
+fn resolve_mysql_result_type(
+    column_name: &str,
+    runtime_type: &str,
+    actual_column_types: Option<&HashMap<String, String>>,
+) -> String {
+    if let Some(actual_type) = actual_column_types.and_then(|types| types.get(column_name)) {
+        return normalize_mysql_type_name(actual_type);
+    }
+    normalize_mysql_type_name(runtime_type)
+}
+
+/// 从对象 describe 中提取字段真实类型映射；仅在表名匹配时启用，避免跨表缓存误用到当前结果集。
+fn build_column_type_map_from_describe(
+    describe: Option<&ObjectDescribe>,
+) -> Option<HashMap<String, String>> {
+    let describe = describe?;
+
+    let mut column_types = HashMap::with_capacity(describe.fields.len());
+    for field in &describe.fields {
+        let column_type = field
+            .metadata
+            .get("columnType")
+            .and_then(|value| value.as_str())
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .unwrap_or(field.data_type.as_str());
+        column_types.insert(field.name.clone(), column_type.to_string());
+    }
+    Some(column_types)
 }
 
 /// 读取列值并做类型映射（按 MySQL 列类型优先解码，避免日期/时间被误读为空）。
@@ -1127,7 +1166,7 @@ fn row_try_get_json_value(row: &MySqlRow, column_name: &str, mysql_type: &str) -
 
     if is_mysql_bool_type(&normalized) {
         if let Ok(value) = row.try_get::<Option<bool>, _>(column_name) {
-            // MySQL BOOLEAN 本质是 TINYINT(1)，统一按数值输出，避免前端出现 true/false 展示偏差。
+            // 仅在真实字段类型确认为 bool/boolean 时才走这里；tinyint(1) 会先被表元数据纠正回整数类型。
             return value
                 .map(|item| bool_to_json_number(item))
                 .unwrap_or(Value::Null);
@@ -1254,7 +1293,22 @@ fn row_try_get_json_value(row: &MySqlRow, column_name: &str, mysql_type: &str) -
 
 /// 标准化 MySQL 列类型名，统一转小写并压缩空白字符。
 fn normalize_mysql_type_name(raw: &str) -> String {
-    raw.split_whitespace()
+    let mut normalized = String::with_capacity(raw.len());
+    let mut paren_depth = 0usize;
+    for ch in raw.chars() {
+        match ch {
+            '(' => {
+                paren_depth += 1;
+            }
+            ')' => {
+                paren_depth = paren_depth.saturating_sub(1);
+            }
+            _ if paren_depth == 0 => normalized.push(ch),
+            _ => {}
+        }
+    }
+    normalized
+        .split_whitespace()
         .filter(|item| !item.is_empty())
         .collect::<Vec<_>>()
         .join(" ")
@@ -1544,9 +1598,11 @@ fn decode_optional_row_string(row: &MySqlRow, index: usize) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_delete_preview_sql, build_insert_preview_sql, build_update_preview_sql,
-        normalize_create_values, normalize_update_values,
+        build_column_type_map_from_describe, build_delete_preview_sql, build_insert_preview_sql,
+        build_update_preview_sql, normalize_create_values, normalize_mysql_type_name,
+        normalize_update_values, resolve_mysql_result_type,
     };
+    use crate::models::ObjectDescribe;
     use serde_json::{json, Value};
     use std::collections::HashMap;
 
@@ -1620,5 +1676,51 @@ mod tests {
             delete_sql,
             "DELETE FROM `orders` WHERE `order_id` = 'A-100';"
         );
+    }
+
+    #[test]
+    fn normalize_mysql_type_name_strips_display_width_but_keeps_base_type() {
+        assert_eq!(normalize_mysql_type_name("tinyint(1)"), "tinyint");
+        assert_eq!(normalize_mysql_type_name("tinyint(1) unsigned"), "tinyint unsigned");
+        assert_eq!(normalize_mysql_type_name("decimal(10, 2)"), "decimal");
+    }
+
+    #[test]
+    fn resolve_mysql_result_type_prefers_table_metadata_for_tinyint_1_columns() {
+        let mut actual_column_types = HashMap::new();
+        actual_column_types.insert("status".to_string(), "tinyint(1)".to_string());
+
+        let resolved = resolve_mysql_result_type("status", "BOOLEAN", Some(&actual_column_types));
+
+        assert_eq!(resolved, "tinyint");
+    }
+
+    #[test]
+    fn build_column_type_map_from_describe_uses_cached_mysql_column_type() {
+        let describe: ObjectDescribe = serde_json::from_value(json!({
+            "name": "orders",
+            "label": "orders",
+            "fields": [
+                {
+                    "name": "status",
+                    "label": "status",
+                    "dataType": "tinyint",
+                    "nillable": true,
+                    "updateable": true,
+                    "createable": true,
+                    "metadata": {
+                        "columnType": "tinyint(1)",
+                        "mysqlDataType": "tinyint"
+                    }
+                }
+            ],
+            "childRelationships": []
+        }))
+        .expect("测试 describe 应构造成功");
+
+        let map = build_column_type_map_from_describe(Some(&describe))
+            .expect("存在 describe 时应返回字段类型映射");
+
+        assert_eq!(map.get("status"), Some(&"tinyint(1)".to_string()));
     }
 }

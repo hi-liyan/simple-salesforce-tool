@@ -105,10 +105,11 @@ impl DataProvider<'_> {
         &self,
         source: &SalesforceSource,
         query_text: &str,
+        describe: Option<&ObjectDescribe>,
     ) -> Result<QueryResult, AppError> {
         match self {
             DataProvider::Salesforce(provider) => provider.query_records(source, query_text).await,
-            DataProvider::MySql(provider) => provider.query_records(source, query_text).await,
+            DataProvider::MySql(provider) => provider.query_records(source, query_text, describe).await,
         }
     }
 

@@ -1,6 +1,10 @@
 import { useMemo, useState } from "react";
 import { GridColumn } from "@glideapps/glide-data-grid";
 import { buildHeaderDisplayLines } from "../renderers/drawHeader";
+import { estimateAutoColumnWidth } from "../utils/columnWidth";
+
+// 默认列宽采样行数：按表头 + 前 50 行内容估算，兼顾体验与性能。
+const DEFAULT_COLUMN_WIDTH_SAMPLE_ROWS = 50;
 
 type UseDataGridColumnsParams = {
   // 当前可见字段列表。
@@ -84,12 +88,26 @@ export function useDataGridColumns({
     return widths;
   }, [displayColumns, fieldMetadataMap, showHeaderMetadata]);
 
+  // 内容驱动的默认列宽：按“表头 + 前 N 行采样内容”估算，替代固定 180/280 宽度。
+  const autoColumnWidths = useMemo(() => {
+    const widths: Record<string, number> = {};
+    for (const column of displayColumns) {
+      widths[column] = estimateAutoColumnWidth({
+        fieldName: column,
+        metadata: fieldMetadataMap[column] || {},
+        records,
+        sampleRowCount: DEFAULT_COLUMN_WIDTH_SAMPLE_ROWS
+      });
+    }
+    return widths;
+  }, [displayColumns, fieldMetadataMap, records]);
+
   const columns = useMemo<GridColumn[]>(() => {
     const dataColumns: GridColumn[] = displayColumns.map((column) => ({
       id: column,
       // 数据列标题由 drawHeader 自定义双行绘制，这里留空避免默认文案覆盖。
       title: "",
-      width: Math.max(headerMinWidths[column] ?? 44, columnWidths[column] ?? (column === "Id" ? 280 : 180))
+      width: Math.max(headerMinWidths[column] ?? 44, columnWidths[column] ?? autoColumnWidths[column] ?? 44)
     }));
 
     return [
@@ -105,7 +123,7 @@ export function useDataGridColumns({
       { id: "__index", title: "#", width: Math.max(headerMinWidths.__index ?? 56, columnWidths.__index ?? 56) },
       ...dataColumns
     ];
-  }, [displayColumns, columnWidths, showSelectionColumn, headerMinWidths]);
+  }, [displayColumns, columnWidths, showSelectionColumn, headerMinWidths, autoColumnWidths]);
 
   // MySQL 主键列：用于缺失 Id 时的勾选回退键。
   const mysqlPrimaryKeyField = useMemo(() => {
