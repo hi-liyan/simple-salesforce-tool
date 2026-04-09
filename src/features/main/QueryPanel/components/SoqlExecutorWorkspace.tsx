@@ -448,8 +448,9 @@ export function SoqlExecutorWorkspace({
     patchActiveTab((tab) => ({ ...tab, loading: true, notice: null }));
 
     try {
+      const primaryObjectName = extractPrimaryObjectName(executeSoql);
       // 调用后端统一查询命令，支持常规查询与复杂子查询。
-      const result = await api.queryRecords(effectiveSourceId, executeSoql, objectName);
+      const result = await api.queryRecords(effectiveSourceId, executeSoql, primaryObjectName || undefined);
       const normalizedResult = normalizeQueryResult(result);
 
       patchActiveTab((tab) => ({
