@@ -85,8 +85,8 @@ export const api = {
     invokeApi<ObjectDdl>("get_object_ddl", { sourceId, objectName }),
   resolveFieldChildRelationshipName: (sourceId: string, objectName: string, fieldName: string) =>
     invokeApi<string | null>("resolve_field_child_relationship_name", { sourceId, objectName, fieldName }),
-  queryRecords: (sourceId: string, soql: string) =>
-    invokeApi<QueryResult>("query_records", { sourceId, soql }),
+  queryRecords: (sourceId: string, soql: string, objectName?: string) =>
+    invokeApi<QueryResult>("query_records", { sourceId, soql, objectName }),
   getCurrentUserContext: (sourceId: string) =>
     invokeApi<CurrentUserContext>("get_current_user_context", { sourceId }),
   createRecord: (payload: RecordMutationPayload) => invokeApi<string>("create_record", { payload }),

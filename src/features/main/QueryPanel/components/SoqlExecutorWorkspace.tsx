@@ -449,7 +449,7 @@ export function SoqlExecutorWorkspace({
 
     try {
       // 调用后端统一查询命令，支持常规查询与复杂子查询。
-      const result = await api.queryRecords(effectiveSourceId, executeSoql);
+      const result = await api.queryRecords(effectiveSourceId, executeSoql, objectName);
       const normalizedResult = normalizeQueryResult(result);
 
       patchActiveTab((tab) => ({

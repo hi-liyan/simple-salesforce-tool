@@ -1806,6 +1806,7 @@ pub async fn query_records(
     state: State<'_, AppState>,
     source_id: String,
     soql: String,
+    object_name: Option<String>,
 ) -> Result<QueryResult, String> {
     if soql.trim().is_empty() {
         return Err("查询语句不能为空".to_string());
@@ -1822,13 +1823,28 @@ pub async fn query_records(
     let provider =
         provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
     let log_category = resolve_log_category(&source);
+    let normalized_object_name = object_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    let mysql_describe = if source.source_type.eq_ignore_ascii_case("mysql") {
+        load_mysql_describe_for_query(&state, &source_id, &source, normalized_object_name.as_deref())
+            .await
+            .map_err(AppError::to_string_error)?
+    } else {
+        None
+    };
     let query_detail = if source.is_salesforce() {
         build_salesforce_query_detail(&source.api_version, &query_text)
     } else {
         build_mysql_query_detail(&query_text)
     };
 
-    let query_result = match provider.query_records(&source, &query_text).await {
+    let query_result = match provider
+        .query_records(&source, &query_text, mysql_describe.as_ref())
+        .await
+    {
         Ok(result) => Ok(result),
         Err(error) if is_unauthorized_error(&error) && source_id.starts_with("cli-") => {
             let refreshed_source =
@@ -1838,7 +1854,7 @@ pub async fn query_records(
             let refreshed_provider = provider_for_source(state.inner(), &refreshed_source)
                 .map_err(AppError::to_string_error)?;
             refreshed_provider
-                .query_records(&refreshed_source, &query_text)
+                .query_records(&refreshed_source, &query_text, mysql_describe.as_ref())
                 .await
         }
         Err(error) => Err(error),
@@ -1876,6 +1892,65 @@ pub async fn query_records(
             Err(message)
         }
     }
+}
+
+/// 从 SQLite 元数据缓存读取对象 describe；命中失败时返回 None。
+fn read_cached_object_describe(
+    state: &State<'_, AppState>,
+    source_id: &str,
+    object_name: &str,
+) -> Result<Option<ObjectDescribe>, AppError> {
+    let connection = state
+        .db
+        .lock()
+        .map_err(|error| AppError::Biz(format!("Database lock failed: {error}")))?;
+    let payload = db::read_source_metadata_cache(
+        &connection,
+        source_id,
+        METADATA_TYPE_OBJECT_DESCRIBE,
+        Some(object_name),
+    )?;
+    let Some(payload) = payload else {
+        return Ok(None);
+    };
+    serde_json::from_str::<ObjectDescribe>(&payload)
+        .map(Some)
+        .map_err(|error| AppError::Serde(error.to_string()))
+}
+
+/// MySQL 查询结果解码所需 describe：优先读 SQLite 缓存，未命中时回源目标数据源并写回缓存。
+async fn load_mysql_describe_for_query(
+    state: &State<'_, AppState>,
+    source_id: &str,
+    source: &SalesforceSource,
+    object_name: Option<&str>,
+) -> Result<Option<ObjectDescribe>, AppError> {
+    let Some(object_name) = object_name.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+
+    if let Some(cached) = read_cached_object_describe(state, source_id, object_name)? {
+        return Ok(Some(cached));
+    }
+
+    let provider = provider_for_source(state.inner(), source)?;
+    let describe = provider.describe_object(source, object_name).await?;
+
+    let payload =
+        serde_json::to_string(&describe).map_err(|error| AppError::Serde(error.to_string()))?;
+    let connection = state
+        .db
+        .lock()
+        .map_err(|error| AppError::Biz(format!("Database lock failed: {error}")))?;
+    db::write_source_metadata_cache(
+        &connection,
+        source_id,
+        METADATA_TYPE_OBJECT_DESCRIBE,
+        Some(object_name),
+        &payload,
+    )?;
+
+    Ok(Some(describe))
 }
 
 /// 获取当前登录用户上下文（时区/地区），用于前端按 Salesforce 用户时区展示 datetime。
