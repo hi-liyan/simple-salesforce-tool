@@ -76,7 +76,7 @@ type UseQueryPanelActionsInput = {
   // 加载 MySQL DDL。
   loadMysqlDdl: (objectName: string) => Promise<void>;
   // 更新 Tab。
-  patchTab: (objectName: string, updater: (tab: TabState) => TabState) => void;
+  patchTab: (tabBindingKey: string, updater: (tab: TabState) => TabState) => void;
   // 执行对象查询。
   queryTabData: (
     objectName: string,
@@ -228,31 +228,31 @@ export function useQueryPanelActions({
       },
       onToggleQueryBar: () => {
         if (!activeTab) return;
-        patchTab(activeTab.objectName, (item) => ({ ...item, showQueryBar: !item.showQueryBar }));
+        patchTab(activeTab.bindingKey, (item) => ({ ...item, showQueryBar: !item.showQueryBar }));
       },
       onToggleLogs: () => {
         if (!activeTab) return;
-        patchTab(activeTab.objectName, (item) => ({ ...item, showLogs: !item.showLogs }));
+        patchTab(activeTab.bindingKey, (item) => ({ ...item, showLogs: !item.showLogs }));
       },
       onWhereChange: (value) => {
         if (!activeTab) return;
-        patchTab(activeTab.objectName, (item) => ({ ...item, whereClause: value }));
+        patchTab(activeTab.bindingKey, (item) => ({ ...item, whereClause: value }));
       },
       onLimitChange: (value) => {
         if (!activeTab) return;
-        patchTab(activeTab.objectName, (item) => ({ ...item, limit: value }));
+        patchTab(activeTab.bindingKey, (item) => ({ ...item, limit: value }));
       },
       onSortFieldChange: (value) => {
         if (!activeTab) return;
-        patchTab(activeTab.objectName, (item) => ({ ...item, sortField: value }));
+        patchTab(activeTab.bindingKey, (item) => ({ ...item, sortField: value }));
       },
       onSortDirectionChange: (value) => {
         if (!activeTab) return;
-        patchTab(activeTab.objectName, (item) => ({ ...item, sortDirection: value }));
+        patchTab(activeTab.bindingKey, (item) => ({ ...item, sortDirection: value }));
       },
       onSortClauseChange: (value) => {
         if (!activeTab) return;
-        patchTab(activeTab.objectName, (item) => {
+        patchTab(activeTab.bindingKey, (item) => {
           const normalized = value.trim();
           if (!normalized) {
             // 手动清空排序条件时同步清空旧版排序字段，避免 UI 回退显示旧值。
@@ -295,7 +295,7 @@ export function useQueryPanelActions({
       },
       onToggleRecord: (recordId, checked) => {
         if (!activeTab) return;
-        patchTab(activeTab.objectName, (item) => ({
+        patchTab(activeTab.bindingKey, (item) => ({
           ...item,
           selectedRecordIds: checked
             ? Array.from(new Set([...item.selectedRecordIds, recordId]))
@@ -304,27 +304,27 @@ export function useQueryPanelActions({
       },
       onToggleAllRecords: (checked, recordIds) => {
         if (!activeTab) return;
-        patchTab(activeTab.objectName, (item) => ({ ...item, selectedRecordIds: checked ? recordIds : [] }));
+        patchTab(activeTab.bindingKey, (item) => ({ ...item, selectedRecordIds: checked ? recordIds : [] }));
       },
       onEditCell: (rowIndex, columnName, value) => {
         if (!activeTab) return;
-        patchTab(activeTab.objectName, (item) => {
+        patchTab(activeTab.bindingKey, (item) => {
           const nextRecords = [...item.result.records];
           const target = nextRecords[rowIndex];
           if (!target) return item;
 
           // 旧行编辑统一绑定基线键：避免主键字段被修改后，无法再定位 baseline。
-          const currentRecordKey = getRecordKey(target, rowIndex, {
+          const stableRowId = getRecordKey(target, rowIndex, {
             sourceType: selectedSourceType,
             mysqlPrimaryKeyField: getMysqlPrimaryKeyField(item.describe)
           });
           const baselineKeyFromRecord = typeof target.__baselineKey === "string" ? target.__baselineKey : "";
-          const stableBaselineKey = baselineKeyFromRecord || currentRecordKey;
+          const stableBaselineKey = baselineKeyFromRecord || stableRowId;
           const isEditingNewRow = Boolean(target.__isNew);
           const nextRecord = isEditingNewRow
             ? { ...target, [columnName]: value }
-            : { ...target, __baselineKey: stableBaselineKey, [columnName]: value };
-          // 统一记录键：MySQL 使用主键值，Salesforce 使用 Id，确保脏标记与渲染高亮一致。
+            : { ...target, __rowStableId: stableBaselineKey, __baselineKey: stableBaselineKey, [columnName]: value };
+          // 统一记录键：前端一律使用稳定 rowStableId，避免主键编辑后失去行定位。
           const cellKey = `${stableBaselineKey}:${columnName}`;
           const dirtySet = new Set(item.dirtyCellKeys);
           const isNewRow = Boolean(nextRecord.__isNew);
@@ -360,7 +360,7 @@ export function useQueryPanelActions({
       },
       onShowMessage: (message) => {
         if (!activeTab) return;
-        patchTab(activeTab.objectName, (item) => ({
+        patchTab(activeTab.bindingKey, (item) => ({
           ...item,
           notice: { type: "error", message }
         }));
@@ -373,7 +373,7 @@ export function useQueryPanelActions({
           acc[field.name] = nextChecked;
           return acc;
         }, {} as Record<string, boolean>);
-        patchTab(activeTab.objectName, (item) => ({ ...item, columnVisibility: nextVisibility }));
+        patchTab(activeTab.bindingKey, (item) => ({ ...item, columnVisibility: nextVisibility }));
         const resolvedSourceId = activeTab.sourceId || selectedSourceId;
         if (resolvedSourceId) {
           void persistColumnVisibility(resolvedSourceId, activeTab.objectName, nextVisibility);
@@ -382,7 +382,7 @@ export function useQueryPanelActions({
       onToggleFieldVisibility: (fieldName, checked) => {
         if (!activeTab) return;
         const nextVisibility = { ...activeTab.columnVisibility, [fieldName]: checked };
-        patchTab(activeTab.objectName, (item) => ({
+        patchTab(activeTab.bindingKey, (item) => ({
           ...item,
           columnVisibility: nextVisibility
         }));
@@ -393,13 +393,13 @@ export function useQueryPanelActions({
       },
       onSoqlChange: (value) => {
         if (!activeTab) return;
-        patchTab(activeTab.objectName, (item) => ({ ...item, soqlDraft: value }));
+        patchTab(activeTab.bindingKey, (item) => ({ ...item, soqlDraft: value }));
       },
       onExecuteCustomSoql: () => void executeCustomSoql(),
       onCloseWorkspaceNotice: clearWorkspaceNotice,
       onCloseActiveTabNotice: () => {
         if (!activeTab) return;
-        patchTab(activeTab.objectName, (item) => ({ ...item, notice: null }));
+        patchTab(activeTab.bindingKey, (item) => ({ ...item, notice: null }));
       },
       onSetSoqlSidebarWidth: setSoqlSidebarWidth
     }),

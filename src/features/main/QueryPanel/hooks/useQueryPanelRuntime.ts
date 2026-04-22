@@ -141,6 +141,11 @@ type UseQueryPanelRuntimeInput = {
     records: Record<string, unknown>[],
     options?: { sourceType?: string; mysqlPrimaryKeyField?: string }
   ) => Record<string, Record<string, unknown>>;
+  // 为查询结果补齐稳定行身份。
+  normalizeRecordsWithStableIds: (
+    records: Record<string, unknown>[],
+    options?: { sourceType?: string; mysqlPrimaryKeyField?: string }
+  ) => Record<string, unknown>[];
   // 判断是否存在未提交修改。
   hasPendingChanges: (tab: TabState) => boolean;
   // 获取记录唯一键。
@@ -177,6 +182,7 @@ export function useQueryPanelRuntime({
   buildQueryStatement,
   normalizeQueryResult,
   buildBaselineRecords,
+  normalizeRecordsWithStableIds,
   hasPendingChanges,
   getRecordKey,
   mysqlDdlMap,
@@ -354,7 +360,15 @@ export function useQueryPanelRuntime({
           sortClause
         );
         const rawResult = await api.queryRecords(resolvedSourceId, soql, freshTab.objectName);
-        const result = normalizeQueryResult(rawResult);
+        const normalizedResult = normalizeQueryResult(rawResult);
+        const normalizedRecords = normalizeRecordsWithStableIds(normalizedResult.records, {
+          sourceType: normalizedType,
+          mysqlPrimaryKeyField
+        });
+        const result = {
+          ...normalizedResult,
+          records: normalizedRecords
+        };
 
         storePatchTab(tabBindingKey, (t) => ({
           ...t,
@@ -365,7 +379,7 @@ export function useQueryPanelRuntime({
           currentSoql: soql,
           soqlDraft: soql,
           dirtyCellKeys: [],
-          baselineRecords: buildBaselineRecords(result.records, {
+          baselineRecords: buildBaselineRecords(normalizedRecords, {
             sourceType: normalizedType,
             mysqlPrimaryKeyField
           }),
@@ -394,6 +408,7 @@ export function useQueryPanelRuntime({
       buildQueryStatement,
       normalizeQueryResult,
       buildBaselineRecords,
+      normalizeRecordsWithStableIds,
       appendTabLog
     ]
   );
@@ -606,7 +621,7 @@ export function useQueryPanelRuntime({
       ...item,
       result: {
         ...item.result,
-        records: [{ __localId: tempId, __isNew: true }, ...item.result.records]
+        records: [{ __localId: tempId, __rowStableId: tempId, __isNew: true }, ...item.result.records]
       },
       notice: { type: "success", message: "已新增一行，请填写后点击执行更新。" }
     }));
@@ -704,13 +719,14 @@ export function useQueryPanelRuntime({
           ?? record.Id
           ?? (isMysqlSource && mysqlPrimaryKeyField ? record[mysqlPrimaryKeyField] : undefined);
         const recordId = recordIdRaw === null || recordIdRaw === undefined ? "" : String(recordIdRaw).trim();
+        const isPendingDelete = pendingDeleteSet.has(stableRecordKey);
         if (!recordId) {
-          if (isMysqlSource && Object.keys(values).length > 0) {
+          if (isMysqlSource && (Object.keys(values).length > 0 || isPendingDelete)) {
             missingRecordIdRows.push(rowIndex + 1);
           }
           continue;
         }
-        if (pendingDeleteSet.has(recordId)) {
+        if (isPendingDelete) {
           deletes.push(recordId);
           continue;
         }
@@ -722,7 +738,7 @@ export function useQueryPanelRuntime({
 
       if (missingRecordIdRows.length > 0) {
         throw new Error(
-          `MySQL 更新失败：存在已编辑但缺少 Id 的行（第 ${missingRecordIdRows.join("、")} 行）。请确保查询结果包含主键列。`
+          `MySQL 更新失败：存在已编辑或待删除但缺少 Id 的行（第 ${missingRecordIdRows.join("、")} 行）。请确保查询结果包含主键列。`
         );
       }
 

@@ -120,8 +120,8 @@ type AppState = {
   setTabs: (tabs: TabState[] | ((tabs: TabState[]) => TabState[])) => void;
   // 更新全局加载状态。
   setLoading: (loading: boolean) => void;
-  // 对指定 Tab 打补丁更新：支持 bindingKey 或 objectName（兼容旧调用）。
-  patchTab: (tabIdentity: string, updater: (tab: TabState) => TabState) => void;
+  // 对指定 Tab 打补丁更新：仅接受 bindingKey，避免同名对象跨数据源串写状态。
+  patchTab: (tabBindingKey: string, updater: (tab: TabState) => TabState) => void;
   // 关闭指定 Tab。
   closeTab: (tabIdentity: string) => void;
   // 清空所有 Tab。
@@ -158,11 +158,11 @@ export const useAppStore = create<AppState>()(
         })),
       setLoading: (loading) => set({ loading }),
 
-      patchTab: (tabIdentity, updater) => {
+      patchTab: (tabBindingKey, updater) => {
         set((state) => {
           let changed = false;
           const nextTabs = state.tabs.map((tab) => {
-            if (!isTabMatchedByIdentity(tab, tabIdentity)) return tab;
+            if (getTabBindingKey(tab) !== tabBindingKey) return tab;
             changed = true;
             const nextTab = updater(ensureTabBindingKey(tab));
             return ensureTabBindingKey(nextTab);

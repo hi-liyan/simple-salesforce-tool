@@ -26,6 +26,7 @@ import {
   getSortableFieldNames,
   getVisibleColumns,
   hasPendingChanges,
+  normalizeRecordsWithStableIds,
   normalizeQueryResult,
   pickDefaultSortField
 } from "../logic/queryUtils";
@@ -82,6 +83,11 @@ export function useMainPageQueryPanel({
   // 读取对象 Tab 身份：优先使用 bindingKey，兼容历史 objectName。
   function getTabIdentity(tab: Pick<TabState, "bindingKey" | "sourceId" | "objectName">): string {
     return tab.bindingKey || buildObjectTabBindingKey(tab.sourceId || "", tab.objectName || "");
+  }
+
+  // 按 sourceId + objectName 解析对象 Tab 的 bindingKey。
+  function resolveObjectTabBindingKey(sourceId: string, objectName: string): string {
+    return buildObjectTabBindingKey(sourceId || "", objectName || "");
   }
 
   // 判断 Tab 是否命中指定身份：兼容旧 objectName 传参。
@@ -177,31 +183,31 @@ export function useMainPageQueryPanel({
   }
 
   // 更新指定对象 Tab，并统一处理通知自动关闭。
-  function patchTab(objectName: string, updater: (tab: TabState) => TabState) {
+  function patchTab(tabBindingKey: string, updater: (tab: TabState) => TabState) {
     let shouldAutoCloseNotice = false;
 
-    patchTabInStore(objectName, (tab) => {
+    patchTabInStore(tabBindingKey, (tab) => {
       const next = updater(tab);
       shouldAutoCloseNotice = Boolean(next.notice);
 
-      if (!next.notice && noticeTimersRef.current[objectName]) {
-        clearTimeout(noticeTimersRef.current[objectName]);
-        delete noticeTimersRef.current[objectName];
+      if (!next.notice && noticeTimersRef.current[tabBindingKey]) {
+        clearTimeout(noticeTimersRef.current[tabBindingKey]);
+        delete noticeTimersRef.current[tabBindingKey];
       }
 
       return next;
     });
 
     if (shouldAutoCloseNotice) {
-      if (noticeTimersRef.current[objectName]) {
-        clearTimeout(noticeTimersRef.current[objectName]);
+      if (noticeTimersRef.current[tabBindingKey]) {
+        clearTimeout(noticeTimersRef.current[tabBindingKey]);
       }
-      noticeTimersRef.current[objectName] = setTimeout(() => {
-        patchTabInStore(objectName, (tab) => ({
+      noticeTimersRef.current[tabBindingKey] = setTimeout(() => {
+        patchTabInStore(tabBindingKey, (tab) => ({
           ...tab,
           notice: null
         }));
-        delete noticeTimersRef.current[objectName];
+        delete noticeTimersRef.current[tabBindingKey];
       }, 3000);
     }
   }
@@ -213,13 +219,13 @@ export function useMainPageQueryPanel({
   }
 
   // 追加 Tab 操作日志。
-  function appendTabLog(objectName: string, payload: Omit<TabLog, "id" | "timestamp">) {
+  function appendTabLog(tabBindingKey: string, payload: Omit<TabLog, "id" | "timestamp">) {
     const log: TabLog = {
       id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       timestamp: new Date().toISOString(),
       ...payload
     };
-    patchTab(objectName, (item) => ({
+    patchTab(tabBindingKey, (item) => ({
       ...item,
       logs: [log, ...item.logs].slice(0, 200)
     }));
@@ -274,7 +280,7 @@ export function useMainPageQueryPanel({
     try {
       await api.saveColumnVisibility(sourceId, objectName, visibility);
     } catch (error) {
-      patchTab(objectName, (item) => ({
+      patchTab(resolveObjectTabBindingKey(sourceId, objectName), (item) => ({
         ...item,
         notice: { type: "error", message: `保存字段勾选配置失败：${String(error)}` }
       }));
@@ -297,6 +303,7 @@ export function useMainPageQueryPanel({
     buildVisibilityFromSoql,
     extractWhereClause,
     buildBaselineRecords,
+    normalizeRecordsWithStableIds,
     getSortableFieldNames,
     pickDefaultSortField
   });
@@ -328,6 +335,7 @@ export function useMainPageQueryPanel({
     buildQueryStatement,
     normalizeQueryResult,
     buildBaselineRecords,
+    normalizeRecordsWithStableIds,
     hasPendingChanges,
     getRecordKey,
     mysqlDdlMap,
@@ -367,10 +375,12 @@ export function useMainPageQueryPanel({
     if (objectNames.length === 0) return;
 
     const closeSet = new Set(objectNames);
-    Object.keys(noticeTimersRef.current).forEach((objectName) => {
-      if (!closeSet.has(objectName)) return;
-      clearTimeout(noticeTimersRef.current[objectName]);
-      delete noticeTimersRef.current[objectName];
+    Object.keys(noticeTimersRef.current).forEach((tabIdentity) => {
+      const matchedTab = tabs.find((tab) => getTabIdentity(tab) === tabIdentity) || null;
+      const matched = closeSet.has(tabIdentity) || (matchedTab ? closeSet.has(matchedTab.objectName) : false);
+      if (!matched) return;
+      clearTimeout(noticeTimersRef.current[tabIdentity]);
+      delete noticeTimersRef.current[tabIdentity];
     });
 
     const nextTabs = tabs.filter((tab) => !closeSet.has(getTabIdentity(tab)) && !closeSet.has(tab.objectName));
@@ -486,7 +496,8 @@ export function useMainPageQueryPanel({
           error: ""
         }
       }));
-      patchTab(normalizedObjectName, (tab) => ({ ...tab, loading: true }));
+      const targetBindingKey = resolveObjectTabBindingKey(sourceId, normalizedObjectName);
+      patchTab(targetBindingKey, (tab) => ({ ...tab, loading: true }));
 
       try {
         const refreshedObjects = await queryClient.fetchQuery({
@@ -512,14 +523,14 @@ export function useMainPageQueryPanel({
           }
         }));
 
-        const openedTab = useAppStore.getState().tabs.find((tab) => tab.objectName === normalizedObjectName);
+        const openedTab = useAppStore.getState().tabs.find((tab) => getTabIdentity(tab) === targetBindingKey);
         if (openedTab) {
-          patchTab(normalizedObjectName, (tab) => ({
+          patchTab(targetBindingKey, (tab) => ({
             ...tab,
             describe,
             columnVisibility: visibility
           }));
-          await queryTabData(normalizedObjectName, describe);
+          await queryTabData(targetBindingKey, describe);
         }
 
         return { describe, ddl };
@@ -533,7 +544,7 @@ export function useMainPageQueryPanel({
             error: errorMessage
           }
         }));
-        patchTab(normalizedObjectName, (tab) => ({ ...tab, loading: false }));
+        patchTab(targetBindingKey, (tab) => ({ ...tab, loading: false }));
         throw error;
       }
     },

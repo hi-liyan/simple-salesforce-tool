@@ -142,6 +142,7 @@ export function DataGrid({
 
   const getRecordKey = useCallback((rowIndex: number): string => {
     const record = records[rowIndex] || {};
+    if (record.__rowStableId) return String(record.__rowStableId);
     if (record.__localId) return String(record.__localId);
     if (record.Id) return String(record.Id);
     if (mysqlPrimaryKeyField) {
@@ -150,7 +151,7 @@ export function DataGrid({
         return String(value);
       }
     }
-    return `row-${rowIndex}`;
+    return `row:${rowIndex}`;
   }, [records, mysqlPrimaryKeyField]);
 
   const getCellContent = useMemo(

@@ -53,6 +53,11 @@ type UseQueryExecutionInput = {
     records: Record<string, unknown>[],
     options?: { sourceType?: string; mysqlPrimaryKeyField?: string }
   ) => Record<string, Record<string, unknown>>;
+  // 为查询结果补齐稳定行身份。
+  normalizeRecordsWithStableIds: (
+    records: Record<string, unknown>[],
+    options?: { sourceType?: string; mysqlPrimaryKeyField?: string }
+  ) => Record<string, unknown>[];
   // 获取可排序字段集合。
   getSortableFieldNames: (describe: ObjectDescribe) => string[];
   // 选择默认排序字段。
@@ -75,6 +80,7 @@ export function useQueryExecution({
   buildVisibilityFromSoql,
   extractWhereClause,
   buildBaselineRecords,
+  normalizeRecordsWithStableIds,
   getSortableFieldNames,
   pickDefaultSortField
 }: UseQueryExecutionInput) {
@@ -185,7 +191,15 @@ export function useQueryExecution({
           sortClause
         );
         const rawResult = await api.queryRecords(resolvedSourceId, soql, tabObjectName);
-        const result = normalizeQueryResult(rawResult);
+        const normalizedResult = normalizeQueryResult(rawResult);
+        const normalizedRecords = normalizeRecordsWithStableIds(normalizedResult.records, {
+          sourceType: normalizedType,
+          mysqlPrimaryKeyField
+        });
+        const result = {
+          ...normalizedResult,
+          records: normalizedRecords
+        };
 
         patchTab(tabBindingKey, (item) => ({
           ...item,
@@ -196,7 +210,7 @@ export function useQueryExecution({
           currentSoql: soql,
           soqlDraft: soql,
           dirtyCellKeys: [],
-          baselineRecords: buildBaselineRecords(result.records, {
+          baselineRecords: buildBaselineRecords(normalizedRecords, {
             sourceType: normalizedType,
             mysqlPrimaryKeyField
           }),
@@ -261,7 +275,15 @@ export function useQueryExecution({
         ? activeTab.describe?.fields.find((field) => String(field.metadata?.columnKey || "").toUpperCase() === "PRI")?.name || ""
         : "";
       const rawResult = await api.queryRecords(resolvedSourceId, activeTab.soqlDraft, activeTab.objectName);
-      const result = normalizeQueryResult(rawResult);
+      const normalizedResult = normalizeQueryResult(rawResult);
+      const normalizedRecords = normalizeRecordsWithStableIds(normalizedResult.records, {
+        sourceType: normalizedType,
+        mysqlPrimaryKeyField
+      });
+      const result = {
+        ...normalizedResult,
+        records: normalizedRecords
+      };
       const nextVisibility = buildVisibilityFromSoql(activeTab.soqlDraft, activeTab.describe, activeTab.columnVisibility);
 
       patchTab(activeTabBindingKey, (item) => ({
@@ -273,7 +295,7 @@ export function useQueryExecution({
         currentSoql: activeTab.soqlDraft,
         columnVisibility: nextVisibility,
         dirtyCellKeys: [],
-        baselineRecords: buildBaselineRecords(result.records, {
+        baselineRecords: buildBaselineRecords(normalizedRecords, {
           sourceType: normalizedType,
           mysqlPrimaryKeyField
         }),
@@ -307,11 +329,12 @@ export function useQueryExecution({
     patchTab,
     queryLanguageLabel,
     normalizeQueryResult,
-    buildVisibilityFromSoql,
-    buildBaselineRecords,
-    extractWhereClause,
-    selectedSourceType,
-    appendTabLog,
+      buildVisibilityFromSoql,
+      buildBaselineRecords,
+      normalizeRecordsWithStableIds,
+      extractWhereClause,
+      selectedSourceType,
+      appendTabLog,
     persistColumnVisibility
   ]);
 

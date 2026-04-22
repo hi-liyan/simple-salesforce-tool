@@ -123,6 +123,7 @@
   - 空字符串改成 `null` 不应被视为“未变化”。
   - 主键变化不应影响待删记录定位。
   - 多数据源同名表时，状态写入必须只命中 `bindingKey` 对应 tab。
+  - 进度备注（2026-04-22）：本轮已补“主键变化不影响待删记录定位”“多数据源同名表仅命中 bindingKey”两条回归测试；`Set Null` 与空字符串/`null` 语义测试留待 Task 3 一并补齐。
 
 - [ ] **Step 2: 补值语义规划测试**
   - 为“新增/更新 payload 规划器”写纯函数测试，至少覆盖：
@@ -136,7 +137,7 @@
   - 验证主键、自增列、生成列、只读列被双击或输入时会给出只读提示。
   - 验证 `Set Null` 只允许对可空字段生效。
 
-- [ ] **Step 4: 修正测试脚本命名与入口**
+- [x] **Step 4: 修正测试脚本命名与入口**
   - 保持 `npm run test:query-panel`、`npm run test:datagrid-utils` 可直接跑新用例。
 
 - [ ] **Step 5: 运行测试**
@@ -155,25 +156,25 @@
 - Modify: `src/types/index.ts`
 - Test: `tests/query-panel/mysqlCrudEditing.test.ts`
 
-- [ ] **Step 1: 收紧前端写状态入口**
+- [x] **Step 1: 收紧前端写状态入口**
   - 把 `patchTab(activeTab.objectName, ...)` 这一类写路径统一改成只接受 `bindingKey`。
   - 不再新增任何按 `objectName` 写状态的逻辑。
 
-- [ ] **Step 2: 引入稳定行身份**
+- [x] **Step 2: 引入稳定行身份**
   - 为旧行生成 `rowStableId`，来源优先级建议为：
   - `record.__rowStableId`
   - `record.__baselineKey`
   - 查询时生成的稳定内部键
   - 严禁继续把“当前主键值”当成前端唯一身份。
 
-- [ ] **Step 3: 分离两类概念**
+- [x] **Step 3: 分离两类概念**
   - `rowStableId` 只服务前端选择、dirty、待删除高亮、行定位。
   - `rowLocator` 才是后端更新/删除定位条件，MySQL 下默认使用 baseline 主键值。
 
-- [ ] **Step 4: 统一 DataGrid 选择键**
+- [x] **Step 4: 统一 DataGrid 选择键**
   - `selectedRecordIds`、`pendingDeleteRecordIds` 的值统一换成 `rowStableId`，不要再存当前主键值。
 
-- [ ] **Step 5: 运行测试**
+- [x] **Step 5: 运行测试**
   - Run: `npm run test:query-panel`
   - Expected: “主键修改后删除失效”“同名表串状态”的回归用例通过。
 

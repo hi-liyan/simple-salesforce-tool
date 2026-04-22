@@ -77,7 +77,7 @@ export function createGetCellContent({
         kind: GridCellKind.Boolean,
         data: selectedRecordIds.includes(recordId),
         allowOverlay: false,
-        readonly: recordId.startsWith("row-"),
+        readonly: recordId.startsWith("row:"),
         // 行级高亮：确保选择列与数据列颜色一致。
         themeOverride: rowThemeOverride
       };
