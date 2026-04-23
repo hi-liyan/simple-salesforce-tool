@@ -24,8 +24,7 @@ use crate::models::{
     TerminalCommandReorderPayload, TerminalCommandUpsertPayload,
 };
 use crate::providers::{
-    preview_create_record_sql, preview_delete_record_sql, preview_save_records_sql,
-    preview_save_records_with_deletes_items, preview_save_records_with_deletes_sql,
+    preview_create_record_sql, preview_delete_record_sql, preview_save_records_with_deletes_items,
     preview_update_record_sql, provider_for_source,
 };
 use crate::sf_cli;
@@ -57,6 +56,313 @@ fn write_system_log(
             detail,
         );
     }
+}
+
+/// MySQL 结构化日志 schema：供前端识别新版 mutation 日志详情。
+const MYSQL_MUTATION_LOG_SCHEMA: &str = "mysql-mutation-log/v1";
+
+/// MySQL 单条变更日志项：对应一条 create/update/delete 的执行摘要。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MysqlMutationLogDetailItem {
+    /// 操作类型：create/update/delete。
+    operation_type: String,
+    /// 同类操作内的顺序索引；未知时为空。
+    operation_index: Option<usize>,
+    /// 当前操作的记录定位值。
+    record_locator: String,
+    /// 当前操作影响行数；未知时为空。
+    rows_affected: Option<u64>,
+    /// 当前操作对应的执行预览 SQL。
+    preview_sql: String,
+    /// 当前操作错误信息；成功时为空字符串。
+    error: String,
+    /// 当前操作是否成功。
+    success: bool,
+}
+
+/// MySQL 结构化日志详情：用于系统日志页增强展示与失败定位。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MysqlMutationLogDetail {
+    /// schema 版本：便于前端兼容不同 detail 结构。
+    schema: String,
+    /// 执行模式：批量提交为 transaction，单条操作为 single。
+    execution_mode: String,
+    /// 最终结果：success/failed。
+    result: String,
+    /// 顶层操作类型：如 create/update/delete/save_records_with_deletes。
+    operation_type: String,
+    /// 顶层失败或主操作的序号；未知时为空。
+    operation_index: Option<usize>,
+    /// 顶层失败或主操作的记录定位值。
+    record_locator: String,
+    /// 顶层失败或主操作的影响行数；未知时为空。
+    rows_affected: Option<u64>,
+    /// 汇总后的执行预览 SQL 文本。
+    preview_sql: String,
+    /// 顶层错误信息；成功时为空字符串。
+    error: String,
+    /// 批量提交时的逐条执行结果。
+    items: Vec<MysqlMutationLogDetailItem>,
+}
+
+/// MySQL 失败上下文：从错误文本中提取序号、定位值与原因，便于写入结构化日志。
+#[derive(Debug, Clone, Default)]
+struct MysqlMutationFailureContext {
+    /// 失败操作类型：create/update/delete。
+    operation_type: String,
+    /// 失败操作序号；未知时为空。
+    operation_index: Option<usize>,
+    /// 失败操作的记录定位值。
+    record_locator: String,
+    /// 失败原因文本。
+    error: String,
+}
+
+/// 从错误文本中提取 marker 之后的连续 ASCII 数字。
+fn extract_numeric_marker(message: &str, marker: &str) -> Option<usize> {
+    let start = message.find(marker)? + marker.len();
+    let digits: String = message[start..]
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit())
+        .collect();
+    if digits.is_empty() {
+        return None;
+    }
+    digits.parse::<usize>().ok()
+}
+
+/// 从错误文本中提取 marker 之后直到分隔符的片段。
+fn extract_text_marker(message: &str, marker: &str) -> String {
+    let Some(start) = message.find(marker) else {
+        return String::new();
+    };
+    message[start + marker.len()..]
+        .chars()
+        .take_while(|ch| !matches!(ch, '，' | ',' | '\n' | '\r'))
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
+/// 解析 MySQL 失败文本中的操作类型、序号与记录定位值。
+fn parse_mysql_mutation_failure_context(message: &str) -> MysqlMutationFailureContext {
+    let operation_type = if message.contains("MySQL create") {
+        "create"
+    } else if message.contains("MySQL update") {
+        "update"
+    } else if message.contains("MySQL delete") {
+        "delete"
+    } else {
+        ""
+    }
+    .to_string();
+
+    let error = if let Some(index) = message.find("原因：") {
+        message[index + "原因：".len()..].trim().to_string()
+    } else if let Some(index) = message.find("原因:") {
+        message[index + "原因:".len()..].trim().to_string()
+    } else {
+        message.trim().to_string()
+    };
+
+    MysqlMutationFailureContext {
+        operation_type,
+        operation_index: extract_numeric_marker(message, "operation_index="),
+        record_locator: extract_text_marker(message, "record_locator="),
+        error,
+    }
+}
+
+/// 统一构造“执行预览 SQL”回退文本，避免再误导为驱动层原始 SQL。
+fn fallback_mysql_log_detail(error: &AppError) -> String {
+    format!("-- 执行预览 SQL 生成失败：{error}")
+}
+
+/// 生成单条日志项标签：例如 update#1。
+fn build_mysql_log_item_label(operation_type: &str, operation_index: Option<usize>) -> String {
+    match operation_index {
+        Some(index) => format!("{operation_type}#{index}"),
+        None => operation_type.to_string(),
+    }
+}
+
+/// 把结构化日志项汇总成可读的执行预览 SQL 文本。
+fn build_mysql_log_preview_sql(items: &[MysqlMutationLogDetailItem], fallback_sql: &str) -> String {
+    if items.is_empty() {
+        return fallback_sql.to_string();
+    }
+    items
+        .iter()
+        .map(|item| {
+            format!(
+                "[{}] {}",
+                build_mysql_log_item_label(&item.operation_type, item.operation_index),
+                item.preview_sql
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// 将结构化日志对象序列化为 detail 文本；序列化失败时回退到可读字符串。
+fn serialize_mysql_log_detail(detail: &MysqlMutationLogDetail) -> String {
+    serde_json::to_string(detail).unwrap_or_else(|error| {
+        format!(
+            "执行模式={}\n执行结果={}\n执行预览 SQL:\n{}\nerror={}",
+            detail.execution_mode, detail.result, detail.preview_sql, error
+        )
+    })
+}
+
+/// 基于批量预览项构造结构化日志子项；失败时会把错误挂到对应失败项上。
+fn build_mysql_preview_log_items(
+    preview_items: &[MutationPreviewSqlItem],
+    failure_context: Option<&MysqlMutationFailureContext>,
+    default_success: bool,
+) -> Vec<MysqlMutationLogDetailItem> {
+    preview_items
+        .iter()
+        .map(|item| {
+            let matched_failure = failure_context.filter(|context| {
+                context.operation_type == item.op
+                    && context.operation_index == Some(item.operation_index)
+            });
+            MysqlMutationLogDetailItem {
+                operation_type: item.op.clone(),
+                operation_index: Some(item.operation_index),
+                record_locator: matched_failure
+                    .map(|context| context.record_locator.clone())
+                    .unwrap_or_default(),
+                rows_affected: None,
+                preview_sql: item.preview_sql.clone(),
+                error: matched_failure
+                    .map(|context| context.error.clone())
+                    .unwrap_or_default(),
+                success: default_success && matched_failure.is_none(),
+            }
+        })
+        .collect()
+}
+
+/// 基于真实执行结果构造结构化日志子项。
+fn build_mysql_execution_log_items(
+    execution_items: &[crate::models::MutationExecutionItem],
+) -> Vec<MysqlMutationLogDetailItem> {
+    execution_items
+        .iter()
+        .map(|item| MysqlMutationLogDetailItem {
+            operation_type: item.op.clone(),
+            operation_index: Some(item.operation_index),
+            record_locator: item.row_locator.clone(),
+            rows_affected: Some(item.rows_affected),
+            preview_sql: item.preview_sql.clone(),
+            error: item.error.clone(),
+            success: item.success,
+        })
+        .collect()
+}
+
+/// 构造单条 MySQL mutation 的结构化日志详情。
+fn build_mysql_single_log_detail(
+    operation_type: &str,
+    record_locator: &str,
+    preview_sql: &str,
+    rows_affected: Option<u64>,
+    success: bool,
+    error: Option<&str>,
+) -> String {
+    let item = MysqlMutationLogDetailItem {
+        operation_type: operation_type.to_string(),
+        operation_index: Some(0),
+        record_locator: record_locator.to_string(),
+        rows_affected,
+        preview_sql: preview_sql.to_string(),
+        error: error.unwrap_or_default().to_string(),
+        success,
+    };
+    let preview_sql_text = build_mysql_log_preview_sql(std::slice::from_ref(&item), preview_sql);
+    serialize_mysql_log_detail(&MysqlMutationLogDetail {
+        schema: MYSQL_MUTATION_LOG_SCHEMA.to_string(),
+        execution_mode: "single".to_string(),
+        result: if success { "success" } else { "failed" }.to_string(),
+        operation_type: operation_type.to_string(),
+        operation_index: Some(0),
+        record_locator: record_locator.to_string(),
+        rows_affected,
+        preview_sql: preview_sql_text,
+        error: error.unwrap_or_default().to_string(),
+        items: vec![item],
+    })
+}
+
+/// 构造批量 MySQL mutation 的结构化日志详情。
+fn build_mysql_batch_log_detail(
+    operation_type: &str,
+    preview_items: &[MutationPreviewSqlItem],
+    execution_result: Option<&MutationExecutionResult>,
+    error_message: Option<&str>,
+    preview_fallback_sql: &str,
+) -> String {
+    let failure_context = error_message.map(parse_mysql_mutation_failure_context);
+    let items = if let Some(summary) = execution_result {
+        build_mysql_execution_log_items(&summary.items)
+    } else {
+        build_mysql_preview_log_items(
+            preview_items,
+            failure_context.as_ref(),
+            error_message.is_none(),
+        )
+    };
+    let failed_item = items.iter().find(|item| !item.success);
+    let preview_sql = build_mysql_log_preview_sql(&items, preview_fallback_sql);
+    let rows_affected_values = items
+        .iter()
+        .filter_map(|item| item.rows_affected)
+        .collect::<Vec<_>>();
+    let rows_affected = if let Some(item) = failed_item {
+        item.rows_affected
+    } else if rows_affected_values.is_empty() {
+        None
+    } else {
+        Some(rows_affected_values.into_iter().sum())
+    };
+
+    serialize_mysql_log_detail(&MysqlMutationLogDetail {
+        schema: MYSQL_MUTATION_LOG_SCHEMA.to_string(),
+        execution_mode: "transaction".to_string(),
+        result: if error_message.is_none() {
+            "success"
+        } else {
+            "failed"
+        }
+        .to_string(),
+        operation_type: operation_type.to_string(),
+        operation_index: failed_item
+            .and_then(|item| item.operation_index)
+            .or(failure_context
+                .as_ref()
+                .and_then(|context| context.operation_index)),
+        record_locator: failed_item
+            .map(|item| item.record_locator.clone())
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                failure_context
+                    .as_ref()
+                    .map(|context| context.record_locator.clone())
+                    .filter(|value| !value.is_empty())
+            })
+            .unwrap_or_default(),
+        rows_affected,
+        preview_sql,
+        error: failed_item
+            .map(|item| item.error.clone())
+            .filter(|value| !value.is_empty())
+            .or_else(|| error_message.map(|value| value.to_string()))
+            .unwrap_or_default(),
+        items,
+    })
 }
 
 const SF_CLI_PATH_SETTING_KEY: &str = "sf_cli_path";
@@ -142,11 +448,6 @@ fn resolve_log_category(source: &SalesforceSource) -> &'static str {
     } else {
         "MYSQL_DB"
     }
-}
-
-/// MySQL 原始 SQL 预览失败时的兜底文案，避免日志构造影响主流程。
-fn fallback_mysql_log_detail(error: &AppError) -> String {
-    format!("-- 原始 SQL 预览失败：{error}")
 }
 
 /// 构造 Salesforce 查询日志详情。
@@ -2090,6 +2391,18 @@ pub async fn create_record(
 
     match create_result {
         Ok(record_id) => {
+            let detail = if source.is_salesforce() {
+                format!("recordId={record_id}\n{operation_detail}")
+            } else {
+                build_mysql_single_log_detail(
+                    "create",
+                    &record_id,
+                    &operation_detail,
+                    Some(1),
+                    true,
+                    None,
+                )
+            };
             write_system_log(
                 &state,
                 "INFO",
@@ -2099,13 +2412,24 @@ pub async fn create_record(
                 Some(&payload.object_name),
                 true,
                 "新增记录成功。",
-                Some(&format!("recordId={record_id}\n{operation_detail}")),
+                Some(&detail),
             );
             Ok(record_id)
         }
         Err(error) => {
             let message = AppError::to_string_error(error);
-            let detail = format!("{operation_detail}\nerror={message}");
+            let detail = if source.is_salesforce() {
+                format!("{operation_detail}\nerror={message}")
+            } else {
+                build_mysql_single_log_detail(
+                    "create",
+                    "",
+                    &operation_detail,
+                    None,
+                    false,
+                    Some(&message),
+                )
+            };
             write_system_log(
                 &state,
                 "ERROR",
@@ -2149,15 +2473,32 @@ pub async fn save_records(
     let object_name = payload.object_name.clone();
     let creates = payload.creates.clone();
     let updates = payload.updates.clone();
+    let (mysql_preview_items, mysql_preview_fallback_sql) = if source.is_salesforce() {
+        (Vec::new(), String::new())
+    } else {
+        match preview_save_records_with_deletes_items(
+            &source,
+            &object_name,
+            creates.clone(),
+            updates.clone(),
+            Vec::new(),
+        )
+        .await
+        {
+            Ok(items) => (items, String::new()),
+            Err(error) => (Vec::new(), fallback_mysql_log_detail(&error)),
+        }
+    };
     let operation_detail = if source.is_salesforce() {
         build_salesforce_save_detail(&source.api_version, &object_name, &creates, &updates, None)
     } else {
-        match preview_save_records_sql(&source, &object_name, creates.clone(), updates.clone())
-            .await
-        {
-            Ok(detail) => detail,
-            Err(error) => fallback_mysql_log_detail(&error),
-        }
+        build_mysql_batch_log_detail(
+            "save_records",
+            &mysql_preview_items,
+            None,
+            None,
+            &mysql_preview_fallback_sql,
+        )
     };
     let save_result = match provider
         .save_records(&source, &object_name, creates.clone(), updates.clone())
@@ -2190,6 +2531,11 @@ pub async fn save_records(
 
     match save_result {
         Ok(()) => {
+            let detail = if source.is_salesforce() {
+                operation_detail.clone()
+            } else {
+                operation_detail.clone()
+            };
             write_system_log(
                 &state,
                 "INFO",
@@ -2202,13 +2548,23 @@ pub async fn save_records(
                     "批量保存成功,新增 {} 条,更新 {} 条。",
                     create_count, update_count
                 ),
-                Some(&operation_detail),
+                Some(&detail),
             );
             Ok(())
         }
         Err(error) => {
             let message = AppError::to_string_error(error);
-            let detail = format!("{operation_detail}\nerror={message}");
+            let detail = if source.is_salesforce() {
+                format!("{operation_detail}\nerror={message}")
+            } else {
+                build_mysql_batch_log_detail(
+                    "save_records",
+                    &mysql_preview_items,
+                    None,
+                    Some(&message),
+                    &mysql_preview_fallback_sql,
+                )
+            };
             write_system_log(
                 &state,
                 "ERROR",
@@ -2308,7 +2664,7 @@ pub async fn save_records_with_deletes(
     let creates = payload.creates.clone();
     let updates = payload.updates.clone();
     let deletes = payload.deletes.clone();
-    let operation_detail = match preview_save_records_with_deletes_sql(
+    let (preview_items, preview_fallback_sql) = match preview_save_records_with_deletes_items(
         &source,
         &object_name,
         creates.clone(),
@@ -2317,8 +2673,8 @@ pub async fn save_records_with_deletes(
     )
     .await
     {
-        Ok(detail) => detail,
-        Err(error) => fallback_mysql_log_detail(&error),
+        Ok(items) => (items, String::new()),
+        Err(error) => (Vec::new(), fallback_mysql_log_detail(&error)),
     };
 
     // MySQL 下执行单事务提交，失败时直接返回错误信息。
@@ -2338,6 +2694,13 @@ pub async fn save_records_with_deletes(
 
     match save_result {
         Ok(summary) => {
+            let detail = build_mysql_batch_log_detail(
+                "save_records_with_deletes",
+                &preview_items,
+                Some(&summary),
+                None,
+                &preview_fallback_sql,
+            );
             write_system_log(
                 &state,
                 "INFO",
@@ -2350,13 +2713,19 @@ pub async fn save_records_with_deletes(
                     "批量保存成功,新增 {} 条,更新 {} 条,删除 {} 条。",
                     create_count, update_count, delete_count
                 ),
-                Some(&operation_detail),
+                Some(&detail),
             );
             Ok(summary)
         }
         Err(error) => {
             let message = AppError::to_string_error(error);
-            let detail = format!("{operation_detail}\nerror={message}");
+            let detail = build_mysql_batch_log_detail(
+                "save_records_with_deletes",
+                &preview_items,
+                None,
+                Some(&message),
+                &preview_fallback_sql,
+            );
             write_system_log(
                 &state,
                 "ERROR",
@@ -2428,6 +2797,18 @@ pub async fn update_record(
 
     match update_result {
         Ok(()) => {
+            let detail = if source.is_salesforce() {
+                format!("recordId={record_id}\n{operation_detail}")
+            } else {
+                build_mysql_single_log_detail(
+                    "update",
+                    &record_id,
+                    &operation_detail,
+                    Some(1),
+                    true,
+                    None,
+                )
+            };
             write_system_log(
                 &state,
                 "INFO",
@@ -2437,13 +2818,24 @@ pub async fn update_record(
                 Some(&object_name),
                 true,
                 "更新记录成功。",
-                Some(&format!("recordId={record_id}\n{operation_detail}")),
+                Some(&detail),
             );
             Ok(())
         }
         Err(error) => {
             let message = AppError::to_string_error(error);
-            let detail = format!("{operation_detail}\nerror={message}");
+            let detail = if source.is_salesforce() {
+                format!("{operation_detail}\nerror={message}")
+            } else {
+                build_mysql_single_log_detail(
+                    "update",
+                    &record_id,
+                    &operation_detail,
+                    Some(0),
+                    false,
+                    Some(&message),
+                )
+            };
             write_system_log(
                 &state,
                 "ERROR",
@@ -2514,6 +2906,18 @@ pub async fn delete_record(
 
     match delete_result {
         Ok(()) => {
+            let detail = if source.is_salesforce() {
+                format!("recordId={record_id}\n{operation_detail}")
+            } else {
+                build_mysql_single_log_detail(
+                    "delete",
+                    &record_id,
+                    &operation_detail,
+                    Some(1),
+                    true,
+                    None,
+                )
+            };
             write_system_log(
                 &state,
                 "INFO",
@@ -2523,13 +2927,24 @@ pub async fn delete_record(
                 Some(&object_name),
                 true,
                 "删除记录成功。",
-                Some(&format!("recordId={record_id}\n{operation_detail}")),
+                Some(&detail),
             );
             Ok(())
         }
         Err(error) => {
             let message = AppError::to_string_error(error);
-            let detail = format!("{operation_detail}\nerror={message}");
+            let detail = if source.is_salesforce() {
+                format!("{operation_detail}\nerror={message}")
+            } else {
+                build_mysql_single_log_detail(
+                    "delete",
+                    &record_id,
+                    &operation_detail,
+                    Some(0),
+                    false,
+                    Some(&message),
+                )
+            };
             write_system_log(
                 &state,
                 "ERROR",

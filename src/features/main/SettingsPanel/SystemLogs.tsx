@@ -1,7 +1,13 @@
 import { ChevronDown, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useSystemLogsQuery } from "../../../queries/salesforce";
-import { buildSystemLogContent, shouldCollapseSystemLogContent } from "./systemLogContent";
+import {
+  buildSystemLogContent,
+  extractSystemLogStructuredFailureText,
+  getSystemLogPreviewSqlItems,
+  parseSystemLogDetail,
+  shouldCollapseSystemLogContent
+} from "./systemLogContent";
 
 // 系统日志面板：展示后端持久化日志并支持分页。
 export function SystemLogsPanel() {
@@ -91,6 +97,10 @@ export function SystemLogsPanel() {
             // 长内容默认折叠，短内容直接完整展示。
             const collapsible = shouldCollapseSystemLogContent(item.message, item.detail);
             const expanded = expandedLogIds[item.id] ?? false;
+            // 结构化日志元信息：用于增强失败态与执行预览 SQL 的可读性。
+            const parsedDetail = parseSystemLogDetail(item.detail);
+            const failureText = extractSystemLogStructuredFailureText(item.detail);
+            const previewItems = getSystemLogPreviewSqlItems(item.detail);
 
             return (
               // 单条日志卡片：保留轻量列表结构，仅为正文增加折叠能力。
@@ -104,7 +114,24 @@ export function SystemLogsPanel() {
                   级别: {item.level} {item.sourceId ? `| 数据源: ${item.sourceId}` : ""} {item.target ? `| 目标: ${item.target}` : ""}
                 </p>
                 {/* 日志正文容器：长内容默认裁切，支持手动展开查看。 */}
-                <div className="mt-1 rounded-md border border-base-300 bg-base-100/70 px-2 py-1.5">
+                <div
+                  className={`mt-1 rounded-md border px-2 py-1.5 ${
+                    item.success ? "border-base-300 bg-base-100/70" : "border-error/40 bg-error/5"
+                  }`}
+                >
+                  {/* 结构化标签区：突出失败优先和“执行预览 SQL”语义。 */}
+                  {(parsedDetail || failureText || previewItems.length > 0) && (
+                    <div className="mb-1 flex flex-wrap items-center gap-1">
+                      {/* 失败标签：让失败日志在长列表中更容易被扫到。 */}
+                      {!item.success && <span className="badge badge-error badge-sm">失败优先</span>}
+                      {/* 执行模式标签：帮助用户区分单条操作与事务批量提交。 */}
+                      {parsedDetail?.executionMode && <span className="badge badge-ghost badge-sm">{parsedDetail.executionMode}</span>}
+                      {/* 预览 SQL 标签：明确这里展示的是执行前预览，不是驱动层抓到的原始 SQL。 */}
+                      {previewItems.length > 0 && <span className="badge badge-outline badge-sm">执行预览 SQL</span>}
+                    </div>
+                  )}
+                  {/* 失败摘要：优先用单独行展示失败定位，避免埋在长文本里。 */}
+                  {failureText && <p className="mb-1 whitespace-pre-wrap break-all text-[12px] font-medium text-error">{failureText}</p>}
                   {/* 正文文本：折叠态限制展示行数，展开态展示全部内容。 */}
                   <p className={`whitespace-pre-wrap break-all text-[12px] ${collapsible && !expanded ? "line-clamp-4 text-neutral/80" : "text-neutral/90"}`}>
                     {content}

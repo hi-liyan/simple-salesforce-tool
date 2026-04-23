@@ -354,11 +354,12 @@
 - Modify: `src/features/main/SettingsPanel/systemLogContent.ts`
 - Test: `tests/query-panel/systemLogContent.test.ts`
 
-- [ ] **Step 1: 修正文案定义**
+- [x] **Step 1: 修正文案定义**
   - 系统日志里的 SQL 文案统一改成“执行预览 SQL”或等价表达。
   - 不再暗示它是驱动层原始 SQL。
+  - 进度备注（2026-04-23）：`commands.rs` 的 MySQL 兜底文案已从“原始 SQL 预览失败”改为“执行预览 SQL 生成失败”；`systemLogContent.ts` 与 `SystemLogs.tsx` 也统一按“执行预览 SQL”展示和标识，不再误导为驱动层原始 SQL。
 
-- [ ] **Step 2: 结构化输出 detail**
+- [x] **Step 2: 结构化输出 detail**
   - 不要再只拼接长字符串。
   - 建议 detail 中包含：
   - `preview_sql`
@@ -367,16 +368,19 @@
   - `record_locator`
   - `rows_affected`
   - `error`
+  - 进度备注（2026-04-23）：MySQL `create/update/delete/save_records/save_records_with_deletes` 的系统日志 detail 已切为 `mysql-mutation-log/v1` 结构化 JSON，包含 `previewSql`、`operationType`、`operationIndex`、`recordLocator`、`rowsAffected`、`error` 与逐条 `items` 列表，前端可直接解析增强展示。
 
-- [ ] **Step 3: 前端日志页增加可读性增强**
+- [x] **Step 3: 前端日志页增加可读性增强**
   - 首轮至少支持：
   - 失败优先高亮
   - 预览 SQL 标识
   - 长文本折叠优化
+  - 进度备注（2026-04-23）：系统日志页已支持失败卡片高亮、结构化失败定位单独展示、`执行预览 SQL` 徽标与原有长文本折叠共存；`tests/query-panel/systemLogContent.test.ts` 也补上了结构化解析与文案回归用例。
 
 - [ ] **Step 4: 运行测试**
   - Run: `npm run test:query-panel`
   - Expected: 日志展示与真实语义一致，不再误导为“原始 SQL”。
+  - 进度备注（2026-04-23）：`cargo test ensure_rows_affected_or_fail_should_reject_zero_row_update --manifest-path src-tauri/Cargo.toml -- --exact` 已完成并通过，证明本轮 Rust 改动可编译；但前端 `node`/`npm` 仍被当前环境里的 Windows 包装脚本阻塞，执行 `node --test --experimental-strip-types tests/query-panel/systemLogContent.test.ts` 直接报 `Exec format error`，待切换到可用 Node 运行环境后补跑。
 
 ### Task 8: 将 SQLite v2 作为独立计划准备，不与主线混做
 
@@ -385,17 +389,20 @@
 - Optional reference: `src-tauri/src/db.rs`
 - Optional reference: `src-tauri/src/models.rs`
 
-- [ ] **Step 1: 明确边界**
+- [x] **Step 1: 明确边界**
   - `SQLite v2` 不属于“修复 MySQL 可信编辑闭环”的同一提交范围。
   - 它应该单独产出新设计文档和迁移计划。
+  - 进度备注（2026-04-23）：已新增 [`docs/sqlite-v2-design-2026-04-22.md`](/mnt/d/test-workspace/simple-salesforce-tool/docs/sqlite-v2-design-2026-04-22.md)，明确 SQLite v2 与 MySQL 可信编辑主线分离，不在同一提交范围内推进。
 
-- [ ] **Step 2: 先只记录前置条件**
+- [x] **Step 2: 先只记录前置条件**
   - 只有在 Task 1 到 Task 7 稳定后，才启动 `db.rs` 拆分、schema v2、迁移、token 安全等改造。
+  - 进度备注（2026-04-23）：SQLite v2 设计文档已补充前置条件，明确要求在 MySQL 主线、日志语义和可执行验证稳定后，再启动 `db.rs` 模块拆分、schema v2、迁移与 token 安全改造。
 
-- [ ] **Step 3: 输出独立子计划入口**
+- [x] **Step 3: 输出独立子计划入口**
   - 后续建议新建：
   - `docs/sqlite-v2-design-2026-04-22.md`
   - `docs/sqlite-v2-implementation-plan-2026-04-22.md`
+  - 进度备注（2026-04-23）：已新增 [`docs/sqlite-v2-implementation-plan-2026-04-22.md`](/mnt/d/test-workspace/simple-salesforce-tool/docs/sqlite-v2-implementation-plan-2026-04-22.md)，后续可以直接按独立任务包继续推进 SQLite v2。
 
 ---
 

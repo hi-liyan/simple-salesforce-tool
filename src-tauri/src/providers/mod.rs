@@ -13,8 +13,7 @@ use crate::models::{
 };
 use mysql_provider::MySqlProvider;
 pub use mysql_provider::{
-    preview_create_record_sql, preview_delete_record_sql, preview_save_records_sql,
-    preview_save_records_with_deletes_items, preview_save_records_with_deletes_sql,
+    preview_create_record_sql, preview_delete_record_sql, preview_save_records_with_deletes_items,
     preview_update_record_sql,
 };
 use salesforce_provider::SalesforceProvider;
