@@ -24,6 +24,8 @@ export type DataGridProps = {
   selectedRecordIds: string[];
   // 只读模式：开启后强制禁用单元格编辑（用于 SOQL 工作空间结果表）。
   readOnlyMode?: boolean;
+  // 结果集只读原因：开启只读模式时透传到单元格提示文案。
+  readOnlyReasonText?: string;
   // Salesforce 当前用户时区（IANA），用于 datetime 与 Salesforce Web 行为对齐。
   salesforceTimezone?: string | null;
   // 当前选中的数据源 ID：用于打开 Salesforce 记录页（可选）。
@@ -56,6 +58,7 @@ export function DataGrid({
   dirtyCellKeys,
   selectedRecordIds,
   readOnlyMode = false,
+  readOnlyReasonText = "",
   salesforceTimezone,
   sourceId,
   selectedSourceType,
@@ -78,11 +81,13 @@ export function DataGrid({
       acc[fieldName] = {
         ...(metadata || {}),
         createable: false,
-        updateable: false
+        updateable: false,
+        // 结果集级只读原因优先于字段自身原因，双击提示时直接解释为什么整张表不可编辑。
+        resultReadonlyReason: readOnlyReasonText
       };
       return acc;
     }, {} as Record<string, Record<string, unknown>>);
-  }, [fieldMetadataMap, readOnlyMode]);
+  }, [fieldMetadataMap, readOnlyMode, readOnlyReasonText]);
 
   // 仅在时区字符串合法时启用 Salesforce 用户时区；非法值自动回退浏览器本地时区。
   const effectiveSalesforceTimezone = useMemo(

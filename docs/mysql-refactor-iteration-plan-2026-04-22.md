@@ -236,31 +236,37 @@
 - Modify: `src-tauri/src/providers/mysql_provider.rs`
 - Test: `tests/query-panel/mysqlCrudEditing.test.ts`
 
-- [ ] **Step 1: 后端 describe 阶段修正字段能力**
+- [x] **Step 1: 后端 describe 阶段修正字段能力**
   - 主键列、自增列、生成列、只读列不能继续统一标记为 `createable/updateable=true`。
   - 把 `columnKey`、`extra`、`columnDefault` 等元数据真正用于能力推导。
+  - 进度备注（2026-04-23）：`mysql_provider.rs` 已新增字段能力推导逻辑，describe 阶段会把主键列标记为不可更新，把自增列/生成列标记为不可创建且不可更新，并补充 `defaultedOnCreate`、`isPrimaryKey`、`isAutoIncrement`、`isGenerated` 以及只读原因元数据。
 
-- [ ] **Step 2: 前端统一消费字段能力**
+- [x] **Step 2: 前端统一消费字段能力**
   - `isCellEditableByMeta` 只读判断必须与后端真实能力一致。
   - DataGrid 的只读提示文案要能解释“为什么不能改”。
+  - 进度备注（2026-04-23）：DataGrid 已改为统一消费后端返回的字段能力元数据；双击或直接编辑只读格时，会优先展示“字段级只读原因”或“结果集只读原因”，不再只给出笼统的不可编辑提示。
 
-- [ ] **Step 3: 增加结果集可更新性模型**
+- [x] **Step 3: 增加结果集可更新性模型**
   - 在查询完成后生成：
   - `editable`
   - `readonly_missing_pk`
   - `readonly_complex_query`
   - `readonly_multi_table`
   - 如果当前代码短期无法精准判断复杂查询，可先保守判定，只要缺主键或无法识别单表就置只读。
+  - 进度备注（2026-04-23）：已新增 `mysqlUpdateCapability.ts`，当前会基于“当前已执行 SQL + describe 主键元数据”保守判定结果集能力；单表且包含主键列时为 `editable`，缺主键、多表 JOIN、聚合/表达式等复杂查询会切为只读。
 
-- [ ] **Step 4: 接入工具栏与表格只读态**
+- [x] **Step 4: 接入工具栏与表格只读态**
   - 只要不是 `editable`：
   - 禁用单元格编辑
   - 禁用“执行更新”
   - 展示明确原因
+  - 进度备注（2026-04-23）：MySQL 结果集被判只读时，工具栏中的“新建记录 / 删除勾选 / 执行更新”会前置禁用，表格进入只读模式，顶部展示只读原因条；运行时入口也增加了只读保护，避免绕过 UI 直接触发编辑/删除/提交。
 
 - [ ] **Step 5: 运行测试**
   - Run: `npm run test:query-panel`
-  - Expected: 缺主键、复杂查询、主键列编辑等场景有稳定结果。
+  - Run: `cargo test infer_mysql_field_write_capability --manifest-path src-tauri/Cargo.toml`
+  - Expected: 前端结果集可更新性用例与后端字段能力推导用例通过。
+  - 进度备注（2026-04-23）：`cargo test infer_mysql_field_write_capability --manifest-path src-tauri/Cargo.toml` 已通过；`npm run test:query-panel` 仍受当前 WSL1 Node/npm 环境限制，命令启动即报 `WSL 1 is not supported`，待切换到可用 Node 运行环境后补跑前端用例。
 
 ### Task 5: 增加提交前预览，并让前后端共用同一份变更计划
 

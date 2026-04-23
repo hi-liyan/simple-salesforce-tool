@@ -7,6 +7,7 @@ import {
   getRecordKey,
   normalizeRecordsWithStableIds
 } from "../../src/features/main/QueryPanel/logic/queryUtils.ts";
+import { resolveMysqlResultUpdateCapability } from "../../src/features/main/QueryPanel/logic/mysqlUpdateCapability.ts";
 
 // 重置 App Store：避免测试之间共享状态导致断言互相污染。
 function resetAppStoreState() {
@@ -84,4 +85,93 @@ test("queryUtils: MySQL 主键被编辑后，旧行仍应使用稳定 rowStableI
   assert.equal(getRecordKey(editedRecord, 0, options), stableRowId);
   assert.equal(baselineRecords[stableRowId]?.id, 1);
   assert.equal(baselineRecords[stableRowId]?.__rowStableId, stableRowId);
+});
+
+// 构造最小化 MySQL describe：用于结果集可更新性判定测试。
+function createMysqlDescribe(options?: {
+  primaryKeyField?: string;
+}) {
+  const primaryKeyField = options?.primaryKeyField || "id";
+  return {
+    name: "users",
+    label: "users",
+    fields: [
+      {
+        name: primaryKeyField,
+        label: primaryKeyField,
+        dataType: "int",
+        nillable: false,
+        createable: true,
+        updateable: false,
+        metadata: {
+          columnKey: "PRI",
+          mysqlDataType: "int"
+        }
+      },
+      {
+        name: "name",
+        label: "name",
+        dataType: "varchar",
+        nillable: true,
+        createable: true,
+        updateable: true,
+        metadata: {
+          mysqlDataType: "varchar"
+        }
+      }
+    ],
+    childRelationships: []
+  };
+}
+
+test("resolveMysqlResultUpdateCapability: 单表且包含主键列时应判定为 editable", () => {
+  const capability = resolveMysqlResultUpdateCapability({
+    sourceType: "mysql",
+    objectName: "users",
+    queryText: "SELECT id, name FROM users ORDER BY id DESC LIMIT 50",
+    describe: createMysqlDescribe()
+  });
+
+  assert.equal(capability.mode, "editable");
+  assert.equal(capability.editable, true);
+  assert.equal(capability.primaryKeyField, "id");
+});
+
+test("resolveMysqlResultUpdateCapability: 缺少主键列时应判定为 readonly_missing_pk", () => {
+  const capability = resolveMysqlResultUpdateCapability({
+    sourceType: "mysql",
+    objectName: "users",
+    queryText: "SELECT name FROM users ORDER BY name ASC LIMIT 50",
+    describe: createMysqlDescribe()
+  });
+
+  assert.equal(capability.mode, "readonly_missing_pk");
+  assert.equal(capability.editable, false);
+  assert.match(capability.reason, /主键列/);
+});
+
+test("resolveMysqlResultUpdateCapability: JOIN 查询应判定为 readonly_multi_table", () => {
+  const capability = resolveMysqlResultUpdateCapability({
+    sourceType: "mysql",
+    objectName: "users",
+    queryText: "SELECT users.id, profiles.nickname FROM users JOIN profiles ON profiles.user_id = users.id",
+    describe: createMysqlDescribe()
+  });
+
+  assert.equal(capability.mode, "readonly_multi_table");
+  assert.equal(capability.editable, false);
+  assert.match(capability.reason, /多表/);
+});
+
+test("resolveMysqlResultUpdateCapability: 聚合查询应判定为 readonly_complex_query", () => {
+  const capability = resolveMysqlResultUpdateCapability({
+    sourceType: "mysql",
+    objectName: "users",
+    queryText: "SELECT COUNT(*) AS total FROM users",
+    describe: createMysqlDescribe()
+  });
+
+  assert.equal(capability.mode, "readonly_complex_query");
+  assert.equal(capability.editable, false);
+  assert.match(capability.reason, /复杂查询/);
 });

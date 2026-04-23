@@ -16,7 +16,7 @@ import {
   createMysqlDraftValue
 } from "../../../features/main/QueryPanel/logic/mysqlValueSemantics.ts";
 import {
-  getNonEditableMysqlTypeLabel,
+  buildReadonlyCellMessage,
   isCellEditableByMeta,
 } from "../utils/field";
 import {
@@ -83,13 +83,8 @@ export function createCellEditedHandler({
     const strategy = resolveFieldTypeStrategy(metadata);
 
     if (!isCellEditableByMeta(metadata, isNewRow)) {
-      const blockedMysqlType = getNonEditableMysqlTypeLabel(metadata);
-      if (blockedMysqlType) {
-        onShowMessage(`${columnId} 字段类型 ${blockedMysqlType} 不支持在表格中编辑。`);
-        return;
-      }
-      const action = isNewRow ? "创建" : "更新";
-      onShowMessage(`${columnId} 字段不可${action}，无法编辑。`);
+      // 只读提示优先解释“为什么不能改”，避免用户只看到静态禁用而不知道原因。
+      onShowMessage(buildReadonlyCellMessage(columnId, metadata, isNewRow));
       return;
     }
 
@@ -232,13 +227,8 @@ export function createCellClickedHandler({
     const strategy = resolveFieldTypeStrategy(metadata);
 
     if (!isCellEditableByMeta(metadata, isNewRow)) {
-      const blockedMysqlType = getNonEditableMysqlTypeLabel(metadata);
-      if (blockedMysqlType) {
-        onShowMessage(`${columnId} 字段类型 ${blockedMysqlType} 不支持在表格中编辑。`);
-        return;
-      }
-      const action = isNewRow ? "创建" : "更新";
-      onShowMessage(`${columnId} 字段不可${action}，无法编辑。`);
+      // 双击只读格时给出明确原因，避免用户误以为表格卡住或点击未生效。
+      onShowMessage(buildReadonlyCellMessage(columnId, metadata, isNewRow));
       return;
     }
 

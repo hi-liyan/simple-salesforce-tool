@@ -7,6 +7,7 @@ import { SoqlMonacoEditor } from "../../../../components/SoqlMonacoEditor";
 import { api } from "../../../../api";
 import { useAppStore } from "../../../../store/useAppStore";
 import { buildObjectTabBindingKey, Notice, ObjectDdl, TabState } from "../../../../types";
+import { resolveMysqlResultUpdateCapability } from "../logic/mysqlUpdateCapability.ts";
 import { buildSourceSurfacePalette } from "../logic/sourceColor.ts";
 import type { QueryOverrides } from "../types";
 import { MysqlSmartInput } from "./MysqlSmartInput";
@@ -543,8 +544,25 @@ export function DataQueryTabPane({
   objectNames,
   hideTabBar = false
 }: DataQueryTabPaneProps) {
+  // 根据数据源类型切换查询栏布局（MySQL 使用 SQL 手工排序表达式）。
+  const isMysqlSource = (selectedSourceType || "salesforce").toLowerCase() === "mysql";
+  // MySQL 结果集可更新性：从当前执行 SQL 与 describe 中保守推导编辑能力。
+  const mysqlResultUpdateCapability = useMemo(
+    () =>
+      resolveMysqlResultUpdateCapability({
+        sourceType: activeTab?.sourceType || selectedSourceType,
+        objectName: activeTab?.objectName || "",
+        describe: activeTab?.describe || null,
+        queryText: activeTab?.currentSoql || ""
+      }),
+    [activeTab?.currentSoql, activeTab?.describe, activeTab?.objectName, activeTab?.sourceType, selectedSourceType]
+  );
+  // MySQL 结果集只读原因：为空表示当前结果集允许编辑。
+  const mysqlResultReadonlyReason = isMysqlSource && !mysqlResultUpdateCapability.editable
+    ? mysqlResultUpdateCapability.reason
+    : "";
   // “执行更新”按钮是否可用：可用时使用绿色强调，强化“可提交”感知。
-  const canApplyPendingChanges = Boolean(activeTab && !activeTab.loading && hasPendingChanges);
+  const canApplyPendingChanges = Boolean(activeTab && !activeTab.loading && hasPendingChanges && !mysqlResultReadonlyReason);
   // 工具栏背景色：将数据源颜色转换为浅色表面背景，避免顶部工具栏过重抢视觉焦点。
   const toolbarBackgroundColor = buildSourceSurfacePalette(String(activeTab?.sourceColor || "").trim())?.backgroundColor || "#FFFFFF";
   // 工具栏按钮统一尺寸：使用 34px 中间档高度（介于 h-8 与 h-9 之间）。
@@ -559,8 +577,6 @@ export function DataQueryTabPane({
   const [fieldSearchKeyword, setFieldSearchKeyword] = useState("");
   // MySQL 字段抽屉搜索关键词：仅按字段名过滤。
   const [mysqlFieldSearchKeyword, setMysqlFieldSearchKeyword] = useState("");
-  // 根据数据源类型切换查询栏布局（MySQL 使用 SQL 手工排序表达式）。
-  const isMysqlSource = (selectedSourceType || "salesforce").toLowerCase() === "mysql";
   // 当前抽屉视图：MySQL 支持 DDL / 字段两种视图；Salesforce 固定复合抽屉。
   const activeDrawerView = isMysqlSource
     ? activeTab?.drawerView === "mysql-fields"
@@ -909,13 +925,19 @@ export function DataQueryTabPane({
             {/* 顶部工具栏背景：默认白色；如果数据源设置颜色，则整条按钮区域显示该颜色。 */}
             <div className="border-b border-base-300 px-3 py-1.5 overflow-x-auto" style={{ backgroundColor: toolbarBackgroundColor }}>
               <div className="flex flex-row items-center gap-1 min-w-max">
-                <button className={toolbarButtonClassName} disabled={activeTab.loading} onClick={onCreateRecord}>
+                <button
+                  className={toolbarButtonClassName}
+                  disabled={activeTab.loading || Boolean(mysqlResultReadonlyReason)}
+                  title={mysqlResultReadonlyReason || undefined}
+                  onClick={onCreateRecord}
+                >
                   <Plus size={13} />
                   新建记录
                 </button>
                 <button
                   className={`${toolbarButtonClassName} btn-error`}
-                  disabled={activeTab.loading || activeTab.selectedRecordIds.length === 0}
+                  disabled={activeTab.loading || activeTab.selectedRecordIds.length === 0 || Boolean(mysqlResultReadonlyReason)}
+                  title={mysqlResultReadonlyReason || undefined}
                   onClick={onDeleteCheckedRecords}
                 >
                   <Trash2 size={13} />
@@ -923,7 +945,8 @@ export function DataQueryTabPane({
                 </button>
                 <button
                   className={applyButtonClassName}
-                  disabled={activeTab.loading || !hasPendingChanges}
+                  disabled={activeTab.loading || !hasPendingChanges || Boolean(mysqlResultReadonlyReason)}
+                  title={mysqlResultReadonlyReason || undefined}
                   onClick={onApplyPendingChanges}
                 >
                   <Play size={13} />
@@ -971,6 +994,13 @@ export function DataQueryTabPane({
               </div>
             </div>
 
+            {/* MySQL 只读原因条：在用户进入编辑前就明确解释为什么当前结果集不能改。 */}
+            {mysqlResultReadonlyReason && (
+              <div className="border-b border-warning/30 bg-warning/10 px-3 py-2 text-[12px] text-warning-content">
+                当前结果集已切换为只读：{mysqlResultReadonlyReason}
+              </div>
+            )}
+
             {/* 查询栏。 */}
             {activeTab.showQueryBar && (
               <QueryBar
@@ -995,6 +1025,8 @@ export function DataQueryTabPane({
                 fieldMetadataMap={fieldMetadataMap}
                 dirtyCellKeys={activeTab.dirtyCellKeys}
                 selectedRecordIds={activeTab.selectedRecordIds}
+                readOnlyMode={Boolean(mysqlResultReadonlyReason)}
+                readOnlyReasonText={mysqlResultReadonlyReason}
                 salesforceTimezone={salesforceTimezone}
                 pendingDeleteRecordIds={pendingDeleteRecordIds}
                 sourceId={selectedSourceId}

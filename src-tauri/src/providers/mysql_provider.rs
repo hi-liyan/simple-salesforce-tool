@@ -54,6 +54,69 @@ fn default_mysql_charset() -> String {
     "utf8mb4".to_string()
 }
 
+/// MySQL 字段写入能力：从 information_schema 元数据推导前后端一致的创建/更新权限。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MysqlFieldWriteCapability {
+    /// 创建记录时是否允许显式写入该列。
+    createable: bool,
+    /// 更新记录时是否允许显式写入该列。
+    updateable: bool,
+    /// 创建记录时数据库是否会自动给出默认值。
+    defaulted_on_create: bool,
+    /// 是否为主键列。
+    is_primary_key: bool,
+    /// 是否为自增列。
+    is_auto_increment: bool,
+    /// 是否为生成列。
+    is_generated: bool,
+    /// 创建时只读原因（为空表示可创建写入）。
+    create_readonly_reason: Option<String>,
+    /// 更新时只读原因（为空表示可更新写入）。
+    update_readonly_reason: Option<String>,
+}
+
+/// 基于 MySQL column_key/extra/default 推导字段写入能力。
+fn infer_mysql_field_write_capability(
+    column_key: &str,
+    extra: &str,
+    column_default: Option<&str>,
+) -> MysqlFieldWriteCapability {
+    let normalized_column_key = column_key.trim().to_uppercase();
+    let normalized_extra = extra.trim().to_lowercase();
+    let is_primary_key = normalized_column_key == "PRI";
+    let is_auto_increment = normalized_extra.contains("auto_increment");
+    let is_generated = normalized_extra.contains("generated");
+    let defaulted_on_create = column_default.is_some() || is_auto_increment || is_generated;
+
+    let create_readonly_reason = if is_generated {
+        Some("是生成列，值由数据库表达式维护。".to_string())
+    } else if is_auto_increment {
+        Some("是自增列，创建时由 MySQL 自动生成。".to_string())
+    } else {
+        None
+    };
+    let update_readonly_reason = if is_generated {
+        Some("是生成列，值由数据库表达式维护。".to_string())
+    } else if is_primary_key {
+        Some("是主键列，提交时仅作为行定位条件，不能直接更新。".to_string())
+    } else if is_auto_increment {
+        Some("是自增列，更新时不可手工改写。".to_string())
+    } else {
+        None
+    };
+
+    MysqlFieldWriteCapability {
+        createable: create_readonly_reason.is_none(),
+        updateable: update_readonly_reason.is_none(),
+        defaulted_on_create,
+        is_primary_key,
+        is_auto_increment,
+        is_generated,
+        create_readonly_reason,
+        update_readonly_reason,
+    }
+}
+
 /// MySQL Provider：提供表/字段/查询/CRUD/事务能力。
 pub struct MySqlProvider;
 
@@ -275,6 +338,11 @@ impl MySqlProvider {
             let extra: Option<String> = decode_optional_row_string(&row, 5usize);
             let column_comment: Option<String> = decode_optional_row_string(&row, 6usize);
             let column_type: Option<String> = decode_optional_row_string(&row, 7usize);
+            let capability = infer_mysql_field_write_capability(
+                column_key.as_deref().unwrap_or_default(),
+                extra.as_deref().unwrap_or_default(),
+                column_default.as_deref(),
+            );
 
             let mut metadata = HashMap::new();
             metadata.insert(
@@ -301,14 +369,46 @@ impl MySqlProvider {
                 "columnType".to_string(),
                 column_type.map(Value::String).unwrap_or(Value::Null),
             );
+            metadata.insert(
+                "defaultedOnCreate".to_string(),
+                Value::Bool(capability.defaulted_on_create),
+            );
+            metadata.insert(
+                "isPrimaryKey".to_string(),
+                Value::Bool(capability.is_primary_key),
+            );
+            metadata.insert(
+                "isAutoIncrement".to_string(),
+                Value::Bool(capability.is_auto_increment),
+            );
+            metadata.insert(
+                "isGenerated".to_string(),
+                Value::Bool(capability.is_generated),
+            );
+            metadata.insert(
+                "mysqlCreateReadonlyReason".to_string(),
+                capability
+                    .create_readonly_reason
+                    .clone()
+                    .map(Value::String)
+                    .unwrap_or(Value::Null),
+            );
+            metadata.insert(
+                "mysqlUpdateReadonlyReason".to_string(),
+                capability
+                    .update_readonly_reason
+                    .clone()
+                    .map(Value::String)
+                    .unwrap_or(Value::Null),
+            );
 
             fields.push(ObjectField {
                 name: column_name.clone(),
                 label: column_name,
                 data_type,
                 nillable: is_nullable.eq_ignore_ascii_case("YES"),
-                updateable: true,
-                createable: true,
+                updateable: capability.updateable,
+                createable: capability.createable,
                 metadata,
             });
         }
@@ -1599,8 +1699,8 @@ fn decode_optional_row_string(row: &MySqlRow, index: usize) -> Option<String> {
 mod tests {
     use super::{
         build_column_type_map_from_describe, build_delete_preview_sql, build_insert_preview_sql,
-        build_update_preview_sql, normalize_create_values, normalize_mysql_type_name,
-        normalize_update_values, resolve_mysql_result_type,
+        build_update_preview_sql, infer_mysql_field_write_capability, normalize_create_values,
+        normalize_mysql_type_name, normalize_update_values, resolve_mysql_result_type,
     };
     use crate::models::ObjectDescribe;
     use serde_json::{json, Value};
@@ -1722,5 +1822,36 @@ mod tests {
             .expect("存在 describe 时应返回字段类型映射");
 
         assert_eq!(map.get("status"), Some(&"tinyint(1)".to_string()));
+    }
+
+    #[test]
+    fn infer_mysql_field_write_capability_disables_primary_key_update() {
+        let capability = infer_mysql_field_write_capability("PRI", "", None);
+
+        assert_eq!(capability.createable, true);
+        assert_eq!(capability.updateable, false);
+        assert_eq!(capability.defaulted_on_create, false);
+        assert_eq!(capability.is_primary_key, true);
+    }
+
+    #[test]
+    fn infer_mysql_field_write_capability_disables_auto_increment_create_and_update() {
+        let capability = infer_mysql_field_write_capability("", "auto_increment", None);
+
+        assert_eq!(capability.createable, false);
+        assert_eq!(capability.updateable, false);
+        assert_eq!(capability.defaulted_on_create, true);
+        assert_eq!(capability.is_auto_increment, true);
+    }
+
+    #[test]
+    fn infer_mysql_field_write_capability_marks_generated_columns_as_readonly() {
+        let capability =
+            infer_mysql_field_write_capability("", "DEFAULT_GENERATED on update CURRENT_TIMESTAMP", Some("CURRENT_TIMESTAMP"));
+
+        assert_eq!(capability.createable, false);
+        assert_eq!(capability.updateable, false);
+        assert_eq!(capability.defaulted_on_create, true);
+        assert_eq!(capability.is_generated, true);
     }
 }

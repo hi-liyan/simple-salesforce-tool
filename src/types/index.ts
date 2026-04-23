@@ -143,6 +143,27 @@ export type MysqlCellDraftValue =
       value: unknown;
     };
 
+// 查询结果可更新性模式：用于提前判断当前 MySQL 结果集是否允许进入可信编辑链路。
+export type RowUpdateCapabilityMode =
+  | "editable"
+  | "readonly_missing_pk"
+  | "readonly_complex_query"
+  | "readonly_multi_table";
+
+// 查询结果可更新性：统一承载“是否可编辑”和“为什么不可编辑”的前端语义。
+export type RowUpdateCapability = {
+  // 当前结果集可更新性模式。
+  mode: RowUpdateCapabilityMode;
+  // 是否允许继续编辑/提交。
+  editable: boolean;
+  // 对用户可见的只读原因说明。
+  reason: string;
+  // 当前结果集解析出的目标表名。
+  targetTableName: string;
+  // 当前结果集识别出的主键字段名。
+  primaryKeyField: string;
+};
+
 // 页面提示消息。
 export type Notice = {
   type: "error" | "success";

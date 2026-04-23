@@ -4,6 +4,7 @@ import { buildObjectTabBindingKey, ObjectDescribe, ObjectDdl, TabLog, TabState, 
 import { getSourceColor } from "../logic/sourceColor.ts";
 import { useAppStore } from "../../../../store/useAppStore";
 import { buildMysqlCreateValues, buildMysqlUpdateValues } from "../logic/mysqlMutationPlanner.ts";
+import { resolveMysqlResultUpdateCapability } from "../logic/mysqlUpdateCapability.ts";
 import { isMysqlBlankValue, resolveMysqlDraftRuntimeValue } from "../logic/mysqlValueSemantics.ts";
 
 type MysqlDdlState = Record<string, { loading: boolean; data: ObjectDdl | null; error: string }>;
@@ -576,6 +577,20 @@ export function useQueryPanelRuntime({
     if (!resolvedSourceId || !activeTab) return;
     const activeTabBindingKey =
       activeTab.bindingKey || buildObjectTabBindingKey(activeTab.sourceId || resolvedSourceId, activeTab.objectName);
+    const resolvedSourceType = activeTab.sourceType || selectedSourceType || "salesforce";
+    const mysqlResultUpdateCapability = resolveMysqlResultUpdateCapability({
+      sourceType: resolvedSourceType,
+      objectName: activeTab.objectName,
+      describe: activeTab.describe,
+      queryText: activeTab.currentSoql || ""
+    });
+    if (resolvedSourceType.toLowerCase() === "mysql" && !mysqlResultUpdateCapability.editable) {
+      patchTab(activeTabBindingKey, (item) => ({
+        ...item,
+        notice: { type: "error", message: mysqlResultUpdateCapability.reason }
+      }));
+      return;
+    }
     if (activeTab.selectedRecordIds.length === 0) {
       patchTab(activeTabBindingKey, (item) => ({
         ...item,
@@ -610,13 +625,27 @@ export function useQueryPanelRuntime({
         errorMessage: String(error)
       });
     }
-  }, [selectedSourceId, activeTab, patchTab, appendTabLog]);
+  }, [selectedSourceId, activeTab, selectedSourceType, patchTab, appendTabLog]);
 
   // 快速创建一行本地新增记录。
   const createRecordQuickly = useCallback(() => {
     if (!activeTab) return;
     const activeTabBindingKey =
       activeTab.bindingKey || buildObjectTabBindingKey(activeTab.sourceId || selectedSourceId, activeTab.objectName);
+    const resolvedSourceType = activeTab.sourceType || selectedSourceType || "salesforce";
+    const mysqlResultUpdateCapability = resolveMysqlResultUpdateCapability({
+      sourceType: resolvedSourceType,
+      objectName: activeTab.objectName,
+      describe: activeTab.describe,
+      queryText: activeTab.currentSoql || ""
+    });
+    if (resolvedSourceType.toLowerCase() === "mysql" && !mysqlResultUpdateCapability.editable) {
+      patchTab(activeTabBindingKey, (item) => ({
+        ...item,
+        notice: { type: "error", message: mysqlResultUpdateCapability.reason }
+      }));
+      return;
+    }
 
     const tempId = `new-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     patchTab(activeTabBindingKey, (item) => ({
@@ -627,7 +656,7 @@ export function useQueryPanelRuntime({
       },
       notice: { type: "success", message: "已新增一行，请填写后点击执行更新。" }
     }));
-  }, [activeTab, patchTab, selectedSourceId]);
+  }, [activeTab, patchTab, selectedSourceId, selectedSourceType]);
 
   // 执行新增/更新/删除提交。
   const applyPendingChanges = useCallback(async () => {
@@ -639,6 +668,19 @@ export function useQueryPanelRuntime({
       activeTab.bindingKey || buildObjectTabBindingKey(activeTab.sourceId || resolvedSourceId, activeTab.objectName);
 
     const isMysqlSource = resolvedSourceType.toLowerCase() === "mysql";
+    const mysqlResultUpdateCapability = resolveMysqlResultUpdateCapability({
+      sourceType: resolvedSourceType,
+      objectName: activeTab.objectName,
+      describe: activeTab.describe,
+      queryText: activeTab.currentSoql || ""
+    });
+    if (isMysqlSource && !mysqlResultUpdateCapability.editable) {
+      patchTab(activeTabBindingKey, (item) => ({
+        ...item,
+        notice: { type: "error", message: mysqlResultUpdateCapability.reason }
+      }));
+      return;
+    }
     // MySQL 新增前置校验：必填字段缺失时直接提示并中断提交。
     if (isMysqlSource) {
       const mysqlMissingRequiredItems = collectMysqlMissingRequiredFields(activeTab.result.records, activeTab.describe);
