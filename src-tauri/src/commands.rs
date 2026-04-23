@@ -16,16 +16,17 @@ use crate::db;
 use crate::error::AppError;
 use crate::models::{
     AiCapabilities, AiChatTurnV2Request, AiChatTurnV2Response, CliPathProbe, CliPathSettings,
-    CliPathStatus, CurrentUserContext, LlmSettings, LlmSettingsView, ObjectDdl, ObjectDescribe,
-    QueryResult, RecordMutationPayload, RecordSavePayload, RecordSaveWithDeletePayload,
-    RecordUpdatePayload, SalesforceObject, SalesforceSource, SaveLlmSettingsPayload,
-    SourceUpsertPayload, SystemLogPage,
+    CliPathStatus, CurrentUserContext, LlmSettings, LlmSettingsView, MutationExecutionResult,
+    MutationPreviewSqlItem, ObjectDdl, ObjectDescribe, QueryResult, RecordMutationPayload,
+    RecordSavePayload, RecordSaveWithDeletePayload, RecordUpdatePayload, SalesforceObject,
+    SalesforceSource, SaveLlmSettingsPayload, SourceUpsertPayload, SystemLogPage,
     TerminalCommandGroup, TerminalCommandGroupUpsertPayload, TerminalCommandItem,
     TerminalCommandReorderPayload, TerminalCommandUpsertPayload,
 };
 use crate::providers::{
     preview_create_record_sql, preview_delete_record_sql, preview_save_records_sql,
-    preview_save_records_with_deletes_sql, preview_update_record_sql, provider_for_source,
+    preview_save_records_with_deletes_items, preview_save_records_with_deletes_sql,
+    preview_update_record_sql, provider_for_source,
 };
 use crate::sf_cli;
 use crate::terminal::{self as terminal_runtime, TerminalSessionInfo, TerminalShellOption};
@@ -842,9 +843,11 @@ pub async fn list_objects(
         // MySQL 旧缓存可能没有 comment 字段；若整批缓存都缺注释，则自动回源刷新。
         let should_reuse_cache = !is_mysql_source
             || cached.is_empty()
-            || cached
-                .iter()
-                .any(|item| item.comment.as_deref().is_some_and(|comment| !comment.trim().is_empty()));
+            || cached.iter().any(|item| {
+                item.comment
+                    .as_deref()
+                    .is_some_and(|comment| !comment.trim().is_empty())
+            });
         if should_reuse_cache {
             write_system_log(
                 &state,
@@ -1829,9 +1832,14 @@ pub async fn query_records(
         .filter(|value| !value.is_empty())
         .map(ToString::to_string);
     let mysql_describe = if source.source_type.eq_ignore_ascii_case("mysql") {
-        load_mysql_describe_for_query(&state, &source_id, &source, normalized_object_name.as_deref())
-            .await
-            .map_err(AppError::to_string_error)?
+        load_mysql_describe_for_query(
+            &state,
+            &source_id,
+            &source,
+            normalized_object_name.as_deref(),
+        )
+        .await
+        .map_err(AppError::to_string_error)?
     } else {
         None
     };
@@ -2217,15 +2225,52 @@ pub async fn save_records(
     }
 }
 
+/// 预览批量保存记录（新增+更新+删除）的 MySQL SQL，不执行写入。
+#[tauri::command]
+pub async fn preview_save_records_with_deletes(
+    state: State<'_, AppState>,
+    payload: RecordSaveWithDeletePayload,
+) -> Result<Vec<MutationPreviewSqlItem>, String> {
+    if payload.creates.is_empty() && payload.updates.is_empty() && payload.deletes.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let source = {
+        let connection = state
+            .db
+            .lock()
+            .map_err(|error| format!("Database lock failed: {error}"))?;
+        db::get_source(&connection, &payload.source_id).map_err(AppError::to_string_error)?
+    };
+    if source.is_salesforce() {
+        return Err("Salesforce 暂不支持单事务批量提交预览（含删除）。".to_string());
+    }
+
+    preview_save_records_with_deletes_items(
+        &source,
+        &payload.object_name,
+        payload.creates,
+        payload.updates,
+        payload.deletes,
+    )
+    .await
+    .map_err(AppError::to_string_error)
+}
+
 /// 批量保存记录（新增+更新+删除，单事务）。
 #[tauri::command]
 pub async fn save_records_with_deletes(
     _app: tauri::AppHandle,
     state: State<'_, AppState>,
     payload: RecordSaveWithDeletePayload,
-) -> Result<(), String> {
+) -> Result<MutationExecutionResult, String> {
     if payload.creates.is_empty() && payload.updates.is_empty() && payload.deletes.is_empty() {
-        return Ok(());
+        return Ok(MutationExecutionResult {
+            create_count: 0,
+            update_count: 0,
+            delete_count: 0,
+            items: Vec::new(),
+        });
     }
 
     let source = {
@@ -2287,12 +2332,12 @@ pub async fn save_records_with_deletes(
         )
         .await
     {
-        Ok(()) => Ok(()),
+        Ok(summary) => Ok(summary),
         Err(error) => Err(error),
     };
 
     match save_result {
-        Ok(()) => {
+        Ok(summary) => {
             write_system_log(
                 &state,
                 "INFO",
@@ -2307,7 +2352,7 @@ pub async fn save_records_with_deletes(
                 ),
                 Some(&operation_detail),
             );
-            Ok(())
+            Ok(summary)
         }
         Err(error) => {
             let message = AppError::to_string_error(error);

@@ -6,7 +6,8 @@ import { NoticeAlert } from "../../../../components/NoticeAlert";
 import { SoqlMonacoEditor } from "../../../../components/SoqlMonacoEditor";
 import { api } from "../../../../api";
 import { useAppStore } from "../../../../store/useAppStore";
-import { buildObjectTabBindingKey, Notice, ObjectDdl, TabState } from "../../../../types";
+import { buildObjectTabBindingKey, MutationPreviewItem, Notice, ObjectDdl, TabState } from "../../../../types";
+import { buildMysqlMutationPlan, mergeMysqlPreviewSqlItems } from "../logic/mysqlMutationPlanner.ts";
 import { resolveMysqlResultUpdateCapability } from "../logic/mysqlUpdateCapability.ts";
 import { buildSourceSurfacePalette } from "../logic/sourceColor.ts";
 import type { QueryOverrides } from "../types";
@@ -207,6 +208,23 @@ type QueryBarProps = {
   onSortClauseChange: (value: string) => void;
   // 执行查询：支持用草稿覆盖值执行，避免依赖 store 回写完成。
   onQuery: (overrides?: QueryOverrides) => void;
+};
+
+type MysqlMutationPreviewState = {
+  // 弹窗是否打开。
+  open: boolean;
+  // 当前是否正在生成预览或执行提交。
+  loading: boolean;
+  // 预览阶段错误信息。
+  error: string;
+  // 新增操作数量。
+  createCount: number;
+  // 更新操作数量。
+  updateCount: number;
+  // 删除操作数量。
+  deleteCount: number;
+  // 结构化预览项列表。
+  items: MutationPreviewItem[];
 };
 
 // 查询栏：将输入草稿隔离在子组件内，避免输入时触发 DataGrid 等重组件重渲染导致卡顿。
@@ -605,6 +623,16 @@ export function DataQueryTabPane({
   const [tabContextMenu, setTabContextMenu] = useState<{ x: number; y: number; objectName: string } | null>(null);
   // 编辑器对象字段缓存：支持 FROM 任意对象后做字段补全。
   const [soqlObjectFieldsMap, setSoqlObjectFieldsMap] = useState<Record<string, string[]>>({});
+  // MySQL 提交前预览弹窗状态：统一承载摘要、预览项与加载/错误信息。
+  const [mysqlMutationPreviewState, setMysqlMutationPreviewState] = useState<MysqlMutationPreviewState>({
+    open: false,
+    loading: false,
+    error: "",
+    createCount: 0,
+    updateCount: 0,
+    deleteCount: 0,
+    items: []
+  });
 
   // 日志面板拖拽调整高度。
   useEffect(() => {
@@ -800,6 +828,114 @@ export function DataQueryTabPane({
     };
   }, [selectedSourceId, activeTab, objectNames, soqlObjectFieldsMap]);
 
+  // 打开 MySQL 提交前预览：先用本地 planner 生成结构化摘要，再向后端换取预览 SQL。
+  async function openMysqlMutationPreview() {
+    if (!activeTab?.describe) return;
+    const resolvedSourceId = activeTab.sourceId || selectedSourceId;
+    const editableFields = new Set(activeTab.describe.fields.map((field) => field.name));
+    const mysqlPrimaryKeyField =
+      activeTab.describe.fields.find((field) => String(field.metadata?.columnKey || "").toUpperCase() === "PRI")?.name || "";
+    const mutationPlan = buildMysqlMutationPlan({
+      records: activeTab.result.records,
+      baselineRecords: activeTab.baselineRecords,
+      dirtyCellKeys: activeTab.dirtyCellKeys,
+      pendingDeleteRecordIds: activeTab.pendingDeleteRecordIds,
+      editableFields,
+      sourceType: activeTab.sourceType || selectedSourceType,
+      mysqlPrimaryKeyField
+    });
+
+    if (mutationPlan.missingRecordIdRows.length > 0) {
+      onShowMessage(
+        `MySQL 更新失败：存在已编辑或待删除但缺少 Id 的行（第 ${mutationPlan.missingRecordIdRows.join("、")} 行）。请确保查询结果包含主键列。`
+      );
+      return;
+    }
+
+    setMysqlMutationPreviewState({
+      open: true,
+      loading: true,
+      error: "",
+      createCount: mutationPlan.creates.length,
+      updateCount: mutationPlan.updates.length,
+      deleteCount: mutationPlan.deletes.length,
+      items: mutationPlan.previewItems
+    });
+
+    try {
+      const previewSqlItems = await api.previewSaveRecordsWithDeletes({
+        sourceId: resolvedSourceId,
+        objectName: activeTab.objectName,
+        creates: mutationPlan.creates,
+        updates: mutationPlan.updates,
+        deletes: mutationPlan.deletes
+      });
+      setMysqlMutationPreviewState((state) => ({
+        ...state,
+        loading: false,
+        items: mergeMysqlPreviewSqlItems(mutationPlan.previewItems, previewSqlItems)
+      }));
+    } catch (error) {
+      setMysqlMutationPreviewState((state) => ({
+        ...state,
+        loading: false,
+        error: `生成预览 SQL 失败：${String(error)}`
+      }));
+    }
+  }
+
+  // 点击“执行更新”时：MySQL 先走预览弹窗，Salesforce 保持原有直提交流程。
+  async function handleApplyPendingChangesClick() {
+    if (!isMysqlSource) {
+      void onApplyPendingChanges(); // 行内注释：Salesforce 维持现有直提交流程，不引入额外预览步骤。
+      return;
+    }
+    await openMysqlMutationPreview(); // 行内注释：MySQL 先展示结构化预览，确认后再真正执行。
+  }
+
+  // 确认执行当前预览：真正调用运行时提交逻辑，成功/失败提示仍由运行时统一写回 Tab notice。
+  async function handleConfirmMysqlMutationPreview() {
+    setMysqlMutationPreviewState((state) => ({
+      ...state,
+      loading: true,
+      error: ""
+    }));
+    await onApplyPendingChanges();
+    setMysqlMutationPreviewState({
+      open: false,
+      loading: false,
+      error: "",
+      createCount: 0,
+      updateCount: 0,
+      deleteCount: 0,
+      items: []
+    });
+  }
+
+  // 关闭预览弹窗：执行中不允许关闭，避免用户误判当前提交状态。
+  function closeMysqlMutationPreview() {
+    if (mysqlMutationPreviewState.loading) return;
+    setMysqlMutationPreviewState({
+      open: false,
+      loading: false,
+      error: "",
+      createCount: 0,
+      updateCount: 0,
+      deleteCount: 0,
+      items: []
+    });
+  }
+
+  // 统计本次预览里会显式写入 NULL 的字段数量，供摘要区直接展示。
+  const mysqlPreviewNullWriteCount = useMemo(
+    () =>
+      mysqlMutationPreviewState.items.reduce(
+        (count, item) => count + item.fields.filter((field) => field.kind === "null").length,
+        0
+      ),
+    [mysqlMutationPreviewState.items]
+  );
+
   return (
     <>
       {/* 工作区全局提示。 */}
@@ -947,7 +1083,7 @@ export function DataQueryTabPane({
                   className={applyButtonClassName}
                   disabled={activeTab.loading || !hasPendingChanges || Boolean(mysqlResultReadonlyReason)}
                   title={mysqlResultReadonlyReason || undefined}
-                  onClick={onApplyPendingChanges}
+                  onClick={() => void handleApplyPendingChangesClick()}
                 >
                   <Play size={13} />
                   执行更新
@@ -1372,6 +1508,109 @@ export function DataQueryTabPane({
               <span className="text-[12px] text-neutral/70">{loadingText}</span>
             </div>
           )}
+        </div>
+      )}
+
+      {/* MySQL 提交前预览弹窗：让用户在真正提交前确认 create/update/delete 与 NULL 写入摘要。 */}
+      {mysqlMutationPreviewState.open && (
+        <div className="modal modal-open">
+          {/* 弹窗主体：保持中等宽度，兼顾 SQL 预览与移动端可读性。 */}
+          <div className="modal-box max-w-4xl p-0">
+            {/* 头部：展示本次提交动作概览。 */}
+            <div className="border-b border-base-300 px-6 py-4">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h3 className="text-lg font-semibold">MySQL 提交前预览</h3>
+                  <p className="mt-1 text-[12px] text-neutral/70">
+                    新增 {mysqlMutationPreviewState.createCount} 行，更新 {mysqlMutationPreviewState.updateCount} 行，删除{" "}
+                    {mysqlMutationPreviewState.deleteCount} 行，写入 NULL {mysqlPreviewNullWriteCount} 个字段。
+                  </p>
+                </div>
+                {/* 关闭按钮：执行中禁用，避免用户误以为提交已取消。 */}
+                <button
+                  className="btn btn-circle btn-ghost btn-sm"
+                  onClick={closeMysqlMutationPreview}
+                  disabled={mysqlMutationPreviewState.loading}
+                  aria-label="关闭提交前预览"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+            </div>
+
+            {/* 主体内容：逐条展示结构化摘要与预览 SQL。 */}
+            <div className="max-h-[70vh] overflow-auto px-6 py-4">
+              {mysqlMutationPreviewState.error && (
+                <div className="mb-4 rounded border border-error/30 bg-error/10 px-3 py-2 text-[12px] text-error">
+                  {mysqlMutationPreviewState.error}
+                </div>
+              )}
+              {mysqlMutationPreviewState.items.length === 0 ? (
+                <div className="rounded border border-base-300 bg-base-200/40 px-3 py-6 text-center text-[12px] text-neutral/70">
+                  当前没有可提交的 MySQL 变更。
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {mysqlMutationPreviewState.items.map((item) => (
+                    <section key={`${item.op}:${item.operationIndex}:${item.rowStableId}`} className="rounded border border-base-300 bg-base-100">
+                      {/* 预览项头部：展示操作类型与定位信息。 */}
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-base-300 px-3 py-2 text-[12px]">
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`badge badge-sm ${
+                              item.op === "create" ? "badge-success" : item.op === "update" ? "badge-info" : "badge-error"
+                            }`}
+                          >
+                            {item.op === "create" ? "新增" : item.op === "update" ? "更新" : "删除"}
+                          </span>
+                          <span className="text-neutral/80">
+                            {item.rowLocator ? `定位值：${item.rowLocator}` : `行标识：${item.rowStableId}`}
+                          </span>
+                        </div>
+                        <span className="text-neutral/60">序号 #{item.operationIndex + 1}</span>
+                      </div>
+
+                      {/* 字段摘要：优先让用户看清本条操作会写哪些值。 */}
+                      <div className="px-3 py-2 text-[12px]">
+                        {item.fields.length === 0 ? (
+                          <div className="text-neutral/70">该操作不包含字段写入。</div>
+                        ) : (
+                          <div className="flex flex-wrap gap-2">
+                            {item.fields.map((field) => (
+                              <span key={`${item.op}:${item.operationIndex}:${field.name}`} className="rounded border border-base-300 bg-base-200/60 px-2 py-1">
+                                {field.name} = {field.kind === "null" ? "NULL" : JSON.stringify(field.value)}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* SQL 预览：使用后端真实归一化逻辑生成，避免前端拼串与实际执行不一致。 */}
+                      <div className="border-t border-base-300 px-3 py-2">
+                        <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded bg-base-200/40 p-2 text-[12px]">
+                          {item.previewSql || (mysqlMutationPreviewState.loading ? "正在生成预览 SQL..." : "暂无预览 SQL。")}
+                        </pre>
+                      </div>
+                    </section>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* 底部动作区：确认后才真正执行数据库写入。 */}
+            <div className="modal-action mt-0 border-t border-base-300 px-6 py-4">
+              <button className="btn btn-ghost" onClick={closeMysqlMutationPreview} disabled={mysqlMutationPreviewState.loading}>
+                取消
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={() => void handleConfirmMysqlMutationPreview()}
+                disabled={mysqlMutationPreviewState.loading || mysqlMutationPreviewState.items.length === 0}
+              >
+                {mysqlMutationPreviewState.loading ? "执行中..." : "确认执行"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </>

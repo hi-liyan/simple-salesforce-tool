@@ -279,7 +279,7 @@
 - Modify: `src-tauri/src/providers/mysql_provider.rs`
 - Test: `tests/query-panel/mysqlMutationPlanner.test.ts`
 
-- [ ] **Step 1: 统一前端预览数据结构**
+- [x] **Step 1: 统一前端预览数据结构**
   - 把提交前预览抽象为结构化数组，而不是只拼一段字符串。
   - 每条预览至少包含：
   - `op`
@@ -287,22 +287,26 @@
   - `rowLocator`
   - `fields`
   - `previewSql`
+  - 进度备注（2026-04-23）：已在 `src/types/index.ts` 新增 `MutationPreviewItem`、`MutationPreviewField`、`MutationPreviewSqlItem`、`MutationExecutionResult` 等结构，并在 `mysqlMutationPlanner.ts` 中补齐 `buildMysqlMutationPlan` / `mergeMysqlPreviewSqlItems`，前端预览项已从字符串摘要切换为结构化数组。
 
-- [ ] **Step 2: 前端在点击“执行更新”前弹轻量预览**
+- [x] **Step 2: 前端在点击“执行更新”前弹轻量预览**
   - 首轮可以只做 Drawer / Modal 中的摘要，不必做复杂 diff UI。
   - 必须展示：
   - 新增几行
   - 更新几行
   - 删除几行
   - 哪些字段将写入 `NULL`
+  - 进度备注（2026-04-23）：`DataQueryTabPane.tsx` 已接入 MySQL 提交前预览弹窗；点击“执行更新”会先向后端请求预览 SQL，再展示 create/update/delete 数量、NULL 写入字段数、逐条字段摘要与预览 SQL，确认后才真正提交。
 
-- [ ] **Step 3: 让预览与执行共享同一套 planner**
+- [x] **Step 3: 让预览与执行共享同一套 planner**
   - 防止“预览一套语义，执行另一套语义”。
   - 如果共享代码成本太高，至少共享字段排序、主键定位、空值语义归一化逻辑。
+  - 进度备注（2026-04-23）：`useQueryPanelRuntime.ts` 与 `DataQueryTabPane.tsx` 已统一复用 `buildMysqlMutationPlan`；预览和真正执行现在共享同一套 create/update/delete 规划逻辑，避免两边各自扫描行数据产生语义漂移。
 
 - [ ] **Step 4: 运行测试**
   - Run: `npm run test:query-panel`
   - Expected: 预览结果与最终提交 planner 一致。
+  - 进度备注（2026-04-23）：已新增 `tests/query-panel/mysqlMutationPlanner.test.ts` 覆盖“预览项与最终提交 payload 共享同一份 planner”；但当前 WSL1 环境的 Node/npm 仍无法运行 `npm run test:query-panel`，命令启动即报 `WSL 1 is not supported`，待切换可用 Node 环境后补跑。
 
 ### Task 6: 修复事务可靠性，显式处理 `rows_affected = 0`
 
@@ -313,28 +317,33 @@
 - Modify: `src/types/index.ts`
 - Test: `tests/query-panel/mysqlCrudEditing.test.ts`
 
-- [ ] **Step 1: 更新 execute_update / execute_delete 返回值**
+- [x] **Step 1: 更新 execute_update / execute_delete 返回值**
   - 不再只返回 `Result<(), AppError>`。
   - 至少返回影响行数或结构化执行结果。
+  - 进度备注（2026-04-23）：`execute_insert` / `execute_update` / `execute_delete` 已改为返回 `rows_affected`；`save_records_with_deletes` 则进一步返回 `MutationExecutionResult`，供前端消费结构化执行摘要。
 
-- [ ] **Step 2: 把“0 行命中”升级为业务失败**
+- [x] **Step 2: 把“0 行命中”升级为业务失败**
   - 对 update/delete：
   - `rows_affected == 0` 时返回明确错误，内容需带记录定位信息。
+  - 进度备注（2026-04-23）：已新增 `ensure_rows_affected_or_fail(...)`；update/delete 命中 0 行时会直接返回业务错误，并在错误信息中携带 `record_locator`，不再把伪成功当成成功。
 
-- [ ] **Step 3: save_records_with_deletes 输出结构化执行摘要**
+- [x] **Step 3: save_records_with_deletes 输出结构化执行摘要**
   - 至少能区分：
   - 哪一条 create 失败
   - 哪一条 update 失败
   - 哪一条 delete 失败
   - 哪条语句是 0 行命中
+  - 进度备注（2026-04-23）：`save_records_with_deletes` 已改为返回 `MutationExecutionResult`，成功时包含逐条 `MutationExecutionItem`（操作类型、序号、定位值、受影响行数、预览 SQL）；失败时会把 `operation_index`、`record_locator` 与原始错误一起拼入返回信息，便于前端和日志定位首个失败子操作。
 
-- [ ] **Step 4: 前端消费明确错误**
+- [x] **Step 4: 前端消费明确错误**
   - 不要只显示 `执行更新失败：Error(...)`。
   - 失败提示至少包含“操作类型 + 行定位 + 原因”。
+  - 进度备注（2026-04-23）：前端运行时已改为消费新的后端错误文本；当 MySQL update/delete 命中 0 行或某条子操作失败时，Tab notice 和日志会直接显示包含操作类型、`record_locator`、`operation_index` 的明确错误，而不是模糊的通用失败提示。
 
 - [ ] **Step 5: 运行测试**
   - Run: `npm run test:query-panel`
   - Expected: 伪成功场景不再被当成成功。
+  - 进度备注（2026-04-23）：`cargo test ensure_rows_affected_or_fail_should_reject_zero_row_update --manifest-path src-tauri/Cargo.toml` 已通过；前端 `npm run test:query-panel` 仍受当前 WSL1 Node/npm 环境限制无法执行，待切换到可用 Node 环境后补跑整套 QueryPanel 用例。
 
 ### Task 7: 校正系统日志语义，并补失败定位能力
 

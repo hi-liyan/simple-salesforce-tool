@@ -127,6 +127,75 @@ export type RecordSaveWithDeletePayload = {
   deletes: string[];
 };
 
+// MySQL 变更预览操作类型：与前后端预览/执行结果共用统一枚举。
+export type MutationPreviewOperation = "create" | "update" | "delete";
+
+// MySQL 变更预览字段：显式区分写入 NULL 与写入具体值，便于前端摘要展示。
+export type MutationPreviewField = {
+  // 字段名。
+  name: string;
+  // 字段写入语义。
+  kind: "null" | "value";
+  // 字段最终写入值；kind=null 时固定为 null。
+  value: unknown;
+};
+
+// 后端返回的预览 SQL 片段：用于把结构化预览项补齐为“可读 SQL”。
+export type MutationPreviewSqlItem = {
+  // 操作类型。
+  op: MutationPreviewOperation;
+  // 同类操作内的顺序索引：用于和前端 planner 结果稳定对齐。
+  operationIndex: number;
+  // 预览 SQL 文本。
+  previewSql: string;
+};
+
+// 前端结构化变更预览项：供预览弹窗、提交日志与执行结果映射复用。
+export type MutationPreviewItem = {
+  // 操作类型。
+  op: MutationPreviewOperation;
+  // 同类操作内的顺序索引：用于关联后端返回的 SQL/执行结果。
+  operationIndex: number;
+  // 前端稳定行身份：仅用于 UI 高亮与定位。
+  rowStableId: string;
+  // 后端记录定位值：update/delete 通常为主键值，create 为空字符串。
+  rowLocator: string;
+  // 本次操作涉及的字段摘要。
+  fields: MutationPreviewField[];
+  // 预览 SQL：点击“执行更新”前由后端返回补齐。
+  previewSql: string;
+};
+
+// MySQL 单条执行结果：供前端展示成功摘要与失败定位。
+export type MutationExecutionItem = {
+  // 操作类型。
+  op: MutationPreviewOperation;
+  // 同类操作内的顺序索引：用于回写到预览项。
+  operationIndex: number;
+  // 后端记录定位值。
+  rowLocator: string;
+  // 实际受影响行数。
+  rowsAffected: number;
+  // 该条操作是否执行成功。
+  success: boolean;
+  // 预览 SQL：与系统日志中的预览语义保持一致。
+  previewSql: string;
+  // 失败原因；成功时为空字符串。
+  error: string;
+};
+
+// MySQL 批量执行摘要：供前端成功提示、日志与后续失败定位扩展复用。
+export type MutationExecutionResult = {
+  // 新增操作数量。
+  createCount: number;
+  // 更新操作数量。
+  updateCount: number;
+  // 删除操作数量。
+  deleteCount: number;
+  // 单条执行结果列表。
+  items: MutationExecutionItem[];
+};
+
 // MySQL 单元格草稿值：显式区分“省略字段”“写入 NULL”“写入具体值”。
 export type MysqlCellDraftValue =
   | {

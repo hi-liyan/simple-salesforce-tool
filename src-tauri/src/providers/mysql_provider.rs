@@ -10,8 +10,9 @@ use sqlx::{types::Json, Column, MySql, QueryBuilder, Row, TypeInfo};
 
 use crate::error::AppError;
 use crate::models::{
-    CurrentUserContext, ObjectDdl, ObjectDescribe, ObjectField, QueryResult, RecordUpdatePayload,
-    SalesforceObject, SalesforceSource,
+    CurrentUserContext, MutationExecutionItem, MutationExecutionResult, MutationPreviewSqlItem,
+    ObjectDdl, ObjectDescribe, ObjectField, QueryResult, RecordUpdatePayload, SalesforceObject,
+    SalesforceSource,
 };
 
 /// MySQL 数据源连接配置（来自 source.config_json）。
@@ -174,38 +175,74 @@ pub async fn preview_save_records_with_deletes_sql(
     updates: Vec<RecordUpdatePayload>,
     deletes: Vec<String>,
 ) -> Result<String, AppError> {
+    Ok(
+        preview_save_records_with_deletes_items(source, object_name, creates, updates, deletes)
+            .await?
+            .into_iter()
+            .map(|item| {
+                format!(
+                    "[{}#{}] {}",
+                    item.op, item.operation_index, item.preview_sql
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+}
+
+/// 构建 MySQL 批量保存+删除结构化预览：供前端提交前预览与系统日志复用。
+pub async fn preview_save_records_with_deletes_items(
+    source: &SalesforceSource,
+    object_name: &str,
+    creates: Vec<HashMap<String, Value>>,
+    updates: Vec<RecordUpdatePayload>,
+    deletes: Vec<String>,
+) -> Result<Vec<MutationPreviewSqlItem>, AppError> {
     let (safe_table, primary_key) = resolve_table_and_primary_key(source, object_name).await?;
-    let mut lines: Vec<String> = Vec::new();
+    let mut items: Vec<MutationPreviewSqlItem> =
+        Vec::with_capacity(creates.len() + updates.len() + deletes.len());
 
     // 新增记录逐条展开，保持与真实执行顺序一致。
     for (index, item) in creates.into_iter().enumerate() {
         let normalized_values = normalize_create_values(item, &primary_key);
         let sql = build_insert_preview_sql(&safe_table, normalized_values)?;
-        lines.push(format!("[create#{index}] {sql}"));
+        items.push(MutationPreviewSqlItem {
+            op: "create".to_string(),
+            operation_index: index,
+            preview_sql: sql,
+        });
     }
 
     // 更新记录逐条展开；没有可更新字段时显式标记为未执行 SQL。
     for (index, item) in updates.into_iter().enumerate() {
         let normalized_values = normalize_update_values(item.values, &primary_key);
-        if let Some(sql) = build_update_preview_sql(
+        let preview_sql = if let Some(sql) = build_update_preview_sql(
             &safe_table,
             &primary_key,
             &item.record_id,
             normalized_values,
         )? {
-            lines.push(format!("[update#{index}] {sql}"));
+            sql
         } else {
-            lines.push(format!("[update#{index}] -- SQL 未执行：没有可更新字段。"));
-        }
+            "-- SQL 未执行：没有可更新字段。".to_string()
+        };
+        items.push(MutationPreviewSqlItem {
+            op: "update".to_string(),
+            operation_index: index,
+            preview_sql,
+        });
     }
 
     // 删除记录逐条展开，便于定位回滚前的操作明细。
     for (index, record_id) in deletes.into_iter().enumerate() {
-        let sql = build_delete_preview_sql(&safe_table, &primary_key, &record_id);
-        lines.push(format!("[delete#{index}] {sql}"));
+        items.push(MutationPreviewSqlItem {
+            op: "delete".to_string(),
+            operation_index: index,
+            preview_sql: build_delete_preview_sql(&safe_table, &primary_key, &record_id),
+        });
     }
 
-    Ok(lines.join("\n"))
+    Ok(items)
 }
 
 /// 构建 MySQL 更新日志 SQL：与真实执行共用主键解析和字段归一化逻辑。
@@ -568,7 +605,7 @@ impl MySqlProvider {
         creates: Vec<HashMap<String, Value>>,
         updates: Vec<RecordUpdatePayload>,
         deletes: Vec<String>,
-    ) -> Result<(), AppError> {
+    ) -> Result<MutationExecutionResult, AppError> {
         let safe_table = ensure_safe_identifier(object_name, "表名")?;
         let config = MySqlSourceConfig::from_source(source)?;
         let pool = build_mysql_pool(&config).await?;
@@ -577,40 +614,107 @@ impl MySqlProvider {
             .begin()
             .await
             .map_err(|error| AppError::Db(format!("开启 MySQL 事务失败: {error}")))?;
+        let create_count = creates.len();
+        let update_count = updates.len();
+        let delete_count = deletes.len();
+        let mut execution_items: Vec<MutationExecutionItem> =
+            Vec::with_capacity(create_count + update_count + delete_count);
 
         // 新增记录必须全部成功才继续。
-        for create_item in creates {
+        for (index, create_item) in creates.into_iter().enumerate() {
             let create_item = normalize_create_values(create_item, &primary_key);
-            execute_insert(&mut *transaction, &safe_table, create_item).await?;
+            let preview_sql = build_insert_preview_sql(&safe_table, create_item.clone())?;
+            let rows_affected = execute_insert(&mut *transaction, &safe_table, create_item)
+                .await
+                .map_err(|error| {
+                    AppError::Biz(format!(
+                        "MySQL create 失败：operation_index={index}，原因：{error}"
+                    ))
+                })?;
+            execution_items.push(MutationExecutionItem {
+                op: "create".to_string(),
+                operation_index: index,
+                row_locator: String::new(),
+                rows_affected,
+                success: true,
+                preview_sql,
+                error: String::new(),
+            });
         }
 
         // 更新记录逐条提交，任何失败都会触发回滚。
-        for update_item in updates {
+        for (index, update_item) in updates.into_iter().enumerate() {
+            let record_locator = update_item.record_id.clone();
             let values = normalize_update_values(update_item.values, &primary_key);
             if values.is_empty() {
                 // 空更新直接跳过，避免写入无意义 SQL。
                 continue;
             }
-            execute_update(
+            let preview_sql = build_update_preview_sql(
+                &safe_table,
+                &primary_key,
+                &record_locator,
+                values.clone(),
+            )?
+            .unwrap_or_else(|| "-- SQL 未执行：没有可更新字段。".to_string());
+            let rows_affected = execute_update(
                 &mut *transaction,
                 &safe_table,
                 &primary_key,
-                &update_item.record_id,
+                &record_locator,
                 values,
             )
-            .await?;
+            .await
+            .map_err(|error| {
+                AppError::Biz(format!(
+                    "MySQL update 失败：record_locator={}，operation_index={}，原因：{}",
+                    record_locator, index, error
+                ))
+            })?;
+            execution_items.push(MutationExecutionItem {
+                op: "update".to_string(),
+                operation_index: index,
+                row_locator: record_locator,
+                rows_affected,
+                success: true,
+                preview_sql,
+                error: String::new(),
+            });
         }
 
         // 删除记录逐条提交，确保与新增/更新处于同一事务。
-        for record_id in deletes {
-            execute_delete(&mut *transaction, &safe_table, &primary_key, &record_id).await?;
+        for (index, record_id) in deletes.into_iter().enumerate() {
+            let preview_sql = build_delete_preview_sql(&safe_table, &primary_key, &record_id);
+            let rows_affected =
+                execute_delete(&mut *transaction, &safe_table, &primary_key, &record_id)
+                    .await
+                    .map_err(|error| {
+                        AppError::Biz(format!(
+                            "MySQL delete 失败：record_locator={}，operation_index={}，原因：{}",
+                            record_id, index, error
+                        ))
+                    })?;
+            execution_items.push(MutationExecutionItem {
+                op: "delete".to_string(),
+                operation_index: index,
+                row_locator: record_id,
+                rows_affected,
+                success: true,
+                preview_sql,
+                error: String::new(),
+            });
         }
 
         transaction
             .commit()
             .await
             .map_err(|error| AppError::Db(format!("提交 MySQL 事务失败: {error}")))?;
-        Ok(())
+        Ok(MutationExecutionResult {
+            create_count,
+            update_count,
+            delete_count,
+            items: execution_items,
+        })
     }
 
     /// 更新单条记录（按主键定位）。
@@ -631,7 +735,9 @@ impl MySqlProvider {
             return Ok(());
         }
 
-        execute_update(&pool, &safe_table, &primary_key, record_id, values).await
+        execute_update(&pool, &safe_table, &primary_key, record_id, values)
+            .await
+            .map(|_| ())
     }
 
     /// 删除单条记录（按主键定位）。
@@ -646,16 +752,9 @@ impl MySqlProvider {
         let pool = build_mysql_pool(&config).await?;
         let primary_key = resolve_primary_key_column(&pool, &config, &safe_table).await?;
 
-        let mut builder = QueryBuilder::<MySql>::new(format!(
-            "DELETE FROM `{safe_table}` WHERE `{primary_key}` = "
-        ));
-        builder.push_bind(record_id);
-        builder
-            .build()
-            .execute(&pool)
+        execute_delete(&pool, &safe_table, &primary_key, record_id)
             .await
-            .map_err(|error| AppError::Db(format!("删除 MySQL 记录失败: {error}")))?;
-        Ok(())
+            .map(|_| ())
     }
 
     /// MySQL 无 Salesforce token 校验，恒定返回 true。
@@ -1057,12 +1156,26 @@ fn build_delete_preview_sql(table_name: &str, primary_key: &str, record_id: &str
     )
 }
 
+/// 校验 MySQL update/delete 的影响行数，0 行命中视为业务失败而不是伪成功。
+fn ensure_rows_affected_or_fail(
+    operation_type: &str,
+    record_locator: &str,
+    rows_affected: u64,
+) -> Result<u64, AppError> {
+    if rows_affected == 0 {
+        return Err(AppError::Biz(format!(
+            "MySQL {operation_type} 未命中任何记录：record_locator={record_locator}，本次操作已回滚。"
+        )));
+    }
+    Ok(rows_affected)
+}
+
 /// 执行 INSERT 语句（支持 pool 或 transaction 执行器）。
 async fn execute_insert<'a, E>(
     executor: E,
     table_name: &str,
     values: HashMap<String, Value>,
-) -> Result<(), AppError>
+) -> Result<u64, AppError>
 where
     E: sqlx::Executor<'a, Database = MySql>,
 {
@@ -1087,12 +1200,12 @@ where
     }
     builder.push(")");
 
-    builder
+    let result = builder
         .build()
         .execute(executor)
         .await
         .map_err(|error| AppError::Db(format!("新增 MySQL 记录失败: {error}")))?;
-    Ok(())
+    Ok(result.rows_affected())
 }
 
 /// 执行 UPDATE 语句（支持 pool 或 transaction 执行器）。
@@ -1102,12 +1215,12 @@ async fn execute_update<'a, E>(
     primary_key: &str,
     record_id: &str,
     values: HashMap<String, Value>,
-) -> Result<(), AppError>
+) -> Result<u64, AppError>
 where
     E: sqlx::Executor<'a, Database = MySql>,
 {
     if values.is_empty() {
-        return Ok(());
+        return Ok(0);
     }
     let entries = collect_sorted_entries(values)?;
 
@@ -1122,12 +1235,12 @@ where
     builder.push(" WHERE `").push(primary_key).push("` = ");
     builder.push_bind(record_id);
 
-    builder
+    let result = builder
         .build()
         .execute(executor)
         .await
         .map_err(|error| AppError::Db(format!("更新 MySQL 记录失败: {error}")))?;
-    Ok(())
+    ensure_rows_affected_or_fail("update", record_id, result.rows_affected())
 }
 
 /// 执行 DELETE 语句（支持 pool 或 transaction 执行器）。
@@ -1136,7 +1249,7 @@ async fn execute_delete<'a, E>(
     table_name: &str,
     primary_key: &str,
     record_id: &str,
-) -> Result<(), AppError>
+) -> Result<u64, AppError>
 where
     E: sqlx::Executor<'a, Database = MySql>,
 {
@@ -1144,12 +1257,12 @@ where
         "DELETE FROM `{table_name}` WHERE `{primary_key}` = "
     ));
     builder.push_bind(record_id);
-    builder
+    let result = builder
         .build()
         .execute(executor)
         .await
         .map_err(|error| AppError::Db(format!("删除 MySQL 记录失败: {error}")))?;
-    Ok(())
+    ensure_rows_affected_or_fail("delete", record_id, result.rows_affected())
 }
 
 /// 将 JSON 值绑定到 SQL 参数（优先保留数字/布尔类型）。
@@ -1699,8 +1812,9 @@ fn decode_optional_row_string(row: &MySqlRow, index: usize) -> Option<String> {
 mod tests {
     use super::{
         build_column_type_map_from_describe, build_delete_preview_sql, build_insert_preview_sql,
-        build_update_preview_sql, infer_mysql_field_write_capability, normalize_create_values,
-        normalize_mysql_type_name, normalize_update_values, resolve_mysql_result_type,
+        build_update_preview_sql, ensure_rows_affected_or_fail, infer_mysql_field_write_capability,
+        normalize_create_values, normalize_mysql_type_name, normalize_update_values,
+        resolve_mysql_result_type,
     };
     use crate::models::ObjectDescribe;
     use serde_json::{json, Value};
@@ -1747,6 +1861,16 @@ mod tests {
     }
 
     #[test]
+    fn ensure_rows_affected_or_fail_should_reject_zero_row_update() {
+        let error = ensure_rows_affected_or_fail("update", "id=42", 0)
+            .expect_err("0 行命中必须升级为业务失败");
+        assert!(
+            error.to_string().contains("id=42"),
+            "错误信息应包含记录定位信息，便于前端提示具体失败行"
+        );
+    }
+
+    #[test]
     fn build_update_preview_sql_returns_none_when_no_mutable_fields() {
         let normalized = normalize_update_values(
             build_values(&[("Id", json!("A-100")), ("order_id", json!("A-100"))]),
@@ -1781,7 +1905,10 @@ mod tests {
     #[test]
     fn normalize_mysql_type_name_strips_display_width_but_keeps_base_type() {
         assert_eq!(normalize_mysql_type_name("tinyint(1)"), "tinyint");
-        assert_eq!(normalize_mysql_type_name("tinyint(1) unsigned"), "tinyint unsigned");
+        assert_eq!(
+            normalize_mysql_type_name("tinyint(1) unsigned"),
+            "tinyint unsigned"
+        );
         assert_eq!(normalize_mysql_type_name("decimal(10, 2)"), "decimal");
     }
 
@@ -1846,8 +1973,11 @@ mod tests {
 
     #[test]
     fn infer_mysql_field_write_capability_marks_generated_columns_as_readonly() {
-        let capability =
-            infer_mysql_field_write_capability("", "DEFAULT_GENERATED on update CURRENT_TIMESTAMP", Some("CURRENT_TIMESTAMP"));
+        let capability = infer_mysql_field_write_capability(
+            "",
+            "DEFAULT_GENERATED on update CURRENT_TIMESTAMP",
+            Some("CURRENT_TIMESTAMP"),
+        );
 
         assert_eq!(capability.createable, false);
         assert_eq!(capability.updateable, false);

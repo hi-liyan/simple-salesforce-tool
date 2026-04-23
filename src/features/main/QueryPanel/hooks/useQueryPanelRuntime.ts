@@ -3,9 +3,9 @@ import { api } from "../../../../api";
 import { buildObjectTabBindingKey, ObjectDescribe, ObjectDdl, TabLog, TabState, SalesforceObject, SalesforceSource } from "../../../../types";
 import { getSourceColor } from "../logic/sourceColor.ts";
 import { useAppStore } from "../../../../store/useAppStore";
-import { buildMysqlCreateValues, buildMysqlUpdateValues } from "../logic/mysqlMutationPlanner.ts";
+import { buildMysqlMutationPlan } from "../logic/mysqlMutationPlanner.ts";
 import { resolveMysqlResultUpdateCapability } from "../logic/mysqlUpdateCapability.ts";
-import { isMysqlBlankValue, resolveMysqlDraftRuntimeValue } from "../logic/mysqlValueSemantics.ts";
+import { isMysqlBlankValue } from "../logic/mysqlValueSemantics.ts";
 
 type MysqlDdlState = Record<string, { loading: boolean; data: ObjectDdl | null; error: string }>;
 
@@ -713,108 +713,86 @@ export function useQueryPanelRuntime({
     const mysqlPrimaryKeyField = isMysqlSource
       ? activeTab.describe.fields.find((field) => String(field.metadata?.columnKey || "").toUpperCase() === "PRI")?.name || ""
       : "";
-    const dirtyCellSet = new Set(activeTab.dirtyCellKeys);
-    const pendingDeleteSet = new Set(activeTab.pendingDeleteRecordIds);
-    const creates: Record<string, unknown>[] = [];
-    const updates: { recordId: string; values: Record<string, unknown> }[] = [];
-    const deletes: string[] = [];
-    const missingRecordIdRows: number[] = [];
-
-    patchTab(activeTabBindingKey, (item) => ({ ...item, loading: true }));
-    try {
-      for (let rowIndex = 0; rowIndex < activeTab.result.records.length; rowIndex += 1) {
-        const record = activeTab.result.records[rowIndex];
-        const recordKey = getRecordKey(record, rowIndex, {
+    const mysqlMutationPlan = isMysqlSource
+      ? buildMysqlMutationPlan({
+          records: activeTab.result.records,
+          baselineRecords: activeTab.baselineRecords,
+          dirtyCellKeys: activeTab.dirtyCellKeys,
+          pendingDeleteRecordIds: activeTab.pendingDeleteRecordIds,
+          editableFields,
           sourceType: resolvedSourceType,
           mysqlPrimaryKeyField
-        });
-        // 稳定基线键：编辑主键列后仍使用初始键定位 dirty/baseline，避免更新丢失。
-        const baselineKeyFromRecord = typeof record.__baselineKey === "string" ? record.__baselineKey : "";
-        const stableRecordKey = baselineKeyFromRecord || recordKey;
-        const isNewRow = Boolean(record.__isNew);
+        })
+      : null;
+    const creates: Record<string, unknown>[] = mysqlMutationPlan?.creates || [];
+    const updates: { recordId: string; values: Record<string, unknown> }[] = mysqlMutationPlan?.updates || [];
+    const deletes: string[] = mysqlMutationPlan?.deletes || [];
 
-        if (isNewRow) {
-          const values = isMysqlSource
-            ? buildMysqlCreateValues({
-                record,
-                editableFields
-              })
-            : (() => {
-                const nextValues: Record<string, unknown> = {};
-                Object.entries(record).forEach(([field, raw]) => {
-                  if (field.startsWith("__") || field === "Id" || !editableFields.has(field)) return;
-                  if (raw === null || raw === undefined || String(raw).trim() === "") return;
-                  nextValues[field] = raw;
-                });
-                return nextValues;
-              })();
-          if (Object.keys(values).length > 0) {
-            creates.push(values);
-          }
-          continue;
+    if (!isMysqlSource) {
+      const dirtyCellSet = new Set(activeTab.dirtyCellKeys);
+      const pendingDeleteSet = new Set(activeTab.pendingDeleteRecordIds);
+      activeTab.result.records.forEach((record, rowIndex) => {
+        const stableRecordKey = getRecordKey(record, rowIndex, {
+          sourceType: resolvedSourceType
+        });
+        if (record.__isNew) {
+          const values: Record<string, unknown> = {};
+          Object.entries(record).forEach(([field, raw]) => {
+            if (field.startsWith("__") || field === "Id" || !editableFields.has(field)) return;
+            if (raw === null || raw === undefined || String(raw).trim() === "") return;
+            values[field] = raw; // 行内注释：Salesforce 维持旧语义，跳过空值。
+          });
+          if (Object.keys(values).length > 0) creates.push(values);
+          return;
         }
 
-        const dirtyFields: string[] = [];
+        const values: Record<string, unknown> = {};
         dirtyCellSet.forEach((cellKey) => {
-          // 记录键可能包含 ":"（例如时间字符串主键），因此按最后一个 ":" 分割字段名更安全。
+          // 记录键可能包含 ":"，因此按最后一个 ":" 分割字段名。
           const splitIndex = cellKey.lastIndexOf(":");
           if (splitIndex < 0) return;
           const key = cellKey.slice(0, splitIndex);
           const field = cellKey.slice(splitIndex + 1);
           if (key !== stableRecordKey || field === "Id" || !editableFields.has(field)) return;
-          dirtyFields.push(field);
+          values[field] = record[field]; // 行内注释：仅把当前行脏字段写入 Salesforce 更新 payload。
         });
-        const values = isMysqlSource
-          ? buildMysqlUpdateValues({
-              record,
-              editableFields,
-              dirtyFields
-            })
-          : (() => {
-              const nextValues: Record<string, unknown> = {};
-              dirtyFields.forEach((field) => {
-                nextValues[field] = record[field];
-              });
-              return nextValues;
-            })();
 
         const baselineRecord = activeTab.baselineRecords[stableRecordKey];
-        const recordIdRaw = baselineRecord?.Id
-          ?? (isMysqlSource && mysqlPrimaryKeyField ? baselineRecord?.[mysqlPrimaryKeyField] : undefined)
-          ?? resolveMysqlDraftRuntimeValue(record.Id)
-          ?? (isMysqlSource && mysqlPrimaryKeyField ? resolveMysqlDraftRuntimeValue(record[mysqlPrimaryKeyField]) : undefined);
+        const recordIdRaw = baselineRecord?.Id ?? record.Id;
         const recordId = recordIdRaw === null || recordIdRaw === undefined ? "" : String(recordIdRaw).trim();
-        const isPendingDelete = pendingDeleteSet.has(stableRecordKey);
-        if (!recordId) {
-          if (isMysqlSource && (Object.keys(values).length > 0 || isPendingDelete)) {
-            missingRecordIdRows.push(rowIndex + 1);
-          }
-          continue;
-        }
-        if (isPendingDelete) {
+        if (!recordId) return;
+        if (pendingDeleteSet.has(stableRecordKey)) {
           deletes.push(recordId);
-          continue;
+          return;
         }
-
         if (Object.keys(values).length > 0) {
           updates.push({ recordId, values });
         }
-      }
+      });
+    }
 
-      if (missingRecordIdRows.length > 0) {
+    patchTab(activeTabBindingKey, (item) => ({ ...item, loading: true }));
+    try {
+      if (mysqlMutationPlan?.missingRecordIdRows && mysqlMutationPlan.missingRecordIdRows.length > 0) {
         throw new Error(
-          `MySQL 更新失败：存在已编辑或待删除但缺少 Id 的行（第 ${missingRecordIdRows.join("、")} 行）。请确保查询结果包含主键列。`
+          `MySQL 更新失败：存在已编辑或待删除但缺少 Id 的行（第 ${mysqlMutationPlan.missingRecordIdRows.join("、")} 行）。请确保查询结果包含主键列。`
         );
       }
 
       if (isMysqlSource) {
         // MySQL 下统一走单事务命令，确保新增/更新/删除原子提交。
-        await api.saveRecordsWithDeletes({
+        const executionResult = await api.saveRecordsWithDeletes({
           sourceId: resolvedSourceId,
           objectName: activeTab.objectName,
           creates,
           updates,
           deletes
+        });
+        appendTabLog(activeTabBindingKey, {
+          action: "UPSERT",
+          success: true,
+          request: `creates=${creates.length}, updates=${updates.length}, deletes=${deletes.length}`,
+          summary: `执行更新成功，新增 ${executionResult.createCount} 条，更新 ${executionResult.updateCount} 条，删除 ${executionResult.deleteCount} 条。`
         });
       } else {
         // Salesforce 仍使用现有拆分逻辑：新增/更新批量提交，删除逐条提交。
@@ -831,13 +809,13 @@ export function useQueryPanelRuntime({
             deletes.map((recordId) => api.deleteRecord(resolvedSourceId, activeTab.objectName, recordId))
           );
         }
+        appendTabLog(activeTabBindingKey, {
+          action: "UPSERT",
+          success: true,
+          request: `creates=${creates.length}, updates=${updates.length}, deletes=${deletes.length}`,
+          summary: `执行更新成功，新增 ${creates.length} 条，更新 ${updates.length} 条，删除 ${deletes.length} 条。`
+        });
       }
-      appendTabLog(activeTabBindingKey, {
-        action: "UPSERT",
-        success: true,
-        request: `creates=${creates.length}, updates=${updates.length}, deletes=${deletes.length}`,
-        summary: `执行更新成功，新增 ${creates.length} 条，更新 ${updates.length} 条，删除 ${deletes.length} 条。`
-      });
 
       await queryTabData(activeTabBindingKey);
       patchTab(activeTabBindingKey, (item) => ({
