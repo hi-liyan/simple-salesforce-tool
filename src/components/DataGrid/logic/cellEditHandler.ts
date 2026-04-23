@@ -11,6 +11,11 @@ import {
   normalizeMysqlDatetimeValueForSave
 } from "../utils/datetime";
 import {
+  createMysqlDraftNullValue,
+  createMysqlDraftOmitValue,
+  createMysqlDraftValue
+} from "../../../features/main/QueryPanel/logic/mysqlValueSemantics.ts";
+import {
   getNonEditableMysqlTypeLabel,
   isCellEditableByMeta,
 } from "../utils/field";
@@ -96,18 +101,22 @@ export function createCellEditedHandler({
         return;
       }
       if (nextText === PICKLIST_NONE_VALUE && isPicklistNullable(metadata)) {
-        onEditCell(row, columnId, null);
+        onEditCell(row, columnId, isMysqlSource ? createMysqlDraftNullValue() : null);
         return;
       }
-      onEditCell(row, columnId, nextText);
+      onEditCell(row, columnId, isMysqlSource ? createMysqlDraftValue(nextText) : nextText);
       return;
     }
 
     if (strategy === "date") {
       const nextText = extractEditableString(newValue).trim();
       if (!nextText) {
+        if (isMysqlSource && isNewRow) {
+          onEditCell(row, columnId, createMysqlDraftOmitValue());
+          return;
+        }
         if (metadata.nillable === true) {
-          onEditCell(row, columnId, null);
+          onEditCell(row, columnId, isMysqlSource ? createMysqlDraftNullValue() : null);
           return;
         }
         onShowMessage(`${columnId} 字段不允许为空。`);
@@ -120,15 +129,19 @@ export function createCellEditedHandler({
         return;
       }
 
-      onEditCell(row, columnId, normalizedDate);
+      onEditCell(row, columnId, isMysqlSource ? createMysqlDraftValue(normalizedDate) : normalizedDate);
       return;
     }
 
     if (strategy === "datetime") {
       const nextText = extractEditableString(newValue).trim();
       if (!nextText) {
+        if (isMysqlSource && isNewRow) {
+          onEditCell(row, columnId, createMysqlDraftOmitValue());
+          return;
+        }
         if (metadata.nillable === true) {
-          onEditCell(row, columnId, null);
+          onEditCell(row, columnId, isMysqlSource ? createMysqlDraftNullValue() : null);
           return;
         }
         onShowMessage(`${columnId} 字段不允许为空。`);
@@ -143,7 +156,7 @@ export function createCellEditedHandler({
         return;
       }
 
-      onEditCell(row, columnId, normalizedDatetime);
+      onEditCell(row, columnId, isMysqlSource ? createMysqlDraftValue(normalizedDatetime) : normalizedDatetime);
       return;
     }
 
@@ -153,7 +166,8 @@ export function createCellEditedHandler({
         onShowMessage(`${columnId} 字段仅支持 true/false。`);
         return;
       }
-      onEditCell(row, columnId, text === "true");
+      const nextValue = text === "true";
+      onEditCell(row, columnId, isMysqlSource ? createMysqlDraftValue(nextValue) : nextValue);
       return;
     }
 
@@ -163,11 +177,24 @@ export function createCellEditedHandler({
         onShowMessage(`${columnId} 字段仅支持数字。`);
         return;
       }
-      onEditCell(row, columnId, num);
+      if (isMysqlSource && num === undefined) {
+        if (isNewRow) {
+          onEditCell(row, columnId, createMysqlDraftOmitValue());
+          return;
+        }
+        if (metadata.nillable === true) {
+          onEditCell(row, columnId, createMysqlDraftNullValue());
+          return;
+        }
+        onShowMessage(`${columnId} 字段不允许为空。`);
+        return;
+      }
+      onEditCell(row, columnId, isMysqlSource ? createMysqlDraftValue(num) : num);
       return;
     }
 
-    onEditCell(row, columnId, extractEditableString(newValue));
+    const nextText = extractEditableString(newValue);
+    onEditCell(row, columnId, isMysqlSource ? createMysqlDraftValue(nextText) : nextText);
   };
 }
 

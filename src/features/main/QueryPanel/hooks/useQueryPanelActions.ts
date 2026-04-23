@@ -5,6 +5,11 @@ import type { ObjectDescribe, SalesforceObject, SalesforceSource, SourceBindingM
 import { MainViewMode } from "../../../../store/useAppStore";
 import { getSourceColor } from "../logic/sourceColor.ts";
 import { getMysqlPrimaryKeyField, getRecordKey } from "../logic/queryUtils";
+import {
+  isMysqlDraftDirty,
+  isMysqlDraftOmitValue,
+  normalizeMysqlEditedCellValue
+} from "../logic/mysqlValueSemantics.ts";
 
 type UseQueryPanelActionsInput = {
   // 当前激活 Query Tab。
@@ -312,24 +317,39 @@ export function useQueryPanelActions({
           const nextRecords = [...item.result.records];
           const target = nextRecords[rowIndex];
           if (!target) return item;
+          const resolvedSourceType = item.sourceType || selectedSourceType || "salesforce";
+          const isMysqlSource = resolvedSourceType.toLowerCase() === "mysql";
+          // MySQL 编辑统一先归一化成显式 draft 语义，避免 null/undefined/空字符串混淆。
+          const normalizedValue = isMysqlSource ? normalizeMysqlEditedCellValue(value) : value;
 
           // 旧行编辑统一绑定基线键：避免主键字段被修改后，无法再定位 baseline。
           const stableRowId = getRecordKey(target, rowIndex, {
-            sourceType: selectedSourceType,
+            sourceType: resolvedSourceType,
             mysqlPrimaryKeyField: getMysqlPrimaryKeyField(item.describe)
           });
           const baselineKeyFromRecord = typeof target.__baselineKey === "string" ? target.__baselineKey : "";
           const stableBaselineKey = baselineKeyFromRecord || stableRowId;
           const isEditingNewRow = Boolean(target.__isNew);
-          const nextRecord = isEditingNewRow
-            ? { ...target, [columnName]: value }
-            : { ...target, __rowStableId: stableBaselineKey, __baselineKey: stableBaselineKey, [columnName]: value };
+          const nextRecordBase = isEditingNewRow
+            ? { ...target }
+            : { ...target, __rowStableId: stableBaselineKey, __baselineKey: stableBaselineKey };
+          const nextRecord = (() => {
+            if (isMysqlDraftOmitValue(normalizedValue)) {
+              const { [columnName]: _removed, ...rest } = nextRecordBase;
+              return rest;
+            }
+            return { ...nextRecordBase, [columnName]: normalizedValue };
+          })();
           // 统一记录键：前端一律使用稳定 rowStableId，避免主键编辑后失去行定位。
           const cellKey = `${stableBaselineKey}:${columnName}`;
           const dirtySet = new Set(item.dirtyCellKeys);
           const isNewRow = Boolean(nextRecord.__isNew);
           if (isNewRow) {
-            dirtySet.add(cellKey); // 新增行任意修改都视为脏数据。
+            if (isMysqlSource && isMysqlDraftOmitValue(normalizedValue)) {
+              dirtySet.delete(cellKey); // 新增行回退为 omit 后，视为回到“未填写”状态。
+            } else {
+              dirtySet.add(cellKey); // 新增行显式编辑过的字段统一视为脏数据。
+            }
           } else {
             const stringify = (input: unknown): string => {
               if (input === null || input === undefined) return "";
@@ -341,9 +361,12 @@ export function useQueryPanelActions({
                 return String(input);
               }
             };
-            const baselineValue = stringify(item.baselineRecords[stableBaselineKey]?.[columnName]);
-            const nextValue = stringify(value);
-            if (baselineValue === nextValue) {
+            const baselineValue = item.baselineRecords[stableBaselineKey]?.[columnName];
+            const nextValue = nextRecord[columnName];
+            const isDirty = isMysqlSource
+              ? isMysqlDraftDirty(baselineValue, nextValue)
+              : stringify(baselineValue) !== stringify(nextValue);
+            if (!isDirty) {
               dirtySet.delete(cellKey); // 改回原值则移除脏标记。
             } else {
               dirtySet.add(cellKey); // 与基线不一致则保留脏标记。

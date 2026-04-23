@@ -3,6 +3,8 @@ import { api } from "../../../../api";
 import { buildObjectTabBindingKey, ObjectDescribe, ObjectDdl, TabLog, TabState, SalesforceObject, SalesforceSource } from "../../../../types";
 import { getSourceColor } from "../logic/sourceColor.ts";
 import { useAppStore } from "../../../../store/useAppStore";
+import { buildMysqlCreateValues, buildMysqlUpdateValues } from "../logic/mysqlMutationPlanner.ts";
+import { isMysqlBlankValue, resolveMysqlDraftRuntimeValue } from "../logic/mysqlValueSemantics.ts";
 
 type MysqlDdlState = Record<string, { loading: boolean; data: ObjectDdl | null; error: string }>;
 
@@ -44,7 +46,7 @@ function collectMysqlMissingRequiredFields(
     // 仅对前端本地新增行做必填校验。
     if (!record.__isNew) return;
     const missingFieldNames = requiredFields
-      .filter((field) => isBlankCellValue(record[field.name]))
+      .filter((field) => isMysqlBlankValue(record[field.name]))
       .map((field) => field.name);
     if (missingFieldNames.length > 0) {
       missingItems.push({ row: rowIndex + 1, fields: missingFieldNames });
@@ -690,19 +692,27 @@ export function useQueryPanelRuntime({
         const isNewRow = Boolean(record.__isNew);
 
         if (isNewRow) {
-          const values: Record<string, unknown> = {};
-          Object.entries(record).forEach(([field, raw]) => {
-            if (field.startsWith("__") || field === "Id" || !editableFields.has(field)) return;
-            if (raw === null || raw === undefined || String(raw).trim() === "") return;
-            values[field] = raw;
-          });
+          const values = isMysqlSource
+            ? buildMysqlCreateValues({
+                record,
+                editableFields
+              })
+            : (() => {
+                const nextValues: Record<string, unknown> = {};
+                Object.entries(record).forEach(([field, raw]) => {
+                  if (field.startsWith("__") || field === "Id" || !editableFields.has(field)) return;
+                  if (raw === null || raw === undefined || String(raw).trim() === "") return;
+                  nextValues[field] = raw;
+                });
+                return nextValues;
+              })();
           if (Object.keys(values).length > 0) {
             creates.push(values);
           }
           continue;
         }
 
-        const values: Record<string, unknown> = {};
+        const dirtyFields: string[] = [];
         dirtyCellSet.forEach((cellKey) => {
           // 记录键可能包含 ":"（例如时间字符串主键），因此按最后一个 ":" 分割字段名更安全。
           const splitIndex = cellKey.lastIndexOf(":");
@@ -710,14 +720,27 @@ export function useQueryPanelRuntime({
           const key = cellKey.slice(0, splitIndex);
           const field = cellKey.slice(splitIndex + 1);
           if (key !== stableRecordKey || field === "Id" || !editableFields.has(field)) return;
-          values[field] = record[field];
+          dirtyFields.push(field);
         });
+        const values = isMysqlSource
+          ? buildMysqlUpdateValues({
+              record,
+              editableFields,
+              dirtyFields
+            })
+          : (() => {
+              const nextValues: Record<string, unknown> = {};
+              dirtyFields.forEach((field) => {
+                nextValues[field] = record[field];
+              });
+              return nextValues;
+            })();
 
         const baselineRecord = activeTab.baselineRecords[stableRecordKey];
         const recordIdRaw = baselineRecord?.Id
           ?? (isMysqlSource && mysqlPrimaryKeyField ? baselineRecord?.[mysqlPrimaryKeyField] : undefined)
-          ?? record.Id
-          ?? (isMysqlSource && mysqlPrimaryKeyField ? record[mysqlPrimaryKeyField] : undefined);
+          ?? resolveMysqlDraftRuntimeValue(record.Id)
+          ?? (isMysqlSource && mysqlPrimaryKeyField ? resolveMysqlDraftRuntimeValue(record[mysqlPrimaryKeyField]) : undefined);
         const recordId = recordIdRaw === null || recordIdRaw === undefined ? "" : String(recordIdRaw).trim();
         const isPendingDelete = pendingDeleteSet.has(stableRecordKey);
         if (!recordId) {

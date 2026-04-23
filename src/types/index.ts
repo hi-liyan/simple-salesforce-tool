@@ -127,6 +127,22 @@ export type RecordSaveWithDeletePayload = {
   deletes: string[];
 };
 
+// MySQL 单元格草稿值：显式区分“省略字段”“写入 NULL”“写入具体值”。
+export type MysqlCellDraftValue =
+  | {
+      __mysqlDraft: true;
+      kind: "omit";
+    }
+  | {
+      __mysqlDraft: true;
+      kind: "null";
+    }
+  | {
+      __mysqlDraft: true;
+      kind: "value";
+      value: unknown;
+    };
+
 // 页面提示消息。
 export type Notice = {
   type: "error" | "success";

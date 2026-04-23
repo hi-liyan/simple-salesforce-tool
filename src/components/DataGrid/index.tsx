@@ -136,6 +136,7 @@ export function DataGrid({
     setRowContextMenu,
     sourceId,
     objectName,
+    selectedSourceType,
     onEditCell,
     onShowMessage
   });

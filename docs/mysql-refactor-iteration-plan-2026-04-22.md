@@ -192,32 +192,37 @@
 - Test: `tests/query-panel/mysqlMutationPlanner.test.ts`
 - Test: `tests/dategrid/mysqlCellEditing.test.ts`
 
-- [ ] **Step 1: 定义单元格草稿值模型**
+- [x] **Step 1: 定义单元格草稿值模型**
   - 至少支持：
   - `kind: "omit"`
   - `kind: "null"`
   - `kind: "value"`
   - `kind: "default"` 或与 `omit` 合并，但语义必须明确写在类型和文档里。
+  - 进度备注（2026-04-23）：已新增 `MysqlCellDraftValue` 与 `mysqlValueSemantics.ts`，当前实现采用 `omit/null/value` 三态模型，`default` 暂不单独建模，先与 `omit` 合并并在 planner 中按“省略字段”语义处理。
 
-- [ ] **Step 2: 把 dirty 判断改成“语义比较”**
+- [x] **Step 2: 把 dirty 判断改成“语义比较”**
   - 不再使用当前的 `stringify(null | undefined | "") -> ""` 比较。
   - 单独实现比较函数，例如：
   - `compareMysqlDraftValue(baselineValue, draftValue)`
   - `isMysqlDraftDirty(baselineValue, draftValue)`
+  - 进度备注（2026-04-23）：`useQueryPanelActions.ts` 已改为在 MySQL 下走 `normalizeMysqlEditedCellValue + isMysqlDraftDirty`，不再把 `null`、`undefined`、空字符串归一成同一比较结果。
 
-- [ ] **Step 3: 收敛编辑入口**
+- [x] **Step 3: 收敛编辑入口**
   - 文本输入清空时，不能直接等价成 `undefined`。
   - 日期/时间/数字/布尔输入都要映射成显式 draft 语义。
   - 右键 `Set Null` 必须生成 `kind: "null"`，而不是裸 `null`。
+  - 进度备注（2026-04-23）：`cellEditHandler.ts` 已按 MySQL 新旧行区分 `omit/null/value` 写入；`useDataGridMenuActions.ts` 的 `Set Null` 已改为写入显式 `null draft`；`getCellContent.ts` 已同步适配 draft 展示，避免表格渲染 `[object Object]`。
 
-- [ ] **Step 4: 重写提交 payload 规划器**
+- [x] **Step 4: 重写提交 payload 规划器**
   - 不再通过“扫整行 + 跳过空值”构建 `creates` / `updates`。
   - 统一从 `baseline + draft` 生成显式 diff。
+  - 进度备注（2026-04-23）：已新增 `mysqlMutationPlanner.ts`，`useQueryPanelRuntime.ts` 在 MySQL 下改为使用 `buildMysqlCreateValues/buildMysqlUpdateValues` 生成提交 payload，并在记录定位时兼容 draft 运行时值解析。
 
 - [ ] **Step 5: 运行测试**
   - Run: `npm run test:query-panel`
   - Run: `npm run test:datagrid-utils`
   - Expected: `null`、`undefined`、空字符串、`0`、`false` 的差异都能稳定通过。
+  - 进度备注（2026-04-23）：已新增 `tests/query-panel/mysqlMutationPlanner.test.ts` 与 `tests/dategrid/mysqlCellEditing.test.ts`，但当前会话环境的 Node/npm 受 WSL1 兼容性限制，无法实际执行测试命令；待切换到可用 Node 运行环境后补跑并回填结果。
 
 ### Task 4: 补齐字段能力模型与查询结果可更新性预判
 

@@ -1,4 +1,5 @@
 import type { ObjectDescribe, ObjectField, QueryResult, TabState } from "../../../../types/index.ts";
+import { resolveMysqlDraftRuntimeValue } from "./mysqlValueSemantics.ts";
 
 // 记录键计算参数：用于按数据源类型统一 key 生成规则。
 export type RecordKeyOptions = {
@@ -10,12 +11,13 @@ export type RecordKeyOptions = {
 
 // 解析当前记录的后端定位值：用于更新/删除时生成 recordId。
 function resolveRecordLocator(record: Record<string, unknown>, options: RecordKeyOptions = {}): string {
-  if (record.Id !== null && record.Id !== undefined && String(record.Id).trim() !== "") {
-    return String(record.Id).trim();
+  const salesforceId = resolveMysqlDraftRuntimeValue(record.Id);
+  if (salesforceId !== null && salesforceId !== undefined && String(salesforceId).trim() !== "") {
+    return String(salesforceId).trim();
   }
   // MySQL 场景优先使用主键字段值作为后端定位条件。
   if ((options.sourceType || "salesforce").toLowerCase() === "mysql" && options.mysqlPrimaryKeyField) {
-    const mysqlPrimaryValue = record[options.mysqlPrimaryKeyField];
+    const mysqlPrimaryValue = resolveMysqlDraftRuntimeValue(record[options.mysqlPrimaryKeyField]);
     if (mysqlPrimaryValue !== null && mysqlPrimaryValue !== undefined && String(mysqlPrimaryValue).trim() !== "") {
       return String(mysqlPrimaryValue).trim();
     }
