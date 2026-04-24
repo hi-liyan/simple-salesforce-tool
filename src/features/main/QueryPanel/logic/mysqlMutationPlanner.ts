@@ -60,6 +60,9 @@ function resolveMysqlMutationEntry(rawValue: unknown): { include: boolean; value
   if (isMysqlCellDraftValue(rawValue) && rawValue.kind === "omit") {
     return { include: false };
   }
+  if (isMysqlCellDraftValue(rawValue) && rawValue.kind === "default") {
+    return { include: true, value: rawValue };
+  }
   const runtimeValue = resolveMysqlDraftRuntimeValue(rawValue);
   if (runtimeValue === undefined) {
     return { include: false };
@@ -92,8 +95,12 @@ function resolveMysqlRecordLocator(
 function buildMutationPreviewFields(values: Record<string, unknown>): MutationPreviewField[] {
   return Object.entries(values).map(([name, value]) => ({
     name,
-    kind: value === null ? "null" : "value",
-    value
+    kind: isMysqlCellDraftValue(value) && value.kind === "default"
+      ? "default"
+      : value === null
+        ? "null"
+        : "value",
+    value: isMysqlCellDraftValue(value) && value.kind === "default" ? "DEFAULT" : value
   }));
 }
 
@@ -105,6 +112,7 @@ export function buildMysqlCreateValues({
   const values: Record<string, unknown> = {};
   Object.entries(record).forEach(([fieldName, rawValue]) => {
     if (isInternalField(fieldName) || !editableFields.has(fieldName)) return;
+    if (isMysqlCellDraftValue(rawValue) && rawValue.kind === "default") return;
     const entry = resolveMysqlMutationEntry(rawValue);
     if (!entry.include) return;
     values[fieldName] = entry.value;

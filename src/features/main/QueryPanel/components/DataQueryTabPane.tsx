@@ -1583,7 +1583,7 @@ export function DataQueryTabPane({
                           <div className="flex flex-wrap gap-2">
                             {item.fields.map((field) => (
                               <span key={`${item.op}:${item.operationIndex}:${field.name}`} className="rounded border border-base-300 bg-base-200/60 px-2 py-1">
-                                {field.name} = {field.kind === "null" ? "NULL" : JSON.stringify(field.value)}
+                                {field.name} = {field.kind === "null" ? "NULL" : field.kind === "default" ? "DEFAULT" : JSON.stringify(field.value)}
                               </span>
                             ))}
                           </div>

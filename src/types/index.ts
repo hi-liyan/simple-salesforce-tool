@@ -135,8 +135,8 @@ export type MutationPreviewField = {
   // 字段名。
   name: string;
   // 字段写入语义。
-  kind: "null" | "value";
-  // 字段最终写入值；kind=null 时固定为 null。
+  kind: "null" | "value" | "default";
+  // 字段最终写入值；kind=null 时固定为 null，kind=default 时固定为 "DEFAULT"。
   value: unknown;
 };
 
@@ -210,6 +210,10 @@ export type MysqlCellDraftValue =
       __mysqlDraft: true;
       kind: "value";
       value: unknown;
+    }
+  | {
+      __mysqlDraft: true;
+      kind: "default";
     };
 
 // 查询结果可更新性模式：用于提前判断当前 MySQL 结果集是否允许进入可信编辑链路。

@@ -1081,8 +1081,21 @@ fn escape_sql_literal(value: &str) -> String {
     value.replace('\\', "\\\\").replace('\'', "\\'")
 }
 
+/// 判断当前 JSON 值是否表示“恢复字段默认值”语义。
+fn is_mysql_default_marker(value: &Value) -> bool {
+    matches!(
+        value,
+        Value::Object(map)
+            if map.get("__mysqlDraft").and_then(Value::as_bool) == Some(true)
+                && map.get("kind").and_then(Value::as_str) == Some("default")
+    )
+}
+
 /// 渲染 MySQL 可读值文本，便于系统日志白盒追踪。
 fn format_mysql_value_literal(value: &Value) -> String {
+    if is_mysql_default_marker(value) {
+        return "DEFAULT".to_string();
+    }
     match value {
         Value::Null => "NULL".to_string(),
         Value::Bool(item) => {
@@ -1230,7 +1243,11 @@ where
             builder.push(", ");
         }
         builder.push("`").push(key).push("` = ");
-        push_bind_json_value(&mut builder, value);
+        if is_mysql_default_marker(value) {
+            builder.push("DEFAULT");
+        } else {
+            push_bind_json_value(&mut builder, value);
+        }
     }
     builder.push(" WHERE `").push(primary_key).push("` = ");
     builder.push_bind(record_id);
@@ -1880,6 +1897,28 @@ mod tests {
             .expect("无可更新字段时也不应报错");
 
         assert!(sql.is_none());
+    }
+
+    #[test]
+    fn build_update_preview_sql_uses_default_keyword_for_default_marker() {
+        let normalized = normalize_update_values(
+            build_values(&[(
+                "status",
+                json!({
+                    "__mysqlDraft": true,
+                    "kind": "default"
+                }),
+            )]),
+            "order_id",
+        );
+        let sql = build_update_preview_sql("orders", "order_id", "A-100", normalized)
+            .expect("DEFAULT 更新日志 SQL 应该构造成功")
+            .expect("存在默认值字段时应该生成 SQL");
+
+        assert_eq!(
+            sql,
+            "UPDATE `orders` SET `status` = DEFAULT WHERE `order_id` = 'A-100';"
+        );
     }
 
     #[test]

@@ -102,7 +102,9 @@ export function createGetCellContent({
     const editable = isCellEditableByMeta(metadata, isNewRow);
     const requiredNewField = isRequiredOnCreate(metadata, isNewRow);
     const raw = record[columnId];
-    const mysqlDisplayState = isMysqlSource ? resolveMysqlDisplayValue(raw) : { value: raw, useNullPlaceholder: raw === null || raw === undefined };
+    const mysqlDisplayState = isMysqlSource
+      ? resolveMysqlDisplayValue(raw, metadata)
+      : { value: raw, useNullPlaceholder: raw === null || raw === undefined };
     const cellValue = mysqlDisplayState.value;
     const isDirty = dirtyCellSet.has(`${recordId}:${columnId}`);
     const isRequiredEmpty = requiredNewField && (isMysqlSource ? isMysqlBlankValue(raw) : isEmptyValue(raw));

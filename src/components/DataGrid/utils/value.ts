@@ -1,11 +1,15 @@
-import { EditableGridCell, GridCellKind } from "@glideapps/glide-data-grid";
+import { GridCellKind } from "@glideapps/glide-data-grid";
+import type { EditableGridCell } from "@glideapps/glide-data-grid";
 
 // 布尔值统一转换为编辑器可识别文本。
 export function normalizeBooleanText(value: unknown): string {
   if (typeof value === "boolean") return value ? "true" : "false";
+  if (typeof value === "number") return value === 1 ? "true" : "false";
   if (typeof value === "string") {
     const normalized = value.trim().toLowerCase();
     if (normalized === "true" || normalized === "false") return normalized;
+    if (normalized === "1") return "true";
+    if (normalized === "0") return "false";
   }
   return "false";
 }

@@ -1,7 +1,10 @@
 import { useCallback } from "react";
 import { api } from "../../../api";
 import { RowContextMenuState } from "../types";
-import { createMysqlDraftNullValue } from "../../../features/main/QueryPanel/logic/mysqlValueSemantics.ts";
+import {
+  createMysqlDraftDefaultValue,
+  createMysqlDraftNullValue
+} from "../../../features/main/QueryPanel/logic/mysqlValueSemantics.ts";
 
 type UseDataGridMenuActionsParams = {
   // 当前右键菜单状态。
@@ -81,9 +84,18 @@ export function useDataGridMenuActions({
     setRowContextMenu(null); // 执行后关闭菜单，避免重复点击。
   }, [rowContextMenu, onEditCell, setRowContextMenu, isMysqlSource]);
 
+  // 右键菜单动作：恢复字段默认值；统一写入 default 草稿，提交阶段再按 create/update 分流。
+  const setCellDefaultValueFromMenu = useCallback(() => {
+    if (!rowContextMenu) return;
+    if (!rowContextMenu.canSetDefaultValue) return;
+    onEditCell(rowContextMenu.rowIndex, rowContextMenu.columnId, createMysqlDraftDefaultValue());
+    setRowContextMenu(null);
+  }, [rowContextMenu, onEditCell, setRowContextMenu]);
+
   return {
     openRecordPageFromMenu,
     copyCellValueFromMenu,
-    setCellNullishFromMenu
+    setCellNullishFromMenu,
+    setCellDefaultValueFromMenu
   };
 }
