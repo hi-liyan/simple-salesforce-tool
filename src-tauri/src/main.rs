@@ -9,7 +9,9 @@ mod llm;
 mod models;
 mod providers;
 mod salesforce;
+mod services;
 mod sf_cli;
+mod storage;
 mod terminal;
 
 use std::collections::HashMap;
@@ -64,10 +66,14 @@ fn main() {
             commands::open_external_url,
             commands::list_system_logs,
             commands::create_source,
+            commands::get_source,
+            commands::get_source_secret_view,
             commands::reorder_sources,
             commands::test_source_connection,
             commands::update_source,
             commands::delete_source,
+            commands::load_workspace_snapshot,
+            commands::save_workspace_snapshot,
             commands::get_column_visibility,
             commands::save_column_visibility,
             commands::list_objects,
@@ -92,8 +98,6 @@ fn main() {
             commands::ai_chat_turn_v2,
             commands::ai_stop_turn,
             commands::stop_llm_stream_generation,
-            commands::get_ui_state,
-            commands::save_ui_state,
             commands::list_terminal_command_groups,
             commands::create_terminal_command_group,
             commands::update_terminal_command_group,
@@ -104,6 +108,8 @@ fn main() {
             commands::reorder_terminal_commands,
             commands::open_terminal_session,
             commands::list_available_terminal_shells,
+            commands::get_terminal_shell_settings,
+            commands::save_terminal_shell_command,
             commands::write_terminal_input,
             commands::resize_terminal_session,
             commands::close_terminal_session,

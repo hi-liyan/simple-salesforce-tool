@@ -276,13 +276,14 @@ export function SettingsPanel() {
   }
 
   // 打开 MySQL 编辑弹窗：从 source.configJson 回填表单。
-  function openMySqlEditModal(source: SalesforceSource) {
+  async function openMySqlEditModal(source: SalesforceSource) {
+    const secretView = await api.getSourceSecretView(source.id).catch(() => null);
     const rawConfig = (source.configJson || {}) as Record<string, unknown>;
     const host = String(rawConfig.host || "");
     const port = Number(rawConfig.port || 3306);
     const database = String(rawConfig.database || "");
     const username = String(rawConfig.username || "");
-    const password = String(rawConfig.password || "");
+    const password = String(secretView?.password || "");
     const primaryKey = String(rawConfig.primaryKey || "");
     setEditingMySqlSource(source);
     setMySqlEditForm({
@@ -300,12 +301,13 @@ export function SettingsPanel() {
   }
 
   // 打开 Salesforce 编辑弹窗：仅允许编辑非 CLI 数据源。
-  function openSalesforceEditModal(source: SalesforceSource) {
+  async function openSalesforceEditModal(source: SalesforceSource) {
+    const secretView = await api.getSourceSecretView(source.id).catch(() => null);
     setEditingSalesforceSource(source);
     setSalesforceEditForm({
       name: source.name || "",
       instanceUrl: source.instanceUrl || "",
-      accessToken: source.accessToken || "",
+      accessToken: secretView?.accessToken || "",
       apiVersion: source.apiVersion || "v61.0",
       color: getSourceColor(source)
     });
@@ -322,14 +324,14 @@ export function SettingsPanel() {
   }
 
   // 打开数据源设置入口：优先复用现有编辑弹窗，否则回退到通用颜色设置弹窗。
-  function openSourceSettingsModal(source: SalesforceSource) {
+  async function openSourceSettingsModal(source: SalesforceSource) {
     const normalizedSourceType = (source.sourceType || "salesforce").toLowerCase();
     if (normalizedSourceType === "mysql") {
-      openMySqlEditModal(source);
+      await openMySqlEditModal(source);
       return;
     }
     if (normalizedSourceType === "salesforce" && !source.id.startsWith("cli-")) {
-      openSalesforceEditModal(source);
+      await openSalesforceEditModal(source);
       return;
     }
     openSourceColorModal(source);
@@ -391,13 +393,17 @@ export function SettingsPanel() {
   }
 
   // 构建通用颜色更新 payload：保留原有连接字段，只覆盖 configJson.color。
-  function buildSourceColorPayload(source: SalesforceSource) {
+  function buildSourceColorPayload(source: SalesforceSource, secretView?: { accessToken?: string; password?: string }) {
+    const nextConfigJson = { ...(source.configJson || {}) } as Record<string, unknown>;
+    if (secretView?.password) {
+      nextConfigJson.password = secretView.password;
+    }
     return withSourceColor({
       name: source.name,
       sourceType: source.sourceType,
-      configJson: { ...(source.configJson || {}) },
+      configJson: nextConfigJson,
       instanceUrl: source.instanceUrl,
-      accessToken: source.accessToken,
+      accessToken: secretView?.accessToken || "",
       apiVersion: source.apiVersion
     }, sourceColorForm);
   }
@@ -476,7 +482,8 @@ export function SettingsPanel() {
     setSourceColorMessage("");
     setSourceColorSubmitting(true);
     try {
-      await api.updateSource(editingColorSource.id, buildSourceColorPayload(editingColorSource));
+      const secretView = await api.getSourceSecretView(editingColorSource.id).catch(() => null);
+      await api.updateSource(editingColorSource.id, buildSourceColorPayload(editingColorSource, secretView || undefined));
       await refreshSourceVisualState(); // 保存后让 QueryPanel 左树与工作区标签同步拿到最新颜色。
       closeSourceColorModal();
     } catch (saveError) {
@@ -520,15 +527,14 @@ export function SettingsPanel() {
     setTerminalSettingsLoading(true);
     setError("");
     try {
-      const [options, commandValue, legacyPreference] = await Promise.all([
+      const [options, terminalShellSettings] = await Promise.all([
         api.listAvailableTerminalShells(),
-        api.getUiState("terminal.shell.command"),
-        api.getUiState("terminal.shell.preference")
+        api.getTerminalShellSettings()
       ]);
       const normalizedOptions = Array.isArray(options) ? options : [];
       setTerminalShellOptions(normalizedOptions);
 
-      const savedCommand = (commandValue || "").trim();
+      const savedCommand = (terminalShellSettings.commandValue || "").trim();
       if (savedCommand) {
         // 优先将数据库中的保存值映射到本次探测到的绝对路径选项，失效配置则清空以引导用户重新选择。
         const matchedSavedOption = findTerminalShellOption(normalizedOptions, savedCommand);
@@ -537,7 +543,7 @@ export function SettingsPanel() {
       }
 
       // 兼容旧配置值（pwsh/powershell），自动映射到命令名。
-      const legacy = (legacyPreference || "").trim().toLowerCase();
+      const legacy = (terminalShellSettings.legacyPreference || "").trim().toLowerCase();
       if (legacy === "powershell") {
         const matchedLegacyOption = findTerminalShellOption(normalizedOptions, "powershell.exe");
         setTerminalShellCommand(matchedLegacyOption?.command || "");
@@ -578,7 +584,7 @@ export function SettingsPanel() {
         setError("当前终端 Shell 不是绝对路径，请重新选择。");
         return;
       }
-      await api.saveUiState("terminal.shell.command", absoluteShellPath);
+      await api.saveTerminalShellCommand(absoluteShellPath);
       setTerminalShellCommand(absoluteShellPath);
     } catch (saveError) {
       setError(String(saveError));

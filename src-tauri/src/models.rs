@@ -66,6 +66,68 @@ pub struct SourceUpsertPayload {
     pub api_version: String,
 }
 
+/// 数据源 secret 明文视图：仅供显式编辑链路使用。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceSecretView {
+    /// 数据源 ID。
+    pub source_id: String,
+    /// Salesforce accessToken 明文；非 Salesforce 数据源时为空。
+    pub access_token: String,
+    /// MySQL 密码明文；未使用时为空。
+    pub password: String,
+}
+
+/// secret 访问审计记录。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretAuditRecord {
+    /// bundle ID。
+    pub bundle_id: String,
+    /// secret item ID。
+    pub secret_item_id: Option<String>,
+    /// 动作名。
+    pub action: String,
+    /// 触发来源。
+    pub trigger_source: String,
+    /// 是否成功。
+    pub success: bool,
+    /// 摘要说明。
+    pub message: String,
+    /// 关联 ID。
+    #[serde(default)]
+    pub correlation_id: String,
+    /// 结构化详情。
+    #[serde(default)]
+    pub detail_json: Value,
+}
+
+/// secret 审计列表项。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretAuditEntry {
+    /// 审计主键。
+    pub id: i64,
+    /// bundle ID。
+    pub bundle_id: String,
+    /// secret item ID。
+    pub secret_item_id: Option<String>,
+    /// 动作名。
+    pub action: String,
+    /// 触发来源。
+    pub trigger_source: String,
+    /// 是否成功。
+    pub success: bool,
+    /// 摘要说明。
+    pub message: String,
+    /// 关联 ID。
+    pub correlation_id: String,
+    /// 结构化详情。
+    pub detail_json: Value,
+    /// 创建时间。
+    pub created_at: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SalesforceObject {
@@ -131,6 +193,208 @@ pub struct ObjectChildRelationship {
     pub deprecated_and_hidden: bool,
 }
 
+/// 元数据对象记录：用于结构化对象快照表。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceObjectRecord {
+    /// 数据源 ID。
+    pub source_id: String,
+    /// 对象名。
+    pub object_name: String,
+    /// 标签。
+    pub label: String,
+    /// 注释。
+    pub comment: Option<String>,
+    /// 是否可查询。
+    pub queryable: bool,
+    /// 是否可新增。
+    pub createable: bool,
+    /// 是否可更新。
+    pub updateable: bool,
+    /// 是否可删除。
+    pub deletable: bool,
+    /// schema 版本。
+    pub schema_version: i64,
+    /// 快照版本。
+    pub snapshot_version: i64,
+    /// 身份哈希。
+    pub identity_hash: String,
+    /// 刷新原因。
+    pub refresh_reason: String,
+}
+
+impl SourceObjectRecord {
+    /// 便捷构造 Salesforce 对象记录。
+    pub fn salesforce(name: &str, label: &str) -> Self {
+        Self {
+            source_id: String::new(),
+            object_name: name.to_string(),
+            label: label.to_string(),
+            comment: None,
+            queryable: true,
+            createable: true,
+            updateable: true,
+            deletable: true,
+            schema_version: 1,
+            snapshot_version: 1,
+            identity_hash: String::new(),
+            refresh_reason: String::new(),
+        }
+    }
+}
+
+/// 元数据字段记录。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceObjectFieldRecord {
+    /// 数据源 ID。
+    pub source_id: String,
+    /// 对象名。
+    pub object_name: String,
+    /// 字段名。
+    pub field_name: String,
+    /// 标签。
+    pub label: String,
+    /// 数据类型。
+    pub data_type: String,
+    /// 是否允许为空。
+    pub nillable: bool,
+    /// 是否可更新。
+    pub updateable: bool,
+    /// 是否可创建。
+    pub createable: bool,
+    /// 原始 metadata。
+    pub metadata: HashMap<String, Value>,
+    /// 排序号。
+    pub sort_order: i64,
+}
+
+impl SourceObjectFieldRecord {
+    /// 构造文本字段记录。
+    pub fn text(object_name: &str, field_name: &str, sort_order: i64) -> Self {
+        Self {
+            source_id: String::new(),
+            object_name: object_name.to_string(),
+            field_name: field_name.to_string(),
+            label: field_name.to_string(),
+            data_type: "string".to_string(),
+            nillable: true,
+            updateable: true,
+            createable: true,
+            metadata: HashMap::new(),
+            sort_order,
+        }
+    }
+}
+
+/// 元数据关系记录。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceObjectRelationRecord {
+    /// 数据源 ID。
+    pub source_id: String,
+    /// 对象名。
+    pub object_name: String,
+    /// 关系名。
+    pub relation_name: String,
+    /// 子对象名。
+    pub child_sobject: String,
+    /// 字段名。
+    pub field_name: String,
+    /// relationshipName。
+    pub relationship_name: String,
+    /// 是否隐藏。
+    pub deprecated_and_hidden: bool,
+    /// 关系类型。
+    pub relation_type: String,
+    /// 排序号。
+    pub sort_order: i64,
+}
+
+/// 元数据 blob 记录。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceMetadataBlobRecord {
+    /// blob ID。
+    pub id: String,
+    /// 数据源 ID。
+    pub source_id: String,
+    /// 对象名。
+    pub object_name: String,
+    /// blob 类型。
+    pub blob_type: String,
+    /// 原始载荷。
+    pub payload_json: String,
+    /// schema 版本。
+    pub schema_version: i64,
+    /// 快照版本。
+    pub snapshot_version: i64,
+}
+
+impl SourceMetadataBlobRecord {
+    /// 构造 describe blob。
+    pub fn describe(object_name: &str, payload_json: &str) -> Self {
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            source_id: String::new(),
+            object_name: object_name.to_string(),
+            blob_type: "describe".to_string(),
+            payload_json: payload_json.to_string(),
+            schema_version: 1,
+            snapshot_version: 1,
+        }
+    }
+}
+
+/// 结构化元数据快照写入载荷。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetadataSnapshotUpsert {
+    /// 数据源 ID。
+    pub source_id: String,
+    /// 对象名。
+    pub object_name: String,
+    /// schema 版本。
+    pub schema_version: i64,
+    /// 快照版本。
+    pub snapshot_version: i64,
+    /// 身份哈希。
+    pub identity_hash: String,
+    /// 刷新原因。
+    pub refresh_reason: String,
+    /// 对象记录。
+    pub object: SourceObjectRecord,
+    /// 字段记录列表。
+    pub fields: Vec<SourceObjectFieldRecord>,
+    /// 索引记录列表。
+    pub indexes: Vec<Value>,
+    /// 约束记录列表。
+    pub constraints: Vec<Value>,
+    /// 关系记录列表。
+    pub relations: Vec<SourceObjectRelationRecord>,
+    /// blob 列表。
+    pub blobs: Vec<SourceMetadataBlobRecord>,
+    /// 可选 DDL。
+    #[serde(default)]
+    pub ddl: Option<ObjectDdl>,
+}
+
+/// 单对象结构化快照。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ObjectSnapshot {
+    /// 对象记录。
+    pub object: SourceObjectRecord,
+    /// 字段列表。
+    pub fields: Vec<SourceObjectFieldRecord>,
+    /// 关系列表。
+    pub relations: Vec<SourceObjectRelationRecord>,
+    /// blob 列表。
+    pub blobs: Vec<SourceMetadataBlobRecord>,
+    /// 可选 DDL。
+    pub ddl: Option<ObjectDdl>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CurrentUserContext {
@@ -147,6 +411,263 @@ pub struct QueryResult {
     pub total_size: usize,
     /// 记录列表（键为字段名，值为 JSON 值）。
     pub records: Vec<HashMap<String, Value>>,
+}
+
+/// 工作区标签 DTO。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceTabDto {
+    /// 标签 ID。
+    pub tab_id: String,
+    /// 标签类型。
+    pub tab_kind: String,
+    /// 标题。
+    pub title: String,
+    /// 数据源 ID。
+    pub source_id: Option<String>,
+    /// 排序号。
+    pub sort_order: i64,
+    /// 是否激活。
+    pub is_active: i64,
+    /// 扩展载荷。
+    #[serde(default)]
+    pub payload_json: Value,
+}
+
+impl WorkspaceTabDto {
+    /// 构造 query 标签。
+    pub fn query(tab_id: &str, title: &str, source_id: &str) -> Self {
+        Self {
+            tab_id: tab_id.to_string(),
+            tab_kind: "query".to_string(),
+            title: title.to_string(),
+            source_id: Some(source_id.to_string()),
+            sort_order: 1,
+            is_active: 1,
+            payload_json: Value::Object(serde_json::Map::new()),
+        }
+    }
+}
+
+/// Query 标签状态 DTO。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct QueryTabStateDto {
+    /// 标签 ID。
+    pub tab_id: String,
+    /// 绑定键。
+    pub binding_key: String,
+    /// 数据源 ID。
+    pub source_id: String,
+    /// 数据源类型。
+    pub source_type: String,
+    /// 数据源名称。
+    pub source_name: String,
+    /// 数据源颜色。
+    pub source_color: String,
+    /// 对象名。
+    pub object_name: String,
+    /// 标签显示名。
+    pub label: String,
+    /// describe。
+    pub describe_json: Option<Value>,
+    /// where 草稿。
+    pub where_clause: String,
+    /// limit。
+    pub limit: i64,
+    /// 排序字段。
+    pub sort_field: String,
+    /// 排序方向。
+    pub sort_direction: String,
+    /// 排序表达式。
+    pub sort_clause: String,
+    /// 当前查询。
+    pub current_soql: String,
+    /// 草稿查询。
+    pub soql_draft: String,
+    /// 是否展示查询栏。
+    pub show_query_bar: bool,
+    /// 是否展示抽屉。
+    pub show_drawer: bool,
+    /// 抽屉视图。
+    pub drawer_view: String,
+    /// 是否展示日志。
+    pub show_logs: bool,
+    /// 列可见性。
+    pub column_visibility: Value,
+    /// 提示。
+    pub notice_json: Option<Value>,
+}
+
+impl QueryTabStateDto {
+    /// 构造最小 seed。
+    pub fn seed(tab_id: &str, source_id: &str, object_name: &str) -> Self {
+        Self {
+            tab_id: tab_id.to_string(),
+            binding_key: format!("{source_id}::{object_name}"),
+            source_id: source_id.to_string(),
+            source_type: "salesforce".to_string(),
+            source_name: String::new(),
+            source_color: String::new(),
+            object_name: object_name.to_string(),
+            label: object_name.to_string(),
+            describe_json: None,
+            where_clause: String::new(),
+            limit: 200,
+            sort_field: String::new(),
+            sort_direction: "DESC".to_string(),
+            sort_clause: String::new(),
+            current_soql: String::new(),
+            soql_draft: String::new(),
+            show_query_bar: true,
+            show_drawer: false,
+            drawer_view: "salesforce".to_string(),
+            show_logs: false,
+            column_visibility: Value::Object(serde_json::Map::new()),
+            notice_json: None,
+        }
+    }
+}
+
+/// Query 结果集 DTO。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct QueryResultSetDto {
+    /// 结果集 ID。
+    pub result_set_id: String,
+    /// 标签 ID。
+    pub tab_id: String,
+    /// 恢复状态：fresh/stale/invalid。
+    pub result_status: String,
+    /// 总条数。
+    pub total_size: i64,
+    /// 记录列表。
+    pub records_json: Value,
+}
+
+impl QueryResultSetDto {
+    /// 构造 stale seed。
+    pub fn stale_seed(
+        result_set_id: &str,
+        tab_id: &str,
+        _source_id: &str,
+        _object_name: &str,
+    ) -> Self {
+        Self {
+            result_set_id: result_set_id.to_string(),
+            tab_id: tab_id.to_string(),
+            result_status: "stale".to_string(),
+            total_size: 0,
+            records_json: Value::Array(Vec::new()),
+        }
+    }
+}
+
+/// Query 行草稿 DTO。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct QueryRowDraftDto {
+    /// 标签 ID。
+    pub tab_id: String,
+    /// 已勾选记录。
+    pub selected_record_ids_json: Value,
+    /// 待删除记录。
+    pub pending_delete_record_ids_json: Value,
+    /// 脏单元格键。
+    pub dirty_cell_keys_json: Value,
+    /// baseline。
+    pub baseline_records_json: Value,
+}
+
+/// Console 标签状态 DTO。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsoleTabStateDto {
+    /// 标签 ID。
+    pub tab_id: String,
+    /// 数据源 ID。
+    pub source_id: String,
+    /// 数据源类型。
+    pub source_type: String,
+    /// 数据源名称。
+    pub source_name: String,
+    /// 数据源颜色。
+    pub source_color: String,
+    /// 标签名。
+    pub name: String,
+    /// 草稿。
+    pub soql_draft: String,
+    /// 选中文本。
+    pub selected_soql_text: String,
+    /// 查询结果。
+    pub result_json: Value,
+    /// 提示。
+    pub notice_json: Option<Value>,
+    /// 日志列表。
+    pub logs_json: Value,
+    /// 已选记录。
+    pub selected_record_ids_json: Value,
+    /// 是否显示底部面板。
+    pub show_bottom_panel: bool,
+    /// AI 会话 ID。
+    pub ai_conversation_id: String,
+    /// AI 提示词草稿。
+    pub ai_prompt_draft: String,
+    /// AI 消息列表。
+    pub ai_messages_json: Value,
+    /// 是否 AI 模式。
+    pub ai_mode: bool,
+}
+
+/// 工具标签状态 DTO。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolTabStateDto {
+    /// 标签 ID。
+    pub tab_id: String,
+    /// 工具类型。
+    pub tool_kind: String,
+    /// 标签名。
+    pub name: String,
+    /// 结构化载荷。
+    pub payload_json: Value,
+}
+
+/// 终端标签状态 DTO。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalTabStateDto {
+    /// 标签 ID。
+    pub tab_id: String,
+    /// 标签名。
+    pub name: String,
+    /// 输入草稿。
+    pub input_draft: String,
+    /// 输出列表。
+    pub outputs_json: Value,
+}
+
+/// 工作区快照 DTO。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceSnapshotDto {
+    /// 全部工作区标签。
+    pub tabs: Vec<WorkspaceTabDto>,
+    /// Query 标签状态。
+    pub query_tabs: Vec<QueryTabStateDto>,
+    /// Query 结果集。
+    pub query_results: Vec<QueryResultSetDto>,
+    /// Query 草稿。
+    pub query_row_drafts: Vec<QueryRowDraftDto>,
+    /// Console 标签状态。
+    pub console_tabs: Vec<ConsoleTabStateDto>,
+    /// 工具标签状态。
+    pub tool_tabs: Vec<ToolTabStateDto>,
+    /// 终端标签状态。
+    pub terminal_tabs: Vec<TerminalTabStateDto>,
+    /// 工作区 UI 扩展状态。
+    #[serde(default)]
+    pub ui_state: HashMap<String, Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -310,6 +831,15 @@ pub struct TerminalCommandReorderPayload {
 pub struct TerminalCommandGroupUpsertPayload {
     /// 命令组名称。
     pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalShellSettings {
+    /// 当前保存的绝对路径命令。
+    pub command_value: Option<String>,
+    /// 旧版偏好字段（如 pwsh / powershell）。
+    pub legacy_preference: Option<String>,
 }
 
 /// 对象列表缓存行（SQLite 内部结构）。

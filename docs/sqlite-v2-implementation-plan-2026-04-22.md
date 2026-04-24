@@ -10,6 +10,14 @@
 
 ---
 
+## 实施状态（2026-04-24）
+
+- 已落地：新增 `storage/` 与 `services/` 骨架，v2 schema / bootstrap / PRAGMA 已进入代码；数据源与 secret 已分域建模，并补了 `get_source`、`get_source_secret_view`、`load_workspace_snapshot`、`save_workspace_snapshot` 命令入口。
+- 已落地：前端 `tauriStorage` 已改为通过结构化 workspace snapshot 读写，新增 [`tests/query-panel/workspaceSnapshot.test.ts`](/mnt/d/test-workspace/simple-salesforce-tool/tests/query-panel/workspaceSnapshot.test.ts) 锁定多 store 恢复映射；`node --test --experimental-strip-types tests/query-panel/workspaceSnapshot.test.ts tests/query-panel/startupPersistence.test.ts tests/query-panel/terminalStoreIsolation.test.ts` 已通过。
+- 已落地：设置页编辑链路已切到 `getSourceSecretView`，MySQL / Salesforce 编辑表单与颜色更新链路会显式回填并保留 secret 明文。
+- 待收尾：`AppState/main.rs` 仍保留旧 `db` 入口，`db.rs` 当前是 v2 兼容适配层，尚未完成计划中的最终移除；通用 `get_ui_state/save_ui_state` 已删除，但旧 `db.rs` 兼容层尚在。
+- 已验证：`cargo test --manifest-path src-tauri/Cargo.toml`、`npm run test:query-panel`、`npm run test:datagrid-utils`、`npm run build` 均已通过。
+
 ### Task 1: 建立 SQLite v2 启动边界与切库 bootstrap
 
 **Files:**
@@ -571,7 +579,7 @@ git commit -m "feat(storage): 增加诊断日志与自动化领域"
 - Modify: `src/pages/mainPageStartup.ts`
 - Create: `tests/query-panel/workspaceSnapshot.test.ts`
 
-- [ ] **Step 1: 写失败测试，锁定“后端 snapshot -> 多 store 恢复”的映射**
+- [x] **Step 1: 写失败测试，锁定“后端 snapshot -> 多 store 恢复”的映射**
 
 ```ts
 test("restoreWorkspaceSnapshot: 应按 query/console/tool/terminal 分层恢复，并重置运行态标记", () => {
@@ -591,12 +599,12 @@ test("restoreWorkspaceSnapshot: 应按 query/console/tool/terminal 分层恢复�
 });
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `node --test --experimental-strip-types tests/query-panel/workspaceSnapshot.test.ts`
 Expected: FAIL with `restoreWorkspaceSnapshot is not defined`
 
-- [ ] **Step 3: 增加前后端 DTO 类型与 snapshot 映射器**
+- [x] **Step 3: 增加前后端 DTO 类型与 snapshot 映射器**
 
 ```ts
 // src/store/workspaceSnapshot.ts
@@ -623,7 +631,7 @@ export function restoreWorkspaceSnapshot(snapshot: WorkspaceSnapshotDto) {
 }
 ```
 
-- [ ] **Step 4: 把 `tauriStorage` 与各 store 从黑盒 key/value 迁到结构化 snapshot**
+- [x] **Step 4: 把 `tauriStorage` 与各 store 从黑盒 key/value 迁到结构化 snapshot**
 
 ```ts
 // src/api/index.ts
@@ -641,7 +649,7 @@ export async function loadWorkspaceSnapshotFromBackend(): Promise<WorkspaceSnaps
 }
 ```
 
-- [ ] **Step 5: 运行测试确认通过**
+- [x] **Step 5: 运行测试确认通过**
 
 Run: `node --test --experimental-strip-types tests/query-panel/workspaceSnapshot.test.ts tests/query-panel/startupPersistence.test.ts`
 Expected: PASS
@@ -721,7 +729,7 @@ if (snapshot) {
 }
 ```
 
-- [ ] **Step 5: 运行 QueryPanel 回归测试**
+- [x] **Step 5: 运行 QueryPanel 回归测试**
 
 Run: `npm run test:query-panel`
 Expected: PASS

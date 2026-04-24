@@ -3,7 +3,6 @@ import { persist } from "zustand/middleware";
 import { buildObjectTabBindingKey, type TabState } from "../types/index.ts";
 import { createDebouncedTauriJsonStorage } from "./tauriStorage.ts";
 import { hydrateTab } from "./queryTabHydration.ts";
-import { createPersistedQueryTabSnapshot, type PersistedQueryTabSnapshot } from "./queryTabPersistence.ts";
 
 // 主页面视图模式：支持 Query 工作区、Terminal 工作区、工具页与设置页入口。
 export type MainViewMode = "query" | "terminal" | "tools" | "settings";
@@ -136,7 +135,7 @@ type PersistedAppState = {
   selectedSourceId: string;
   viewMode: MainViewMode;
   soqlSidebarWidth: number;
-  tabs: PersistedQueryTabSnapshot[];
+  tabs: TabState[];
   activeTabObjectName: string;
 };
 
@@ -211,7 +210,7 @@ export const useAppStore = create<AppState>()(
         selectedSourceId: state.selectedSourceId,
         viewMode: state.viewMode,
         soqlSidebarWidth: state.soqlSidebarWidth,
-        tabs: state.tabs.map((tab) => createPersistedQueryTabSnapshot(ensureTabBindingKey(tab))),
+        tabs: state.tabs.map((tab) => ensureTabBindingKey(tab)),
         activeTabObjectName: state.activeTabObjectName
       }),
       // 从持久化快照恢复时，兼容历史 source 分桶结构并扁平化为全局 tabs。

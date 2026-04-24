@@ -19,9 +19,10 @@ use crate::models::{
     CliPathStatus, CurrentUserContext, LlmSettings, LlmSettingsView, MutationExecutionResult,
     MutationPreviewSqlItem, ObjectDdl, ObjectDescribe, QueryResult, RecordMutationPayload,
     RecordSavePayload, RecordSaveWithDeletePayload, RecordUpdatePayload, SalesforceObject,
-    SalesforceSource, SaveLlmSettingsPayload, SourceUpsertPayload, SystemLogPage,
-    TerminalCommandGroup, TerminalCommandGroupUpsertPayload, TerminalCommandItem,
-    TerminalCommandReorderPayload, TerminalCommandUpsertPayload,
+    SalesforceSource, SaveLlmSettingsPayload, SourceSecretView, SourceUpsertPayload,
+    SystemLogPage, TerminalCommandGroup, TerminalCommandGroupUpsertPayload, TerminalCommandItem,
+    TerminalCommandReorderPayload, TerminalCommandUpsertPayload, TerminalShellSettings,
+    WorkspaceSnapshotDto,
 };
 use crate::providers::{
     preview_create_record_sql, preview_delete_record_sql, preview_save_records_with_deletes_items,
@@ -1020,6 +1021,36 @@ pub fn create_source(
     db::create_source(&connection, payload).map_err(AppError::to_string_error)
 }
 
+/// 读取单个数据源的公共信息。
+#[tauri::command]
+pub fn get_source(
+    state: State<'_, AppState>,
+    source_id: String,
+) -> Result<SalesforceSource, String> {
+    let connection = state
+        .db
+        .lock()
+        .map_err(|error| format!("Database lock failed: {error}"))?;
+    let sources = db::list_sources(&connection).map_err(AppError::to_string_error)?;
+    sources
+        .into_iter()
+        .find(|item| item.id == source_id)
+        .ok_or_else(|| format!("未找到数据源: {source_id}"))
+}
+
+/// 显式读取设置页编辑链路需要的 secret 明文。
+#[tauri::command]
+pub fn get_source_secret_view(
+    state: State<'_, AppState>,
+    source_id: String,
+) -> Result<SourceSecretView, String> {
+    let connection = state
+        .db
+        .lock()
+        .map_err(|error| format!("Database lock failed: {error}"))?;
+    db::get_source_secret_view(&connection, &source_id).map_err(AppError::to_string_error)
+}
+
 /// 按前端传入顺序重排数据源序号。
 #[tauri::command]
 pub fn reorder_sources(
@@ -1083,6 +1114,29 @@ pub fn delete_source(state: State<'_, AppState>, id: String) -> Result<(), Strin
         .lock()
         .map_err(|error| format!("Database lock failed: {error}"))?;
     db::delete_source(&connection, &id).map_err(AppError::to_string_error)
+}
+
+/// 读取结构化工作区快照。
+#[tauri::command]
+pub fn load_workspace_snapshot(state: State<'_, AppState>) -> Result<WorkspaceSnapshotDto, String> {
+    let connection = state
+        .db
+        .lock()
+        .map_err(|error| format!("Database lock failed: {error}"))?;
+    db::load_workspace_snapshot(&connection).map_err(AppError::to_string_error)
+}
+
+/// 保存结构化工作区快照。
+#[tauri::command]
+pub fn save_workspace_snapshot(
+    state: State<'_, AppState>,
+    payload: WorkspaceSnapshotDto,
+) -> Result<(), String> {
+    let connection = state
+        .db
+        .lock()
+        .map_err(|error| format!("Database lock failed: {error}"))?;
+    db::save_workspace_snapshot(&connection, &payload).map_err(AppError::to_string_error)
 }
 
 /// 读取对象字段可见性配置。
@@ -3217,6 +3271,41 @@ pub fn list_available_terminal_shells() -> Result<Vec<TerminalShellOption>, Stri
     Ok(terminal_runtime::list_available_terminal_shells())
 }
 
+/// 读取终端 Shell 设置：包含当前保存值与旧版兼容字段。
+#[tauri::command]
+pub fn get_terminal_shell_settings(
+    state: State<'_, AppState>,
+) -> Result<TerminalShellSettings, String> {
+    let connection = state
+        .db
+        .lock()
+        .map_err(|error| format!("Database lock failed: {error}"))?;
+    Ok(TerminalShellSettings {
+        command_value: db::read_app_setting(&connection, TERMINAL_SHELL_COMMAND_KEY)
+            .map_err(AppError::to_string_error)?,
+        legacy_preference: db::read_app_setting(&connection, LEGACY_TERMINAL_SHELL_PREFERENCE_KEY)
+            .map_err(AppError::to_string_error)?,
+    })
+}
+
+/// 保存终端 Shell 命令路径。
+#[tauri::command]
+pub fn save_terminal_shell_command(
+    state: State<'_, AppState>,
+    command: String,
+) -> Result<(), String> {
+    let normalized_command = command.trim().to_string();
+    if normalized_command.is_empty() {
+        return Err("终端 Shell 命令不能为空".to_string());
+    }
+    let connection = state
+        .db
+        .lock()
+        .map_err(|error| format!("Database lock failed: {error}"))?;
+    db::write_app_setting(&connection, TERMINAL_SHELL_COMMAND_KEY, &normalized_command)
+        .map_err(AppError::to_string_error)
+}
+
 /// 向终端会话写入输入（真实终端键盘输入透传）。
 #[tauri::command]
 pub fn write_terminal_input(
@@ -3330,26 +3419,6 @@ fn read_terminal_shell_command(state: &State<'_, AppState>) -> Option<String> {
         return Some("pwsh.exe".to_string());
     }
     Some(legacy)
-}
-
-/// 读取 UI 持久化状态（通用键值）。
-#[tauri::command]
-pub fn get_ui_state(state: State<'_, AppState>, key: String) -> Result<Option<String>, String> {
-    let connection = state
-        .db
-        .lock()
-        .map_err(|error| format!("Database lock failed: {error}"))?;
-    db::read_app_setting(&connection, &key).map_err(AppError::to_string_error)
-}
-
-/// 写入 UI 持久化状态（通用键值）。
-#[tauri::command]
-pub fn save_ui_state(state: State<'_, AppState>, key: String, value: String) -> Result<(), String> {
-    let connection = state
-        .db
-        .lock()
-        .map_err(|error| format!("Database lock failed: {error}"))?;
-    db::write_app_setting(&connection, &key, &value).map_err(AppError::to_string_error)
 }
 
 #[cfg(test)]
