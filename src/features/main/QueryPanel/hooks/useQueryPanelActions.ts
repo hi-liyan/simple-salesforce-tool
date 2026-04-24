@@ -11,6 +11,15 @@ import {
   normalizeMysqlEditedCellValue
 } from "../logic/mysqlValueSemantics.ts";
 
+type EditableGridRecord = Record<string, unknown> & {
+  // 是否为前端本地新增行。
+  __isNew?: boolean;
+  // 前端稳定行身份：用于 dirty / 选中 / 删除定位。
+  __rowStableId?: string;
+  // 基线记录键：用于主键编辑后仍能命中 baseline。
+  __baselineKey?: string;
+};
+
 type UseQueryPanelActionsInput = {
   // 当前激活 Query Tab。
   activeTab: TabState | null;
@@ -314,7 +323,7 @@ export function useQueryPanelActions({
       onEditCell: (rowIndex, columnName, value) => {
         if (!activeTab) return;
         patchTab(activeTab.bindingKey, (item) => {
-          const nextRecords = [...item.result.records];
+          const nextRecords = [...item.result.records] as EditableGridRecord[];
           const target = nextRecords[rowIndex];
           if (!target) return item;
           const resolvedSourceType = item.sourceType || selectedSourceType || "salesforce";
@@ -330,12 +339,13 @@ export function useQueryPanelActions({
           const baselineKeyFromRecord = typeof target.__baselineKey === "string" ? target.__baselineKey : "";
           const stableBaselineKey = baselineKeyFromRecord || stableRowId;
           const isEditingNewRow = Boolean(target.__isNew);
-          const nextRecordBase = isEditingNewRow
+          const nextRecordBase: EditableGridRecord = isEditingNewRow
             ? { ...target }
             : { ...target, __rowStableId: stableBaselineKey, __baselineKey: stableBaselineKey };
-          const nextRecord = (() => {
+          const nextRecord: EditableGridRecord = (() => {
             if (isMysqlDraftOmitValue(normalizedValue)) {
-              const { [columnName]: _removed, ...rest } = nextRecordBase;
+              const rest: EditableGridRecord = { ...nextRecordBase };
+              delete rest[columnName]; // 行内注释：MySQL omit 语义需要从草稿记录里移除该字段。
               return rest;
             }
             return { ...nextRecordBase, [columnName]: normalizedValue };

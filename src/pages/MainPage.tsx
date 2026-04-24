@@ -11,6 +11,7 @@ import { useQueryWorkspaceTabsStore } from "../store/useQueryWorkspaceTabsStore"
 import { useQuerySourceTreeStore } from "../store/useQuerySourceTreeStore";
 import { enableStorageWrite } from "../store/tauriStorage";
 import { checkGithubLatestVersion, waitForUiIdleFrame } from "../utils/versionUpdate";
+import { createStartupCoordinator, shouldMountQueryPanel } from "./mainPageStartup";
 // 启动版本检查标志：避免 React StrictMode 在开发环境重复触发新版本通知。
 let startupVersionCheckTriggered = false;
 
@@ -55,6 +56,8 @@ const STARTUP_STAGES: StartupStage[] = [
 
 // 启动阶段索引：按 key 快速获取阶段配置，避免重复查找。
 const STARTUP_STAGE_MAP = Object.fromEntries(STARTUP_STAGES.map((stage) => [stage.key, stage])) as Record<StartupStageKey, StartupStage>;
+// 启动协调器：跨 StrictMode 双挂载共享一次性启动任务与阶段进度。
+const mainPageStartupCoordinator = createStartupCoordinator<StartupStage>(STARTUP_STAGE_MAP.rehydrate);
 
 // 懒加载 Query 工作区：将 DataGrid / 控制台等较重 UI 拆出首包。
 const LazyQueryPanel = lazy(async () => {
@@ -117,14 +120,11 @@ export function MainPage() {
   const setViewMode = useAppStore((state) => state.setViewMode);
   const soqlSidebarWidth = useAppStore((state) => state.soqlSidebarWidth);
   const setSoqlSidebarWidth = useAppStore((state) => state.setSoqlSidebarWidth);
+  const compactPersistedTabsSnapshot = useAppStore((state) => state.compactPersistedTabsSnapshot);
   const resetTerminalWorkspace = useTerminalStore((state) => state.resetTerminalWorkspace);
 
-  // 启动画面状态：首次初始化完成前显示全屏遮罩，避免用户误以为卡死。
-  const [startupLoading, setStartupLoading] = useState(true);
-  // 当前启动阶段：用于驱动遮罩中的进度条与动作文案。
-  const [startupStage, setStartupStage] = useState<StartupStage>(STARTUP_STAGE_MAP.rehydrate);
-  // 启动完成标记：用于在 QueryPanel 聚合层触发“数据源切换重置 Tab”逻辑。
-  const [startupComplete, setStartupComplete] = useState(false);
+  // 启动画面快照：由模块级协调器托管，避免 StrictMode 双挂载重复执行启动重任务。
+  const [startupState, setStartupState] = useState(() => mainPageStartupCoordinator.getSnapshot());
   // 新版本提示通知状态：有值时在右上角显示升级通知。
   const [versionUpdateNotice, setVersionUpdateNotice] = useState<VersionUpdateNoticeState | null>(null);
   // Terminal 面板是否已初始化：首次进入 Terminal 后保持挂载，避免切页时重建会话。
@@ -141,17 +141,19 @@ export function MainPage() {
     setViewMode,
     soqlSidebarWidth,
     setSoqlSidebarWidth,
-    startupComplete,
+    startupComplete: startupState.complete,
     tokenRefreshing
   });
 
   // 初始化加载：先恢复本地持久化状态，再将 CLI 同步放到后台静默执行。
   useEffect(() => {
-    let active = true;
+    const unsubscribe = mainPageStartupCoordinator.subscribe((snapshot) => {
+      setStartupState(snapshot);
+    });
 
-    const setup = async () => {
+    void mainPageStartupCoordinator.ensureStarted(async ({ setStage, finish }) => {
       // 启动第一阶段：恢复持久化工作区快照。
-      setStartupStage(STARTUP_STAGE_MAP.rehydrate);
+      setStage(STARTUP_STAGE_MAP.rehydrate);
       // 手动触发 rehydrate（skipHydration: true），从 SQLite 恢复持久化状态。
       await Promise.all([
         useAppStore.persist.rehydrate(),
@@ -159,12 +161,12 @@ export function MainPage() {
         useQueryWorkspaceTabsStore.persist.rehydrate(),
         useQuerySourceTreeStore.persist.rehydrate()
       ]);
-      if (!active) return;
 
       // 启动第二阶段：允许后续状态重新写回本地存储。
-      setStartupStage(STARTUP_STAGE_MAP["enable-storage"]);
-      // rehydrate 完成且确认组件仍存活后，才开启写入门控。
+      setStage(STARTUP_STAGE_MAP["enable-storage"]);
+      // rehydrate 完成后开启写入门控，并主动把旧版重快照压缩为轻量结构。
       enableStorageWrite();
+      compactPersistedTabsSnapshot();
       // 终端工作区不参与启动恢复：每次启动都从空白标签开始。
       resetTerminalWorkspace();
       // 同步移除历史终端快照，避免后续误触发恢复旧 Tab。
@@ -175,20 +177,17 @@ export function MainPage() {
       }
 
       // 启动第三阶段：恢复本地数据源与上次选择结果。
-      setStartupStage(STARTUP_STAGE_MAP["restore-sources"]);
+      setStage(STARTUP_STAGE_MAP["restore-sources"]);
       // hydration 完成后从 store 读取持久化的数据源 ID。
       const persistedSourceId = useAppStore.getState().selectedSourceId;
       // 首屏只恢复本地数据源与上次选择，避免 CLI 同步和对象强刷阻塞启动遮罩。
       await refreshSources(false, undefined, persistedSourceId, {
         forceObjectRefresh: false
       });
-      if (!active) return;
 
       // 启动最后阶段：主界面已具备可交互条件，准备收起启动遮罩。
-      setStartupStage(STARTUP_STAGE_MAP.ready);
-      // 首次初始化结束后关闭启动遮罩，并标记启动完成。
-      setStartupComplete(true);
-      setStartupLoading(false);
+      setStage(STARTUP_STAGE_MAP.ready);
+      finish();
 
       // 异步重新拉取恢复的 Tab 数据（describe + query），不阻塞主界面。
       const finalSelectedSourceId = useAppStore.getState().selectedSourceId;
@@ -214,13 +213,12 @@ export function MainPage() {
           void checkLatestVersionOnStartup(showVersionUpdateNotice);
         });
       }
-    };
+    });
 
-    void setup();
     return () => {
-      active = false;
+      unsubscribe();
     };
-  }, []);
+  }, [compactPersistedTabsSnapshot, refreshSources, reloadRestoredTabs, resetTerminalWorkspace]);
 
   // 监听 token 刷新事件：用于在 loading 遮罩中显示更明确文案。
   useEffect(() => {
@@ -259,8 +257,8 @@ export function MainPage() {
 
   // 启动步骤列表：用于在遮罩中展示每个阶段的完成状态。
   const startupStageItems = STARTUP_STAGES.map((stage) => {
-    const isCurrentStage = stage.key === startupStage.key;
-    const isCompletedStage = stage.progress < startupStage.progress;
+    const isCurrentStage = stage.key === startupState.stage.key;
+    const isCompletedStage = stage.progress < startupState.stage.progress;
     // 根据当前阶段进度，推导遮罩中的步骤状态文案。
     const statusText = isCompletedStage ? "已完成" : isCurrentStage ? "进行中" : "待开始";
     return {
@@ -353,7 +351,7 @@ export function MainPage() {
         content={
           <>
             {/* Query 工作区：对象树 + 数据/控制台统一 Tab，首次进入时按需加载。 */}
-            {viewMode === "query" && (
+            {shouldMountQueryPanel(viewMode, startupState.complete) && (
               <Suspense fallback={<WorkspaceLoadingFallback title="正在加载 Query 工作区" />}>
                 {/* Query 工作区主体。 */}
                 <LazyQueryPanel viewState={queryPanelViewState} actions={queryPanelActions} />
@@ -394,7 +392,7 @@ export function MainPage() {
           className="fixed right-4 top-4 z-[70] max-w-[380px] shadow-lg"
         />
       )}
-      {startupLoading && (
+      {startupState.loading && (
         // 启动遮罩：初始化期间覆盖全屏并拦截鼠标事件。
         <div className="fixed inset-0 z-[120] flex items-center justify-center bg-base-200/95 backdrop-blur-sm">
           {/* 启动卡片：展示加载状态、进度条与当前动作。 */}
@@ -403,19 +401,19 @@ export function MainPage() {
               <span className="loading loading-spinner text-primary" style={{ width: 26, height: 26 }} />
               <div className="min-w-0">
                 <p className="text-[14px] font-semibold">正在启动应用</p>
-                <p className="mt-1 text-[12px] text-neutral/70">{startupStage.detail}</p>
+                <p className="mt-1 text-[12px] text-neutral/70">{startupState.stage.detail}</p>
               </div>
             </div>
             {/* 进度条：显示当前启动进度与动作名称。 */}
             <div className="mt-5">
               <div className="mb-2 flex items-center justify-between text-[12px] text-neutral/70">
-                <span>{startupStage.label}</span>
-                <span>{startupStage.progress}%</span>
+                <span>{startupState.stage.label}</span>
+                <span>{startupState.stage.progress}%</span>
               </div>
               <div className="h-2 overflow-hidden rounded-full bg-base-300">
                 <div
                   className="h-full rounded-full bg-primary transition-all duration-300 ease-out"
-                  style={{ width: `${startupStage.progress}%` }}
+                  style={{ width: `${startupState.stage.progress}%` }}
                 />
               </div>
             </div>

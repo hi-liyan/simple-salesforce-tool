@@ -3,6 +3,7 @@ import { persist } from "zustand/middleware";
 import { buildObjectTabBindingKey, type TabState } from "../types/index.ts";
 import { createDebouncedTauriJsonStorage } from "./tauriStorage.ts";
 import { hydrateTab } from "./queryTabHydration.ts";
+import { createPersistedQueryTabSnapshot, type PersistedQueryTabSnapshot } from "./queryTabPersistence.ts";
 
 // 主页面视图模式：支持 Query 工作区、Terminal 工作区、工具页与设置页入口。
 export type MainViewMode = "query" | "terminal" | "tools" | "settings";
@@ -126,6 +127,8 @@ type AppState = {
   closeTab: (tabIdentity: string) => void;
   // 清空所有 Tab。
   resetTabs: () => void;
+  // 触发一次轻量快照持久化：用于把历史重快照压缩回当前结构。
+  compactPersistedTabsSnapshot: () => void;
 };
 
 // App 持久化切片：仅包含真正需要落盘的稳定 UI 状态。
@@ -133,7 +136,7 @@ type PersistedAppState = {
   selectedSourceId: string;
   viewMode: MainViewMode;
   soqlSidebarWidth: number;
-  tabs: TabState[];
+  tabs: PersistedQueryTabSnapshot[];
   activeTabObjectName: string;
 };
 
@@ -189,7 +192,13 @@ export const useAppStore = create<AppState>()(
         set({
           tabs: [],
           activeTabObjectName: ""
-        })
+        }),
+
+      compactPersistedTabsSnapshot: () =>
+        set((state) => ({
+          // 这里复制一份 tabs 数组，主动触发 persist 重新落盘为轻量快照。
+          tabs: state.tabs.map((tab) => ensureTabBindingKey(tab))
+        }))
     }),
     {
       name: "ui.app-store",
@@ -202,7 +211,7 @@ export const useAppStore = create<AppState>()(
         selectedSourceId: state.selectedSourceId,
         viewMode: state.viewMode,
         soqlSidebarWidth: state.soqlSidebarWidth,
-        tabs: state.tabs,
+        tabs: state.tabs.map((tab) => createPersistedQueryTabSnapshot(ensureTabBindingKey(tab))),
         activeTabObjectName: state.activeTabObjectName
       }),
       // 从持久化快照恢复时，兼容历史 source 分桶结构并扁平化为全局 tabs。
