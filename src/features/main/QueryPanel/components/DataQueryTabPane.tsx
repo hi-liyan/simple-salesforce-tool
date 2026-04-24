@@ -383,6 +383,7 @@ function QueryBar({
 
   // 执行查询：优先使用草稿覆盖值，保证点击查询时使用最新输入。
   function handleQueryClick() {
+    if (activeTab.loading) return;
     // 查询前先取消防抖回写，避免“点击查询后又被旧定时器回写”产生错觉。
     clearTimers();
     // 主动回写一次，保证 UI 切换 Tab 或其它地方读取 store 时拿到一致值。
@@ -415,6 +416,7 @@ function QueryBar({
             suggestions={mysqlWhereSuggestions}
             defaultWidth={360}
             allowClear
+            onSubmit={handleQueryClick}
           />
         ) : (
           <SalesforceSmartInput
@@ -430,6 +432,7 @@ function QueryBar({
             suggestions={salesforceWhereSuggestions}
             defaultWidth={360}
             allowClear
+            onSubmit={handleQueryClick}
           />
         )}
 
@@ -448,6 +451,7 @@ function QueryBar({
               suggestions={mysqlSortSuggestions}
               defaultWidth={300}
               allowClear
+              onSubmit={handleQueryClick}
             />
 
             <div className="w-[90px]">
@@ -481,6 +485,7 @@ function QueryBar({
               suggestions={salesforceSortSuggestions}
               defaultWidth={300}
               allowClear
+              onSubmit={handleQueryClick}
             />
 
             <div className="w-[90px]">
