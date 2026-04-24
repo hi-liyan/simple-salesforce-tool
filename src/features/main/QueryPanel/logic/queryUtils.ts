@@ -1,4 +1,5 @@
-import { ObjectDescribe, ObjectField, QueryResult, TabState } from "../../../../types";
+import type { ObjectDescribe, ObjectField, QueryResult, TabState } from "../../../../types/index.ts";
+import { resolveMysqlDraftRuntimeValue } from "./mysqlValueSemantics.ts";
 
 // 记录键计算参数：用于按数据源类型统一 key 生成规则。
 export type RecordKeyOptions = {
@@ -7,6 +8,53 @@ export type RecordKeyOptions = {
   // MySQL 主键字段名（来自 describe 字段元数据）。
   mysqlPrimaryKeyField?: string;
 };
+
+// 解析当前记录的后端定位值：用于更新/删除时生成 recordId。
+function resolveRecordLocator(record: Record<string, unknown>, options: RecordKeyOptions = {}): string {
+  const salesforceId = resolveMysqlDraftRuntimeValue(record.Id);
+  if (salesforceId !== null && salesforceId !== undefined && String(salesforceId).trim() !== "") {
+    return String(salesforceId).trim();
+  }
+  // MySQL 场景优先使用主键字段值作为后端定位条件。
+  if ((options.sourceType || "salesforce").toLowerCase() === "mysql" && options.mysqlPrimaryKeyField) {
+    const mysqlPrimaryValue = resolveMysqlDraftRuntimeValue(record[options.mysqlPrimaryKeyField]);
+    if (mysqlPrimaryValue !== null && mysqlPrimaryValue !== undefined && String(mysqlPrimaryValue).trim() !== "") {
+      return String(mysqlPrimaryValue).trim();
+    }
+  }
+  return "";
+}
+
+// 生成记录稳定身份：仅供前端选择、高亮、dirty 与待删除定位使用。
+function buildFallbackRowStableId(record: Record<string, unknown>, rowIndex: number, options: RecordKeyOptions = {}): string {
+  if (record.__localId !== null && record.__localId !== undefined && String(record.__localId).trim() !== "") {
+    return String(record.__localId).trim();
+  }
+  const locator = resolveRecordLocator(record, options);
+  if (locator) {
+    if ((options.sourceType || "salesforce").toLowerCase() === "mysql" && options.mysqlPrimaryKeyField) {
+      return `mysql:${options.mysqlPrimaryKeyField}:${locator}`;
+    }
+    return `record:${locator}`;
+  }
+  return `row:${rowIndex}`;
+}
+
+// 为查询结果补齐稳定行身份：旧行固定 __rowStableId/__baselineKey，新行仅保留 __rowStableId。
+export function normalizeRecordsWithStableIds(
+  records: Record<string, unknown>[],
+  options: RecordKeyOptions = {}
+): Record<string, unknown>[] {
+  return records.map((record, rowIndex) => {
+    const rowStableId = getRecordKey(record, rowIndex, options);
+    const isNewRow = Boolean(record.__isNew);
+    return {
+      ...record,
+      __rowStableId: rowStableId,
+      ...(isNewRow ? {} : { __baselineKey: rowStableId })
+    };
+  });
+}
 
 // 计算默认字段可见性。
 export function buildDefaultVisibility(describe: ObjectDescribe): Record<string, boolean> {
@@ -175,18 +223,17 @@ export function buildBaselineRecords(
   return baseline;
 }
 
-// 获取记录主键或临时键。
+// 获取记录稳定键：优先使用已缓存的 rowStableId/baselineKey，缺失时再按定位值生成。
 export function getRecordKey(record: Record<string, unknown>, rowIndex: number, options: RecordKeyOptions = {}): string {
-  if (record.__localId) return String(record.__localId);
-  if (record.Id) return String(record.Id);
-  // MySQL 行键回退：缺失 Id 时使用主键字段值，保证编辑高亮与更新提交使用同一键。
-  if ((options.sourceType || "salesforce").toLowerCase() === "mysql" && options.mysqlPrimaryKeyField) {
-    const mysqlPrimaryValue = record[options.mysqlPrimaryKeyField];
-    if (mysqlPrimaryValue !== null && mysqlPrimaryValue !== undefined && String(mysqlPrimaryValue).trim() !== "") {
-      return String(mysqlPrimaryValue);
-    }
+  const rowStableId = record.__rowStableId;
+  if (rowStableId !== null && rowStableId !== undefined && String(rowStableId).trim() !== "") {
+    return String(rowStableId).trim();
   }
-  return `row-${rowIndex}`;
+  const baselineKey = record.__baselineKey;
+  if (baselineKey !== null && baselineKey !== undefined && String(baselineKey).trim() !== "") {
+    return String(baselineKey).trim();
+  }
+  return buildFallbackRowStableId(record, rowIndex, options);
 }
 
 // 归一化查询结果。

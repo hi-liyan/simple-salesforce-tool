@@ -1,5 +1,6 @@
 import { GridCell, GridCellKind, GridColumn, Item } from "@glideapps/glide-data-grid";
 import { buildCellThemeOverride, buildRowThemeOverride } from "../logic/rowTheme";
+import { isMysqlBlankValue, resolveMysqlDisplayValue } from "../../../features/main/QueryPanel/logic/mysqlValueSemantics.ts";
 import {
   normalizeDateDisplayValue,
   normalizeDatetimeDisplayValue
@@ -77,7 +78,7 @@ export function createGetCellContent({
         kind: GridCellKind.Boolean,
         data: selectedRecordIds.includes(recordId),
         allowOverlay: false,
-        readonly: recordId.startsWith("row-"),
+        readonly: recordId.startsWith("row:"),
         // 行级高亮：确保选择列与数据列颜色一致。
         themeOverride: rowThemeOverride
       };
@@ -101,9 +102,11 @@ export function createGetCellContent({
     const editable = isCellEditableByMeta(metadata, isNewRow);
     const requiredNewField = isRequiredOnCreate(metadata, isNewRow);
     const raw = record[columnId];
+    const mysqlDisplayState = isMysqlSource ? resolveMysqlDisplayValue(raw) : { value: raw, useNullPlaceholder: raw === null || raw === undefined };
+    const cellValue = mysqlDisplayState.value;
     const isDirty = dirtyCellSet.has(`${recordId}:${columnId}`);
-    const isRequiredEmpty = requiredNewField && isEmptyValue(raw);
-    const isNullishValue = raw === null || raw === undefined;
+    const isRequiredEmpty = requiredNewField && (isMysqlSource ? isMysqlBlankValue(raw) : isEmptyValue(raw));
+    const isNullishValue = mysqlDisplayState.useNullPlaceholder;
 
     const commonTheme = buildCellThemeOverride(isDirty, isRequiredEmpty, isPendingDeleteRow, isNewRowHighlight);
     // 空值仅在展示态使用淡化样式，避免把编辑器里的输入文字也渲染成灰色。
@@ -111,7 +114,7 @@ export function createGetCellContent({
 
     if (strategy === "boolean") {
       // 空值仅显示占位，不把 None/Null 作为真实编辑值写入编辑器。
-      const text = isNullishValue ? "" : normalizeBooleanText(raw);
+      const text = isNullishValue ? "" : normalizeBooleanText(cellValue);
       return {
         kind: GridCellKind.Text,
         data: text,
@@ -124,12 +127,12 @@ export function createGetCellContent({
     }
 
     if (strategy === "number") {
-      const num = coerceNumber(raw);
+      const num = coerceNumber(cellValue);
       return {
         kind: GridCellKind.Number,
         data: num,
         // 数值列优先使用归一化后的数字文本，避免 tinyint 等字段被显示为 true/false。
-        displayData: isNullishValue ? nullPlaceholderText : num === undefined ? String(raw) : String(num),
+        displayData: isNullishValue ? nullPlaceholderText : num === undefined ? String(cellValue) : String(num),
         allowOverlay: editable || allowReadonlyOverlay,
         readonly: !editable,
         themeOverride: commonTheme,
@@ -139,7 +142,7 @@ export function createGetCellContent({
 
     if (strategy === "date") {
       // MySQL 日期值直接展示标准字符串；Salesforce 继续按既有日期规范展示。
-      const text = isMysqlSource ? stringifyCellValue(raw) : normalizeDateDisplayValue(raw);
+      const text = isMysqlSource ? stringifyCellValue(cellValue) : normalizeDateDisplayValue(cellValue);
       return {
         kind: GridCellKind.Text,
         // date 单元格展示与提交统一为 Salesforce 日期格式（YYYY-MM-DD）。
@@ -154,7 +157,7 @@ export function createGetCellContent({
 
     if (strategy === "datetime") {
       // MySQL datetime/timestamp 不做 Salesforce 时区偏移转换，避免跨时区误差。
-      const text = isMysqlSource ? stringifyCellValue(raw) : normalizeDatetimeDisplayValue(raw, effectiveSalesforceTimezone);
+      const text = isMysqlSource ? stringifyCellValue(cellValue) : normalizeDatetimeDisplayValue(cellValue, effectiveSalesforceTimezone);
       return {
         kind: GridCellKind.Text,
         // datetime 单元格展示为 Salesforce 日期时间格式（YYYY-MM-DDTHH:mm:ss.SSS+0000）。
@@ -169,7 +172,7 @@ export function createGetCellContent({
 
     if (strategy === "picklist") {
       const options = getPicklistEditorOptions(metadata);
-      const value = normalizePicklistValue(raw);
+      const value = normalizePicklistValue(cellValue);
       const displayText = resolvePicklistDisplayText(value, options);
       return {
         kind: GridCellKind.Text,
@@ -184,7 +187,7 @@ export function createGetCellContent({
       };
     }
 
-    const text = stringifyCellValue(raw);
+    const text = stringifyCellValue(cellValue);
     return {
       kind: GridCellKind.Text,
       data: text,

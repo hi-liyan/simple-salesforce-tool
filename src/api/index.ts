@@ -9,6 +9,8 @@ import type {
   CurrentUserContext,
   LlmSettings,
   LlmSettingsSavePayload,
+  MutationExecutionResult,
+  MutationPreviewSqlItem,
   ObjectDdl,
   ObjectDescribe,
   QueryResult,
@@ -91,9 +93,12 @@ export const api = {
     invokeApi<CurrentUserContext>("get_current_user_context", { sourceId }),
   createRecord: (payload: RecordMutationPayload) => invokeApi<string>("create_record", { payload }),
   saveRecords: (payload: RecordSavePayload) => invokeApi<void>("save_records", { payload }),
+  // MySQL 提交前预览 SQL：只生成展示用 SQL，不执行数据库写入。
+  previewSaveRecordsWithDeletes: (payload: RecordSaveWithDeletePayload) =>
+    invokeApi<MutationPreviewSqlItem[]>("preview_save_records_with_deletes", { payload }),
   // MySQL 单事务提交新增/更新/删除。
   saveRecordsWithDeletes: (payload: RecordSaveWithDeletePayload) =>
-    invokeApi<void>("save_records_with_deletes", { payload }),
+    invokeApi<MutationExecutionResult>("save_records_with_deletes", { payload }),
   updateRecord: (sourceId: string, objectName: string, recordId: string, values: Record<string, unknown>) =>
     invokeApi<void>("update_record", { sourceId, objectName, recordId, values }),
   deleteRecord: (sourceId: string, objectName: string, recordId: string) =>

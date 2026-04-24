@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import { api } from "../../../api";
 import { RowContextMenuState } from "../types";
+import { createMysqlDraftNullValue } from "../../../features/main/QueryPanel/logic/mysqlValueSemantics.ts";
 
 type UseDataGridMenuActionsParams = {
   // 当前右键菜单状态。
@@ -11,6 +12,8 @@ type UseDataGridMenuActionsParams = {
   sourceId?: string;
   // 当前对象 API 名称。
   objectName?: string;
+  // 当前数据源类型：用于区分 Set None / Set Null 的实际写入语义。
+  selectedSourceType?: string;
   // 单元格编辑回调。
   onEditCell: (rowIndex: number, columnName: string, value: unknown) => void;
   // 用户提示回调。
@@ -23,9 +26,11 @@ export function useDataGridMenuActions({
   setRowContextMenu,
   sourceId,
   objectName,
+  selectedSourceType,
   onEditCell,
   onShowMessage
 }: UseDataGridMenuActionsParams) {
+  const isMysqlSource = (selectedSourceType || "salesforce").toLowerCase() === "mysql";
   // 打开 Salesforce 记录页：后端校验 token 后直接打开系统浏览器。
   const openRecordPageFromMenu = useCallback(async () => {
     if (!rowContextMenu) return;
@@ -72,9 +77,9 @@ export function useDataGridMenuActions({
   const setCellNullishFromMenu = useCallback(() => {
     if (!rowContextMenu) return;
     if (!rowContextMenu.canSetNullish) return;
-    onEditCell(rowContextMenu.rowIndex, rowContextMenu.columnId, null);
+    onEditCell(rowContextMenu.rowIndex, rowContextMenu.columnId, isMysqlSource ? createMysqlDraftNullValue() : null);
     setRowContextMenu(null); // 执行后关闭菜单，避免重复点击。
-  }, [rowContextMenu, onEditCell, setRowContextMenu]);
+  }, [rowContextMenu, onEditCell, setRowContextMenu, isMysqlSource]);
 
   return {
     openRecordPageFromMenu,

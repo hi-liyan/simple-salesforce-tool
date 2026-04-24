@@ -127,6 +127,112 @@ export type RecordSaveWithDeletePayload = {
   deletes: string[];
 };
 
+// MySQL 变更预览操作类型：与前后端预览/执行结果共用统一枚举。
+export type MutationPreviewOperation = "create" | "update" | "delete";
+
+// MySQL 变更预览字段：显式区分写入 NULL 与写入具体值，便于前端摘要展示。
+export type MutationPreviewField = {
+  // 字段名。
+  name: string;
+  // 字段写入语义。
+  kind: "null" | "value";
+  // 字段最终写入值；kind=null 时固定为 null。
+  value: unknown;
+};
+
+// 后端返回的预览 SQL 片段：用于把结构化预览项补齐为“可读 SQL”。
+export type MutationPreviewSqlItem = {
+  // 操作类型。
+  op: MutationPreviewOperation;
+  // 同类操作内的顺序索引：用于和前端 planner 结果稳定对齐。
+  operationIndex: number;
+  // 预览 SQL 文本。
+  previewSql: string;
+};
+
+// 前端结构化变更预览项：供预览弹窗、提交日志与执行结果映射复用。
+export type MutationPreviewItem = {
+  // 操作类型。
+  op: MutationPreviewOperation;
+  // 同类操作内的顺序索引：用于关联后端返回的 SQL/执行结果。
+  operationIndex: number;
+  // 前端稳定行身份：仅用于 UI 高亮与定位。
+  rowStableId: string;
+  // 后端记录定位值：update/delete 通常为主键值，create 为空字符串。
+  rowLocator: string;
+  // 本次操作涉及的字段摘要。
+  fields: MutationPreviewField[];
+  // 预览 SQL：点击“执行更新”前由后端返回补齐。
+  previewSql: string;
+};
+
+// MySQL 单条执行结果：供前端展示成功摘要与失败定位。
+export type MutationExecutionItem = {
+  // 操作类型。
+  op: MutationPreviewOperation;
+  // 同类操作内的顺序索引：用于回写到预览项。
+  operationIndex: number;
+  // 后端记录定位值。
+  rowLocator: string;
+  // 实际受影响行数。
+  rowsAffected: number;
+  // 该条操作是否执行成功。
+  success: boolean;
+  // 预览 SQL：与系统日志中的预览语义保持一致。
+  previewSql: string;
+  // 失败原因；成功时为空字符串。
+  error: string;
+};
+
+// MySQL 批量执行摘要：供前端成功提示、日志与后续失败定位扩展复用。
+export type MutationExecutionResult = {
+  // 新增操作数量。
+  createCount: number;
+  // 更新操作数量。
+  updateCount: number;
+  // 删除操作数量。
+  deleteCount: number;
+  // 单条执行结果列表。
+  items: MutationExecutionItem[];
+};
+
+// MySQL 单元格草稿值：显式区分“省略字段”“写入 NULL”“写入具体值”。
+export type MysqlCellDraftValue =
+  | {
+      __mysqlDraft: true;
+      kind: "omit";
+    }
+  | {
+      __mysqlDraft: true;
+      kind: "null";
+    }
+  | {
+      __mysqlDraft: true;
+      kind: "value";
+      value: unknown;
+    };
+
+// 查询结果可更新性模式：用于提前判断当前 MySQL 结果集是否允许进入可信编辑链路。
+export type RowUpdateCapabilityMode =
+  | "editable"
+  | "readonly_missing_pk"
+  | "readonly_complex_query"
+  | "readonly_multi_table";
+
+// 查询结果可更新性：统一承载“是否可编辑”和“为什么不可编辑”的前端语义。
+export type RowUpdateCapability = {
+  // 当前结果集可更新性模式。
+  mode: RowUpdateCapabilityMode;
+  // 是否允许继续编辑/提交。
+  editable: boolean;
+  // 对用户可见的只读原因说明。
+  reason: string;
+  // 当前结果集解析出的目标表名。
+  targetTableName: string;
+  // 当前结果集识别出的主键字段名。
+  primaryKeyField: string;
+};
+
 // 页面提示消息。
 export type Notice = {
   type: "error" | "success";

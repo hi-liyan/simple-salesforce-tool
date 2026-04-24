@@ -62,6 +62,39 @@ export function getNonEditableMysqlTypeLabel(metadata: Record<string, unknown>):
   return dataType;
 }
 
+// 生成只读单元格提示文案：优先返回结果集只读原因，其次返回字段级只读原因。
+export function buildReadonlyCellMessage(
+  columnName: string,
+  metadata: Record<string, unknown>,
+  isNewRow: boolean
+): string {
+  const resultReadonlyReason = typeof metadata.resultReadonlyReason === "string"
+    ? metadata.resultReadonlyReason.trim()
+    : "";
+  if (resultReadonlyReason) {
+    return resultReadonlyReason;
+  }
+
+  const blockedMysqlType = getNonEditableMysqlTypeLabel(metadata);
+  if (blockedMysqlType) {
+    return `${columnName} 字段类型 ${blockedMysqlType} 不支持在表格中编辑。`;
+  }
+
+  const fieldReadonlyReason = isNewRow
+    ? typeof metadata.mysqlCreateReadonlyReason === "string"
+      ? metadata.mysqlCreateReadonlyReason.trim()
+      : ""
+    : typeof metadata.mysqlUpdateReadonlyReason === "string"
+      ? metadata.mysqlUpdateReadonlyReason.trim()
+      : "";
+  if (fieldReadonlyReason) {
+    return `${columnName} 字段${fieldReadonlyReason}`;
+  }
+
+  const action = isNewRow ? "创建" : "更新";
+  return `${columnName} 字段不可${action}，无法编辑。`;
+}
+
 // 判断布尔字段类型。
 export function isBooleanType(fieldType: string): boolean {
   return fieldType === "boolean" || fieldType === "bool";

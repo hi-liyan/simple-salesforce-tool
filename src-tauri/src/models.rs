@@ -210,6 +210,49 @@ pub struct RecordSaveWithDeletePayload {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct MutationPreviewSqlItem {
+    /// 操作类型：create/update/delete。
+    pub op: String,
+    /// 同类操作内的顺序索引：用于前端把 SQL 回填到对应预览项。
+    pub operation_index: usize,
+    /// 预览 SQL 文本。
+    pub preview_sql: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MutationExecutionItem {
+    /// 操作类型：create/update/delete。
+    pub op: String,
+    /// 同类操作内的顺序索引：用于前端映射执行结果。
+    pub operation_index: usize,
+    /// 当前操作的记录定位值；create 场景通常为空字符串。
+    pub row_locator: String,
+    /// 当前操作影响行数。
+    pub rows_affected: u64,
+    /// 当前操作是否执行成功。
+    pub success: bool,
+    /// 与真实执行共用归一化逻辑构造的预览 SQL。
+    pub preview_sql: String,
+    /// 失败原因；成功时返回空字符串。
+    pub error: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MutationExecutionResult {
+    /// 新增操作数量。
+    pub create_count: usize,
+    /// 更新操作数量。
+    pub update_count: usize,
+    /// 删除操作数量。
+    pub delete_count: usize,
+    /// 单条执行结果列表。
+    pub items: Vec<MutationExecutionItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TerminalCommandItem {
     /// 命令主键。
     pub id: String,

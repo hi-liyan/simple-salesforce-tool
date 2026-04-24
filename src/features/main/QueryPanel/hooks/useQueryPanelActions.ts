@@ -5,6 +5,20 @@ import type { ObjectDescribe, SalesforceObject, SalesforceSource, SourceBindingM
 import { MainViewMode } from "../../../../store/useAppStore";
 import { getSourceColor } from "../logic/sourceColor.ts";
 import { getMysqlPrimaryKeyField, getRecordKey } from "../logic/queryUtils";
+import {
+  isMysqlDraftDirty,
+  isMysqlDraftOmitValue,
+  normalizeMysqlEditedCellValue
+} from "../logic/mysqlValueSemantics.ts";
+
+type EditableGridRecord = Record<string, unknown> & {
+  // 是否为前端本地新增行。
+  __isNew?: boolean;
+  // 前端稳定行身份：用于 dirty / 选中 / 删除定位。
+  __rowStableId?: string;
+  // 基线记录键：用于主键编辑后仍能命中 baseline。
+  __baselineKey?: string;
+};
 
 type UseQueryPanelActionsInput = {
   // 当前激活 Query Tab。
@@ -76,7 +90,7 @@ type UseQueryPanelActionsInput = {
   // 加载 MySQL DDL。
   loadMysqlDdl: (objectName: string) => Promise<void>;
   // 更新 Tab。
-  patchTab: (objectName: string, updater: (tab: TabState) => TabState) => void;
+  patchTab: (tabBindingKey: string, updater: (tab: TabState) => TabState) => void;
   // 执行对象查询。
   queryTabData: (
     objectName: string,
@@ -228,31 +242,31 @@ export function useQueryPanelActions({
       },
       onToggleQueryBar: () => {
         if (!activeTab) return;
-        patchTab(activeTab.objectName, (item) => ({ ...item, showQueryBar: !item.showQueryBar }));
+        patchTab(activeTab.bindingKey, (item) => ({ ...item, showQueryBar: !item.showQueryBar }));
       },
       onToggleLogs: () => {
         if (!activeTab) return;
-        patchTab(activeTab.objectName, (item) => ({ ...item, showLogs: !item.showLogs }));
+        patchTab(activeTab.bindingKey, (item) => ({ ...item, showLogs: !item.showLogs }));
       },
       onWhereChange: (value) => {
         if (!activeTab) return;
-        patchTab(activeTab.objectName, (item) => ({ ...item, whereClause: value }));
+        patchTab(activeTab.bindingKey, (item) => ({ ...item, whereClause: value }));
       },
       onLimitChange: (value) => {
         if (!activeTab) return;
-        patchTab(activeTab.objectName, (item) => ({ ...item, limit: value }));
+        patchTab(activeTab.bindingKey, (item) => ({ ...item, limit: value }));
       },
       onSortFieldChange: (value) => {
         if (!activeTab) return;
-        patchTab(activeTab.objectName, (item) => ({ ...item, sortField: value }));
+        patchTab(activeTab.bindingKey, (item) => ({ ...item, sortField: value }));
       },
       onSortDirectionChange: (value) => {
         if (!activeTab) return;
-        patchTab(activeTab.objectName, (item) => ({ ...item, sortDirection: value }));
+        patchTab(activeTab.bindingKey, (item) => ({ ...item, sortDirection: value }));
       },
       onSortClauseChange: (value) => {
         if (!activeTab) return;
-        patchTab(activeTab.objectName, (item) => {
+        patchTab(activeTab.bindingKey, (item) => {
           const normalized = value.trim();
           if (!normalized) {
             // 手动清空排序条件时同步清空旧版排序字段，避免 UI 回退显示旧值。
@@ -295,7 +309,7 @@ export function useQueryPanelActions({
       },
       onToggleRecord: (recordId, checked) => {
         if (!activeTab) return;
-        patchTab(activeTab.objectName, (item) => ({
+        patchTab(activeTab.bindingKey, (item) => ({
           ...item,
           selectedRecordIds: checked
             ? Array.from(new Set([...item.selectedRecordIds, recordId]))
@@ -304,32 +318,48 @@ export function useQueryPanelActions({
       },
       onToggleAllRecords: (checked, recordIds) => {
         if (!activeTab) return;
-        patchTab(activeTab.objectName, (item) => ({ ...item, selectedRecordIds: checked ? recordIds : [] }));
+        patchTab(activeTab.bindingKey, (item) => ({ ...item, selectedRecordIds: checked ? recordIds : [] }));
       },
       onEditCell: (rowIndex, columnName, value) => {
         if (!activeTab) return;
-        patchTab(activeTab.objectName, (item) => {
-          const nextRecords = [...item.result.records];
+        patchTab(activeTab.bindingKey, (item) => {
+          const nextRecords = [...item.result.records] as EditableGridRecord[];
           const target = nextRecords[rowIndex];
           if (!target) return item;
+          const resolvedSourceType = item.sourceType || selectedSourceType || "salesforce";
+          const isMysqlSource = resolvedSourceType.toLowerCase() === "mysql";
+          // MySQL 编辑统一先归一化成显式 draft 语义，避免 null/undefined/空字符串混淆。
+          const normalizedValue = isMysqlSource ? normalizeMysqlEditedCellValue(value) : value;
 
           // 旧行编辑统一绑定基线键：避免主键字段被修改后，无法再定位 baseline。
-          const currentRecordKey = getRecordKey(target, rowIndex, {
-            sourceType: selectedSourceType,
+          const stableRowId = getRecordKey(target, rowIndex, {
+            sourceType: resolvedSourceType,
             mysqlPrimaryKeyField: getMysqlPrimaryKeyField(item.describe)
           });
           const baselineKeyFromRecord = typeof target.__baselineKey === "string" ? target.__baselineKey : "";
-          const stableBaselineKey = baselineKeyFromRecord || currentRecordKey;
+          const stableBaselineKey = baselineKeyFromRecord || stableRowId;
           const isEditingNewRow = Boolean(target.__isNew);
-          const nextRecord = isEditingNewRow
-            ? { ...target, [columnName]: value }
-            : { ...target, __baselineKey: stableBaselineKey, [columnName]: value };
-          // 统一记录键：MySQL 使用主键值，Salesforce 使用 Id，确保脏标记与渲染高亮一致。
+          const nextRecordBase: EditableGridRecord = isEditingNewRow
+            ? { ...target }
+            : { ...target, __rowStableId: stableBaselineKey, __baselineKey: stableBaselineKey };
+          const nextRecord: EditableGridRecord = (() => {
+            if (isMysqlDraftOmitValue(normalizedValue)) {
+              const rest: EditableGridRecord = { ...nextRecordBase };
+              delete rest[columnName]; // 行内注释：MySQL omit 语义需要从草稿记录里移除该字段。
+              return rest;
+            }
+            return { ...nextRecordBase, [columnName]: normalizedValue };
+          })();
+          // 统一记录键：前端一律使用稳定 rowStableId，避免主键编辑后失去行定位。
           const cellKey = `${stableBaselineKey}:${columnName}`;
           const dirtySet = new Set(item.dirtyCellKeys);
           const isNewRow = Boolean(nextRecord.__isNew);
           if (isNewRow) {
-            dirtySet.add(cellKey); // 新增行任意修改都视为脏数据。
+            if (isMysqlSource && isMysqlDraftOmitValue(normalizedValue)) {
+              dirtySet.delete(cellKey); // 新增行回退为 omit 后，视为回到“未填写”状态。
+            } else {
+              dirtySet.add(cellKey); // 新增行显式编辑过的字段统一视为脏数据。
+            }
           } else {
             const stringify = (input: unknown): string => {
               if (input === null || input === undefined) return "";
@@ -341,9 +371,12 @@ export function useQueryPanelActions({
                 return String(input);
               }
             };
-            const baselineValue = stringify(item.baselineRecords[stableBaselineKey]?.[columnName]);
-            const nextValue = stringify(value);
-            if (baselineValue === nextValue) {
+            const baselineValue = item.baselineRecords[stableBaselineKey]?.[columnName];
+            const nextValue = nextRecord[columnName];
+            const isDirty = isMysqlSource
+              ? isMysqlDraftDirty(baselineValue, nextValue)
+              : stringify(baselineValue) !== stringify(nextValue);
+            if (!isDirty) {
               dirtySet.delete(cellKey); // 改回原值则移除脏标记。
             } else {
               dirtySet.add(cellKey); // 与基线不一致则保留脏标记。
@@ -360,7 +393,7 @@ export function useQueryPanelActions({
       },
       onShowMessage: (message) => {
         if (!activeTab) return;
-        patchTab(activeTab.objectName, (item) => ({
+        patchTab(activeTab.bindingKey, (item) => ({
           ...item,
           notice: { type: "error", message }
         }));
@@ -373,7 +406,7 @@ export function useQueryPanelActions({
           acc[field.name] = nextChecked;
           return acc;
         }, {} as Record<string, boolean>);
-        patchTab(activeTab.objectName, (item) => ({ ...item, columnVisibility: nextVisibility }));
+        patchTab(activeTab.bindingKey, (item) => ({ ...item, columnVisibility: nextVisibility }));
         const resolvedSourceId = activeTab.sourceId || selectedSourceId;
         if (resolvedSourceId) {
           void persistColumnVisibility(resolvedSourceId, activeTab.objectName, nextVisibility);
@@ -382,7 +415,7 @@ export function useQueryPanelActions({
       onToggleFieldVisibility: (fieldName, checked) => {
         if (!activeTab) return;
         const nextVisibility = { ...activeTab.columnVisibility, [fieldName]: checked };
-        patchTab(activeTab.objectName, (item) => ({
+        patchTab(activeTab.bindingKey, (item) => ({
           ...item,
           columnVisibility: nextVisibility
         }));
@@ -393,13 +426,13 @@ export function useQueryPanelActions({
       },
       onSoqlChange: (value) => {
         if (!activeTab) return;
-        patchTab(activeTab.objectName, (item) => ({ ...item, soqlDraft: value }));
+        patchTab(activeTab.bindingKey, (item) => ({ ...item, soqlDraft: value }));
       },
       onExecuteCustomSoql: () => void executeCustomSoql(),
       onCloseWorkspaceNotice: clearWorkspaceNotice,
       onCloseActiveTabNotice: () => {
         if (!activeTab) return;
-        patchTab(activeTab.objectName, (item) => ({ ...item, notice: null }));
+        patchTab(activeTab.bindingKey, (item) => ({ ...item, notice: null }));
       },
       onSetSoqlSidebarWidth: setSoqlSidebarWidth
     }),

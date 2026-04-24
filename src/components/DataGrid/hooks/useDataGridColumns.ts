@@ -137,6 +137,9 @@ export function useDataGridColumns({
   const selectableIds = useMemo(
     () =>
       records.map((item, index) => {
+        if (item.__rowStableId !== null && item.__rowStableId !== undefined && String(item.__rowStableId).trim() !== "") {
+          return String(item.__rowStableId).trim();
+        }
         const fromId = item.Id;
         if (fromId !== null && fromId !== undefined && String(fromId).trim() !== "") {
           return String(fromId);
@@ -147,7 +150,7 @@ export function useDataGridColumns({
             return String(fromPrimary);
           }
         }
-        return `row-${index}`;
+        return `row:${index}`;
       }),
     [records, mysqlPrimaryKeyField]
   );

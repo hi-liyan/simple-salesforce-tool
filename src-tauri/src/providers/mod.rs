@@ -8,13 +8,13 @@ use serde_json::Value;
 use crate::app_state::AppState;
 use crate::error::AppError;
 use crate::models::{
-    CurrentUserContext, ObjectDdl, ObjectDescribe, QueryResult, RecordUpdatePayload,
-    SalesforceObject, SalesforceSource,
+    CurrentUserContext, MutationExecutionResult, ObjectDdl, ObjectDescribe, QueryResult,
+    RecordUpdatePayload, SalesforceObject, SalesforceSource,
 };
 use mysql_provider::MySqlProvider;
 pub use mysql_provider::{
-    preview_create_record_sql, preview_delete_record_sql, preview_save_records_sql,
-    preview_save_records_with_deletes_sql, preview_update_record_sql,
+    preview_create_record_sql, preview_delete_record_sql, preview_save_records_with_deletes_items,
+    preview_update_record_sql,
 };
 use salesforce_provider::SalesforceProvider;
 
@@ -109,7 +109,9 @@ impl DataProvider<'_> {
     ) -> Result<QueryResult, AppError> {
         match self {
             DataProvider::Salesforce(provider) => provider.query_records(source, query_text).await,
-            DataProvider::MySql(provider) => provider.query_records(source, query_text, describe).await,
+            DataProvider::MySql(provider) => {
+                provider.query_records(source, query_text, describe).await
+            }
         }
     }
 
@@ -171,7 +173,7 @@ impl DataProvider<'_> {
         creates: Vec<HashMap<String, Value>>,
         updates: Vec<RecordUpdatePayload>,
         deletes: Vec<String>,
-    ) -> Result<(), AppError> {
+    ) -> Result<MutationExecutionResult, AppError> {
         match self {
             DataProvider::Salesforce(_) => Err(AppError::Biz(
                 "Salesforce 暂不支持单事务批量提交（含删除）。".to_string(),
