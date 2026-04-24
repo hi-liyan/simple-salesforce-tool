@@ -1,4 +1,6 @@
 import { buildHeaderDisplayLines } from "../renderers/drawHeader.ts";
+import { isMysqlCellDraftValue, resolveMysqlDisplayValue } from "../../../features/main/QueryPanel/logic/mysqlValueSemantics.ts";
+import { stringifyCellValue } from "./value.ts";
 
 type EstimateAutoColumnWidthInput = {
   // 当前字段名：用于构建表头主标题。
@@ -17,7 +19,14 @@ const CELL_HORIZONTAL_PADDING = 32;
 const AUTO_COLUMN_WIDTH_MAX = 900;
 
 // 将单元格值转为用于宽度估算的文本，避免引入编辑器运行时依赖。
-function stringifyColumnWidthValue(value: unknown): string {
+function stringifyColumnWidthValue(value: unknown, metadata: Record<string, unknown>): string {
+  if (isMysqlCellDraftValue(value)) {
+    const mysqlDisplayState = resolveMysqlDisplayValue(value, metadata);
+    if (mysqlDisplayState.useNullPlaceholder) {
+      return "Null";
+    }
+    return stringifyCellValue(mysqlDisplayState.value);
+  }
   if (value === null || value === undefined) return "";
   if (typeof value === "string") return value;
   if (typeof value === "number" || typeof value === "boolean") return String(value);
@@ -60,7 +69,7 @@ export function estimateAutoColumnWidth({
   let maxWidth = Math.max(headerPrimaryWidth, headerSecondaryWidth);
 
   records.slice(0, sampleRowCount).forEach((record) => {
-    const text = stringifyColumnWidthValue(record[fieldName]);
+    const text = stringifyColumnWidthValue(record[fieldName], metadata);
     const contentWidth = measureTextWidth(text, "400 13px sans-serif", ctx);
     if (contentWidth > maxWidth) {
       maxWidth = contentWidth; // 行内注释：默认列宽随采样内容增长，但只保留最大值避免抖动。

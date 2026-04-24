@@ -8,6 +8,7 @@ import { api } from "../../../../api";
 import { useAppStore } from "../../../../store/useAppStore";
 import { buildObjectTabBindingKey, MutationPreviewItem, Notice, ObjectDdl, TabState } from "../../../../types";
 import { buildMysqlMutationPlan, mergeMysqlPreviewSqlItems } from "../logic/mysqlMutationPlanner.ts";
+import { hasMysqlMissingRequiredFields } from "../logic/mysqlCreateValidation.ts";
 import { resolveMysqlResultUpdateCapability } from "../logic/mysqlUpdateCapability.ts";
 import { buildSourceSurfacePalette } from "../logic/sourceColor.ts";
 import type { QueryOverrides } from "../types";
@@ -584,8 +585,15 @@ export function DataQueryTabPane({
   const mysqlResultReadonlyReason = isMysqlSource && !mysqlResultUpdateCapability.editable
     ? mysqlResultUpdateCapability.reason
     : "";
+  // MySQL 新建行必填缺失：用于前置禁用“执行更新”，避免用户点了才收到错误。
+  const mysqlHasMissingRequiredCreateFields = useMemo(
+    () => isMysqlSource && Boolean(activeTab?.describe) && hasMysqlMissingRequiredFields(activeTab?.result.records || [], activeTab?.describe || null),
+    [isMysqlSource, activeTab?.describe, activeTab?.result.records]
+  );
+  const mysqlApplyDisabledReason = mysqlResultReadonlyReason
+    || (mysqlHasMissingRequiredCreateFields ? "存在 NOT NULL 且无默认值的新增字段未填写，请先补全红色高亮字段。" : "");
   // “执行更新”按钮是否可用：可用时使用绿色强调，强化“可提交”感知。
-  const canApplyPendingChanges = Boolean(activeTab && !activeTab.loading && hasPendingChanges && !mysqlResultReadonlyReason);
+  const canApplyPendingChanges = Boolean(activeTab && !activeTab.loading && hasPendingChanges && !mysqlApplyDisabledReason);
   // 工具栏背景色：将数据源颜色转换为浅色表面背景，避免顶部工具栏过重抢视觉焦点。
   const toolbarBackgroundColor = buildSourceSurfacePalette(String(activeTab?.sourceColor || "").trim())?.backgroundColor || "#FFFFFF";
   // 工具栏按钮统一尺寸：使用 34px 中间档高度（介于 h-8 与 h-9 之间）。
@@ -1086,8 +1094,8 @@ export function DataQueryTabPane({
                 </button>
                 <button
                   className={applyButtonClassName}
-                  disabled={activeTab.loading || !hasPendingChanges || Boolean(mysqlResultReadonlyReason)}
-                  title={mysqlResultReadonlyReason || undefined}
+                  disabled={activeTab.loading || !hasPendingChanges || Boolean(mysqlApplyDisabledReason)}
+                  title={mysqlApplyDisabledReason || undefined}
                   onClick={() => void handleApplyPendingChangesClick()}
                 >
                   <Play size={13} />
