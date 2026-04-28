@@ -18,6 +18,7 @@ import { api } from "../../../api";
 import { CliPathProbe, CliPathSettings, CliPathStatus, LlmSettings, SalesforceSource, TerminalShellOption } from "../../../types";
 import { checkGithubLatestVersion } from "../../../utils/versionUpdate";
 import { SystemLogsPanel } from "./SystemLogs";
+import { hydrateSettingsSourcesWithSecrets } from "./sourceSecrets";
 import { buildSourceSurfacePalette, getSourceColor, SOURCE_COLOR_PRESETS, withSourceColor } from "../QueryPanel/logic/sourceColor";
 
 // 判断当前 Shell 路径是否为绝对路径：Windows 支持盘符路径与 UNC 路径，Unix 支持 `/` 开头路径。
@@ -191,7 +192,8 @@ export function SettingsPanel() {
     setError("");
     try {
       const list = await api.listSources(); // 调用后端列出全部数据源。
-      setSources(list);
+      const hydratedList = await hydrateSettingsSourcesWithSecrets(list, api.getSourceSecretView); // 行内注释：仅设置页本地补齐 Salesforce accessToken 明文显示。
+      setSources(hydratedList);
     } catch (loadError) {
       setSources([]); // 失败时清空旧列表，避免展示脏数据。
       setError(String(loadError));
@@ -224,7 +226,8 @@ export function SettingsPanel() {
     try {
       const orderedIds = nextSources.map((item) => item.id);
       const persistedSources = await api.reorderSources(orderedIds);
-      setSources(persistedSources); // 使用后端归一化后的结果覆盖，保证序号绝对一致。
+      const hydratedSources = await hydrateSettingsSourcesWithSecrets(persistedSources, api.getSourceSecretView);
+      setSources(hydratedSources); // 使用后端归一化后的结果覆盖，保证序号绝对一致，同时补回设置页需要展示的 secret。
     } catch (reorderError) {
       setError(`拖拽排序失败：${String(reorderError)}`);
       await loadSources(); // 失败后回滚为服务端顺序，避免前后端状态不一致。
