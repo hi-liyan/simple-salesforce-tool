@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dashboard Settings 设计稿</title>
+    <link rel="stylesheet" href="./assets/styles.css" />
+  </head>
+  <body>
+    <!-- Settings 工作台设计稿：重构为系统控制台式布局。 -->
+    <main class="mockup-page">
+      <a class="back-link" href="./index.html">← 返回设计稿总览</a>
+      <section class="shell glass fade-up">
+        <!-- 左侧全局导航：保持与其它工作区相同的外壳结构。 -->
+        <aside class="rail">
+          <div class="brand-badge">SF</div>
+          <nav class="rail-nav">
+            <a class="rail-button" data-label="Query" href="./dashboard-query.html">Q</a>
+            <a class="rail-button" data-label="Terminal" href="./dashboard-terminal.html">T</a>
+            <a class="rail-button" data-label="Tools" href="./dashboard-tools.html">◎</a>
+            <a class="rail-button active" data-label="Settings" href="./dashboard-settings.html">S</a>
+          </nav>
+          <div class="rail-footer">
+            <a class="rail-button" data-label="Auth Window" href="./auth-window.html">⎋</a>
+          </div>
+        </aside>
+
+        <div class="main-panel">
+          <!-- 顶部上下文栏：展示当前设置分区和全局保存入口。 -->
+          <header class="context-header">
+            <div>
+              <p class="eyebrow">System Control Deck</p>
+              <h1 class="header-title">Data Source &amp; Runtime Settings</h1>
+              <p class="header-meta">设置页不再像传统表单墙，而是通过分层导航、玻璃表面和风险提示构成“系统控制台”。</p>
+            </div>
+            <div class="header-actions">
+              <div class="search-shell">搜索设置项、Shell、数据源、LLM 参数...</div>
+              <span class="pill"><span class="pill-dot dot-success"></span>Autosave Safe</span>
+              <span class="button button-secondary">检查更新</span>
+              <span class="button button-primary">保存更改</span>
+            </div>
+          </header>
+
+          <section class="workspace-grid workspace-settings">
+            <!-- 左侧设置导航：用更明显的分组和激活态替代传统 tabs。 -->
+            <aside class="sidebar-panel">
+              <article class="panel-card glass fade-up delay-1">
+                <h3>Settings Nav</h3>
+                <p class="panel-caption">按任务而非技术项堆叠组织设置分区，减少认知成本。</p>
+                <div class="setting-nav" style="margin-top: 14px;">
+                  <div class="setting-nav-item active interactive">
+                    <strong>数据源</strong>
+                    <div class="panel-caption">排序、颜色、连接信息</div>
+                  </div>
+                  <div class="setting-nav-item interactive">
+                    <strong>CLI 设置</strong>
+                    <div class="panel-caption">路径、探测、状态检查</div>
+                  </div>
+                  <div class="setting-nav-item interactive">
+                    <strong>终端设置</strong>
+                    <div class="panel-caption">默认 Shell 与环境偏好</div>
+                  </div>
+                  <div class="setting-nav-item interactive">
+                    <strong>LLM 设置</strong>
+                    <div class="panel-caption">Base URL / Model / API Key</div>
+                  </div>
+                  <div class="setting-nav-item interactive">
+                    <strong>系统日志</strong>
+                    <div class="panel-caption">后台执行与失败详情</div>
+                  </div>
+                  <div class="setting-nav-item interactive">
+                    <strong>关于与反馈</strong>
+                    <div class="panel-caption">版本、下载与 issue 入口</div>
+                  </div>
+                </div>
+              </article>
+            </aside>
+
+            <!-- 中央设置主区：以数据源分区作为重点展示对象。 -->
+            <div class="center-panel">
+              <article class="settings-frame glass fade-up delay-2">
+                <div class="row-between" style="margin-bottom: 16px;">
+                  <div>
+                    <h3>Data Source Registry</h3>
+                    <p class="panel-caption">把数据源设置设计成“可运营面板”，而不是只读列表。</p>
+                  </div>
+                  <div class="button-row">
+                    <span class="button button-ghost">刷新列表</span>
+                    <span class="button button-primary">新增数据源</span>
+                  </div>
+                </div>
+                <div class="tree-group">
+                  <div class="source-card active interactive">
+                    <div class="row-between">
+                      <div>
+                        <strong>Salesforce · Production</strong>
+                        <div class="panel-caption">api v61.0 · OAuth active · 最近成功同步 2 分钟前</div>
+                      </div>
+                      <span class="pill"><span class="pill-dot dot-success"></span>Priority 01</span>
+                    </div>
+                  </div>
+                  <div class="source-card interactive">
+                    <div class="row-between">
+                      <div>
+                        <strong>MySQL · BI Warehouse</strong>
+                        <div class="panel-caption">mysql://warehouse.company.local:3306/bi</div>
+                      </div>
+                      <span class="pill"><span class="pill-dot dot-info"></span>Priority 02</span>
+                    </div>
+                  </div>
+                </div>
+              </article>
+
+              <article class="settings-frame glass fade-up delay-3">
+                <div class="row-between" style="margin-bottom: 16px;">
+                  <div>
+                    <h3>Source Editor</h3>
+                    <p class="panel-caption">右侧情报栏做说明，中间只聚焦当前可编辑字段与风险操作。</p>
+                  </div>
+                  <span class="pill"><span class="pill-dot dot-warning"></span>Manual Edit Mode</span>
+                </div>
+                <div class="form-grid">
+                  <div class="field-block">
+                    <label class="field-label">数据源名称</label>
+                    <div class="field-input">Production Salesforce</div>
+                  </div>
+                  <div class="field-block">
+                    <label class="field-label">API Version</label>
+                    <div class="field-select">v61.0</div>
+                  </div>
+                  <div class="field-block">
+                    <label class="field-label">Instance URL</label>
+                    <div class="field-input">https://login.salesforce.com</div>
+                  </div>
+                  <div class="field-block">
+                    <label class="field-label">视觉颜色</label>
+                    <div class="field-input">#3b82f6 / 蓝青渐变高亮</div>
+                  </div>
+                  <div class="field-block" style="grid-column: 1 / -1;">
+                    <label class="field-label">Access Token</label>
+                    <div class="field-textarea">••••••••••••••••••••••••••••••••••••••••••••</div>
+                  </div>
+                </div>
+              </article>
+            </div>
+
+            <!-- 右侧情报栏：承载保存状态、风险提示与帮助信息。 -->
+            <aside class="insight-panel">
+              <article class="panel-card glass fade-up delay-2">
+                <h3>Save Insight</h3>
+                <div class="insight-stack" style="margin-top: 14px;">
+                  <div class="mini-stat">
+                    <span class="metric-label">Unsaved Changes</span>
+                    <strong>04</strong>
+                    <span class="panel-caption">名称、颜色、Token、默认排序已修改</span>
+                  </div>
+                  <div class="mini-stat">
+                    <span class="metric-label">Validation</span>
+                    <strong class="ok">Ready to Save</strong>
+                    <span class="panel-caption">当前字段未发现格式性错误。</span>
+                  </div>
+                </div>
+              </article>
+
+              <article class="panel-card glass fade-up delay-3">
+                <h3>Risk &amp; Guidance</h3>
+                <div class="tree-group" style="margin-top: 14px;">
+                  <div class="tree-item">
+                    <div>
+                      <div>Token 覆盖保存</div>
+                      <div class="panel-caption">保存后将立即影响新建请求和后续授权状态。</div>
+                    </div>
+                  </div>
+                  <div class="tree-item">
+                    <div>
+                      <div>CLI 路径回退</div>
+                      <div class="panel-caption">建议允许“自动探测”作为兜底策略，而不是完全清空状态。</div>
+                    </div>
+                  </div>
+                  <div class="tree-item">
+                    <div>
+                      <div>帮助入口</div>
+                      <div class="panel-caption">右侧可放官方文档、诊断建议和异常修复清单。</div>
+                    </div>
+                  </div>
+                </div>
+              </article>
+            </aside>
+          </section>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

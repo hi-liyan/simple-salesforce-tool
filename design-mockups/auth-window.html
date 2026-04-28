@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Auth Window 设计稿</title>
+    <link rel="stylesheet" href="./assets/styles.css" />
+  </head>
+  <body>
+    <!-- 授权窗口设计稿：聚焦 OAuth 连接入口。 -->
+    <main class="mockup-page">
+      <a class="back-link" href="./index.html">← 返回设计稿总览</a>
+      <section class="window-shell fade-up">
+        <!-- 背景光斑：增强小窗口的空间感与霓虹氛围。 -->
+        <div class="auth-orbit one"></div>
+        <div class="auth-orbit two"></div>
+
+        <!-- 中央授权卡片：模拟 Tauri 独立登录窗口。 -->
+        <article class="auth-card glass fade-up delay-1">
+          <p class="eyebrow">OAuth Connection</p>
+          <h1 style="margin: 8px 0 0; font-size: 30px; letter-spacing: -0.04em;">连接 Salesforce</h1>
+          <p class="subtitle">使用更聚焦的玻璃卡完成授权。输入 Instance URL 后跳转浏览器进行 OAuth 登录。</p>
+
+          <div class="pill-row" style="margin-top: 18px;">
+            <span class="pill"><span class="pill-dot dot-success"></span>Secure Browser Flow</span>
+            <span class="pill"><span class="pill-dot dot-info"></span>Desktop Webview</span>
+          </div>
+
+          <!-- 输入区域：强调聚焦 glow 和单任务操作感。 -->
+          <div class="field-block" style="margin-top: 22px;">
+            <label class="field-label">Instance URL</label>
+            <div class="field-input">https://login.salesforce.com</div>
+            <span class="panel-caption">示例：`https://login.salesforce.com` 或 `https://test.salesforce.com`</span>
+          </div>
+
+          <!-- 登录中占位：用 shimmer 模拟提交反馈。 -->
+          <div class="skeleton-block" style="margin-top: 20px;">
+            <div class="skeleton-line long"></div>
+            <div class="skeleton-line medium" style="margin-top: 14px;"></div>
+          </div>
+
+          <div class="button-row" style="margin-top: 22px; justify-content: flex-end;">
+            <span class="button button-ghost">取消</span>
+            <span class="button button-primary">继续授权</span>
+          </div>
+        </article>
+      </section>
+    </main>
+  </body>
+</html>

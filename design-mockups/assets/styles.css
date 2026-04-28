@@ -1,0 +1,1024 @@
+/* 全局设计变量：统一管理 Web3 深色玻璃态设计稿的颜色、阴影与圆角。 */
+:root {
+  --bg-primary: #020617;
+  --bg-secondary: #0f172a;
+  --bg-surface: rgba(15, 23, 42, 0.58);
+  --bg-surface-strong: rgba(15, 23, 42, 0.72);
+  --bg-surface-soft: rgba(30, 41, 59, 0.42);
+  --border-soft: rgba(148, 163, 184, 0.16);
+  --border-strong: rgba(148, 163, 184, 0.28);
+  --text-primary: #e2e8f0;
+  --text-secondary: rgba(226, 232, 240, 0.72);
+  --text-muted: rgba(148, 163, 184, 0.78);
+  --success: #22c55e;
+  --warning: #f59e0b;
+  --danger: #fb7185;
+  --accent-purple: #8b5cf6;
+  --accent-blue: #3b82f6;
+  --accent-cyan: #06b6d4;
+  --accent-gradient: linear-gradient(135deg, rgba(139, 92, 246, 0.92) 0%, rgba(59, 130, 246, 0.92) 52%, rgba(6, 182, 212, 0.92) 100%);
+  --accent-gradient-soft: linear-gradient(135deg, rgba(139, 92, 246, 0.18) 0%, rgba(59, 130, 246, 0.18) 52%, rgba(6, 182, 212, 0.18) 100%);
+  --panel-shadow: 0 24px 80px rgba(2, 6, 23, 0.45);
+  --glow-purple: 0 0 0 1px rgba(139, 92, 246, 0.22), 0 0 28px rgba(139, 92, 246, 0.18);
+  --glow-blue: 0 0 0 1px rgba(59, 130, 246, 0.22), 0 0 32px rgba(59, 130, 246, 0.16);
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+  --transition-fast: 180ms ease;
+  --transition-medium: 280ms ease;
+  --font-sans: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Mono", "Consolas", "Courier New", monospace;
+}
+
+/* 页面基础：统一深色底、中文字体与默认文本颜色。 */
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background:
+    radial-gradient(circle at top left, rgba(139, 92, 246, 0.16), transparent 26%),
+    radial-gradient(circle at top right, rgba(6, 182, 212, 0.14), transparent 28%),
+    radial-gradient(circle at bottom center, rgba(59, 130, 246, 0.12), transparent 30%),
+    linear-gradient(160deg, #020617 0%, #061120 42%, #0b1324 100%);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+}
+
+body {
+  position: relative;
+  overflow-x: hidden;
+}
+
+/* 全局背景光斑：增强桌面应用的未来感与空间层次。 */
+body::before,
+body::after {
+  content: "";
+  position: fixed;
+  inset: auto;
+  pointer-events: none;
+  z-index: 0;
+  filter: blur(22px);
+}
+
+body::before {
+  top: 4%;
+  left: -4%;
+  width: 300px;
+  height: 300px;
+  background: radial-gradient(circle, rgba(139, 92, 246, 0.2), transparent 68%);
+}
+
+body::after {
+  right: -6%;
+  bottom: 0;
+  width: 360px;
+  height: 360px;
+  background: radial-gradient(circle, rgba(6, 182, 212, 0.14), transparent 68%);
+}
+
+/* 设计稿整体容器：为内容提供安全边距与层级。 */
+.mockup-page {
+  position: relative;
+  z-index: 1;
+  min-height: 100vh;
+  padding: 24px;
+}
+
+/* 通用玻璃面板：复用于工作区、卡片、弹窗与侧栏。 */
+.glass {
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.72), rgba(15, 23, 42, 0.54));
+  border: 1px solid var(--border-soft);
+  box-shadow: var(--panel-shadow);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+}
+
+/* 通用标题与说明文本。 */
+.eyebrow {
+  margin: 0;
+  color: var(--accent-cyan);
+  font-size: 12px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.title {
+  margin: 6px 0 0;
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: -0.04em;
+}
+
+.subtitle {
+  margin: 10px 0 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+/* 总览页头部：承载设计说明与视觉方向。 */
+.hero {
+  display: grid;
+  gap: 22px;
+  grid-template-columns: minmax(0, 1.3fr) minmax(280px, 0.7fr);
+  padding: 28px;
+  border-radius: 30px;
+}
+
+.hero-card {
+  padding: 22px;
+  border-radius: var(--radius-xl);
+  background: rgba(15, 23, 42, 0.48);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+/* 统计卡片与页面预览栅格。 */
+.stat-grid,
+.page-grid,
+.component-grid {
+  display: grid;
+  gap: 18px;
+}
+
+.stat-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 18px;
+}
+
+.page-grid {
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  margin-top: 24px;
+}
+
+.component-grid {
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  margin-top: 18px;
+}
+
+.stat-card,
+.preview-card,
+.component-card,
+.surface-card {
+  padding: 18px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-soft);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  transition:
+    transform var(--transition-fast),
+    box-shadow var(--transition-medium),
+    border-color var(--transition-fast);
+}
+
+.preview-card:hover,
+.component-card:hover,
+.surface-card:hover,
+.interactive:hover {
+  transform: translateY(-2px) scale(1.01);
+  border-color: rgba(96, 165, 250, 0.32);
+  box-shadow: var(--panel-shadow), var(--glow-blue);
+}
+
+.preview-card {
+  display: block;
+  color: inherit;
+  text-decoration: none;
+}
+
+.preview-thumb {
+  height: 160px;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  background:
+    linear-gradient(135deg, rgba(139, 92, 246, 0.12), transparent 48%),
+    linear-gradient(180deg, rgba(15, 23, 42, 0.9), rgba(15, 23, 42, 0.58));
+  overflow: hidden;
+}
+
+/* 按钮组件：为后续 React 组件化提供风格参考。 */
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border-radius: 14px;
+  border: 1px solid transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  transition:
+    transform var(--transition-fast),
+    box-shadow var(--transition-fast),
+    border-color var(--transition-fast),
+    background var(--transition-fast);
+}
+
+.button:active {
+  transform: scale(0.98);
+}
+
+.button-primary {
+  background: var(--accent-gradient);
+  box-shadow: var(--glow-purple);
+}
+
+.button-primary:hover {
+  box-shadow: var(--glow-purple), 0 18px 40px rgba(37, 99, 235, 0.24);
+}
+
+.button-secondary {
+  background: rgba(59, 130, 246, 0.12);
+  border-color: rgba(59, 130, 246, 0.22);
+}
+
+.button-secondary:hover {
+  box-shadow: var(--glow-blue);
+}
+
+.button-ghost {
+  background: rgba(15, 23, 42, 0.46);
+  border-color: var(--border-soft);
+}
+
+.button-ghost:hover {
+  background: rgba(30, 41, 59, 0.65);
+}
+
+/* 状态标签：表达数据源、连接态和能力标签。 */
+.pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: rgba(30, 41, 59, 0.64);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.pill-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+}
+
+.dot-success {
+  background: var(--success);
+  box-shadow: 0 0 16px rgba(34, 197, 94, 0.4);
+}
+
+.dot-info {
+  background: var(--accent-cyan);
+  box-shadow: 0 0 16px rgba(6, 182, 212, 0.42);
+}
+
+.dot-warning {
+  background: var(--warning);
+  box-shadow: 0 0 16px rgba(245, 158, 11, 0.4);
+}
+
+/* 工作台布局：复刻 Tauri 桌面应用的主界面结构。 */
+.shell {
+  display: grid;
+  grid-template-columns: 86px minmax(0, 1fr);
+  min-height: calc(100vh - 48px);
+  border-radius: 30px;
+  overflow: hidden;
+}
+
+.rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  padding: 18px 14px;
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.96), rgba(15, 23, 42, 0.76));
+  border-right: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.brand-badge,
+.rail-button {
+  width: 56px;
+  height: 56px;
+  border-radius: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.brand-badge {
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.32), rgba(59, 130, 246, 0.32));
+  border: 1px solid rgba(96, 165, 250, 0.24);
+  box-shadow: var(--glow-purple);
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.rail-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+
+.rail-button {
+  position: relative;
+  width: 100%;
+  color: var(--text-muted);
+  text-decoration: none;
+  background: rgba(15, 23, 42, 0.3);
+  border: 1px solid transparent;
+  transition: all var(--transition-fast);
+}
+
+.rail-button:hover {
+  color: var(--text-primary);
+  background: rgba(30, 41, 59, 0.66);
+  border-color: rgba(96, 165, 250, 0.18);
+}
+
+.rail-button.active {
+  color: #f8fafc;
+  background: rgba(59, 130, 246, 0.18);
+  border-color: rgba(96, 165, 250, 0.28);
+  box-shadow: var(--glow-blue);
+}
+
+.rail-button::after {
+  content: attr(data-label);
+  position: absolute;
+  left: calc(100% + 12px);
+  white-space: nowrap;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.94);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  color: var(--text-secondary);
+  font-size: 12px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-10px);
+  transition: all var(--transition-fast);
+}
+
+.rail-button:hover::after {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.rail-footer {
+  margin-top: auto;
+  width: 100%;
+}
+
+.main-panel {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  min-width: 0;
+}
+
+.context-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 18px 22px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+  background: rgba(15, 23, 42, 0.52);
+}
+
+.header-title {
+  margin: 0;
+  font-size: 24px;
+  letter-spacing: -0.03em;
+}
+
+.header-meta {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.search-shell {
+  min-width: 280px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+/* 主要工作区：Query / Terminal / Tools / Settings 页面共用。 */
+.workspace-grid {
+  display: grid;
+  gap: 18px;
+  min-height: 0;
+  padding: 18px;
+}
+
+.workspace-query {
+  grid-template-columns: 280px minmax(0, 1fr) 320px;
+}
+
+.workspace-terminal {
+  grid-template-columns: 280px minmax(0, 1fr) 300px;
+}
+
+.workspace-settings {
+  grid-template-columns: 250px minmax(0, 1fr) 300px;
+}
+
+.sidebar-panel,
+.center-panel,
+.insight-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 0;
+}
+
+.panel-card {
+  padding: 18px;
+  border-radius: 22px;
+}
+
+.panel-card h3,
+.panel-card h4 {
+  margin: 0;
+}
+
+.panel-caption {
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* 左侧树与列表样式：模拟数据源、对象、命令分组等结构。 */
+.list-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.list-search {
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(2, 6, 23, 0.4);
+  border: 1px solid rgba(148, 163, 184, 0.1);
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.source-card,
+.tree-item,
+.command-card,
+.tool-capsule,
+.setting-nav-item,
+.meta-item {
+  border-radius: 16px;
+  background: rgba(15, 23, 42, 0.48);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.source-card {
+  padding: 14px;
+}
+
+.source-card.active {
+  background: rgba(37, 99, 235, 0.16);
+  border-color: rgba(96, 165, 250, 0.26);
+  box-shadow: var(--glow-blue);
+}
+
+.tree-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tree-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+}
+
+.tree-item.active {
+  border-color: rgba(139, 92, 246, 0.28);
+  box-shadow: var(--glow-purple);
+}
+
+.tree-left,
+.row-between {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.tree-icon,
+.mini-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+
+.tree-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 10px;
+  background: rgba(59, 130, 246, 0.16);
+  color: #bfdbfe;
+  font-size: 12px;
+}
+
+/* 中央英雄区：用于仪表统计和工作区主操作。 */
+.hero-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.metric-card {
+  padding: 18px;
+  border-radius: 20px;
+  background:
+    linear-gradient(180deg, rgba(15, 23, 42, 0.78), rgba(15, 23, 42, 0.48)),
+    var(--accent-gradient-soft);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.metric-label {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.metric-value {
+  margin-top: 10px;
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.04em;
+}
+
+.metric-foot {
+  margin-top: 12px;
+  color: #bfdbfe;
+  font-size: 12px;
+}
+
+/* 编辑器与终端内容块：使用网格线与假文本模拟真实控件。 */
+.editor-frame,
+.terminal-frame,
+.table-frame,
+.settings-frame,
+.auth-card,
+.meta-sheet,
+.modal-preview {
+  padding: 18px;
+  border-radius: 22px;
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.76), rgba(15, 23, 42, 0.52));
+  border: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.tab-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.tab-chip {
+  padding: 10px 14px;
+  border-radius: 14px;
+  background: rgba(15, 23, 42, 0.72);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.tab-chip.active {
+  color: var(--text-primary);
+  background: rgba(59, 130, 246, 0.16);
+  border-color: rgba(96, 165, 250, 0.28);
+  box-shadow: var(--glow-blue);
+}
+
+.editor-body {
+  display: grid;
+  gap: 12px;
+  min-height: 220px;
+  padding: 18px;
+  border-radius: 18px;
+  background:
+    linear-gradient(90deg, rgba(15, 23, 42, 0.92), rgba(15, 23, 42, 0.92)),
+    linear-gradient(rgba(30, 41, 59, 0.24) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(30, 41, 59, 0.24) 1px, transparent 1px);
+  background-size: auto, 100% 34px, 80px 100%;
+  border: 1px solid rgba(148, 163, 184, 0.08);
+}
+
+.code-line,
+.terminal-line,
+.skeleton-line {
+  height: 10px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(148, 163, 184, 0.22), rgba(96, 165, 250, 0.36), rgba(148, 163, 184, 0.18));
+  opacity: 0.88;
+}
+
+.code-line.short,
+.skeleton-line.short {
+  width: 38%;
+}
+
+.code-line.medium,
+.skeleton-line.medium {
+  width: 62%;
+}
+
+.code-line.long,
+.skeleton-line.long {
+  width: 86%;
+}
+
+.terminal-frame {
+  min-height: 520px;
+}
+
+.terminal-body {
+  display: grid;
+  gap: 14px;
+  min-height: 430px;
+  padding: 18px;
+  border-radius: 18px;
+  background: rgba(2, 6, 23, 0.72);
+  border: 1px solid rgba(148, 163, 184, 0.08);
+  font-family: var(--font-mono);
+}
+
+.terminal-line {
+  height: auto;
+  padding: 0;
+  background: transparent;
+  color: rgba(226, 232, 240, 0.84);
+  font-size: 13px;
+}
+
+.prompt {
+  color: #67e8f9;
+}
+
+.ok {
+  color: #4ade80;
+}
+
+.warn {
+  color: #fbbf24;
+}
+
+/* 表格预览：表现 Query 结果与字段元数据。 */
+.table-frame {
+  overflow: hidden;
+}
+
+.table-header,
+.table-row {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr 1fr 0.8fr;
+  gap: 10px;
+  align-items: center;
+}
+
+.table-header {
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(59, 130, 246, 0.12);
+  color: #bfdbfe;
+  font-size: 12px;
+}
+
+.table-row {
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.table-row:last-child {
+  border-bottom: none;
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+/* 右侧情报面板中的结构化块。 */
+.insight-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.mini-stat {
+  padding: 14px;
+  border-radius: 16px;
+  background: rgba(15, 23, 42, 0.5);
+  border: 1px solid rgba(148, 163, 184, 0.1);
+}
+
+.mini-stat strong {
+  display: block;
+  font-size: 18px;
+  margin-top: 8px;
+}
+
+/* 工具页大卡：强化入口页面的未来感。 */
+.tool-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.tool-capsule {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 260px;
+  padding: 20px;
+  background:
+    linear-gradient(180deg, rgba(15, 23, 42, 0.8), rgba(15, 23, 42, 0.54)),
+    var(--accent-gradient-soft);
+}
+
+/* 设置页导航与表单块。 */
+.setting-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.setting-nav-item {
+  padding: 14px 16px;
+}
+
+.setting-nav-item.active {
+  border-color: rgba(96, 165, 250, 0.26);
+  box-shadow: var(--glow-blue);
+  background: rgba(59, 130, 246, 0.14);
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.field-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.field-label {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.field-input,
+.field-select,
+.field-textarea {
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  background: rgba(2, 6, 23, 0.42);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.field-textarea {
+  min-height: 120px;
+  resize: none;
+}
+
+/* 授权窗口与字段详情窗口的聚焦容器。 */
+.window-shell {
+  display: flex;
+  min-height: calc(100vh - 48px);
+  align-items: center;
+  justify-content: center;
+}
+
+.auth-card {
+  width: min(520px, calc(100vw - 48px));
+  padding: 28px;
+}
+
+.auth-orbit {
+  position: absolute;
+  border-radius: 999px;
+  filter: blur(6px);
+  opacity: 0.58;
+}
+
+.auth-orbit.one {
+  width: 140px;
+  height: 140px;
+  top: 18%;
+  left: 16%;
+  background: radial-gradient(circle, rgba(139, 92, 246, 0.24), transparent 70%);
+}
+
+.auth-orbit.two {
+  width: 180px;
+  height: 180px;
+  bottom: 16%;
+  right: 18%;
+  background: radial-gradient(circle, rgba(6, 182, 212, 0.18), transparent 72%);
+}
+
+.meta-sheet {
+  width: min(980px, calc(100vw - 48px));
+}
+
+.meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.meta-item {
+  padding: 14px 16px;
+}
+
+.meta-key {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.meta-value {
+  margin-top: 8px;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+/* Loading shimmer：用于启动态、表格空载与卡片占位。 */
+.skeleton-block {
+  position: relative;
+  overflow: hidden;
+  padding: 18px;
+  border-radius: 18px;
+  background: rgba(15, 23, 42, 0.54);
+  border: 1px solid rgba(148, 163, 184, 0.1);
+}
+
+.skeleton-block::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(96, 165, 250, 0.16), transparent);
+  animation: shimmer 2.2s infinite;
+}
+
+/* 弹窗预览：展示未来可复用 modal 的玻璃态语言。 */
+.modal-preview {
+  position: relative;
+  padding-top: 54px;
+}
+
+.modal-header {
+  position: absolute;
+  top: 16px;
+  left: 18px;
+  right: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+/* 页面分区标题。 */
+.section {
+  margin-top: 28px;
+}
+
+.section-title {
+  margin: 0 0 10px;
+  font-size: 22px;
+  letter-spacing: -0.03em;
+}
+
+.section-subtitle {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+/* 页面底部返回链接。 */
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+  color: #bfdbfe;
+  text-decoration: none;
+  font-size: 13px;
+}
+
+/* 通用入场动效：模拟后续 Framer Motion 的页面进入节奏。 */
+.fade-up {
+  animation: fadeUp 720ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.delay-1 {
+  animation-delay: 120ms;
+}
+
+.delay-2 {
+  animation-delay: 220ms;
+}
+
+.delay-3 {
+  animation-delay: 320ms;
+}
+
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes shimmer {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+/* 响应式回退：保证较窄窗口也能完整查看设计稿。 */
+@media (max-width: 1360px) {
+  .workspace-query,
+  .workspace-terminal,
+  .workspace-settings,
+  .tool-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .hero-strip,
+  .form-grid,
+  .meta-grid,
+  .stat-grid,
+  .hero {
+    grid-template-columns: 1fr;
+  }
+
+  .search-shell {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .context-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .header-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+}

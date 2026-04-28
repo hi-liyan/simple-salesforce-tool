@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Field Meta Window 设计稿</title>
+    <link rel="stylesheet" href="./assets/styles.css" />
+  </head>
+  <body>
+    <!-- 字段元数据窗口设计稿：把纯文本详情升级为数据仪表板式 Data Sheet。 -->
+    <main class="mockup-page">
+      <a class="back-link" href="./index.html">← 返回设计稿总览</a>
+      <section class="window-shell fade-up">
+        <!-- 元数据主卡片：承载字段标题、操作按钮和属性分组。 -->
+        <article class="meta-sheet glass fade-up delay-1">
+          <div class="row-between">
+            <div>
+              <p class="eyebrow">Field Meta Window</p>
+              <h1 style="margin: 8px 0 0; font-size: 28px; letter-spacing: -0.04em;">Amount 字段元数据</h1>
+              <p class="subtitle">把字段详情转成更易浏览的 `key/value` 卡片矩阵，适配独立窄窗场景。</p>
+            </div>
+            <div class="button-row">
+              <span class="button button-ghost">复制 JSON</span>
+              <span class="button button-secondary">筛选字段</span>
+            </div>
+          </div>
+
+          <div class="pill-row" style="margin-top: 18px;">
+            <span class="pill"><span class="pill-dot dot-success"></span>Currency</span>
+            <span class="pill"><span class="pill-dot dot-info"></span>Updateable</span>
+            <span class="pill"><span class="pill-dot dot-warning"></span>Required in Reports</span>
+          </div>
+
+          <!-- 分组卡片：按基础属性、权限能力、关系说明等维度组织元数据。 -->
+          <div class="meta-grid">
+            <div class="meta-item interactive">
+              <div class="meta-key">API 名称</div>
+              <div class="meta-value mono">Amount</div>
+            </div>
+            <div class="meta-item interactive">
+              <div class="meta-key">标签</div>
+              <div class="meta-value">金额</div>
+            </div>
+            <div class="meta-item interactive">
+              <div class="meta-key">字段类型</div>
+              <div class="meta-value">Currency / Precision 18 / Scale 2</div>
+            </div>
+            <div class="meta-item interactive">
+              <div class="meta-key">帮助文本</div>
+              <div class="meta-value">用于记录机会金额，按组织默认币种展示。</div>
+            </div>
+            <div class="meta-item interactive">
+              <div class="meta-key">可创建 / 可更新</div>
+              <div class="meta-value">是 / 是</div>
+            </div>
+            <div class="meta-item interactive">
+              <div class="meta-key">可过滤 / 可排序</div>
+              <div class="meta-value">是 / 是</div>
+            </div>
+            <div class="meta-item interactive">
+              <div class="meta-key">默认值</div>
+              <div class="meta-value">-</div>
+            </div>
+            <div class="meta-item interactive">
+              <div class="meta-key">引用对象</div>
+              <div class="meta-value">无</div>
+            </div>
+          </div>
+
+          <!-- 底部补充区：表现长文本和 JSON 展开内容的容器设计。 -->
+          <div class="table-frame" style="margin-top: 18px;">
+            <div class="row-between" style="margin-bottom: 14px;">
+              <strong>原始元数据片段</strong>
+              <span class="pill">JSON Preview</span>
+            </div>
+            <div class="editor-body mono">
+              <div class="code-line long"></div>
+              <div class="code-line medium"></div>
+              <div class="code-line long"></div>
+              <div class="code-line short"></div>
+            </div>
+          </div>
+        </article>
+      </section>
+    </main>
+  </body>
+</html>

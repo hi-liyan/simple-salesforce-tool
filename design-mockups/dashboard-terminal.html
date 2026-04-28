@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dashboard Terminal 设计稿</title>
+    <link rel="stylesheet" href="./assets/styles.css" />
+  </head>
+  <body>
+    <!-- Terminal 工作台设计稿：强调沉浸式终端舞台和命令库辅助。 -->
+    <main class="mockup-page">
+      <a class="back-link" href="./index.html">← 返回设计稿总览</a>
+      <section class="shell glass fade-up">
+        <!-- 左侧全局导航：与其它工作区统一，保持桌面应用壳层一致。 -->
+        <aside class="rail">
+          <div class="brand-badge">SF</div>
+          <nav class="rail-nav">
+            <a class="rail-button" data-label="Query" href="./dashboard-query.html">Q</a>
+            <a class="rail-button active" data-label="Terminal" href="./dashboard-terminal.html">T</a>
+            <a class="rail-button" data-label="Tools" href="./dashboard-tools.html">◎</a>
+            <a class="rail-button" data-label="Settings" href="./dashboard-settings.html">S</a>
+          </nav>
+          <div class="rail-footer">
+            <a class="rail-button" data-label="Meta Window" href="./field-meta-window.html">▣</a>
+          </div>
+        </aside>
+
+        <div class="main-panel">
+          <!-- 顶部上下文栏：显示当前 Shell、目录和快捷动作。 -->
+          <header class="context-header">
+            <div>
+              <p class="eyebrow">Terminal Operations</p>
+              <h1 class="header-title">Automation &amp; CLI Run Deck</h1>
+              <p class="header-meta">将多会话终端、命令库和脚本上下文整合为一个更具“操作舱”氛围的工作区。</p>
+            </div>
+            <div class="header-actions">
+              <div class="search-shell">搜索命令分组、脚本模板、历史输出...</div>
+              <span class="pill"><span class="pill-dot dot-success"></span>pwsh Available</span>
+              <span class="button button-ghost">新建会话</span>
+              <span class="button button-primary">执行脚本</span>
+            </div>
+          </header>
+
+          <section class="workspace-grid workspace-terminal">
+            <!-- 左侧命令库：展示分组、收藏和剪贴入口。 -->
+            <aside class="sidebar-panel">
+              <article class="panel-card glass fade-up delay-1">
+                <div class="row-between">
+                  <div>
+                    <h3>Command Library</h3>
+                    <p class="panel-caption">左栏弱化成命令抽屉，突出拖拽、收藏和一键粘贴到终端。</p>
+                  </div>
+                  <span class="pill"><span class="pill-dot dot-info"></span>12 Saved</span>
+                </div>
+                <div class="list-search" style="margin-top: 14px;">搜索命令名称 / 描述 / 关键字...</div>
+                <div class="tree-group" style="margin-top: 14px;">
+                  <div class="command-card tree-item active interactive">
+                    <div class="tree-left">
+                      <span class="tree-icon">CI</span>
+                      <div>
+                        <div>CLI 登录与源同步</div>
+                        <div class="panel-caption">Auth / Refresh / Sync</div>
+                      </div>
+                    </div>
+                    <span class="pill">4 cmds</span>
+                  </div>
+                  <div class="command-card tree-item interactive">
+                    <div class="tree-left">
+                      <span class="tree-icon">DB</span>
+                      <div>
+                        <div>MySQL 日常维护</div>
+                        <div class="panel-caption">Schema / Snapshot / Cleanup</div>
+                      </div>
+                    </div>
+                    <span class="pill">6 cmds</span>
+                  </div>
+                  <div class="command-card tree-item interactive">
+                    <div class="tree-left">
+                      <span class="tree-icon">AI</span>
+                      <div>
+                        <div>LLM 辅助命令</div>
+                        <div class="panel-caption">Prompt / Review / Explain</div>
+                      </div>
+                    </div>
+                    <span class="pill">2 cmds</span>
+                  </div>
+                </div>
+              </article>
+            </aside>
+
+            <!-- 中央终端舞台：作为 Terminal 页最强视觉主角。 -->
+            <div class="center-panel">
+              <section class="hero-strip fade-up delay-1">
+                <article class="metric-card interactive">
+                  <div class="metric-label">活跃会话</div>
+                  <div class="metric-value">03</div>
+                  <div class="metric-foot">Prod Login / Data Sync / Git Ops</div>
+                </article>
+                <article class="metric-card interactive">
+                  <div class="metric-label">当前 Shell</div>
+                  <div class="metric-value mono">pwsh.exe</div>
+                  <div class="metric-foot">绝对路径已保存 · 默认新建终端生效</div>
+                </article>
+                <article class="metric-card interactive">
+                  <div class="metric-label">最近运行</div>
+                  <div class="metric-value">5m 20s</div>
+                  <div class="metric-foot">上次刷新对象缓存成功，无错误退出</div>
+                </article>
+              </section>
+
+              <article class="terminal-frame glass fade-up delay-2">
+                <div class="row-between" style="margin-bottom: 16px;">
+                  <div>
+                    <h3>Terminal Stage</h3>
+                    <p class="panel-caption">多会话标签与终端内容融成一个沉浸舞台，让用户一眼聚焦输出。</p>
+                  </div>
+                  <div class="tab-row" style="margin: 0;">
+                    <span class="tab-chip active">Sync Source</span>
+                    <span class="tab-chip">Git Status</span>
+                    <span class="tab-chip">MySQL Snapshot</span>
+                  </div>
+                </div>
+                <div class="pill-row" style="margin-bottom: 14px;">
+                  <span class="pill"><span class="pill-dot dot-success"></span>cwd: /mnt/d/test-workspace/simple-salesforce-tool</span>
+                  <span class="pill"><span class="pill-dot dot-info"></span>encoding: UTF-8 / lf</span>
+                </div>
+                <div class="terminal-body">
+                  <div class="terminal-line"><span class="prompt">PS&gt;</span> sf org list auth --json</div>
+                  <div class="terminal-line ok">[ok] source registry refreshed successfully</div>
+                  <div class="terminal-line"><span class="prompt">PS&gt;</span> sf data query --target-org prod --query "SELECT Id, Name FROM Account LIMIT 10"</div>
+                  <div class="terminal-line">[stdout] 10 rows returned in 00:00:00.842</div>
+                  <div class="terminal-line warn">[notice] metadata cache warmup still running for mysql source</div>
+                  <div class="terminal-line"><span class="prompt">PS&gt;</span> git status --short</div>
+                  <div class="terminal-line">?? design-mockups/dashboard-terminal.html</div>
+                  <div class="terminal-line">?? design-mockups/assets/styles.css</div>
+                </div>
+              </article>
+            </div>
+
+            <!-- 右侧情报栏：给出会话指标、脚本建议和风险提醒。 -->
+            <aside class="insight-panel">
+              <article class="panel-card glass fade-up delay-2">
+                <h3>Session Insight</h3>
+                <div class="insight-stack" style="margin-top: 14px;">
+                  <div class="mini-stat">
+                    <span class="metric-label">Pinned Scripts</span>
+                    <strong>Refresh Sources</strong>
+                    <span class="panel-caption">推荐在 Query 页面数据源异常时一键执行。</span>
+                  </div>
+                  <div class="mini-stat">
+                    <span class="metric-label">Clipboard Payload</span>
+                    <strong class="mono">SELECT Id, Name...</strong>
+                    <span class="panel-caption">最近复制的查询片段可快速粘贴回当前会话。</span>
+                  </div>
+                  <div class="mini-stat">
+                    <span class="metric-label">Shell Health</span>
+                    <strong class="ok">Stable</strong>
+                    <span class="panel-caption">近 24 小时无 crash，无权限异常。</span>
+                  </div>
+                </div>
+              </article>
+
+              <article class="panel-card glass fade-up delay-3">
+                <div class="row-between">
+                  <h3>Recommended Commands</h3>
+                  <span class="pill"><span class="pill-dot dot-warning"></span>Adaptive</span>
+                </div>
+                <div class="tree-group" style="margin-top: 14px;">
+                  <div class="tree-item">
+                    <div>
+                      <div class="mono">sf org login web --instance-url ...</div>
+                      <div class="panel-caption">当生产源失效时重拉 OAuth 授权</div>
+                    </div>
+                  </div>
+                  <div class="tree-item">
+                    <div>
+                      <div class="mono">git log --oneline -5</div>
+                      <div class="panel-caption">快速确认最近变更和本地工作区上下文</div>
+                    </div>
+                  </div>
+                  <div class="tree-item">
+                    <div>
+                      <div class="mono">npm run test:query-panel</div>
+                      <div class="panel-caption">UI 改动后优先回归 Query 相关行为</div>
+                    </div>
+                  </div>
+                </div>
+              </article>
+            </aside>
+          </section>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
