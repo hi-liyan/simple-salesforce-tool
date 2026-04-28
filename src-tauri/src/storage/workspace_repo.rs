@@ -5,8 +5,8 @@ use std::collections::HashMap;
 
 use crate::error::AppError;
 use crate::models::{
-    ConsoleTabStateDto, QueryResultSetDto, QueryRowDraftDto, QueryTabStateDto,
-    TerminalTabStateDto, ToolTabStateDto, WorkspaceSnapshotDto, WorkspaceTabDto,
+    ConsoleTabStateDto, QueryResultSetDto, QueryRowDraftDto, QueryTabStateDto, TerminalTabStateDto,
+    ToolTabStateDto, WorkspaceSnapshotDto, WorkspaceTabDto,
 };
 
 /// 保存结构化工作区快照。
@@ -265,7 +265,8 @@ fn load_query_tabs(connection: &Connection) -> Result<Vec<QueryTabStateDto>, App
             show_drawer: row.get::<_, i64>(17)? != 0,
             drawer_view: row.get(18)?,
             show_logs: row.get::<_, i64>(19)? != 0,
-            column_visibility: serde_json::from_str(&column_visibility_json).unwrap_or(Value::Object(serde_json::Map::new())),
+            column_visibility: serde_json::from_str(&column_visibility_json)
+                .unwrap_or(Value::Object(serde_json::Map::new())),
             notice_json: notice_json.and_then(|value| serde_json::from_str(&value).ok()),
         })
     })?;
@@ -306,10 +307,14 @@ fn load_query_row_drafts(connection: &Connection) -> Result<Vec<QueryRowDraftDto
         let baseline_json: String = row.get(4)?;
         Ok(QueryRowDraftDto {
             tab_id: row.get(0)?,
-            selected_record_ids_json: serde_json::from_str(&selected_json).unwrap_or(Value::Array(Vec::new())),
-            pending_delete_record_ids_json: serde_json::from_str(&pending_json).unwrap_or(Value::Array(Vec::new())),
-            dirty_cell_keys_json: serde_json::from_str(&dirty_json).unwrap_or(Value::Array(Vec::new())),
-            baseline_records_json: serde_json::from_str(&baseline_json).unwrap_or(Value::Object(serde_json::Map::new())),
+            selected_record_ids_json: serde_json::from_str(&selected_json)
+                .unwrap_or(Value::Array(Vec::new())),
+            pending_delete_record_ids_json: serde_json::from_str(&pending_json)
+                .unwrap_or(Value::Array(Vec::new())),
+            dirty_cell_keys_json: serde_json::from_str(&dirty_json)
+                .unwrap_or(Value::Array(Vec::new())),
+            baseline_records_json: serde_json::from_str(&baseline_json)
+                .unwrap_or(Value::Object(serde_json::Map::new())),
         })
     })?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -343,11 +348,13 @@ fn load_console_tabs(connection: &Connection) -> Result<Vec<ConsoleTabStateDto>,
             result_json: serde_json::from_str(&result_json).unwrap_or(Value::Null),
             notice_json: notice_json.and_then(|value| serde_json::from_str(&value).ok()),
             logs_json: serde_json::from_str(&logs_json).unwrap_or(Value::Array(Vec::new())),
-            selected_record_ids_json: serde_json::from_str(&selected_ids_json).unwrap_or(Value::Array(Vec::new())),
+            selected_record_ids_json: serde_json::from_str(&selected_ids_json)
+                .unwrap_or(Value::Array(Vec::new())),
             show_bottom_panel: row.get::<_, i64>(12)? != 0,
             ai_conversation_id: row.get(13)?,
             ai_prompt_draft: row.get(14)?,
-            ai_messages_json: serde_json::from_str(&ai_messages_json).unwrap_or(Value::Array(Vec::new())),
+            ai_messages_json: serde_json::from_str(&ai_messages_json)
+                .unwrap_or(Value::Array(Vec::new())),
             ai_mode: row.get::<_, i64>(16)? != 0,
         })
     })?;
@@ -390,9 +397,8 @@ fn load_terminal_tabs(connection: &Connection) -> Result<Vec<TerminalTabStateDto
 
 /// 读取扩展 UI 状态。
 fn load_ui_state(connection: &Connection) -> Result<HashMap<String, Value>, AppError> {
-    let mut statement = connection.prepare(
-        "SELECT state_key, value_json FROM workspace_ui_state ORDER BY state_key ASC",
-    )?;
+    let mut statement = connection
+        .prepare("SELECT state_key, value_json FROM workspace_ui_state ORDER BY state_key ASC")?;
     let rows = statement.query_map([], |row| {
         let value_json: String = row.get(1)?;
         Ok((

@@ -17,10 +17,7 @@ impl<'a> MetadataService<'a> {
     }
 
     /// 替换单对象快照。
-    pub fn replace_object_snapshot(
-        &self,
-        payload: MetadataSnapshotUpsert,
-    ) -> Result<(), AppError> {
+    pub fn replace_object_snapshot(&self, payload: MetadataSnapshotUpsert) -> Result<(), AppError> {
         self.storage
             .write_tx(|tx| metadata_repo::replace_object_snapshot(tx, &payload))
     }
@@ -162,17 +159,19 @@ impl<'a> MetadataService<'a> {
                 .child_relationships
                 .iter()
                 .enumerate()
-                .map(|(index, relation)| crate::models::SourceObjectRelationRecord {
-                    source_id: source_id.to_string(),
-                    object_name: describe.name.clone(),
-                    relation_name: format!("{}::{}", relation.field, relation.child_sobject),
-                    child_sobject: relation.child_sobject.clone(),
-                    field_name: relation.field.clone(),
-                    relationship_name: relation.relationship_name.clone(),
-                    deprecated_and_hidden: relation.deprecated_and_hidden,
-                    relation_type: "child_relationship".to_string(),
-                    sort_order: index as i64 + 1,
-                })
+                .map(
+                    |(index, relation)| crate::models::SourceObjectRelationRecord {
+                        source_id: source_id.to_string(),
+                        object_name: describe.name.clone(),
+                        relation_name: format!("{}::{}", relation.field, relation.child_sobject),
+                        child_sobject: relation.child_sobject.clone(),
+                        field_name: relation.field.clone(),
+                        relationship_name: relation.relationship_name.clone(),
+                        deprecated_and_hidden: relation.deprecated_and_hidden,
+                        relation_type: "child_relationship".to_string(),
+                        sort_order: index as i64 + 1,
+                    },
+                )
                 .collect(),
             blobs: vec![crate::models::SourceMetadataBlobRecord {
                 id: uuid::Uuid::new_v4().to_string(),
@@ -293,7 +292,10 @@ mod tests {
             })
             .unwrap();
 
-        let snapshot = service.get_object_snapshot("sf-1", "Account").unwrap().unwrap();
+        let snapshot = service
+            .get_object_snapshot("sf-1", "Account")
+            .unwrap()
+            .unwrap();
         assert_eq!(snapshot.object.schema_version, 3);
         assert_eq!(snapshot.fields.len(), 1);
         assert_eq!(snapshot.blobs.len(), 1);

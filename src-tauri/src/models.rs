@@ -20,7 +20,7 @@ pub struct SalesforceSource {
     pub config_json: Value,
     /// Salesforce 实例地址（如 https://xxx.my.salesforce.com）。
     pub instance_url: String,
-    /// OAuth 访问令牌（当前版本直接持久化存储）。
+    /// OAuth 访问令牌（公共列表为空，运行时由 secrets 域按需注入）。
     pub access_token: String,
     /// Salesforce REST API 版本（如 v61.0）。
     pub api_version: String,

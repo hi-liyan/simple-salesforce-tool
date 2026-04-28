@@ -12,15 +12,15 @@ use tauri_plugin_opener::OpenerExt;
 
 use crate::ai::orchestrator::AiOrchestrator;
 use crate::app_state::AppState;
-use crate::db;
+use crate::command_storage as db;
 use crate::error::AppError;
 use crate::models::{
     AiCapabilities, AiChatTurnV2Request, AiChatTurnV2Response, CliPathProbe, CliPathSettings,
     CliPathStatus, CurrentUserContext, LlmSettings, LlmSettingsView, MutationExecutionResult,
     MutationPreviewSqlItem, ObjectDdl, ObjectDescribe, QueryResult, RecordMutationPayload,
     RecordSavePayload, RecordSaveWithDeletePayload, RecordUpdatePayload, SalesforceObject,
-    SalesforceSource, SaveLlmSettingsPayload, SourceSecretView, SourceUpsertPayload,
-    SystemLogPage, TerminalCommandGroup, TerminalCommandGroupUpsertPayload, TerminalCommandItem,
+    SalesforceSource, SaveLlmSettingsPayload, SourceSecretView, SourceUpsertPayload, SystemLogPage,
+    TerminalCommandGroup, TerminalCommandGroupUpsertPayload, TerminalCommandItem,
     TerminalCommandReorderPayload, TerminalCommandUpsertPayload, TerminalShellSettings,
     WorkspaceSnapshotDto,
 };
@@ -44,7 +44,7 @@ fn write_system_log(
     message: &str,
     detail: Option<&str>,
 ) {
-    if let Ok(connection) = state.db.lock() {
+    if let Ok(connection) = state.storage.connection() {
         let _ = db::insert_system_log(
             &connection,
             level,
@@ -375,7 +375,7 @@ const METADATA_TYPE_OBJECT_DDL: &str = "object_ddl";
 
 /// 读取已配置的自定义 Salesforce CLI 路径。
 fn read_configured_cli_path(state: &State<'_, AppState>) -> Option<String> {
-    let connection = state.db.lock().ok()?;
+    let connection = state.storage.connection().ok()?;
     db::read_app_setting(&connection, SF_CLI_PATH_SETTING_KEY)
         .ok()
         .flatten()
@@ -601,8 +601,8 @@ async fn refresh_cli_source_token(
 
         let refreshed_source = {
             let connection = state
-                .db
-                .lock()
+                .storage
+                .connection()
                 .map_err(|error| AppError::Db(format!("Database lock failed: {error}")))?;
             db::upsert_source_with_id(&connection, &refreshed_seed.id, refreshed_seed.payload)?
         };
@@ -651,8 +651,8 @@ async fn refresh_cli_source_token(
 #[tauri::command]
 pub fn list_sources(state: State<'_, AppState>) -> Result<Vec<SalesforceSource>, String> {
     let connection = state
-        .db
-        .lock()
+        .storage
+        .connection()
         .map_err(|error| format!("Database lock failed: {error}"))?;
     db::list_sources(&connection).map_err(AppError::to_string_error)
 }
@@ -683,8 +683,8 @@ pub fn sync_cli_sources(state: State<'_, AppState>) -> Result<Vec<SalesforceSour
     let keep_ids: Vec<String> = seeds.iter().map(|item| item.id.clone()).collect();
     let sources = {
         let connection = state
-            .db
-            .lock()
+            .storage
+            .connection()
             .map_err(|error| format!("Database lock failed: {error}"))?;
 
         // 逐条 upsert,保证同一个 org 重复同步只更新不新增。
@@ -1001,8 +1001,8 @@ pub fn list_system_logs(
     page_size: i64,
 ) -> Result<SystemLogPage, String> {
     let connection = state
-        .db
-        .lock()
+        .storage
+        .connection()
         .map_err(|error| format!("Database lock failed: {error}"))?;
     db::list_system_logs(&connection, page, page_size).map_err(AppError::to_string_error)
 }
@@ -1015,8 +1015,8 @@ pub fn create_source(
 ) -> Result<SalesforceSource, String> {
     validate_payload(&payload)?;
     let connection = state
-        .db
-        .lock()
+        .storage
+        .connection()
         .map_err(|error| format!("Database lock failed: {error}"))?;
     db::create_source(&connection, payload).map_err(AppError::to_string_error)
 }
@@ -1028,8 +1028,8 @@ pub fn get_source(
     source_id: String,
 ) -> Result<SalesforceSource, String> {
     let connection = state
-        .db
-        .lock()
+        .storage
+        .connection()
         .map_err(|error| format!("Database lock failed: {error}"))?;
     let sources = db::list_sources(&connection).map_err(AppError::to_string_error)?;
     sources
@@ -1045,8 +1045,8 @@ pub fn get_source_secret_view(
     source_id: String,
 ) -> Result<SourceSecretView, String> {
     let connection = state
-        .db
-        .lock()
+        .storage
+        .connection()
         .map_err(|error| format!("Database lock failed: {error}"))?;
     db::get_source_secret_view(&connection, &source_id).map_err(AppError::to_string_error)
 }
@@ -1058,8 +1058,8 @@ pub fn reorder_sources(
     ordered_ids: Vec<String>,
 ) -> Result<Vec<SalesforceSource>, String> {
     let connection = state
-        .db
-        .lock()
+        .storage
+        .connection()
         .map_err(|error| format!("Database lock failed: {error}"))?;
     db::reorder_sources(&connection, &ordered_ids).map_err(AppError::to_string_error)
 }
@@ -1100,8 +1100,8 @@ pub fn update_source(
 ) -> Result<SalesforceSource, String> {
     validate_payload(&payload)?;
     let connection = state
-        .db
-        .lock()
+        .storage
+        .connection()
         .map_err(|error| format!("Database lock failed: {error}"))?;
     db::update_source(&connection, &id, payload).map_err(AppError::to_string_error)
 }
@@ -1110,8 +1110,8 @@ pub fn update_source(
 #[tauri::command]
 pub fn delete_source(state: State<'_, AppState>, id: String) -> Result<(), String> {
     let connection = state
-        .db
-        .lock()
+        .storage
+        .connection()
         .map_err(|error| format!("Database lock failed: {error}"))?;
     db::delete_source(&connection, &id).map_err(AppError::to_string_error)
 }
@@ -1120,8 +1120,8 @@ pub fn delete_source(state: State<'_, AppState>, id: String) -> Result<(), Strin
 #[tauri::command]
 pub fn load_workspace_snapshot(state: State<'_, AppState>) -> Result<WorkspaceSnapshotDto, String> {
     let connection = state
-        .db
-        .lock()
+        .storage
+        .connection()
         .map_err(|error| format!("Database lock failed: {error}"))?;
     db::load_workspace_snapshot(&connection).map_err(AppError::to_string_error)
 }
@@ -1133,8 +1133,8 @@ pub fn save_workspace_snapshot(
     payload: WorkspaceSnapshotDto,
 ) -> Result<(), String> {
     let connection = state
-        .db
-        .lock()
+        .storage
+        .connection()
         .map_err(|error| format!("Database lock failed: {error}"))?;
     db::save_workspace_snapshot(&connection, &payload).map_err(AppError::to_string_error)
 }
@@ -1147,8 +1147,8 @@ pub fn get_column_visibility(
     object_name: String,
 ) -> Result<HashMap<String, bool>, String> {
     let connection = state
-        .db
-        .lock()
+        .storage
+        .connection()
         .map_err(|error| format!("Database lock failed: {error}"))?;
     let visibility = db::read_column_visibility(&connection, &source_id, &object_name)
         .map_err(AppError::to_string_error)?;
@@ -1164,8 +1164,8 @@ pub fn save_column_visibility(
     visibility: HashMap<String, bool>,
 ) -> Result<(), String> {
     let connection = state
-        .db
-        .lock()
+        .storage
+        .connection()
         .map_err(|error| format!("Database lock failed: {error}"))?;
     db::write_column_visibility(&connection, &source_id, &object_name, &visibility)
         .map_err(AppError::to_string_error)
@@ -1180,15 +1180,15 @@ pub async fn list_objects(
 ) -> Result<Vec<SalesforceObject>, String> {
     let source = {
         let connection = state
-            .db
-            .lock()
+            .storage
+            .connection()
             .map_err(|error| format!("Database lock failed: {error}"))?;
         db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
     };
     let cached_objects = {
         let connection = state
-            .db
-            .lock()
+            .storage
+            .connection()
             .map_err(|error| format!("Database lock failed: {error}"))?;
         db::read_object_cache(&connection, &source_id).map_err(AppError::to_string_error)?
     };
@@ -1267,8 +1267,8 @@ pub async fn list_objects(
 
     {
         let connection = state
-            .db
-            .lock()
+            .storage
+            .connection()
             .map_err(|error| format!("Database lock failed: {error}"))?;
         // 请求成功后写入缓存,后续短时间内避免重复调用远端接口。
         db::write_object_cache(&connection, &source_id, &objects)
@@ -1309,8 +1309,8 @@ pub fn save_cli_path_settings(
 
     {
         let connection = state
-            .db
-            .lock()
+            .storage
+            .connection()
             .map_err(|error| format!("Database lock failed: {error}"))?;
         if let Some(path) = normalized.as_ref() {
             db::write_app_setting(&connection, SF_CLI_PATH_SETTING_KEY, path)
@@ -1382,8 +1382,8 @@ pub fn save_llm_settings(
 
     {
         let connection = state
-            .db
-            .lock()
+            .storage
+            .connection()
             .map_err(|error| format!("Database lock failed: {error}"))?;
         let raw = serde_json::to_string(&current)
             .map_err(|error| AppError::to_string_error(error.into()))?;
@@ -1449,8 +1449,8 @@ pub async fn refresh_objects(
 ) -> Result<Vec<SalesforceObject>, String> {
     let source = {
         let connection = state
-            .db
-            .lock()
+            .storage
+            .connection()
             .map_err(|error| format!("Database lock failed: {error}"))?;
         db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
     };
@@ -1492,8 +1492,8 @@ pub async fn refresh_objects(
 
     {
         let connection = state
-            .db
-            .lock()
+            .storage
+            .connection()
             .map_err(|error| format!("Database lock failed: {error}"))?;
         // 强制刷新成功后覆盖对象列表缓存，并失效该数据源的对象级元数据缓存。
         db::write_object_cache(&connection, &source_id, &objects)
@@ -1631,8 +1631,8 @@ pub async fn open_object_list_page(
 
     let source = {
         let connection = state
-            .db
-            .lock()
+            .storage
+            .connection()
             .map_err(|error| format!("Database lock failed: {error}"))?;
         db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
     };
@@ -1667,8 +1667,8 @@ pub async fn open_object_edit_page(
 
     let source = {
         let connection = state
-            .db
-            .lock()
+            .storage
+            .connection()
             .map_err(|error| format!("Database lock failed: {error}"))?;
         db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
     };
@@ -1709,8 +1709,8 @@ pub async fn open_record_page(
 
     let source = {
         let connection = state
-            .db
-            .lock()
+            .storage
+            .connection()
             .map_err(|error| format!("Database lock failed: {error}"))?;
         db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
     };
@@ -1853,8 +1853,8 @@ pub async fn describe_object(
     // 先读 SQLite 元数据缓存，命中时直接返回，避免重复请求远端。
     let cached_describe = {
         let connection = state
-            .db
-            .lock()
+            .storage
+            .connection()
             .map_err(|error| format!("Database lock failed: {error}"))?;
         db::read_source_metadata_cache(
             &connection,
@@ -1898,8 +1898,8 @@ pub async fn describe_object(
 
     let mut source = {
         let connection = state
-            .db
-            .lock()
+            .storage
+            .connection()
             .map_err(|error| format!("Database lock failed: {error}"))?;
         db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
     };
@@ -1927,8 +1927,8 @@ pub async fn describe_object(
             {}
             {
                 let connection = state
-                    .db
-                    .lock()
+                    .storage
+                    .connection()
                     .map_err(|error| format!("Database lock failed: {error}"))?;
                 let payload = serde_json::to_string(&describe)
                     .map_err(|error| AppError::Serde(error.to_string()).to_string_error())?;
@@ -1982,8 +1982,8 @@ pub async fn get_object_ddl(
     // 先读 SQLite 元数据缓存，命中时直接返回，避免重复请求数据库/远端。
     let cached_ddl = {
         let connection = state
-            .db
-            .lock()
+            .storage
+            .connection()
             .map_err(|error| format!("Database lock failed: {error}"))?;
         db::read_source_metadata_cache(
             &connection,
@@ -2001,8 +2001,8 @@ pub async fn get_object_ddl(
 
     let source = {
         let connection = state
-            .db
-            .lock()
+            .storage
+            .connection()
             .map_err(|error| format!("Database lock failed: {error}"))?;
         db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
     };
@@ -2018,8 +2018,8 @@ pub async fn get_object_ddl(
         Ok(ddl) => {
             {
                 let connection = state
-                    .db
-                    .lock()
+                    .storage
+                    .connection()
                     .map_err(|error| format!("Database lock failed: {error}"))?;
                 let payload = serde_json::to_string(&ddl)
                     .map_err(|error| AppError::Serde(error.to_string()).to_string_error())?;
@@ -2080,8 +2080,8 @@ pub async fn resolve_field_child_relationship_name(
 
     let source = {
         let connection = state
-            .db
-            .lock()
+            .storage
+            .connection()
             .map_err(|error| format!("Database lock failed: {error}"))?;
         db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
     };
@@ -2173,8 +2173,8 @@ pub async fn query_records(
 
     let source = {
         let connection = state
-            .db
-            .lock()
+            .storage
+            .connection()
             .map_err(|error| format!("Database lock failed: {error}"))?;
         db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
     };
@@ -2264,8 +2264,8 @@ fn read_cached_object_describe(
     object_name: &str,
 ) -> Result<Option<ObjectDescribe>, AppError> {
     let connection = state
-        .db
-        .lock()
+        .storage
+        .connection()
         .map_err(|error| AppError::Biz(format!("Database lock failed: {error}")))?;
     let payload = db::read_source_metadata_cache(
         &connection,
@@ -2302,8 +2302,8 @@ async fn load_mysql_describe_for_query(
     let payload =
         serde_json::to_string(&describe).map_err(|error| AppError::Serde(error.to_string()))?;
     let connection = state
-        .db
-        .lock()
+        .storage
+        .connection()
         .map_err(|error| AppError::Biz(format!("Database lock failed: {error}")))?;
     db::write_source_metadata_cache(
         &connection,
@@ -2325,8 +2325,8 @@ pub async fn get_current_user_context(
 ) -> Result<CurrentUserContext, String> {
     let source = {
         let connection = state
-            .db
-            .lock()
+            .storage
+            .connection()
             .map_err(|error| format!("Database lock failed: {error}"))?;
         db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
     };
@@ -2400,8 +2400,8 @@ pub async fn create_record(
 ) -> Result<String, String> {
     let source = {
         let connection = state
-            .db
-            .lock()
+            .storage
+            .connection()
             .map_err(|error| format!("Database lock failed: {error}"))?;
         db::get_source(&connection, &payload.source_id).map_err(AppError::to_string_error)?
     };
@@ -2513,8 +2513,8 @@ pub async fn save_records(
 
     let source = {
         let connection = state
-            .db
-            .lock()
+            .storage
+            .connection()
             .map_err(|error| format!("Database lock failed: {error}"))?;
         db::get_source(&connection, &payload.source_id).map_err(AppError::to_string_error)?
     };
@@ -2647,8 +2647,8 @@ pub async fn preview_save_records_with_deletes(
 
     let source = {
         let connection = state
-            .db
-            .lock()
+            .storage
+            .connection()
             .map_err(|error| format!("Database lock failed: {error}"))?;
         db::get_source(&connection, &payload.source_id).map_err(AppError::to_string_error)?
     };
@@ -2685,8 +2685,8 @@ pub async fn save_records_with_deletes(
 
     let source = {
         let connection = state
-            .db
-            .lock()
+            .storage
+            .connection()
             .map_err(|error| format!("Database lock failed: {error}"))?;
         db::get_source(&connection, &payload.source_id).map_err(AppError::to_string_error)?
     };
@@ -2808,8 +2808,8 @@ pub async fn update_record(
 ) -> Result<(), String> {
     let source = {
         let connection = state
-            .db
-            .lock()
+            .storage
+            .connection()
             .map_err(|error| format!("Database lock failed: {error}"))?;
         db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
     };
@@ -2917,8 +2917,8 @@ pub async fn delete_record(
 ) -> Result<(), String> {
     let source = {
         let connection = state
-            .db
-            .lock()
+            .storage
+            .connection()
             .map_err(|error| format!("Database lock failed: {error}"))?;
         db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
     };
@@ -3018,8 +3018,8 @@ pub async fn delete_record(
 /// 读取 LLM 设置,未配置时返回默认值。
 fn read_llm_settings(state: &State<'_, AppState>) -> Result<LlmSettings, String> {
     let connection = state
-        .db
-        .lock()
+        .storage
+        .connection()
         .map_err(|error| format!("Database lock failed: {error}"))?;
     let raw = db::read_app_setting(&connection, LLM_SETTINGS_KEY)
         .map_err(AppError::to_string_error)?
@@ -3094,8 +3094,8 @@ pub fn list_terminal_command_groups(
     state: State<'_, AppState>,
 ) -> Result<Vec<TerminalCommandGroup>, String> {
     let connection = state
-        .db
-        .lock()
+        .storage
+        .connection()
         .map_err(|error| format!("Database lock failed: {error}"))?;
     db::list_terminal_command_groups(&connection).map_err(AppError::to_string_error)
 }
@@ -3112,8 +3112,8 @@ pub fn create_terminal_command_group(
     }
 
     let connection = state
-        .db
-        .lock()
+        .storage
+        .connection()
         .map_err(|error| format!("Database lock failed: {error}"))?;
     db::create_terminal_command_group(&connection, &normalized_name)
         .map_err(AppError::to_string_error)
@@ -3132,8 +3132,8 @@ pub fn update_terminal_command_group(
     }
 
     let connection = state
-        .db
-        .lock()
+        .storage
+        .connection()
         .map_err(|error| format!("Database lock failed: {error}"))?;
     db::update_terminal_command_group(&connection, &normalized_group_id, &payload.name)
         .map_err(AppError::to_string_error)
@@ -3146,8 +3146,8 @@ pub fn create_terminal_command(
     payload: TerminalCommandUpsertPayload,
 ) -> Result<TerminalCommandItem, String> {
     let connection = state
-        .db
-        .lock()
+        .storage
+        .connection()
         .map_err(|error| format!("Database lock failed: {error}"))?;
     db::create_terminal_command(&connection, &payload).map_err(AppError::to_string_error)
 }
@@ -3165,8 +3165,8 @@ pub fn update_terminal_command(
     }
 
     let connection = state
-        .db
-        .lock()
+        .storage
+        .connection()
         .map_err(|error| format!("Database lock failed: {error}"))?;
     db::update_terminal_command(&connection, &normalized_command_id, &payload)
         .map_err(AppError::to_string_error)
@@ -3189,8 +3189,8 @@ pub fn delete_terminal_command(
     }
 
     let connection = state
-        .db
-        .lock()
+        .storage
+        .connection()
         .map_err(|error| format!("Database lock failed: {error}"))?;
     db::delete_terminal_command(&connection, &normalized_group_id, &normalized_command_id)
         .map_err(AppError::to_string_error)
@@ -3208,8 +3208,8 @@ pub fn delete_terminal_command_group(
     }
 
     let connection = state
-        .db
-        .lock()
+        .storage
+        .connection()
         .map_err(|error| format!("Database lock failed: {error}"))?;
     db::delete_terminal_command_group(&connection, &normalized_group_id)
         .map_err(AppError::to_string_error)
@@ -3231,8 +3231,8 @@ pub fn reorder_terminal_commands(
     }
 
     let connection = state
-        .db
-        .lock()
+        .storage
+        .connection()
         .map_err(|error| format!("Database lock failed: {error}"))?;
     db::reorder_terminal_commands(&connection, &payload).map_err(AppError::to_string_error)
 }
@@ -3277,8 +3277,8 @@ pub fn get_terminal_shell_settings(
     state: State<'_, AppState>,
 ) -> Result<TerminalShellSettings, String> {
     let connection = state
-        .db
-        .lock()
+        .storage
+        .connection()
         .map_err(|error| format!("Database lock failed: {error}"))?;
     Ok(TerminalShellSettings {
         command_value: db::read_app_setting(&connection, TERMINAL_SHELL_COMMAND_KEY)
@@ -3299,8 +3299,8 @@ pub fn save_terminal_shell_command(
         return Err("终端 Shell 命令不能为空".to_string());
     }
     let connection = state
-        .db
-        .lock()
+        .storage
+        .connection()
         .map_err(|error| format!("Database lock failed: {error}"))?;
     db::write_app_setting(&connection, TERMINAL_SHELL_COMMAND_KEY, &normalized_command)
         .map_err(AppError::to_string_error)
@@ -3395,7 +3395,7 @@ pub fn open_elevated_terminal(_state: State<'_, AppState>) -> Result<(), String>
 
 /// 读取终端 shell 命令配置；兼容旧版 `terminal.shell.preference`（pwsh/powershell）。
 fn read_terminal_shell_command(state: &State<'_, AppState>) -> Option<String> {
-    let connection = state.db.lock().ok()?;
+    let connection = state.storage.connection().ok()?;
     // 优先读取新版完整命令配置。
     let command = db::read_app_setting(&connection, TERMINAL_SHELL_COMMAND_KEY)
         .ok()

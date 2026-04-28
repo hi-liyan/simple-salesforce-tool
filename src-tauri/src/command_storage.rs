@@ -1,5 +1,6 @@
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
+use serde_json::Value;
 
 use crate::error::AppError;
 use crate::models::{
@@ -8,15 +9,8 @@ use crate::models::{
     TerminalCommandUpsertPayload, WorkspaceSnapshotDto,
 };
 use crate::storage::{
-    automation_repo, config_repo, log_repo, metadata_repo, schema, secret_repo, source_repo,
-    workspace_repo,
+    automation_repo, config_repo, log_repo, metadata_repo, secret_repo, source_repo, workspace_repo,
 };
-
-/// 初始化数据库表结构。
-pub fn init_schema(connection: &Connection) -> Result<(), AppError> {
-    crate::storage::pragma::apply_pragmas(connection)?;
-    schema::init_v2_schema(connection)
-}
 
 /// 读取应用配置项，不存在时返回 None。
 pub fn read_app_setting(connection: &Connection, key: &str) -> Result<Option<String>, AppError> {
@@ -45,10 +39,22 @@ pub fn list_sources(connection: &Connection) -> Result<Vec<SalesforceSource>, Ap
 /// 读取运行时数据源：返回 provider 真正需要的 secret 明文。
 pub fn get_source(connection: &Connection, id: &str) -> Result<SalesforceSource, AppError> {
     let record = source_repo::get_source(connection, id)?;
-    let access_token = read_runtime_source_secret(connection, &record, "accessToken")?
-        .or_else(|| read_runtime_source_secret(connection, &record, "password").ok().flatten())
-        .unwrap_or_default();
-    Ok(source_repo::into_public_source(record, access_token))
+    let is_mysql = record.source_type.eq_ignore_ascii_case("mysql");
+    let access_token =
+        read_runtime_source_secret(connection, &record, "accessToken")?.unwrap_or_default();
+    let password = if is_mysql {
+        read_runtime_source_secret(connection, &record, "password")?
+    } else {
+        None
+    };
+    let mut source = source_repo::into_public_source(record, access_token);
+    if let Some(password) = password {
+        if let Some(config) = source.config_json.as_object_mut() {
+            // 行内注释：MySQL provider 从 configJson 构建连接串，运行时需注入 secrets 域密码。
+            config.insert("password".to_string(), Value::String(password));
+        }
+    }
+    Ok(source)
 }
 
 /// 新建数据源。
@@ -59,7 +65,8 @@ pub fn create_source(
     let tx = connection.unchecked_transaction()?;
     let source_id = uuid::Uuid::new_v4().to_string();
     let secret_bundle_id = persist_source_secrets(&tx, &source_id, None, &payload)?;
-    let record = source_repo::insert_source(&tx, &source_id, &payload, secret_bundle_id.as_deref())?;
+    let record =
+        source_repo::insert_source(&tx, &source_id, &payload, secret_bundle_id.as_deref())?;
     tx.commit()?;
     Ok(source_repo::into_public_source(record, String::new()))
 }
@@ -90,7 +97,9 @@ pub fn upsert_source_with_id(
     let secret_bundle_id = persist_source_secrets(
         &tx,
         source_id,
-        current.as_ref().and_then(|item| item.secret_bundle_id.as_deref()),
+        current
+            .as_ref()
+            .and_then(|item| item.secret_bundle_id.as_deref()),
         &payload,
     )?;
     let record =
@@ -126,13 +135,28 @@ pub fn get_source_secret_view(
     connection: &Connection,
     source_id: &str,
 ) -> Result<SourceSecretView, AppError> {
-    let record = source_repo::get_source(connection, source_id)?;
-    Ok(SourceSecretView {
+    let tx = connection.unchecked_transaction()?;
+    let record = source_repo::get_source(&tx, source_id)?;
+    let view = SourceSecretView {
         source_id: source_id.to_string(),
-        access_token: read_runtime_source_secret(connection, &record, "accessToken")?
-            .unwrap_or_default(),
-        password: read_runtime_source_secret(connection, &record, "password")?.unwrap_or_default(),
-    })
+        access_token: read_runtime_source_secret(&tx, &record, "accessToken")?.unwrap_or_default(),
+        password: read_runtime_source_secret(&tx, &record, "password")?.unwrap_or_default(),
+    };
+    if let Some(bundle_id) = &record.secret_bundle_id {
+        secret_repo::insert_secret_access_audit(
+            &tx,
+            bundle_id,
+            None,
+            "read_plaintext_for_edit",
+            "settings.edit-source",
+            true,
+            "允许设置页显式读取 secret 明文",
+            "",
+            "{}",
+        )?;
+    }
+    tx.commit()?;
+    Ok(view)
 }
 
 /// 读取列可见性。
@@ -191,7 +215,9 @@ pub fn read_source_metadata_cache(
 ) -> Result<Option<String>, AppError> {
     let normalized_object_name = object_name.unwrap_or_default();
     if metadata_type == "object_describe" {
-        if let Some(snapshot) = metadata_repo::get_object_snapshot(connection, source_id, normalized_object_name)? {
+        if let Some(snapshot) =
+            metadata_repo::get_object_snapshot(connection, source_id, normalized_object_name)?
+        {
             if let Some(blob) = snapshot
                 .blobs
                 .iter()
@@ -199,12 +225,20 @@ pub fn read_source_metadata_cache(
             {
                 return Ok(Some(blob.payload_json.clone()));
             }
-            return Ok(Some(serde_json::to_string(&metadata_repo::snapshot_to_describe(&snapshot))?));
+            if snapshot.fields.is_empty() {
+                // 行内注释：只有对象目录没有字段时不算 describe 缓存命中，应让调用方回源拉取字段元数据。
+                return Ok(None);
+            }
+            return Ok(Some(serde_json::to_string(
+                &metadata_repo::snapshot_to_describe(&snapshot),
+            )?));
         }
         return Ok(None);
     }
     if metadata_type == "object_ddl" {
-        if let Some(snapshot) = metadata_repo::get_object_snapshot(connection, source_id, normalized_object_name)? {
+        if let Some(snapshot) =
+            metadata_repo::get_object_snapshot(connection, source_id, normalized_object_name)?
+        {
             if let Some(ddl) = snapshot.ddl {
                 return Ok(Some(serde_json::to_string(&ddl)?));
             }
@@ -237,7 +271,8 @@ pub fn write_source_metadata_cache(
     if metadata_type == "object_describe" {
         if let Ok(describe) = serde_json::from_str::<ObjectDescribe>(payload) {
             let tx = connection.unchecked_transaction()?;
-            let existing = metadata_repo::get_object_snapshot(&tx, source_id, normalized_object_name)?;
+            let existing =
+                metadata_repo::get_object_snapshot(&tx, source_id, normalized_object_name)?;
             let object = existing
                 .as_ref()
                 .map(|snapshot| snapshot.object.clone())
@@ -286,17 +321,22 @@ pub fn write_source_metadata_cache(
                     .child_relationships
                     .iter()
                     .enumerate()
-                    .map(|(index, relation)| crate::models::SourceObjectRelationRecord {
-                        source_id: source_id.to_string(),
-                        object_name: normalized_object_name.to_string(),
-                        relation_name: format!("{}::{}", relation.field, relation.child_sobject),
-                        child_sobject: relation.child_sobject.clone(),
-                        field_name: relation.field.clone(),
-                        relationship_name: relation.relationship_name.clone(),
-                        deprecated_and_hidden: relation.deprecated_and_hidden,
-                        relation_type: "child_relationship".to_string(),
-                        sort_order: index as i64 + 1,
-                    })
+                    .map(
+                        |(index, relation)| crate::models::SourceObjectRelationRecord {
+                            source_id: source_id.to_string(),
+                            object_name: normalized_object_name.to_string(),
+                            relation_name: format!(
+                                "{}::{}",
+                                relation.field, relation.child_sobject
+                            ),
+                            child_sobject: relation.child_sobject.clone(),
+                            field_name: relation.field.clone(),
+                            relationship_name: relation.relationship_name.clone(),
+                            deprecated_and_hidden: relation.deprecated_and_hidden,
+                            relation_type: "child_relationship".to_string(),
+                            sort_order: index as i64 + 1,
+                        },
+                    )
                     .collect(),
                 blobs: vec![crate::models::SourceMetadataBlobRecord {
                     id: uuid::Uuid::new_v4().to_string(),
@@ -360,11 +400,26 @@ pub fn write_source_metadata_cache(
 }
 
 /// 清理指定数据源的对象级元数据缓存。
-pub fn clear_source_metadata_cache(connection: &Connection, source_id: &str) -> Result<(), AppError> {
-    connection.execute("DELETE FROM source_object_fields WHERE source_id = ?1", [source_id])?;
-    connection.execute("DELETE FROM source_object_relations WHERE source_id = ?1", [source_id])?;
-    connection.execute("DELETE FROM source_object_ddls WHERE source_id = ?1", [source_id])?;
-    connection.execute("DELETE FROM source_metadata_blobs WHERE source_id = ?1", [source_id])?;
+pub fn clear_source_metadata_cache(
+    connection: &Connection,
+    source_id: &str,
+) -> Result<(), AppError> {
+    connection.execute(
+        "DELETE FROM source_object_fields WHERE source_id = ?1",
+        [source_id],
+    )?;
+    connection.execute(
+        "DELETE FROM source_object_relations WHERE source_id = ?1",
+        [source_id],
+    )?;
+    connection.execute(
+        "DELETE FROM source_object_ddls WHERE source_id = ?1",
+        [source_id],
+    )?;
+    connection.execute(
+        "DELETE FROM source_metadata_blobs WHERE source_id = ?1",
+        [source_id],
+    )?;
     Ok(())
 }
 
@@ -561,4 +616,118 @@ fn persist_source_secrets(
     }
     secret_repo::delete_missing_secret_items(tx, &bundle_id, &keep_keys)?;
     Ok(Some(bundle_id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{read_source_metadata_cache, write_object_cache, write_source_metadata_cache};
+    use crate::models::{ObjectDescribe, ObjectField, SalesforceObject};
+    use crate::storage::Storage;
+    use rusqlite::params;
+    use std::collections::HashMap;
+
+    /// 插入测试数据源：metadata 表通过外键依赖 data_sources。
+    fn seed_salesforce_source(storage: &Storage, source_id: &str) {
+        storage
+            .write(|connection| {
+                connection.execute(
+                    "INSERT INTO data_sources (
+                        id, name, source_type, environment, color, sort_order, enabled,
+                        config_json, secret_bundle_id, version, created_at, updated_at, archived_at
+                    ) VALUES (?1, 'Salesforce', 'salesforce', 'default', '', 1, 1, '{}', NULL, 1, ?2, ?2, NULL)",
+                    params![source_id, chrono::Utc::now().to_rfc3339()],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    /// 构造最小 Salesforce 对象目录项。
+    fn account_object() -> SalesforceObject {
+        SalesforceObject {
+            name: "Account".to_string(),
+            label: "Account".to_string(),
+            comment: None,
+            queryable: true,
+            createable: true,
+            updateable: true,
+            deletable: true,
+        }
+    }
+
+    /// 构造含字段的 describe 缓存载荷。
+    fn account_describe() -> ObjectDescribe {
+        ObjectDescribe {
+            name: "Account".to_string(),
+            label: "Account".to_string(),
+            fields: vec![ObjectField {
+                name: "Name".to_string(),
+                label: "Name".to_string(),
+                data_type: "string".to_string(),
+                nillable: true,
+                updateable: true,
+                createable: true,
+                metadata: HashMap::new(),
+            }],
+            child_relationships: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn object_list_cache_does_not_count_as_salesforce_describe_cache() {
+        let storage = Storage::open_test().unwrap();
+        seed_salesforce_source(&storage, "sf-1");
+
+        storage
+            .write(|connection| write_object_cache(connection, "sf-1", &[account_object()]))
+            .unwrap();
+
+        let cached = storage
+            .read(|connection| {
+                read_source_metadata_cache(connection, "sf-1", "object_describe", Some("Account"))
+            })
+            .unwrap();
+
+        assert!(
+            cached.is_none(),
+            "只有对象目录时不能伪造字段 describe 缓存，否则前端会拿到空字段列表"
+        );
+    }
+
+    #[test]
+    fn refreshing_object_list_preserves_existing_salesforce_describe_fields() {
+        let storage = Storage::open_test().unwrap();
+        seed_salesforce_source(&storage, "sf-1");
+        let payload = serde_json::to_string(&account_describe()).unwrap();
+
+        storage
+            .write(|connection| {
+                write_source_metadata_cache(
+                    connection,
+                    "sf-1",
+                    "object_describe",
+                    Some("Account"),
+                    &payload,
+                )
+            })
+            .unwrap();
+
+        storage
+            .write(|connection| write_object_cache(connection, "sf-1", &[account_object()]))
+            .unwrap();
+
+        let cached = storage
+            .read(|connection| {
+                read_source_metadata_cache(connection, "sf-1", "object_describe", Some("Account"))
+            })
+            .unwrap()
+            .expect("刷新对象目录不应删除已有字段 describe 缓存");
+        let describe: ObjectDescribe = serde_json::from_str(&cached).unwrap();
+
+        assert_eq!(
+            describe.fields.len(),
+            1,
+            "刷新对象目录后仍应保留 Account 字段元数据"
+        );
+    }
 }

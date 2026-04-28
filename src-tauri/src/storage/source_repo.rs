@@ -171,9 +171,8 @@ pub fn reorder_sources(connection: &Connection, ordered_ids: &[String]) -> Resul
 
 /// 清理未保留的 CLI 数据源。
 pub fn prune_cli_sources(connection: &Connection, keep_ids: &[String]) -> Result<(), AppError> {
-    let mut statement = connection.prepare(
-        "SELECT id FROM data_sources WHERE id LIKE 'cli-%' ORDER BY id ASC",
-    )?;
+    let mut statement =
+        connection.prepare("SELECT id FROM data_sources WHERE id LIKE 'cli-%' ORDER BY id ASC")?;
     let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
     for row in rows {
         let source_id = row?;

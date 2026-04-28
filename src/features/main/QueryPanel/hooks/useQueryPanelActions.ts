@@ -406,9 +406,12 @@ export function useQueryPanelActions({
           acc[field.name] = nextChecked;
           return acc;
         }, {} as Record<string, boolean>);
+        // 本地 UI 始终更新，让用户看到全选/全不选的即时反馈。
         patchTab(activeTab.bindingKey, (item) => ({ ...item, columnVisibility: nextVisibility }));
         const resolvedSourceId = activeTab.sourceId || selectedSourceId;
-        if (resolvedSourceId) {
+        // 仅当切换为"全选"时持久化；"全不选"不写入 SQLite，
+        // 避免下次打开同一张表时因 visibility 全 false 触发"至少勾选一个字段"错误。
+        if (nextChecked && resolvedSourceId) {
           void persistColumnVisibility(resolvedSourceId, activeTab.objectName, nextVisibility);
         }
       },

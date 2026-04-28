@@ -2,7 +2,7 @@
 name = "simple-salesforce-tool"
 version = "0.1.0"
 description = "Production-ready multi-source Salesforce desktop tool"
-authors = ["codex"]
+authors = ["liyan", "codex"]
 license = "MIT"
 edition = "2021"
 

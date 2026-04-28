@@ -1,7 +1,7 @@
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::error::AppError;
 use crate::models::{
@@ -11,7 +11,10 @@ use crate::models::{
 };
 
 /// 读取对象列表缓存。
-pub fn list_cached_objects(connection: &Connection, source_id: &str) -> Result<Vec<SalesforceObject>, AppError> {
+pub fn list_cached_objects(
+    connection: &Connection,
+    source_id: &str,
+) -> Result<Vec<SalesforceObject>, AppError> {
     let mut statement = connection.prepare(
         "SELECT object_name, label, comment, queryable, createable, updateable, deletable
          FROM source_objects
@@ -39,17 +42,47 @@ pub fn replace_source_objects(
     objects: &[SalesforceObject],
     refresh_reason: &str,
 ) -> Result<(), AppError> {
-    tx.execute("DELETE FROM source_object_fields WHERE source_id = ?1", [source_id])?;
-    tx.execute("DELETE FROM source_object_relations WHERE source_id = ?1", [source_id])?;
-    tx.execute("DELETE FROM source_object_ddls WHERE source_id = ?1", [source_id])?;
-    tx.execute("DELETE FROM source_metadata_blobs WHERE source_id = ?1", [source_id])?;
-    tx.execute("DELETE FROM source_objects WHERE source_id = ?1", [source_id])?;
+    let next_names = objects
+        .iter()
+        .map(|object| object.name.as_str())
+        .collect::<HashSet<_>>();
+    let existing_names = {
+        let mut statement = tx.prepare(
+            "SELECT object_name FROM source_objects WHERE source_id = ?1 ORDER BY object_name ASC",
+        )?;
+        let rows = statement.query_map([source_id], |row| row.get::<_, String>(0))?;
+        rows.collect::<Result<Vec<_>, _>>()?
+    };
+    for existing_name in existing_names {
+        if next_names.contains(existing_name.as_str()) {
+            continue;
+        }
+        // 行内注释：对象已不存在时才清理它的字段、DDL 与 blob，避免普通目录刷新误删 describe 缓存。
+        tx.execute(
+            "DELETE FROM source_metadata_blobs WHERE source_id = ?1 AND object_name = ?2",
+            params![source_id, existing_name],
+        )?;
+        tx.execute(
+            "DELETE FROM source_objects WHERE source_id = ?1 AND object_name = ?2",
+            params![source_id, existing_name],
+        )?;
+    }
+
     for (index, object) in objects.iter().enumerate() {
         tx.execute(
             "INSERT INTO source_objects (
                 source_id, object_name, label, comment, queryable, createable, updateable, deletable,
                 schema_version, snapshot_version, identity_hash, refresh_reason, updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9, '', ?10, ?11)",
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9, '', ?10, ?11)
+             ON CONFLICT(source_id, object_name) DO UPDATE SET
+                label = excluded.label,
+                comment = excluded.comment,
+                queryable = excluded.queryable,
+                createable = excluded.createable,
+                updateable = excluded.updateable,
+                deletable = excluded.deletable,
+                refresh_reason = excluded.refresh_reason,
+                updated_at = excluded.updated_at",
             params![
                 source_id,
                 object.name,

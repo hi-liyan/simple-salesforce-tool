@@ -10,13 +10,15 @@
 
 ---
 
-## 实施状态（2026-04-24）
+## 实施状态（2026-04-27）
 
 - 已落地：新增 `storage/` 与 `services/` 骨架，v2 schema / bootstrap / PRAGMA 已进入代码；数据源与 secret 已分域建模，并补了 `get_source`、`get_source_secret_view`、`load_workspace_snapshot`、`save_workspace_snapshot` 命令入口。
 - 已落地：前端 `tauriStorage` 已改为通过结构化 workspace snapshot 读写，新增 [`tests/query-panel/workspaceSnapshot.test.ts`](/mnt/d/test-workspace/simple-salesforce-tool/tests/query-panel/workspaceSnapshot.test.ts) 锁定多 store 恢复映射；`node --test --experimental-strip-types tests/query-panel/workspaceSnapshot.test.ts tests/query-panel/startupPersistence.test.ts tests/query-panel/terminalStoreIsolation.test.ts` 已通过。
 - 已落地：设置页编辑链路已切到 `getSourceSecretView`，MySQL / Salesforce 编辑表单与颜色更新链路会显式回填并保留 secret 明文。
-- 待收尾：`AppState/main.rs` 仍保留旧 `db` 入口，`db.rs` 当前是 v2 兼容适配层，尚未完成计划中的最终移除；通用 `get_ui_state/save_ui_state` 已删除，但旧 `db.rs` 兼容层尚在。
-- 已验证：`cargo test --manifest-path src-tauri/Cargo.toml`、`npm run test:query-panel`、`npm run test:datagrid-utils`、`npm run build` 均已通过。
+- 已落地：`AppState/main.rs` 已切到 `Storage` 入口，`src-tauri/src/db.rs` 与 `command_store.rs` 迁移期残留已移除，通用 `get_ui_state/save_ui_state` 主路径已移除；命令层通过 v2 storage/repo/service 边界访问本地库。
+- 已落地：旧 v2 中间库启动保护已补齐；当 `bootstrap_version` 不是当前版本时，会归档为 `app.v2.stale.backup.<timestamp>.db` 并重建当前 v2 schema，避免设置页因缺列报错。
+- 已落地：MySQL 数据源 secret 运行时注入已修复；公共 DTO 不返回 password，provider 运行时数据源会从 `secrets` 域把 password 注回 `configJson.password`。
+- 已验证：本轮修复后 `cargo test --manifest-path src-tauri/Cargo.toml`、`npm run test:query-panel`、`npm run test:datagrid-utils`、`npm run build` 均已通过。
 
 ### Task 1: 建立 SQLite v2 启动边界与切库 bootstrap
 
@@ -747,6 +749,8 @@ git commit -m "feat(frontend): 接入 sqlite v2 恢复与密钥编辑链路"
 - Modify: `src-tauri/src/main.rs`
 - Modify: `src-tauri/src/commands.rs`
 - Delete: `src-tauri/src/db.rs`
+- Delete: `src-tauri/src/command_store.rs`
+- Create: `src-tauri/src/command_storage.rs`
 - Modify: `src/api/index.ts`
 - Modify: `src/store/tauriStorage.ts`
 - Modify: `src/pages/mainPageStartup.ts`
@@ -775,7 +779,7 @@ fn v2_schema_contains_no_legacy_tables() {
 Run: `cargo test --manifest-path src-tauri/Cargo.toml v2_schema_contains_no_legacy_tables -- --exact`
 Expected: FAIL while legacy schema or `db.rs` 仍被引用
 
-- [ ] **Step 3: 删除 legacy `db.rs` 与 `get_ui_state/save_ui_state` 主路径，补最终文档说明**
+- [x] **Step 3: 删除 legacy `db.rs`、`command_store.rs` 与 `get_ui_state/save_ui_state` 主路径，补最终文档说明**
 
 ```rust
 // src-tauri/src/main.rs
@@ -789,7 +793,7 @@ tauri::generate_handler![
 ]
 ```
 
-- [ ] **Step 4: 运行完整验证**
+- [x] **Step 4: 运行完整验证**
 
 Run: `cargo test --manifest-path src-tauri/Cargo.toml`
 Expected: PASS
@@ -806,8 +810,8 @@ Expected: PASS
 - [ ] **Step 5: 提交最终清理**
 
 ```bash
-git add src-tauri/src/main.rs src-tauri/src/commands.rs src/api/index.ts src/store/tauriStorage.ts src/pages/mainPageStartup.ts docs/sqlite-v2-design-2026-04-22.md
-git rm src-tauri/src/db.rs
+git add src-tauri/src/main.rs src-tauri/src/commands.rs src-tauri/src/command_storage.rs src/api/index.ts src/store/tauriStorage.ts src/pages/mainPageStartup.ts docs/sqlite-v2-design-2026-04-22.md
+git rm src-tauri/src/db.rs src-tauri/src/command_store.rs
 git commit -m "refactor(storage): 移除 sqlite v1 兼容层并完成切换"
 ```
 
@@ -820,7 +824,7 @@ git commit -m "refactor(storage): 移除 sqlite v1 兼容层并完成切换"
 - [ ] `第 6.3 / 8 / 16.6 / 16.10 章`：由 Task 3 落地结构化 metadata、版本语义、TTL 与读路径无副作用。
 - [ ] `第 6.4 / 7 / 15 / 16.4 / 16.5 章`：由 Task 4、Task 6、Task 7 共同落地 workspace 恢复、Query 结果状态与草稿恢复。
 - [ ] `第 6.5 / 6.6 / 9.4 / 10 / 16.7 章`：由 Task 5 落地 diagnostics、automation、日志分层与清理基础。
-- [ ] `第 4.2 / 5 / 16.1 / 16.2 / 16.9 章`：由 Task 8 清掉 legacy 表、`db.rs` 与黑盒 UI state 入口。
+- [x] `第 4.2 / 5 / 16.1 / 16.2 / 16.9 章`：由 Task 8 清掉 legacy 表、`db.rs`、`command_store.rs` 与黑盒 UI state 入口。
 
 ### Placeholder Scan
 

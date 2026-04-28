@@ -31,9 +31,6 @@ pub fn write_app_setting(connection: &Connection, key: &str, value: &str) -> Res
 
 /// 删除应用设置值。
 pub fn delete_app_setting(connection: &Connection, key: &str) -> Result<(), AppError> {
-    connection.execute(
-        "DELETE FROM app_settings WHERE setting_key = ?1",
-        [key],
-    )?;
+    connection.execute("DELETE FROM app_settings WHERE setting_key = ?1", [key])?;
     Ok(())
 }

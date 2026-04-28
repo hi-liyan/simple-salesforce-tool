@@ -15,10 +15,7 @@ impl<'a> WorkspaceService<'a> {
     }
 
     /// 保存工作区快照。
-    pub fn save_workspace_snapshot(
-        &self,
-        snapshot: WorkspaceSnapshotDto,
-    ) -> Result<(), AppError> {
+    pub fn save_workspace_snapshot(&self, snapshot: WorkspaceSnapshotDto) -> Result<(), AppError> {
         self.storage
             .write_tx(|tx| workspace_repo::save_workspace_snapshot(tx, &snapshot))
     }
@@ -48,10 +45,7 @@ mod tests {
                 tabs: vec![WorkspaceTabDto::query("tab-1", "Account", "sf-1")],
                 query_tabs: vec![QueryTabStateDto::seed("tab-1", "sf-1", "Account")],
                 query_results: vec![QueryResultSetDto::stale_seed(
-                    "result-1",
-                    "tab-1",
-                    "sf-1",
-                    "Account",
+                    "result-1", "tab-1", "sf-1", "Account",
                 )],
                 query_row_drafts: vec![],
                 console_tabs: vec![],

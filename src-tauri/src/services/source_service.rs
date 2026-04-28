@@ -40,19 +40,28 @@ impl<'a> SourceService<'a> {
         self.storage.write_tx(|tx| {
             let record = source_repo::get_source(tx, source_id)?;
             let secrets = self.read_source_secrets(tx, &record)?;
-            Ok(source_repo::into_public_source(
+            let is_mysql = record.source_type.eq_ignore_ascii_case("mysql");
+            let mut source = source_repo::into_public_source(
                 record,
-                secrets
-                    .get("accessToken")
-                    .or_else(|| secrets.get("password"))
-                    .cloned()
-                    .unwrap_or_default(),
-            ))
+                secrets.get("accessToken").cloned().unwrap_or_default(),
+            );
+            if is_mysql {
+                if let Some(password) = secrets.get("password") {
+                    if let Some(config) = source.config_json.as_object_mut() {
+                        // 行内注释：MySQL provider 只消费 configJson，运行时需把 secrets 域密码注回连接配置。
+                        config.insert("password".to_string(), Value::String(password.clone()));
+                    }
+                }
+            }
+            Ok(source)
         })
     }
 
     /// 创建数据源。
-    pub fn create_source(&self, payload: SourceUpsertPayload) -> Result<SalesforceSource, AppError> {
+    pub fn create_source(
+        &self,
+        payload: SourceUpsertPayload,
+    ) -> Result<SalesforceSource, AppError> {
         self.storage.write_tx(|tx| {
             let source_id = uuid::Uuid::new_v4().to_string();
             let secret_bundle_id = self.persist_source_secrets(tx, &source_id, None, &payload)?;
@@ -93,7 +102,9 @@ impl<'a> SourceService<'a> {
             let secret_bundle_id = self.persist_source_secrets(
                 tx,
                 source_id,
-                existing.as_ref().and_then(|item| item.secret_bundle_id.as_deref()),
+                existing
+                    .as_ref()
+                    .and_then(|item| item.secret_bundle_id.as_deref()),
                 &payload,
             )?;
             let record = source_repo::upsert_source_with_id(
@@ -108,11 +119,15 @@ impl<'a> SourceService<'a> {
 
     /// 删除数据源。
     pub fn delete_source(&self, source_id: &str) -> Result<(), AppError> {
-        self.storage.write_tx(|tx| source_repo::delete_source(tx, source_id))
+        self.storage
+            .write_tx(|tx| source_repo::delete_source(tx, source_id))
     }
 
     /// 调整数据源排序。
-    pub fn reorder_sources(&self, ordered_ids: &[String]) -> Result<Vec<SalesforceSource>, AppError> {
+    pub fn reorder_sources(
+        &self,
+        ordered_ids: &[String],
+    ) -> Result<Vec<SalesforceSource>, AppError> {
         self.storage.write(|conn| {
             source_repo::reorder_sources(conn, ordered_ids)?;
             let records = source_repo::list_sources(conn)?;
@@ -125,7 +140,8 @@ impl<'a> SourceService<'a> {
 
     /// 清理未保留的 CLI 数据源。
     pub fn prune_cli_sources(&self, keep_ids: &[String]) -> Result<(), AppError> {
-        self.storage.write(|conn| source_repo::prune_cli_sources(conn, keep_ids))
+        self.storage
+            .write(|conn| source_repo::prune_cli_sources(conn, keep_ids))
     }
 
     /// 读取设置页显式 secret 明文视图。
@@ -138,12 +154,9 @@ impl<'a> SourceService<'a> {
                 password: String::new(),
             };
             if let Some(bundle_id) = &record.secret_bundle_id {
-                view.access_token = secret_repo::read_secret_item_plaintext(
-                    tx,
-                    bundle_id,
-                    "accessToken",
-                )?
-                .unwrap_or_default();
+                view.access_token =
+                    secret_repo::read_secret_item_plaintext(tx, bundle_id, "accessToken")?
+                        .unwrap_or_default();
                 view.password = secret_repo::read_secret_item_plaintext(tx, bundle_id, "password")?
                     .unwrap_or_default();
                 secret_repo::insert_secret_access_audit(
@@ -217,7 +230,9 @@ impl<'a> SourceService<'a> {
 }
 
 /// 从 `SourceUpsertPayload` 中提取需要独立入库的 secret。
-fn extract_source_secrets(payload: &SourceUpsertPayload) -> std::collections::HashMap<String, String> {
+fn extract_source_secrets(
+    payload: &SourceUpsertPayload,
+) -> std::collections::HashMap<String, String> {
     let mut secrets = std::collections::HashMap::new();
     let access_token = payload.access_token.trim().to_string();
     if !access_token.is_empty() {
@@ -264,12 +279,54 @@ mod tests {
             .unwrap();
 
         let list_item = service.get_source(created.id.as_str()).unwrap();
-        assert_eq!(list_item.access_token, "", "普通 DTO 不应再直接返回明文 token");
+        assert_eq!(
+            list_item.access_token, "",
+            "普通 DTO 不应再直接返回明文 token"
+        );
 
         let edit_view = service.get_source_secret_view(created.id.as_str()).unwrap();
         assert_eq!(
             edit_view.access_token, "secret-token",
             "设置页编辑链路必须能显式拿到完整明文"
+        );
+    }
+
+    #[test]
+    fn runtime_mysql_source_injects_password_back_into_config_json() {
+        let storage = Storage::open_test().unwrap();
+        let service = SourceService::new(&storage);
+
+        let created = service
+            .create_source(SourceUpsertPayload {
+                name: "Local MySQL".into(),
+                source_type: "mysql".into(),
+                config_json: json!({
+                    "host": "127.0.0.1",
+                    "port": 3306,
+                    "database": "demo",
+                    "username": "root",
+                    "password": "mysql-secret"
+                }),
+                instance_url: "mysql://127.0.0.1:3306/demo".into(),
+                access_token: String::new(),
+                api_version: "mysql".into(),
+            })
+            .unwrap();
+
+        let public_source = service.get_source(&created.id).unwrap();
+        assert!(
+            public_source.config_json.get("password").is_none(),
+            "公共 DTO 不应把 MySQL 密码混在普通配置里返回"
+        );
+
+        let runtime_source = service.get_runtime_source(&created.id).unwrap();
+        assert_eq!(
+            runtime_source
+                .config_json
+                .get("password")
+                .and_then(serde_json::Value::as_str),
+            Some("mysql-secret"),
+            "provider 运行时数据源必须把 password 从 secrets 域注回 configJson"
         );
     }
 }

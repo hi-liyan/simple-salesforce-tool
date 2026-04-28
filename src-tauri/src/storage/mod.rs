@@ -12,7 +12,7 @@ pub mod workspace_repo;
 
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
 use crate::error::AppError;
 
@@ -40,10 +40,7 @@ impl Storage {
     /// 为测试创建独立的临时数据库目录。
     #[cfg(test)]
     pub fn open_test() -> Result<Self, AppError> {
-        let root = std::env::temp_dir().join(format!(
-            "sqlite-v2-test-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root = std::env::temp_dir().join(format!("sqlite-v2-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root)?;
         Self::open_or_bootstrap(&root)
     }
@@ -90,5 +87,12 @@ impl Storage {
     /// 返回当前数据库文件路径。
     pub fn db_path(&self) -> &Path {
         &self.db_path
+    }
+
+    /// 暴露底层连接锁：供仍在迁移期的命令层复用同一 Storage 边界。
+    pub fn connection(&self) -> Result<MutexGuard<'_, Connection>, AppError> {
+        self.connection
+            .lock()
+            .map_err(|error| AppError::Biz(format!("获取数据库锁失败: {error}")))
     }
 }

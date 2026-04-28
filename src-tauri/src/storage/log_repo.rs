@@ -37,10 +37,7 @@ pub struct SystemLogRecord {
 }
 
 /// 写入系统日志。
-pub fn insert_system_log(
-    tx: &Transaction<'_>,
-    log: &SystemLogRecord,
-) -> Result<(), AppError> {
+pub fn insert_system_log(tx: &Transaction<'_>, log: &SystemLogRecord) -> Result<(), AppError> {
     tx.execute(
         "INSERT INTO system_logs (
             created_at, level, category, action, source_id, workspace_tab_id, target,
@@ -75,7 +72,8 @@ pub fn list_system_logs(
     let safe_page = page.max(1);
     let safe_page_size = page_size.clamp(1, 200);
     let offset = (safe_page - 1) * safe_page_size;
-    let total: i64 = connection.query_row("SELECT COUNT(*) FROM system_logs", [], |row| row.get(0))?;
+    let total: i64 =
+        connection.query_row("SELECT COUNT(*) FROM system_logs", [], |row| row.get(0))?;
     let mut statement = connection.prepare(
         "SELECT id, created_at, level, category, action, source_id, target, success, message, detail_text
          FROM system_logs

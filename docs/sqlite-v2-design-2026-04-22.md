@@ -1,5 +1,7 @@
 # SQLite v2 生产级重构设计
 
+> 实现备注（2026-04-27）：当前代码已完成 `storage / services / commands` 分层接线，`src-tauri/src/db.rs` 与迁移期 `command_store.rs` 残留已移除；具体实施与验证状态以 [`docs/sqlite-v2-implementation-plan-2026-04-22.md`](/mnt/d/test-workspace/simple-salesforce-tool/docs/sqlite-v2-implementation-plan-2026-04-22.md) 为准。
+
 ## 1. 文档目标
 
 本文档定义本项目本地 SQLite 持久层的 v2 目标架构。该版本明确采用**生产级、可破坏性重构**策略，不要求兼容当前 v1 schema，也不保留长期双写或 legacy 表兜底逻辑。
