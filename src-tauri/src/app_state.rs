@@ -4,17 +4,17 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use rusqlite::Connection;
 use tauri::Manager;
 
 use crate::llm::LlmChatMessage;
 use crate::salesforce::SalesforceClient;
+use crate::storage::Storage;
 use crate::terminal::TerminalSession;
 
-/// 全局应用状态：包含数据库连接和 HTTP 客户端。
+/// 全局应用状态：包含 SQLite v2 存储入口和共享客户端。
 pub struct AppState {
-    /// SQLite 连接（通过 Mutex 串行化 DB 访问，避免并发写冲突）。
-    pub db: Mutex<Connection>,
+    /// SQLite v2 存储入口：命令层统一通过它访问本地库。
+    pub storage: Storage,
     /// Salesforce HTTP 客户端（可复用连接池）。
     pub sf_client: SalesforceClient,
     /// 当前进行中的 CLI 登录取消令牌（关闭登录窗时置为 true）。

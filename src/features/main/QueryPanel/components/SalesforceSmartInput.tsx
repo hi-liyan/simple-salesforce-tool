@@ -1,5 +1,12 @@
 import { KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import { X } from "lucide-react";
+import {
+  filterSmartInputSuggestions,
+  getSmartInputTokenRange,
+  resolveSmartInputEnterAction,
+  resolveSmartInputWidth,
+  shouldOpenSmartInputSuggestions
+} from "../logic/smartInput";
 
 type SalesforceSmartInputProps = {
   // 输入框标题（例如 WHERE）。
@@ -20,22 +27,14 @@ type SalesforceSmartInputProps = {
   maxWidth?: number;
   // 是否显示清空按钮。
   allowClear?: boolean;
-};
-
-type TokenRange = {
-  // 当前词起始位置。
-  start: number;
-  // 当前词结束位置。
-  end: number;
-  // 当前词文本。
-  token: string;
+  // 回车提交：用于在 QueryBar 中触发统一查询动作。
+  onSubmit?: () => void;
 };
 
 // Token 识别规则：支持字段名、关系字段、SOQL 日期字面量（含冒号）。
 const TOKEN_PATTERN = /[A-Za-z0-9_$.:]/;
-const SUGGESTION_LIMIT = 12;
 
-// Salesforce 智能输入：支持宽度拖拽 + 自动补全。
+// Salesforce 智能输入：支持内容自适应宽度与自动补全。
 export function SalesforceSmartInput({
   label,
   value,
@@ -45,10 +44,13 @@ export function SalesforceSmartInput({
   defaultWidth,
   minWidth = 220,
   maxWidth = 640,
-  allowClear = false
+  allowClear = false,
+  onSubmit
 }: SalesforceSmartInputProps) {
   // 输入框引用：用于读取/设置光标位置。
   const inputRef = useRef<HTMLInputElement | null>(null);
+  // 测量节点引用：用于计算输入内容的真实像素宽度。
+  const measureRef = useRef<HTMLSpanElement | null>(null);
   // 根容器引用：用于点击外部关闭补全。
   const rootRef = useRef<HTMLDivElement | null>(null);
   // 是否显示候选弹层。
@@ -57,46 +59,29 @@ export function SalesforceSmartInput({
   const [activeIndex, setActiveIndex] = useState(0);
   // 当前光标位置。
   const [caret, setCaret] = useState(0);
-  // 拖拽状态。
-  const [dragging, setDragging] = useState(false);
   // 宽度状态：仅保留当前组件生命周期，不做本地持久化。
   const [width, setWidth] = useState(defaultWidth);
-  // 拖拽起始点 X。
-  const resizeStartXRef = useRef(0);
-  // 拖拽起始宽度。
-  const resizeStartWidthRef = useRef(defaultWidth);
-
-  // 补全候选去重：忽略大小写。
-  const normalizedSuggestions = useMemo(() => {
-    const next: string[] = [];
-    const seen = new Set<string>();
-    suggestions.forEach((item) => {
-      const text = item.trim();
-      if (!text) return;
-      const key = text.toLowerCase();
-      if (seen.has(key)) return;
-      seen.add(key);
-      next.push(text);
-    });
-    return next;
-  }, [suggestions]);
+  // 手动唤起状态：用于支持 Ctrl+Space 在空输入时展示候选。
+  const [manualTrigger, setManualTrigger] = useState(false);
+  // 显式选择状态：只有方向键移动过候选时，回车才执行补全。
+  const [hasExplicitSelection, setHasExplicitSelection] = useState(false);
 
   // 计算当前光标所在 token。
-  const tokenRange = useMemo(() => getTokenRange(value, caret), [value, caret]);
+  const tokenRange = useMemo(() => getSmartInputTokenRange(value, caret, TOKEN_PATTERN), [value, caret]);
 
   // 根据 token 计算候选列表。
   const filteredSuggestions = useMemo(() => {
-    const token = tokenRange.token.trim().toLowerCase();
-    if (!token) return normalizedSuggestions.slice(0, SUGGESTION_LIMIT);
-    const startsWith = normalizedSuggestions.filter((item) => item.toLowerCase().startsWith(token));
-    const includes = normalizedSuggestions.filter((item) => !item.toLowerCase().startsWith(token) && item.toLowerCase().includes(token));
-    return [...startsWith, ...includes].slice(0, SUGGESTION_LIMIT);
-  }, [normalizedSuggestions, tokenRange.token]);
+    return filterSmartInputSuggestions({
+      suggestions,
+      token: tokenRange.token
+    });
+  }, [suggestions, tokenRange.token]);
 
-  // 候选变化时重置激活项，避免越界。
+  // 候选变化或面板关闭时重置激活项，避免误把旧高亮带到下一轮交互。
   useEffect(() => {
     setActiveIndex(0);
-  }, [filteredSuggestions.length]);
+    setHasExplicitSelection(false);
+  }, [filteredSuggestions.length, open, value]);
 
   // 点击外部关闭补全弹层。
   useEffect(() => {
@@ -104,6 +89,8 @@ export function SalesforceSmartInput({
       if (!rootRef.current) return;
       if (rootRef.current.contains(event.target as Node)) return;
       setOpen(false);
+      setManualTrigger(false);
+      setHasExplicitSelection(false);
     };
 
     window.addEventListener("mousedown", onMouseDown);
@@ -112,33 +99,28 @@ export function SalesforceSmartInput({
     };
   }, []);
 
-  // 拖拽宽度逻辑。
+  // 根据内容实时计算宽度：长内容扩张、短内容收缩，并受最大宽度保护。
   useEffect(() => {
-    if (!dragging) return;
-
-    const onMouseMove = (event: MouseEvent) => {
-      const deltaX = event.clientX - resizeStartXRef.current;
-      const next = resizeStartWidthRef.current + deltaX;
-      setWidth(Math.max(minWidth, Math.min(maxWidth, next)));
-    };
-
-    const onMouseUp = () => {
-      setDragging(false);
-      document.body.style.userSelect = "";
-      document.body.style.cursor = "";
-    };
-
-    document.body.style.userSelect = "none";
-    document.body.style.cursor = "ew-resize";
-    window.addEventListener("mousemove", onMouseMove);
-    window.addEventListener("mouseup", onMouseUp);
-    return () => {
-      window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("mouseup", onMouseUp);
-      document.body.style.userSelect = "";
-      document.body.style.cursor = "";
-    };
-  }, [dragging, minWidth, maxWidth]);
+    const measureNode = measureRef.current;
+    const input = inputRef.current;
+    if (!measureNode || !input) return;
+    const computedStyle = window.getComputedStyle(input);
+    measureNode.style.font = computedStyle.font;
+    measureNode.style.letterSpacing = computedStyle.letterSpacing;
+    const nextWidth = resolveSmartInputWidth({
+      value,
+      placeholder,
+      defaultWidth,
+      minWidth,
+      maxWidth,
+      allowClear,
+      measureText: (text) => {
+        measureNode.textContent = text || " ";
+        return measureNode.offsetWidth;
+      }
+    });
+    setWidth(nextWidth);
+  }, [allowClear, defaultWidth, maxWidth, minWidth, placeholder, value]);
 
   // 插入候选词：替换当前 token，并恢复光标位置。
   function applySuggestion(item: string) {
@@ -146,6 +128,8 @@ export function SalesforceSmartInput({
     const nextCaret = tokenRange.start + item.length;
     onChange(nextValue);
     setOpen(false);
+    setManualTrigger(false);
+    setHasExplicitSelection(false);
     setCaret(nextCaret);
     requestAnimationFrame(() => {
       const input = inputRef.current;
@@ -164,8 +148,19 @@ export function SalesforceSmartInput({
   function onKeyDown(event: KeyboardEvent<HTMLInputElement>) {
     if (event.key === "Enter") {
       event.preventDefault();
-      if (!open || filteredSuggestions.length === 0) return;
-      applySuggestion(filteredSuggestions[activeIndex]);
+      const action = resolveSmartInputEnterAction({
+        open,
+        suggestionCount: filteredSuggestions.length,
+        hasExplicitSelection
+      });
+      if (action === "apply-suggestion" && filteredSuggestions.length > 0) {
+        applySuggestion(filteredSuggestions[activeIndex]);
+        return;
+      }
+      setOpen(false);
+      setManualTrigger(false);
+      setHasExplicitSelection(false);
+      onSubmit?.();
       return;
     }
 
@@ -177,30 +172,37 @@ export function SalesforceSmartInput({
 
     if (event.key === "Escape") {
       setOpen(false);
+      setManualTrigger(false);
+      setHasExplicitSelection(false);
       return;
     }
 
     if (event.key === "ArrowDown" && open && filteredSuggestions.length > 0) {
       event.preventDefault();
       setActiveIndex((current) => (current + 1) % filteredSuggestions.length);
+      setHasExplicitSelection(true);
       return;
     }
 
     if (event.key === "ArrowUp" && open && filteredSuggestions.length > 0) {
       event.preventDefault();
       setActiveIndex((current) => (current - 1 + filteredSuggestions.length) % filteredSuggestions.length);
+      setHasExplicitSelection(true);
       return;
     }
 
     if (event.key === " " && event.ctrlKey) {
       event.preventDefault();
+      setManualTrigger(true);
       setOpen(true);
     }
   }
 
   return (
-    // 外层容器：宽度可调整。
+    // 外层容器：宽度跟随内容自适应。
     <div ref={rootRef} className="relative shrink-0" style={{ width }}>
+      {/* 隐藏测量节点：用于以真实字体样式计算文本宽度。 */}
+      <span ref={measureRef} className="pointer-events-none absolute left-0 top-0 invisible whitespace-pre text-sm leading-[20px]" aria-hidden="true" />
       {/* 输入框标题。 */}
       <label className="mb-1 block text-[12px]">{label}</label>
       {/* 输入框主体。 */}
@@ -216,7 +218,6 @@ export function SalesforceSmartInput({
           spellCheck={false}
           onFocus={(event) => {
             syncCaretFromTarget(event.currentTarget); // 聚焦时同步光标，避免替换范围错误。
-            setOpen(true); // 聚焦后展示候选，减少首字输入等待。
           }}
           onClick={(event) => {
             syncCaretFromTarget(event.currentTarget); // 点击后更新光标位置。
@@ -227,9 +228,23 @@ export function SalesforceSmartInput({
           onKeyDown={onKeyDown}
           onChange={(event) => {
             const nextValue = event.target.value;
+            const nextCaret = event.target.selectionStart || 0;
+            const nextTokenRange = getSmartInputTokenRange(nextValue, nextCaret, TOKEN_PATTERN);
             onChange(nextValue);
             syncCaretFromTarget(event.target); // 输入后同步光标，保证 token 计算准确。
-            setOpen(true); // 输入变化后重新打开候选。
+            setManualTrigger(false); // 行内注释：普通输入后退出手动唤起模式，回到输入驱动提示。
+            setHasExplicitSelection(false); // 行内注释：输入变化后重置显式候选选择状态。
+            setOpen(
+              shouldOpenSmartInputSuggestions({
+                value: nextValue,
+                token: nextTokenRange.token,
+                manualTrigger: false,
+                suggestionCount: filterSmartInputSuggestions({
+                  suggestions,
+                  token: nextTokenRange.token
+                }).length
+              })
+            ); // 行内注释：只有当前 token 非空时才展示候选，空格后的停顿不打断输入。
           }}
         />
 
@@ -238,25 +253,16 @@ export function SalesforceSmartInput({
           <button
             className="btn btn-circle btn-ghost btn-xs absolute right-1 top-1/2 -translate-y-1/2"
             aria-label={`清空${label}`}
-            onClick={() => onChange("")}
+            onClick={() => {
+              onChange(""); // 行内注释：清空后立即同步外部草稿值。
+              setOpen(false); // 行内注释：清空后关闭候选，避免展示无意义浮层。
+              setManualTrigger(false); // 行内注释：清空后重置手动唤起状态。
+              setHasExplicitSelection(false); // 行内注释：清空后清除显式候选选择状态。
+            }}
           >
             <X size={13} />
           </button>
         ) : null}
-
-        {/* 宽度拖拽把手：按下后可水平调整输入框宽度。 */}
-        <div
-          className="absolute -right-1 top-0 z-20 h-full w-2 cursor-ew-resize"
-          role="separator"
-          aria-orientation="vertical"
-          aria-label={`${label}输入框宽度调节`}
-          onMouseDown={(event) => {
-            event.preventDefault();
-            resizeStartXRef.current = event.clientX;
-            resizeStartWidthRef.current = width;
-            setDragging(true);
-          }}
-        />
       </div>
 
       {/* 自动补全弹层。 */}
@@ -281,25 +287,4 @@ export function SalesforceSmartInput({
       ) : null}
     </div>
   );
-}
-
-// 计算光标附近 token 范围：用于替换当前词。
-function getTokenRange(text: string, caret: number): TokenRange {
-  const safeCaret = Math.max(0, Math.min(caret, text.length));
-  let start = safeCaret;
-  let end = safeCaret;
-
-  while (start > 0 && TOKEN_PATTERN.test(text[start - 1])) {
-    start -= 1;
-  }
-
-  while (end < text.length && TOKEN_PATTERN.test(text[end])) {
-    end += 1;
-  }
-
-  return {
-    start,
-    end,
-    token: text.slice(start, end)
-  };
 }

@@ -1,7 +1,9 @@
 import {
+  GridCellKind,
+} from "@glideapps/glide-data-grid";
+import type {
   CellClickedEventArgs,
   EditableGridCell,
-  GridCellKind,
   GridColumn,
   Item
 } from "@glideapps/glide-data-grid";
@@ -9,7 +11,7 @@ import {
   normalizeDateValueForSave,
   normalizeDatetimeValueForSave,
   normalizeMysqlDatetimeValueForSave
-} from "../utils/datetime";
+} from "../utils/datetime.ts";
 import {
   createMysqlDraftNullValue,
   createMysqlDraftOmitValue,
@@ -18,17 +20,17 @@ import {
 import {
   buildReadonlyCellMessage,
   isCellEditableByMeta,
-} from "../utils/field";
+} from "../utils/field.ts";
 import {
   getPicklistEditorOptions,
   isPicklistNullable,
   PICKLIST_NONE_VALUE
-} from "../utils/picklist";
+} from "../utils/picklist.ts";
 import {
   extractEditableNumber,
   extractEditableString
-} from "../utils/value";
-import { resolveFieldTypeStrategy } from "./fieldTypeStrategy";
+} from "../utils/value.ts";
+import { resolveFieldTypeStrategy } from "./fieldTypeStrategy.ts";
 
 type CreateCellEditedHandlerParams = {
   // 列定义：用于定位当前编辑字段。

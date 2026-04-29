@@ -2,22 +2,24 @@
 
 mod ai;
 mod app_state;
+mod command_storage;
 mod commands;
-mod db;
 mod error;
 mod llm;
 mod models;
 mod providers;
 mod salesforce;
+mod services;
 mod sf_cli;
+mod storage;
 mod terminal;
 
 use std::collections::HashMap;
 use std::sync::Mutex;
 
 use app_state::{ensure_data_dir, AppState};
-use rusqlite::Connection;
 use salesforce::SalesforceClient;
+use storage::Storage;
 use tauri::Manager;
 
 fn main() {
@@ -30,17 +32,15 @@ fn main() {
                 .build(),
         )
         .setup(|app| {
-            // 启动阶段初始化数据库和共享客户端，避免运行时重复构建。
+            // 启动阶段初始化 SQLite v2 存储和共享客户端，避免运行时重复构建。
             let data_dir = ensure_data_dir(&app.handle())
                 .map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error))?;
-            let db_path = data_dir.join("app.db");
-            let connection = Connection::open(db_path)?;
-            db::init_schema(&connection).map_err(|error| {
+            let storage = Storage::open_or_bootstrap(&data_dir).map_err(|error| {
                 std::io::Error::new(std::io::ErrorKind::Other, error.to_string())
             })?;
 
             app.manage(AppState {
-                db: Mutex::new(connection),
+                storage,
                 sf_client: SalesforceClient::new(),
                 cli_login_cancel: Mutex::new(None),
                 llm_conversations: Mutex::new(HashMap::new()),
@@ -64,10 +64,14 @@ fn main() {
             commands::open_external_url,
             commands::list_system_logs,
             commands::create_source,
+            commands::get_source,
+            commands::get_source_secret_view,
             commands::reorder_sources,
             commands::test_source_connection,
             commands::update_source,
             commands::delete_source,
+            commands::load_workspace_snapshot,
+            commands::save_workspace_snapshot,
             commands::get_column_visibility,
             commands::save_column_visibility,
             commands::list_objects,
@@ -92,8 +96,6 @@ fn main() {
             commands::ai_chat_turn_v2,
             commands::ai_stop_turn,
             commands::stop_llm_stream_generation,
-            commands::get_ui_state,
-            commands::save_ui_state,
             commands::list_terminal_command_groups,
             commands::create_terminal_command_group,
             commands::update_terminal_command_group,
@@ -104,6 +106,8 @@ fn main() {
             commands::reorder_terminal_commands,
             commands::open_terminal_session,
             commands::list_available_terminal_shells,
+            commands::get_terminal_shell_settings,
+            commands::save_terminal_shell_command,
             commands::write_terminal_input,
             commands::resize_terminal_session,
             commands::close_terminal_session,
@@ -123,4 +127,33 @@ fn main() {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn sqlite_v2_has_no_command_store_compatibility_module() {
+        let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let main_source = std::fs::read_to_string(manifest_dir.join("src/main.rs")).unwrap();
+        let commands_source =
+            std::fs::read_to_string(manifest_dir.join("src/commands.rs")).unwrap();
+        let runtime_main_source = main_source
+            .lines()
+            .take_while(|line| !line.contains("#[cfg(test)]"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(
+            !runtime_main_source.contains("mod command_store"),
+            "SQLite v2 主入口不应再注册 command_store 迁移壳"
+        );
+        assert!(
+            !commands_source.contains("command_store"),
+            "commands.rs 不应再依赖 command_store 迁移壳"
+        );
+        assert!(
+            !manifest_dir.join("src/command_store.rs").exists(),
+            "SQLite v2 完全切换后应删除 command_store.rs"
+        );
+    }
 }

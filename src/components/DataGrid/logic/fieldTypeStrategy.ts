@@ -6,7 +6,7 @@ import {
   isNumberType,
   isPicklistType,
   isPrecisionSensitiveIntegerType
-} from "../utils/field";
+} from "../utils/field.ts";
 
 // DataGrid 字段策略类型：统一映射不同字段到独立处理分支。
 export type FieldTypeStrategy = "picklist" | "date" | "datetime" | "number" | "boolean" | "text";

@@ -8,6 +8,8 @@ type RowContextMenuProps = {
   onCopyCell: () => void;
   // 设置单元格为空（None/Null）。
   onSetNullish: () => void;
+  // 设置单元格恢复默认值。
+  onSetDefaultValue: () => void;
   // 打开 Salesforce 记录页。
   onOpenRecordPage: () => void;
   // 当前上下文是否允许打开 Salesforce 记录页。
@@ -21,6 +23,7 @@ export function RowContextMenu({
   menuState,
   onCopyCell,
   onSetNullish,
+  onSetDefaultValue,
   onOpenRecordPage,
   canOpenRecordPage,
   showOpenRecordPage
@@ -40,6 +43,15 @@ export function RowContextMenu({
           label: menuState.nullishActionLabel,
           onClick: () => {
             onSetNullish(); // 可空字段支持“一键置空”。
+          }
+        } satisfies ContextMenuEntry]
+      : []),
+    ...(menuState.canSetDefaultValue
+      ? [{
+          id: "set-default-value",
+          label: menuState.defaultValueActionLabel,
+          onClick: () => {
+            onSetDefaultValue(); // 恢复字段默认值语义。
           }
         } satisfies ContextMenuEntry]
       : []),

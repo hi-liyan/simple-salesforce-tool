@@ -97,6 +97,13 @@ export type SourceUpsertPayload = {
   apiVersion: string;
 };
 
+// 数据源 secret 明文视图：仅供设置页显式编辑链路读取。
+export type SourceSecretView = {
+  sourceId: string;
+  accessToken: string;
+  password: string;
+};
+
 // 记录新增负载。
 export type RecordMutationPayload = {
   sourceId: string;
@@ -135,8 +142,8 @@ export type MutationPreviewField = {
   // 字段名。
   name: string;
   // 字段写入语义。
-  kind: "null" | "value";
-  // 字段最终写入值；kind=null 时固定为 null。
+  kind: "null" | "value" | "default";
+  // 字段最终写入值；kind=null 时固定为 null，kind=default 时固定为 "DEFAULT"。
   value: unknown;
 };
 
@@ -210,6 +217,10 @@ export type MysqlCellDraftValue =
       __mysqlDraft: true;
       kind: "value";
       value: unknown;
+    }
+  | {
+      __mysqlDraft: true;
+      kind: "default";
     };
 
 // 查询结果可更新性模式：用于提前判断当前 MySQL 结果集是否允许进入可信编辑链路。
@@ -319,6 +330,110 @@ export type SystemLogPage = {
   page: number;
   pageSize: number;
   total: number;
+};
+
+// 工作区标签 DTO：统一承载 query/console/tool/terminal 的恢复顺序与激活态。
+export type WorkspaceTabDto = {
+  tabId: string;
+  tabKind: string;
+  title: string;
+  sourceId?: string;
+  sortOrder: number;
+  isActive: number;
+  payloadJson?: Record<string, unknown>;
+};
+
+// Query 标签状态 DTO。
+export type QueryTabStateDto = {
+  tabId: string;
+  bindingKey: string;
+  sourceId: string;
+  sourceType: string;
+  sourceName: string;
+  sourceColor: string;
+  objectName: string;
+  label: string;
+  describeJson?: Record<string, unknown> | null;
+  whereClause: string;
+  limit: number;
+  sortField: string;
+  sortDirection: string;
+  sortClause: string;
+  currentSoql: string;
+  soqlDraft: string;
+  showQueryBar: boolean;
+  showDrawer: boolean;
+  drawerView: string;
+  showLogs: boolean;
+  columnVisibility: Record<string, boolean>;
+  noticeJson?: Record<string, unknown> | null;
+};
+
+// Query 结果集 DTO。
+export type QueryResultSetDto = {
+  resultSetId: string;
+  tabId: string;
+  resultStatus: "fresh" | "stale" | "invalid" | string;
+  totalSize: number;
+  recordsJson: Record<string, unknown>[];
+};
+
+// Query 行草稿 DTO。
+export type QueryRowDraftDto = {
+  tabId: string;
+  selectedRecordIdsJson: string[];
+  pendingDeleteRecordIdsJson: string[];
+  dirtyCellKeysJson: string[];
+  baselineRecordsJson: Record<string, Record<string, unknown>>;
+};
+
+// Console 标签状态 DTO。
+export type ConsoleTabStateDto = {
+  tabId: string;
+  sourceId: string;
+  sourceType: string;
+  sourceName: string;
+  sourceColor: string;
+  name: string;
+  soqlDraft: string;
+  selectedSoqlText: string;
+  resultJson: QueryResult;
+  noticeJson?: Notice | null;
+  logsJson: TabLog[];
+  selectedRecordIdsJson: string[];
+  showBottomPanel: boolean;
+  aiConversationId: string;
+  aiPromptDraft: string;
+  aiMessagesJson: Record<string, unknown>[];
+  aiMode: boolean;
+};
+
+// 工具标签状态 DTO。
+export type ToolTabStateDto = {
+  tabId: string;
+  toolKind: string;
+  name: string;
+  payloadJson: Record<string, unknown>;
+};
+
+// 终端标签状态 DTO。
+export type TerminalTabStateDto = {
+  tabId: string;
+  name: string;
+  inputDraft: string;
+  outputsJson: Record<string, unknown>[];
+};
+
+// 结构化工作区快照 DTO。
+export type WorkspaceSnapshotDto = {
+  tabs: WorkspaceTabDto[];
+  queryTabs: QueryTabStateDto[];
+  queryResults: QueryResultSetDto[];
+  queryRowDrafts: QueryRowDraftDto[];
+  consoleTabs: ConsoleTabStateDto[];
+  toolTabs: ToolTabStateDto[];
+  terminalTabs: TerminalTabStateDto[];
+  uiState: Record<string, unknown>;
 };
 
 // CLI 路径候选探测结果。
@@ -439,6 +554,12 @@ export type TerminalShellOption = {
   command: string;
   shellName: string;
   shellVersion: string;
+};
+
+// 终端 Shell 设置：用于设置页读取当前保存值与旧版偏好兼容值。
+export type TerminalShellSettings = {
+  commandValue: string | null;
+  legacyPreference: string | null;
 };
 
 // 终端命令项：用于左侧命令库展示与执行。

@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dashboard Query 设计稿</title>
+    <link rel="stylesheet" href="./assets/styles.css" />
+  </head>
+  <body>
+    <!-- Query 工作台设计稿：保留当前真实前端布局，只替换为新的 Web3 视觉语言。 -->
+    <main class="mockup-page">
+      <a class="back-link" href="./index.html">← 返回设计稿总览</a>
+      <section class="shell glass fade-up">
+        <!-- 左侧全局导航：保持 MainLayout 当前的 rail 结构。 -->
+        <aside class="rail">
+          <div class="brand-badge">SF</div>
+          <nav class="rail-nav">
+            <a class="rail-button active" data-label="Query" href="./dashboard-query.html">Q</a>
+            <a class="rail-button" data-label="Terminal" href="./dashboard-terminal.html">T</a>
+            <a class="rail-button" data-label="Tools" href="./dashboard-tools.html">◎</a>
+            <a class="rail-button" data-label="Settings" href="./dashboard-settings.html">S</a>
+          </nav>
+          <div class="rail-footer">
+            <a class="rail-button" data-label="Auth Window" href="./auth-window.html">⎋</a>
+          </div>
+        </aside>
+
+        <!-- 主内容区：对齐当前 QueryPanel 的真实结构，不再使用额外顶部 hero/header。 -->
+        <div class="main-panel" style="display: flex; flex-direction: column; min-width: 0; min-height: 0;">
+          <section
+            class="workspace-grid"
+            style="grid-template-columns: 318px 6px minmax(0, 1fr); gap: 0; padding: 0; min-height: 0; flex: 1;"
+          >
+            <!-- 左侧侧边栏：动作区 + 搜索区 + 统一对象树，结构与当前 QuerySidebar 保持一致。 -->
+            <aside
+              class="sidebar-panel fade-up delay-1"
+              style="
+                gap: 0;
+                min-height: 0;
+                background: linear-gradient(180deg, rgba(15, 23, 42, 0.84), rgba(15, 23, 42, 0.66));
+                border-right: 1px solid rgba(148, 163, 184, 0.12);
+              "
+            >
+              <!-- 顶部动作区：改为 icon 按钮，鼠标经过时通过 title 展示功能名称。 -->
+              <div style="padding: 12px 14px; border-bottom: 1px solid rgba(148, 163, 184, 0.12);">
+                <div class="button-row" style="gap: 8px;">
+                  <span
+                    class="interactive"
+                    title="新增数据源"
+                    style="
+                      display: inline-flex;
+                      width: 38px;
+                      height: 38px;
+                      align-items: center;
+                      justify-content: center;
+                      border-radius: 14px;
+                      background: rgba(15, 23, 42, 0.48);
+                      border: 1px solid rgba(148, 163, 184, 0.16);
+                      color: var(--text-secondary);
+                      cursor: pointer;
+                    "
+                  >
+                    ＋
+                  </span>
+                  <span
+                    class="interactive"
+                    title="刷新数据源"
+                    style="
+                      display: inline-flex;
+                      width: 38px;
+                      height: 38px;
+                      align-items: center;
+                      justify-content: center;
+                      border-radius: 14px;
+                      background: rgba(15, 23, 42, 0.48);
+                      border: 1px solid rgba(148, 163, 184, 0.16);
+                      color: var(--text-secondary);
+                      cursor: pointer;
+                    "
+                  >
+                    ↻
+                  </span>
+                  <span
+                    class="interactive"
+                    title="查询控制台"
+                    style="
+                      display: inline-flex;
+                      width: 38px;
+                      height: 38px;
+                      align-items: center;
+                      justify-content: center;
+                      border-radius: 14px;
+                      background: rgba(59, 130, 246, 0.16);
+                      border: 1px solid rgba(96, 165, 250, 0.24);
+                      color: #dbeafe;
+                      box-shadow: 0 0 22px rgba(59, 130, 246, 0.12);
+                      cursor: pointer;
+                    "
+                  >
+                    {}
+                  </span>
+                  <span
+                    class="interactive"
+                    title="定位当前标签节点"
+                    style="
+                      display: inline-flex;
+                      width: 38px;
+                      height: 38px;
+                      align-items: center;
+                      justify-content: center;
+                      border-radius: 14px;
+                      background: rgba(15, 23, 42, 0.48);
+                      border: 1px solid rgba(148, 163, 184, 0.16);
+                      color: var(--text-secondary);
+                      cursor: pointer;
+                    "
+                  >
+                    ◎
+                  </span>
+                </div>
+              </div>
+
+              <!-- 左侧搜索区：对应 QuerySidebarSearch。 -->
+              <div style="padding: 12px 14px; border-bottom: 1px solid rgba(148, 163, 184, 0.12); position: relative;">
+                <div class="field-input" style="display: flex; align-items: center; gap: 10px;">
+                  <span style="color: var(--text-muted);">⌕</span>
+                  <span style="font-size: 12px; color: var(--text-muted);">搜索 Object 名称 / 标签 / object</span>
+                </div>
+                <p class="panel-caption" style="margin-top: 10px;">搜索范围：Production Salesforce</p>
+                <p class="panel-caption" style="margin-top: 4px;">支持名称、标签和 object 关键字搜索</p>
+              </div>
+
+              <!-- 统一数据源树：保持深色背景，改成和现存更接近的树行结构，不再使用卡片。 -->
+              <div
+                class="list-panel"
+                style="
+                  padding: 6px 0 10px;
+                  min-height: 0;
+                  overflow: auto;
+                  gap: 0;
+                  background: transparent;
+                  color: var(--text-primary);
+                "
+              >
+                <div style="background: rgba(59, 130, 246, 0.08);">
+                  <div
+                    class="interactive"
+                    style="
+                      display: flex;
+                      min-height: 30px;
+                      width: 100%;
+                      align-items: center;
+                      gap: 8px;
+                      padding: 7px 12px;
+                      color: var(--text-primary);
+                    "
+                  >
+                    <span style="display: inline-flex; width: 14px; justify-content: center; color: rgba(226, 232, 240, 0.62);">⌄</span>
+                    <span
+                      style="
+                        display: inline-flex;
+                        min-width: 18px;
+                        height: 18px;
+                        align-items: center;
+                        justify-content: center;
+                        border-radius: 7px;
+                        background: rgba(59, 130, 246, 0.18);
+                        border: 1px solid rgba(96, 165, 250, 0.18);
+                        color: #bfdbfe;
+                        font-size: 9px;
+                        font-weight: 700;
+                      "
+                    >
+                      SF
+                    </span>
+                    <span style="font-size: 12px; font-weight: 600;">Production Salesforce</span>
+                    <span style="margin-left: auto;" class="pill">
+                      <span class="pill-dot dot-success"></span>聚焦
+                    </span>
+                  </div>
+
+                  <div
+                    class="interactive"
+                    style="
+                      display: flex;
+                      min-height: 30px;
+                      width: 100%;
+                      align-items: center;
+                      gap: 8px;
+                      padding: 7px 12px 7px 30px;
+                      background: rgba(59, 130, 246, 0.14);
+                      border-top: 1px solid rgba(148, 163, 184, 0.08);
+                      border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+                      color: #eff6ff;
+                    "
+                  >
+                    <span style="display: inline-flex; width: 14px; justify-content: center; color: rgba(226, 232, 240, 0.62);">⌄</span>
+                    <span class="tree-icon" style="width: 18px; height: 18px; border-radius: 7px; font-size: 9px;">OP</span>
+                    <span style="font-size: 12px; font-weight: 600;">Opportunity</span>
+                    <span style="margin-left: auto;" class="pill">120</span>
+                  </div>
+                  <div
+                    class="interactive"
+                    style="
+                      display: flex;
+                      min-height: 30px;
+                      width: 100%;
+                      align-items: center;
+                      gap: 8px;
+                      padding: 7px 12px 7px 48px;
+                      color: var(--text-secondary);
+                    "
+                  >
+                    <span class="tree-icon" style="width: 16px; height: 16px; border-radius: 6px; font-size: 8px; background: rgba(148, 163, 184, 0.12); color: #cbd5e1;">
+                      FD
+                    </span>
+                    <span style="font-size: 12px;">120 fields · queryable · 当前激活对象</span>
+                  </div>
+
+                  <div
+                    class="interactive"
+                    style="
+                      display: flex;
+                      min-height: 30px;
+                      width: 100%;
+                      align-items: center;
+                      gap: 8px;
+                      padding: 7px 12px 7px 30px;
+                      border-top: 1px solid rgba(148, 163, 184, 0.06);
+                      color: var(--text-secondary);
+                    "
+                  >
+                    <span style="display: inline-flex; width: 14px; justify-content: center; color: rgba(226, 232, 240, 0.42);">›</span>
+                    <span class="tree-icon" style="width: 18px; height: 18px; border-radius: 7px; font-size: 9px; background: rgba(59, 130, 246, 0.1); color: #93c5fd;">
+                      AC
+                    </span>
+                    <span style="font-size: 12px;">Account</span>
+                    <span style="margin-left: auto;" class="pill">98</span>
+                  </div>
+                  <div
+                    class="interactive"
+                    style="
+                      display: flex;
+                      min-height: 30px;
+                      width: 100%;
+                      align-items: center;
+                      gap: 8px;
+                      padding: 7px 12px 7px 30px;
+                      border-top: 1px solid rgba(148, 163, 184, 0.06);
+                      color: var(--text-secondary);
+                    "
+                  >
+                    <span style="display: inline-flex; width: 14px; justify-content: center; color: rgba(226, 232, 240, 0.42);">›</span>
+                    <span class="tree-icon" style="width: 18px; height: 18px; border-radius: 7px; font-size: 9px; background: rgba(59, 130, 246, 0.1); color: #93c5fd;">
+                      CT
+                    </span>
+                    <span style="font-size: 12px;">Contact</span>
+                    <span style="margin-left: auto;" class="pill">76</span>
+                  </div>
+                </div>
+
+                <div style="margin-top: 10px; background: rgba(6, 182, 212, 0.04);">
+                  <div
+                    class="interactive"
+                    style="
+                      display: flex;
+                      min-height: 30px;
+                      width: 100%;
+                      align-items: center;
+                      gap: 8px;
+                      padding: 7px 12px;
+                      color: var(--text-primary);
+                    "
+                  >
+                    <span style="display: inline-flex; width: 14px; justify-content: center; color: rgba(226, 232, 240, 0.62);">⌄</span>
+                    <span
+                      style="
+                        display: inline-flex;
+                        min-width: 18px;
+                        height: 18px;
+                        align-items: center;
+                        justify-content: center;
+                        border-radius: 7px;
+                        background: rgba(6, 182, 212, 0.16);
+                        border: 1px solid rgba(34, 211, 238, 0.16);
+                        color: #a5f3fc;
+                        font-size: 9px;
+                        font-weight: 700;
+                      "
+                    >
+                      DB
+                    </span>
+                    <span style="font-size: 12px; font-weight: 600;">BI Warehouse</span>
+                    <span style="margin-left: auto;" class="pill">
+                      <span class="pill-dot dot-info"></span>mysql
+                    </span>
+                  </div>
+
+                  <div
+                    class="interactive"
+                    style="
+                      display: flex;
+                      min-height: 30px;
+                      width: 100%;
+                      align-items: center;
+                      gap: 8px;
+                      padding: 7px 12px 7px 30px;
+                      border-top: 1px solid rgba(148, 163, 184, 0.06);
+                      color: var(--text-secondary);
+                    "
+                  >
+                    <span style="display: inline-flex; width: 14px; justify-content: center; color: rgba(226, 232, 240, 0.42);">›</span>
+                    <span class="tree-icon" style="width: 18px; height: 18px; border-radius: 7px; font-size: 9px; background: rgba(6, 182, 212, 0.1); color: #67e8f9;">
+                      IV
+                    </span>
+                    <span style="font-size: 12px;">invoices</span>
+                    <span style="margin-left: auto;" class="pill">42</span>
+                  </div>
+                  <div
+                    class="interactive"
+                    style="
+                      display: flex;
+                      min-height: 30px;
+                      width: 100%;
+                      align-items: center;
+                      gap: 8px;
+                      padding: 7px 12px 7px 30px;
+                      border-top: 1px solid rgba(148, 163, 184, 0.06);
+                      color: var(--text-secondary);
+                    "
+                  >
+                    <span style="display: inline-flex; width: 14px; justify-content: center; color: rgba(226, 232, 240, 0.42);">›</span>
+                    <span class="tree-icon" style="width: 18px; height: 18px; border-radius: 7px; font-size: 9px; background: rgba(6, 182, 212, 0.1); color: #67e8f9;">
+                      OD
+                    </span>
+                    <span style="font-size: 12px;">orders</span>
+                    <span style="margin-left: auto;" class="pill">27</span>
+                  </div>
+                </div>
+              </div>
+            </aside>
+
+            <!-- 中间拖拽分隔条：对应 QueryPanel 左栏 resize handle。 -->
+            <div
+              style="
+                background: linear-gradient(180deg, rgba(59, 130, 246, 0.02), rgba(6, 182, 212, 0.08), rgba(59, 130, 246, 0.02));
+                box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.08);
+              "
+            ></div>
+
+            <!-- 右侧工作区：混合 Tab 栏 + 数据页内容，结构对齐当前 QueryWorkspaceTabs + DataQueryTabPane。 -->
+            <div class="fade-up delay-2" style="display: flex; min-width: 0; min-height: 0; flex-direction: column;">
+              <!-- 顶部 mixed tabs：对应 data/console 混合工作区标签。 -->
+              <div
+                style="
+                  display: flex;
+                  align-items: stretch;
+                  overflow-x: auto;
+                  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+                  background: rgba(15, 23, 42, 0.42);
+                "
+              >
+                <div class="tab-chip active" style="margin: 10px 0 10px 12px;">Opportunity</div>
+                <div class="tab-chip" style="margin: 10px 0 10px 10px;">Quarterly Console</div>
+                <div class="tab-chip" style="margin: 10px 0 10px 10px;">Account</div>
+                <div class="tab-chip" style="margin: 10px 12px 10px 10px;">invoices</div>
+              </div>
+
+              <!-- 当前 active data tab 内容：左侧主内容 + 右侧 drawer。 -->
+              <div style="display: grid; grid-template-columns: minmax(0, 1fr) 366px; min-height: 0; flex: 1;">
+                <!-- 左侧主内容区：工具栏 / 查询栏 / DataGrid / 日志。 -->
+                <div style="display: flex; min-width: 0; min-height: 0; flex-direction: column;">
+                  <!-- 顶部工具栏：对应 DataQueryTabPane 当前工具按钮序列。 -->
+                  <div
+                    style="
+                      display: flex;
+                      align-items: center;
+                      gap: 8px;
+                      overflow-x: auto;
+                      padding: 10px 12px;
+                      border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+                      background: linear-gradient(90deg, rgba(30, 41, 59, 0.88), rgba(37, 99, 235, 0.16), rgba(15, 23, 42, 0.82));
+                    "
+                  >
+                    <span class="button button-ghost" style="padding: 10px 12px;">新建记录</span>
+                    <span class="button button-ghost" style="padding: 10px 12px;">删除勾选(2)</span>
+                    <span class="button button-primary" style="padding: 10px 12px;">执行更新</span>
+                    <span class="button button-ghost" style="padding: 10px 12px;">撤回修改</span>
+                    <span class="button button-secondary" style="padding: 10px 12px;">隐藏查询栏</span>
+                    <span class="button button-secondary" style="padding: 10px 12px;">字段与SOQL</span>
+                    <span class="button button-secondary" style="padding: 10px 12px;">日志</span>
+                  </div>
+
+                  <!-- 查询栏：对应 WHERE / 排序 / LIMIT / 查询。 -->
+                  <div style="padding: 12px; border-bottom: 1px solid rgba(148, 163, 184, 0.12);">
+                    <div style="display: grid; grid-template-columns: 1.6fr 1.2fr 90px 110px; gap: 10px; align-items: end;">
+                      <div class="field-block">
+                        <label class="field-label">WHERE</label>
+                        <div class="field-input">CreatedDate &gt;= LAST_N_DAYS:30 AND StageName != 'Closed Lost'</div>
+                      </div>
+                      <div class="field-block">
+                        <label class="field-label">排序</label>
+                        <div class="field-input">CloseDate DESC, Amount DESC</div>
+                      </div>
+                      <div class="field-block">
+                        <label class="field-label">LIMIT</label>
+                        <div class="field-input">200</div>
+                      </div>
+                      <div class="field-block">
+                        <label class="field-label" style="opacity: 0;">执行</label>
+                        <span class="button button-primary" style="padding: 12px 14px; width: 100%;">查询</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- 数据网格区：对应当前 DataGrid 主区域。 -->
+                  <div style="display: flex; min-height: 0; flex: 1; flex-direction: column;">
+                    <div class="table-frame glass" style="margin: 0; border-radius: 0; border-left: 0; border-right: 0; border-top: 0; flex: 1;">
+                      <div class="row-between" style="margin-bottom: 16px;">
+                        <div>
+                          <h3 style="margin: 0;">DataGrid</h3>
+                          <p class="panel-caption">当前对象结果集，支持勾选、编辑脏单元格、删除高亮和字段列显示控制。</p>
+                        </div>
+                        <div class="pill-row">
+                          <span class="pill"><span class="pill-dot dot-warning"></span>2 rows selected</span>
+                          <span class="pill"><span class="pill-dot dot-info"></span>7 dirty cells</span>
+                        </div>
+                      </div>
+                      <div class="table-header">
+                        <div>Opportunity Name</div>
+                        <div>Owner</div>
+                        <div>Amount</div>
+                        <div>Stage</div>
+                      </div>
+                      <div class="table-row">
+                        <div>Enterprise Renewal · APAC</div>
+                        <div>Amy Zhou</div>
+                        <div class="mono">$182,000</div>
+                        <div>Negotiation</div>
+                      </div>
+                      <div class="table-row" style="background: rgba(59, 130, 246, 0.08);">
+                        <div>North Region Multi-year Contract</div>
+                        <div>Jason Lin</div>
+                        <div class="mono">$240,000</div>
+                        <div>Proposal</div>
+                      </div>
+                      <div class="table-row" style="background: rgba(251, 113, 133, 0.08);">
+                        <div>渠道补货二季度扩展</div>
+                        <div>Leo Xu</div>
+                        <div class="mono">$96,400</div>
+                        <div>待删除</div>
+                      </div>
+                      <div class="skeleton-block" style="margin-top: 16px;">
+                        <div class="skeleton-line long"></div>
+                        <div class="skeleton-line medium" style="margin-top: 14px;"></div>
+                        <div class="skeleton-line short" style="margin-top: 14px;"></div>
+                      </div>
+                    </div>
+
+                    <!-- 底部日志面板：对应 activeTab.showLogs 打开时的状态。 -->
+                    <div
+                      style="
+                        height: 196px;
+                        border-top: 1px solid rgba(148, 163, 184, 0.12);
+                        background: rgba(15, 23, 42, 0.56);
+                        display: flex;
+                        min-height: 0;
+                        flex-direction: column;
+                      "
+                    >
+                      <div
+                        style="
+                          height: 6px;
+                          background: linear-gradient(90deg, rgba(139, 92, 246, 0.1), rgba(59, 130, 246, 0.24), rgba(6, 182, 212, 0.1));
+                        "
+                      ></div>
+                      <div class="row-between" style="padding: 10px 12px; border-bottom: 1px solid rgba(148, 163, 184, 0.12);">
+                        <span class="metric-label">操作日志（当前 Tab）</span>
+                        <span class="button button-ghost" style="padding: 8px 10px;">关闭</span>
+                      </div>
+                      <div style="padding: 10px 12px; overflow: auto; min-height: 0;">
+                        <div class="surface-card" style="padding: 12px; margin-bottom: 10px;">
+                          <p style="margin: 0 0 8px; font-size: 12px; color: #4ade80;">2026/04/28 10:18:24 [query] 成功</p>
+                          <p style="margin: 0; font-size: 12px;">请求: SELECT Id, Name, Amount FROM Opportunity ...</p>
+                          <p style="margin: 6px 0 0; font-size: 12px;">响应: 128 rows returned in 28ms</p>
+                        </div>
+                        <div class="surface-card" style="padding: 12px;">
+                          <p style="margin: 0 0 8px; font-size: 12px; color: #fb7185;">2026/04/28 10:13:02 [save] 失败</p>
+                          <p style="margin: 0; font-size: 12px;">请求: update Opportunity set Amount = ...</p>
+                          <p style="margin: 6px 0 0; font-size: 12px;">错误: Validation rule triggered for StageName transition</p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- 右侧抽屉：对应 Salesforce “字段与SOQL” 抽屉开启状态。 -->
+                <aside
+                  style="
+                    display: flex;
+                    min-height: 0;
+                    flex-direction: column;
+                    border-left: 1px solid rgba(148, 163, 184, 0.12);
+                    background: linear-gradient(180deg, rgba(15, 23, 42, 0.82), rgba(15, 23, 42, 0.68));
+                  "
+                >
+                  <!-- 抽屉上半区：Field 元数据。 -->
+                  <div style="display: flex; min-height: 0; flex: 1 1 50%; flex-direction: column; border-bottom: 1px solid rgba(148, 163, 184, 0.12);">
+                    <div class="row-between" style="padding: 10px 12px; border-bottom: 1px solid rgba(148, 163, 184, 0.12);">
+                      <span class="metric-label">Field 元数据</span>
+                      <div class="button-row" style="gap: 8px;">
+                        <span class="button button-ghost" style="padding: 8px 10px;">取消全选</span>
+                        <span class="button button-ghost" style="padding: 8px 10px;">关闭</span>
+                      </div>
+                    </div>
+                    <div style="display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 8px; padding: 10px 12px; border-bottom: 1px solid rgba(148, 163, 184, 0.12);">
+                      <div class="field-input" style="font-size: 12px;">名称/Label</div>
+                      <div class="field-input" style="font-size: 12px;">搜索字段名称或 Label</div>
+                    </div>
+                    <div style="overflow: auto; min-height: 0; padding: 6px 0;">
+                      <div class="tree-item" style="margin: 0 10px 8px;">
+                        <div class="tree-left">
+                          <input type="checkbox" checked />
+                          <div>
+                            <div>Id</div>
+                            <div class="panel-caption">Id / string</div>
+                          </div>
+                        </div>
+                      </div>
+                      <div class="tree-item" style="margin: 0 10px 8px;">
+                        <div class="tree-left">
+                          <input type="checkbox" checked />
+                          <div>
+                            <div>Amount</div>
+                            <div class="panel-caption">金额 / currency</div>
+                          </div>
+                        </div>
+                      </div>
+                      <div class="tree-item" style="margin: 0 10px 8px;">
+                        <div class="tree-left">
+                          <input type="checkbox" checked />
+                          <div>
+                            <div>StageName</div>
+                            <div class="panel-caption">阶段 / picklist</div>
+                          </div>
+                        </div>
+                      </div>
+                      <div class="tree-item" style="margin: 0 10px 8px;">
+                        <div class="tree-left">
+                          <input type="checkbox" />
+                          <div>
+                            <div>ForecastCategory</div>
+                            <div class="panel-caption">预测分类 / picklist</div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- 抽屉下半区：SOQL 执行器。 -->
+                  <div style="display: flex; min-height: 0; flex: 1 1 50%; flex-direction: column;">
+                    <div style="padding: 10px 12px; border-bottom: 1px solid rgba(148, 163, 184, 0.12);">
+                      <span class="metric-label">SOQL 执行器</span>
+                    </div>
+                    <div style="display: flex; min-height: 0; flex: 1; flex-direction: column; padding: 12px;">
+                      <div class="editor-body mono" style="min-height: 0; flex: 1;">
+                        <div class="code-line long"></div>
+                        <div class="code-line medium"></div>
+                        <div class="code-line long"></div>
+                        <div class="code-line short"></div>
+                        <div class="code-line medium"></div>
+                      </div>
+                      <span class="button button-primary" style="margin-top: 10px; align-self: flex-start; padding: 10px 12px;">执行 SOQL</span>
+                    </div>
+                  </div>
+                </aside>
+              </div>
+            </div>
+          </section>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

@@ -19,15 +19,18 @@ import type {
   RecordSaveWithDeletePayload,
   SalesforceObject,
   SalesforceSource,
+  SourceSecretView,
   SourceUpsertPayload,
   SystemLogPage,
   TerminalCommandGroup,
   TerminalCommandGroupUpsertPayload,
   TerminalCommandItem,
   TerminalCommandReorderPayload,
+  TerminalShellSettings,
   TerminalCommandUpsertPayload,
   TerminalSessionInfo,
-  TerminalShellOption
+  TerminalShellOption,
+  WorkspaceSnapshotDto
 } from "../types/index.ts";
 
 // 统一调用封装，确保前后端错误在 UI 层可直接展示。
@@ -64,11 +67,17 @@ export const api = {
   listSystemLogs: (page: number, pageSize: number) =>
     invokeApi<SystemLogPage>("list_system_logs", { page, pageSize }),
   createSource: (payload: SourceUpsertPayload) => invokeApi<SalesforceSource>("create_source", { payload }),
+  getSource: (sourceId: string) => invokeApi<SalesforceSource>("get_source", { sourceId }),
+  getSourceSecretView: (sourceId: string) =>
+    invokeApi<SourceSecretView>("get_source_secret_view", { sourceId }),
   testSourceConnection: (payload: SourceUpsertPayload) => invokeApi<void>("test_source_connection", { payload }),
   updateSource: (id: string, payload: SourceUpsertPayload) =>
     invokeApi<SalesforceSource>("update_source", { id, payload }),
   reorderSources: (orderedIds: string[]) => invokeApi<SalesforceSource[]>("reorder_sources", { orderedIds }),
   deleteSource: (id: string) => invokeApi<void>("delete_source", { id }),
+  loadWorkspaceSnapshot: () => invokeApi<WorkspaceSnapshotDto>("load_workspace_snapshot"),
+  saveWorkspaceSnapshot: (payload: WorkspaceSnapshotDto) =>
+    invokeApi<void>("save_workspace_snapshot", { payload }),
   getColumnVisibility: (sourceId: string, objectName: string) =>
     invokeApi<Record<string, boolean>>("get_column_visibility", { sourceId, objectName }),
   saveColumnVisibility: (sourceId: string, objectName: string, visibility: Record<string, boolean>) =>
@@ -103,9 +112,6 @@ export const api = {
     invokeApi<void>("update_record", { sourceId, objectName, recordId, values }),
   deleteRecord: (sourceId: string, objectName: string, recordId: string) =>
     invokeApi<void>("delete_record", { sourceId, objectName, recordId }),
-  // UI 状态持久化：通用键值读写，供 Zustand persist adapter 使用。
-  getUiState: (key: string) => invokeApi<string | null>("get_ui_state", { key }),
-  saveUiState: (key: string, value: string) => invokeApi<void>("save_ui_state", { key, value }),
   // 读取全局终端命令组（含命令列表）。
   listTerminalCommandGroups: () =>
     invokeApi<TerminalCommandGroup[]>("list_terminal_command_groups"),
@@ -147,6 +153,10 @@ export const api = {
   closeTerminalSession: (tabId: string) => invokeApi<void>("close_terminal_session", { tabId }),
   // 列出系统可用终端 Shell（动态探测，包含版本信息）。
   listAvailableTerminalShells: () => invokeApi<TerminalShellOption[]>("list_available_terminal_shells"),
+  // 读取终端 Shell 设置：包含当前保存值与旧版偏好兼容字段。
+  getTerminalShellSettings: () => invokeApi<TerminalShellSettings>("get_terminal_shell_settings"),
+  // 保存终端 Shell 命令路径。
+  saveTerminalShellCommand: (command: string) => invokeApi<void>("save_terminal_shell_command", { command }),
   // 以管理员身份打开终端（仅 Windows）。
   openElevatedTerminal: () => invokeApi<void>("open_elevated_terminal")
 };

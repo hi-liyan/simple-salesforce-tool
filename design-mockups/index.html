@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Web3 UI 设计稿总览</title>
+    <link rel="stylesheet" href="./assets/styles.css" />
+  </head>
+  <body>
+    <!-- 总览页面：用于集中浏览全部桌面端设计稿入口。 -->
+    <main class="mockup-page">
+      <!-- 设计总览头部：说明风格方向与本轮输出范围。 -->
+      <section class="hero glass fade-up">
+        <div>
+          <p class="eyebrow">Tauri 2 Desktop Mockups</p>
+          <h1 class="title">Simple Salesforce Tool · Web3 Command Center</h1>
+          <p class="subtitle">
+            这一轮设计稿以“深色玻璃态 + 冷色霓虹 + 低对比分层”为核心，围绕当前 Tauri 桌面应用的工作流重组主工作台信息层级，
+            让 Query、Terminal、Tools、Settings 与独立窗口拥有统一的视觉语言。
+          </p>
+          <div class="stat-grid">
+            <!-- 统计卡片：展示本轮设计稿覆盖页面与设计关键词。 -->
+            <article class="stat-card fade-up delay-1">
+              <div class="metric-label">页面数量</div>
+              <div class="metric-value">6</div>
+              <div class="metric-foot">主工作台 4 页 + 独立窗口 2 页</div>
+            </article>
+            <article class="stat-card fade-up delay-2">
+              <div class="metric-label">设计语言</div>
+              <div class="metric-value">Glass + Glow</div>
+              <div class="metric-foot">圆角 16px / Blur / Gradient / Neon</div>
+            </article>
+            <article class="stat-card fade-up delay-3">
+              <div class="metric-label">交互节奏</div>
+              <div class="metric-value">Fade / Hover / Shimmer</div>
+              <div class="metric-foot">为后续 Framer Motion 实现预留动效位</div>
+            </article>
+          </div>
+        </div>
+        <!-- 设计原则卡片：帮助快速理解本轮页面取向。 -->
+        <aside class="hero-card fade-up delay-2">
+          <h2 style="margin: 0; font-size: 20px;">设计原则</h2>
+          <p class="subtitle">
+            保留桌面生产力工具的操作效率，不做“只有概念感”的空壳 Web3 UI。重点通过层级重组、光效控制和玻璃表面，让复杂工作流更清楚。
+          </p>
+          <div class="pill-row" style="margin-top: 18px;">
+            <span class="pill"><span class="pill-dot dot-success"></span>Command Center</span>
+            <span class="pill"><span class="pill-dot dot-info"></span>Insight Panel</span>
+            <span class="pill"><span class="pill-dot dot-warning"></span>Prototype First</span>
+          </div>
+        </aside>
+      </section>
+
+      <!-- 页面列表：逐个跳转到不同的 HTML 设计页面。 -->
+      <section class="section fade-up delay-1">
+        <h2 class="section-title">页面设计稿</h2>
+        <p class="section-subtitle">先从 Query 主工作台看整体风格，再依次检查 Terminal、Tools、Settings 与两个独立窗口。</p>
+        <div class="page-grid">
+          <a class="preview-card interactive fade-up delay-1" href="./dashboard-query.html">
+            <div class="preview-thumb"></div>
+            <h3 style="margin: 16px 0 8px;">Dashboard · Query</h3>
+            <p class="panel-caption">默认首页，聚焦数据源树、查询编辑、结果矩阵与右侧对象情报栏。</p>
+          </a>
+          <a class="preview-card interactive fade-up delay-2" href="./dashboard-terminal.html">
+            <div class="preview-thumb"></div>
+            <h3 style="margin: 16px 0 8px;">Dashboard · Terminal</h3>
+            <p class="panel-caption">沉浸式终端舞台，配合命令库、会话状态与脚本情报侧栏。</p>
+          </a>
+          <a class="preview-card interactive fade-up delay-3" href="./dashboard-tools.html">
+            <div class="preview-thumb"></div>
+            <h3 style="margin: 16px 0 8px;">Dashboard · Tools</h3>
+            <p class="panel-caption">以 Tool Capsules 方式承载 JSON Formatter、Text Diff、JSON Diff 的入口与近期活跃度。</p>
+          </a>
+          <a class="preview-card interactive fade-up delay-1" href="./dashboard-settings.html">
+            <div class="preview-thumb"></div>
+            <h3 style="margin: 16px 0 8px;">Dashboard · Settings</h3>
+            <p class="panel-caption">系统控制台式设置页，左侧分组导航，中间配置面板，右侧风险与帮助情报区。</p>
+          </a>
+          <a class="preview-card interactive fade-up delay-2" href="./auth-window.html">
+            <div class="preview-thumb"></div>
+            <h3 style="margin: 16px 0 8px;">Auth Window</h3>
+            <p class="panel-caption">聚焦式授权窗口，采用钱包连接弹窗的视觉语言强化 OAuth 入口。</p>
+          </a>
+          <a class="preview-card interactive fade-up delay-3" href="./field-meta-window.html">
+            <div class="preview-thumb"></div>
+            <h3 style="margin: 16px 0 8px;">Field Meta Window</h3>
+            <p class="panel-caption">窄窗数据仪表板化，把字段元数据从纯文本列表升级为结构化 Data Sheet。</p>
+          </a>
+        </div>
+      </section>
+
+      <!-- 组件语言展示：对后续 React 可复用组件进行静态预演。 -->
+      <section class="section fade-up delay-2">
+        <h2 class="section-title">组件语言预演</h2>
+        <p class="section-subtitle">这里先静态展示按钮、卡片和 Modal 的视觉语义，便于后续抽成 React 组件。</p>
+        <div class="component-grid">
+          <article class="component-card">
+            <h3 style="margin: 0 0 14px;">Button Tokens</h3>
+            <div class="button-row">
+              <a class="button button-primary" href="./dashboard-query.html">运行查询</a>
+              <a class="button button-secondary" href="./dashboard-tools.html">打开工具</a>
+              <a class="button button-ghost" href="./dashboard-settings.html">系统设置</a>
+            </div>
+          </article>
+          <article class="component-card">
+            <h3 style="margin: 0 0 14px;">Glass Card</h3>
+            <div class="surface-card interactive">
+              <div class="row-between">
+                <strong>Workspace Snapshot</strong>
+                <span class="pill"><span class="pill-dot dot-info"></span>Live</span>
+              </div>
+              <p class="panel-caption">低对比玻璃面板用于承载复杂内容，hover 时只增强边缘和 glow，不破坏整体克制感。</p>
+            </div>
+          </article>
+          <article class="component-card">
+            <h3 style="margin: 0 0 14px;">Modal Preview</h3>
+            <div class="modal-preview">
+              <div class="modal-header">
+                <strong>Quick Connect</strong>
+                <span class="pill"><span class="pill-dot dot-success"></span>Source Modal</span>
+              </div>
+              <div class="field-block">
+                <label class="field-label">Instance URL</label>
+                <div class="field-input">https://login.salesforce.com</div>
+              </div>
+              <div class="button-row" style="margin-top: 18px;">
+                <span class="button button-ghost">取消</span>
+                <span class="button button-primary">继续授权</span>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

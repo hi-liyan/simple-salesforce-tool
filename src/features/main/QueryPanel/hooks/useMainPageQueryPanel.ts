@@ -266,10 +266,15 @@ export function useMainPageQueryPanel({
     objectName: string,
     describe: ObjectDescribe
   ): Promise<Record<string, boolean>> {
+    // 默认全部可见：当 SQLite 无记录或合并后全不可见时，作为兜底值。
     const defaults = buildDefaultVisibility(describe);
     try {
       const stored = await api.getColumnVisibility(sourceId, objectName);
-      return { ...defaults, ...stored };
+      const merged = { ...defaults, ...stored };
+      // 若合并后所有字段均不可见，说明曾持久化了"全不选"状态，回退为全可见默认值，
+      // 避免下次加载时 selectedFields 为空，触发"至少勾选一个字段"错误。
+      const hasAnyVisible = Object.values(merged).some((v) => v === true);
+      return hasAnyVisible ? merged : defaults;
     } catch {
       return defaults;
     }

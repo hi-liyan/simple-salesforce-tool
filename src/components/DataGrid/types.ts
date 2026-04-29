@@ -10,6 +10,12 @@ export type RowContextMenuState = {
   canSetNullish: boolean;
   // 空值动作文案：按数据源区分 Set None / Set Null。
   nullishActionLabel: "Set None" | "Set Null" | "";
+  // 当前右键命中的字段是否允许执行“恢复默认值”动作。
+  canSetDefaultValue: boolean;
+  // 默认值动作文案。
+  defaultValueActionLabel: "Set 默认值" | "";
+  // 默认值动作实际写入语义：统一写入 default 草稿，再由提交阶段按 create/update 区分。
+  defaultValueMode: "mysql-default" | "";
 };
 
 // DataGrid 表头元数据浮层状态：记录字段名、格式化元数据和锚点坐标。

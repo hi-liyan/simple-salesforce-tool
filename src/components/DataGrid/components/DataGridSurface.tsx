@@ -2,11 +2,11 @@ import React from "react";
 import { CompactSelection, DataEditor, EditableGridCell, EditListItem, GridCell, GridColumn, GridSelection, Item } from "@glideapps/glide-data-grid";
 import { HeaderMetaPopover } from "./HeaderMetaPopover";
 import { RowContextMenu } from "./RowContextMenu";
-import { isCellEditableByMeta } from "../utils/field";
 import { stringifyCellValue } from "../utils/value";
 import { RowContextMenuState, HoveredHeaderMetaState } from "../types";
 import { isHeaderInfoIconHit } from "../renderers/drawHeader";
 import { buildDisplayMetadataFromRaw } from "../../../utils/fieldMetadata";
+import { resolveRowContextMenuCapabilities } from "../logic/contextMenu";
 
 // DataGrid 表头高度：与 DataEditor 的 headerHeight 配置保持一致。
 const DATA_GRID_HEADER_HEIGHT = 42;
@@ -28,16 +28,6 @@ function getScrollbarSize(): number {
   const size = measure.offsetHeight - measure.clientHeight;
   document.body.removeChild(measure);
   return size;
-}
-
-// 可空性判定：兼容 Salesforce 的 nillable 与 MySQL 常见 nullable/isNullable 元数据键。
-function isNullableField(metadata: Record<string, unknown>): boolean {
-  if (metadata.nillable === true) return true;
-  if (metadata.nullable === true) return true;
-  if (metadata.isNullable === true) return true;
-  const rawIsNullable = metadata.IS_NULLABLE;
-  if (typeof rawIsNullable === "string" && rawIsNullable.trim().toUpperCase() === "YES") return true;
-  return false;
 }
 
 type DataGridSurfaceProps = {
@@ -97,6 +87,8 @@ type DataGridSurfaceProps = {
   onCopyCell: () => void;
   // 右键菜单动作：置空（None/Null）。
   onSetNullish: () => void;
+  // 右键菜单动作：恢复默认值。
+  onSetDefaultValue: () => void;
   // 右键菜单动作：打开记录页。
   onOpenRecordPage: () => void;
   // 单元格读取函数。
@@ -143,6 +135,7 @@ export function DataGridSurface({
   onToggleAll,
   onCopyCell,
   onSetNullish,
+  onSetDefaultValue,
   onOpenRecordPage,
   getCellContent,
   onCellEdited,
@@ -284,15 +277,14 @@ export function DataGridSurface({
             const copyRecordId = String(copyRecord.Id ?? "").trim();
             const recordId = String(record.Id ?? "").trim();
             const isDataColumn = !columnId.startsWith("__");
-            // 空值动作按数据源切换：Salesforce=Set None，MySQL=Set Null。
-            const isMysqlSource = (selectedSourceType || "salesforce").toLowerCase() === "mysql";
             const metadata = isDataColumn ? (fieldMetadataMap[columnId] || {}) : {};
             const isNewRow = Boolean(record.__isNew);
-            const canSetNullish =
-              isDataColumn &&
-              isNullableField(metadata) &&
-              isCellEditableByMeta(metadata, isNewRow);
-            const nullishActionLabel = canSetNullish ? (isMysqlSource ? "Set Null" : "Set None") : "";
+            const contextMenuCapabilities = resolveRowContextMenuCapabilities({
+              selectedSourceType,
+              metadata,
+              isNewRow,
+              isDataColumn
+            });
             // 复制文本：优先复制当前选区（支持多格/整行/多行），无选区时回退单元格。
             const cellText = buildCopyTextBySelection(
               gridSelection,
@@ -323,8 +315,11 @@ export function DataGridSurface({
               cellText,
               rowIndex: row,
               columnId,
-              canSetNullish,
-              nullishActionLabel
+              canSetNullish: contextMenuCapabilities.canSetNullish,
+              nullishActionLabel: contextMenuCapabilities.nullishActionLabel,
+              canSetDefaultValue: contextMenuCapabilities.canSetDefaultValue,
+              defaultValueActionLabel: contextMenuCapabilities.defaultValueActionLabel,
+              defaultValueMode: contextMenuCapabilities.defaultValueMode
             });
           }}
           // 粘贴/批量编辑时的批处理入口。
@@ -493,6 +488,7 @@ export function DataGridSurface({
             menuState={rowContextMenu}
             onCopyCell={onCopyCell}
             onSetNullish={onSetNullish}
+            onSetDefaultValue={onSetDefaultValue}
             onOpenRecordPage={onOpenRecordPage}
             canOpenRecordPage={canOpenRecordPage}
             showOpenRecordPage={showOpenRecordPage}

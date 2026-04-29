@@ -136,7 +136,7 @@ export function DataGrid({
   const [activeEditorCell, setActiveEditorCell] = useState<Item | null>(null);
   const activeEditorCellRef = useRef<Item | null>(null);
 
-  const { openRecordPageFromMenu, copyCellValueFromMenu, setCellNullishFromMenu } = useDataGridMenuActions({
+  const { openRecordPageFromMenu, copyCellValueFromMenu, setCellNullishFromMenu, setCellDefaultValueFromMenu } = useDataGridMenuActions({
     rowContextMenu,
     setRowContextMenu,
     sourceId,
@@ -304,6 +304,7 @@ export function DataGrid({
         void copyCellValueFromMenu();
       }}
       onSetNullish={setCellNullishFromMenu}
+      onSetDefaultValue={setCellDefaultValueFromMenu}
       onOpenRecordPage={() => {
         void openRecordPageFromMenu();
       }}

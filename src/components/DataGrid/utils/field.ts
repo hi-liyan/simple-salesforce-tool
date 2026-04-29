@@ -161,5 +161,6 @@ export function isRequiredOnCreate(metadata: Record<string, unknown>, isNewRow: 
   if (metadata.createable === false) return false;
   // 创建时后端会自动填默认值的字段，不应再按“必填缺失”标红。
   if (metadata.defaultedOnCreate === true) return false;
+  if (metadata.columnDefault !== null && metadata.columnDefault !== undefined) return false;
   return metadata.nillable === false;
 }

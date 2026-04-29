@@ -6,17 +6,30 @@ import {
   buildMysqlUpdateValues
 } from "../../src/features/main/QueryPanel/logic/mysqlMutationPlanner.ts";
 import {
+  createMysqlDraftDefaultValue,
   createMysqlDraftNullValue,
   createMysqlDraftOmitValue,
   createMysqlDraftValue,
-  isMysqlDraftDirty
+  isMysqlDraftDirty,
+  resolveMysqlDisplayValue
 } from "../../src/features/main/QueryPanel/logic/mysqlValueSemantics.ts";
 
 // MySQL 值语义规划测试：验证 omit/null/value 三种语义能稳定映射到提交 payload。
 test("isMysqlDraftDirty: 空字符串改成 null 时应判定为脏数据", () => {
   assert.equal(isMysqlDraftDirty("", createMysqlDraftNullValue()), true);
-  assert.equal(isMysqlDraftDirty(null, createMysqlDraftNullValue()), false);
+  assert.equal(isMysqlDraftDirty(null, createMysqlDraftNullValue()), true);
   assert.equal(isMysqlDraftDirty(undefined, createMysqlDraftNullValue()), true);
+});
+
+test("isMysqlDraftDirty: 改成默认值语义时应判定为脏数据", () => {
+  assert.equal(isMysqlDraftDirty("DONE", createMysqlDraftDefaultValue()), true);
+});
+
+test("resolveMysqlDisplayValue: DEFAULT 草稿应优先显示字段默认值文本", () => {
+  assert.deepEqual(
+    resolveMysqlDisplayValue(createMysqlDraftDefaultValue(), { columnDefault: "CURRENT_TIMESTAMP" }),
+    { value: "CURRENT_TIMESTAMP", useNullPlaceholder: false }
+  );
 });
 
 test("buildMysqlCreateValues: 应区分 omit、null、空字符串、0、false", () => {
@@ -58,6 +71,21 @@ test("buildMysqlUpdateValues: 应仅输出脏字段，并保留 null 与空字�
     emptyText: "",
     age: 0,
     enabled: false
+  });
+});
+
+test("buildMysqlUpdateValues: DEFAULT 草稿应保留到更新 payload", () => {
+  const values = buildMysqlUpdateValues({
+    record: {
+      status: createMysqlDraftDefaultValue(),
+      ignored: createMysqlDraftValue("x")
+    },
+    dirtyFields: ["status"],
+    editableFields: new Set(["status", "ignored"])
+  });
+
+  assert.deepEqual(values, {
+    status: createMysqlDraftDefaultValue()
   });
 });
 
@@ -132,4 +160,28 @@ test("buildMysqlMutationPlan: 预览项与最终提交 payload 应共享同一�
     ]
   );
   assert.deepEqual(plan.missingRecordIdRows, []);
+});
+
+test("buildMysqlMutationPlan: 更新预览应显式标记 DEFAULT 字段写入", () => {
+  const plan = buildMysqlMutationPlan({
+    records: [
+      {
+        __rowStableId: "mysql:id:1",
+        __baselineKey: "mysql:id:1",
+        id: 1,
+        status: createMysqlDraftDefaultValue()
+      }
+    ],
+    baselineRecords: {
+      "mysql:id:1": { id: 1, status: "DONE" }
+    },
+    dirtyCellKeys: ["mysql:id:1:status"],
+    pendingDeleteRecordIds: [],
+    editableFields: new Set(["status"]),
+    sourceType: "mysql",
+    mysqlPrimaryKeyField: "id"
+  });
+
+  assert.deepEqual(plan.updates, [{ recordId: "1", values: { status: createMysqlDraftDefaultValue() } }]);
+  assert.deepEqual(plan.previewItems[0]?.fields, [{ name: "status", kind: "default", value: "DEFAULT" }]);
 });

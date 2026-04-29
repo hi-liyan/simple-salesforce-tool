@@ -35,6 +35,12 @@ impl From<serde_json::Error> for AppError {
     }
 }
 
+impl From<std::io::Error> for AppError {
+    fn from(value: std::io::Error) -> Self {
+        Self::Biz(value.to_string())
+    }
+}
+
 impl AppError {
     /// 将统一错误类型转成 Tauri command 需要的字符串错误。
     pub fn to_string_error(self) -> String {

@@ -28,11 +28,19 @@ export function createMysqlDraftValue(value: unknown): MysqlCellDraftValue {
   };
 }
 
+// 创建“写入默认值”语义：仅用于更新既有记录时映射到 SQL DEFAULT。
+export function createMysqlDraftDefaultValue(): MysqlCellDraftValue {
+  return {
+    [MYSQL_DRAFT_MARKER]: true,
+    kind: "default"
+  };
+}
+
 // 判断任意输入是否为 MySQL draft 对象。
 export function isMysqlCellDraftValue(value: unknown): value is MysqlCellDraftValue {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Record<string, unknown>;
-  return candidate[MYSQL_DRAFT_MARKER] === true && ["omit", "null", "value"].includes(String(candidate.kind || ""));
+  return candidate[MYSQL_DRAFT_MARKER] === true && ["omit", "null", "value", "default"].includes(String(candidate.kind || ""));
 }
 
 // 归一化编辑输入：把裸值统一包装成显式 MySQL draft 语义。
@@ -53,6 +61,7 @@ export function resolveMysqlDraftRuntimeValue(value: unknown): unknown {
   if (!isMysqlCellDraftValue(value)) return value;
   if (value.kind === "omit") return undefined;
   if (value.kind === "null") return null;
+  if (value.kind === "default") return undefined;
   return value.value;
 }
 
@@ -60,6 +69,7 @@ export function resolveMysqlDraftRuntimeValue(value: unknown): unknown {
 export function isMysqlBlankValue(value: unknown): boolean {
   if (isMysqlCellDraftValue(value)) {
     if (value.kind === "omit" || value.kind === "null") return true;
+    if (value.kind === "default") return false;
     return isMysqlBlankValue(value.value);
   }
   if (value === null || value === undefined) return true;
@@ -68,13 +78,23 @@ export function isMysqlBlankValue(value: unknown): boolean {
 }
 
 // 解析单元格展示值与空值占位状态：避免 draft 对象直接显示为 [object Object]。
-export function resolveMysqlDisplayValue(value: unknown): { value: unknown; useNullPlaceholder: boolean } {
+export function resolveMysqlDisplayValue(
+  value: unknown,
+  metadata?: Record<string, unknown>
+): { value: unknown; useNullPlaceholder: boolean } {
   if (isMysqlCellDraftValue(value)) {
     if (value.kind === "omit") {
       return { value: "", useNullPlaceholder: false };
     }
     if (value.kind === "null") {
       return { value: null, useNullPlaceholder: true };
+    }
+    if (value.kind === "default") {
+      const rawDefaultValue = metadata?.columnDefault;
+      return {
+        value: rawDefaultValue === null || rawDefaultValue === undefined ? "DEFAULT" : rawDefaultValue,
+        useNullPlaceholder: false
+      };
     }
     return {
       value: value.value,
@@ -92,6 +112,7 @@ function stringifyMysqlComparableValue(value: unknown): string {
   if (isMysqlCellDraftValue(value)) {
     if (value.kind === "omit") return "draft:omit";
     if (value.kind === "null") return "draft:null";
+    if (value.kind === "default") return "draft:default";
     return `draft:value:${stringifyMysqlComparableValue(value.value)}`;
   }
   if (value === undefined) return "raw:undefined";

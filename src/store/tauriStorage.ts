@@ -1,10 +1,17 @@
 import { type PersistStorage, type StateStorage, type StorageValue } from "zustand/middleware";
 import { api } from "../api/index.ts";
+import type { WorkspaceSnapshotDto } from "../types/index.ts";
+import {
+  applyPersistedStateToWorkspaceSnapshot,
+  createEmptyWorkspaceSnapshot,
+  getPersistedStateFromWorkspaceSnapshot
+} from "./workspaceSnapshot.ts";
 
 // 写入门控：rehydrate 完成前阻止 setItem，防止默认空值覆盖持久化数据。
 let writeEnabled = false;
 // 持久化写入防抖时间：合并输入、拖拽等高频状态更新，避免每次都直写 SQLite。
 const STORAGE_WRITE_DEBOUNCE_MS = 220;
+
 type PendingStoragePayload =
   | {
       kind: "raw";
@@ -15,23 +22,42 @@ type PendingStoragePayload =
       value: unknown;
     };
 
-// 各持久化 key 的待提交值：始终只保留最后一次写入结果。
+// 待提交的最后一次状态变更：按 store key 合并。
 const pendingStoragePayloadByKey: Record<string, PendingStoragePayload | undefined> = {};
-// 各持久化 key 的延迟提交定时器：用于把连续写入折叠成一次真正落盘。
+// 对应 key 的延迟定时器。
 const pendingStorageTimerByKey: Record<string, ReturnType<typeof globalThis.setTimeout> | undefined> = {};
+// 前端工作区快照缓存：避免多 store 并发 hydration 时重复调用后端。
+let workspaceSnapshotCache: WorkspaceSnapshotDto | undefined;
 
-// 真正执行 SQLite 写入：供防抖调度器统一复用。
-async function persistStorageValue(key: string, value: string): Promise<void> {
+// 在所有 store rehydrate 完成后调用，开启写入。
+export function enableStorageWrite() {
+  writeEnabled = true;
+}
+
+// 从后端读取结构化工作区快照。
+export async function loadWorkspaceSnapshotFromBackend(): Promise<WorkspaceSnapshotDto> {
+  if (workspaceSnapshotCache) return workspaceSnapshotCache;
   try {
-    await api.saveUiState(key, value);
+    workspaceSnapshotCache = await api.loadWorkspaceSnapshot();
+  } catch {
+    workspaceSnapshotCache = createEmptyWorkspaceSnapshot();
+  }
+  return workspaceSnapshotCache;
+}
+
+// 把最新工作区快照写回后端并刷新本地缓存。
+async function persistWorkspaceSnapshot(snapshot: WorkspaceSnapshotDto): Promise<void> {
+  try {
+    await api.saveWorkspaceSnapshot(snapshot);
+    workspaceSnapshotCache = snapshot;
   } catch {
     // 写入失败不中断业务流程。
   }
 }
 
-// 调度指定 key 的持久化写入：连续更新时仅提交最后一次值，并把重序列化推迟到真正落盘时执行。
+// 调度指定 key 的持久化写入：连续更新时仅提交最后一次值。
 function scheduleStorageWrite(key: string, payload: PendingStoragePayload): void {
-  pendingStoragePayloadByKey[key] = payload; // 行内注释：始终覆盖为最新快照，避免把中间态逐条落盘。
+  pendingStoragePayloadByKey[key] = payload;
   const currentTimer = pendingStorageTimerByKey[key];
   if (currentTimer) {
     globalThis.clearTimeout(currentTimer);
@@ -43,60 +69,61 @@ function scheduleStorageWrite(key: string, payload: PendingStoragePayload): void
     delete pendingStoragePayloadByKey[key];
     if (!pendingPayload) return;
 
-    const serializedValue = pendingPayload.kind === "json"
-      ? JSON.stringify(pendingPayload.value)
-      : pendingPayload.value;
-    void persistStorageValue(key, serializedValue);
+    void (async () => {
+      const snapshot = await loadWorkspaceSnapshotFromBackend();
+      const rawValue =
+        pendingPayload.kind === "json" ? JSON.stringify(pendingPayload.value) : pendingPayload.value;
+      const parsed = rawValue ? (JSON.parse(rawValue) as StorageValue<unknown>) : null;
+      const nextSnapshot = applyPersistedStateToWorkspaceSnapshot(snapshot, key, parsed);
+      await persistWorkspaceSnapshot(nextSnapshot);
+    })();
   }, STORAGE_WRITE_DEBOUNCE_MS);
-}
-
-// 在所有 store rehydrate 完成后调用，开启写入。
-export function enableStorageWrite() {
-  writeEnabled = true;
 }
 
 // 读取并解析 JSON 持久化快照：供自定义 PersistStorage 复用。
 async function loadJsonStorageValue<T>(key: string): Promise<StorageValue<T> | null> {
+  const rawValue = await tauriSqliteStorage.getItem(key);
+  if (!rawValue) return null;
   try {
-    const rawValue = await api.getUiState(key);
-    if (!rawValue) return null;
     return JSON.parse(rawValue) as StorageValue<T>;
   } catch {
     return null;
   }
 }
 
-// Zustand persist 的自定义存储后端：通过 Tauri invoke 读写 SQLite app_settings 表。
-// 所有 store 共用此 adapter，未来扩展新页面状态时直接复用即可。
+// Zustand persist 的自定义存储后端：底层改为结构化 workspace snapshot，而不是黑盒 key/value。
 export const tauriSqliteStorage: StateStorage = {
   getItem: async (key: string): Promise<string | null> => {
     try {
-      return await api.getUiState(key);
+      const snapshot = await loadWorkspaceSnapshotFromBackend();
+      const storageValue = getPersistedStateFromWorkspaceSnapshot(snapshot, key);
+      if (!storageValue) return null;
+      return JSON.stringify(storageValue);
     } catch {
       return null;
     }
   },
   setItem: async (key: string, value: string): Promise<void> => {
     if (!writeEnabled) return;
-    scheduleStorageWrite(key, { kind: "raw", value }); // 行内注释：把高频 UI 状态更新合并后再落盘，降低主线程与跨端 I/O 压力。
+    scheduleStorageWrite(key, { kind: "raw", value });
   },
   removeItem: async (key: string): Promise<void> => {
     if (!writeEnabled) return;
-    scheduleStorageWrite(key, { kind: "raw", value: "" }); // 行内注释：删除同样走合并写入，避免 reset 场景连续触发多次 SQLite 更新。
+    scheduleStorageWrite(key, { kind: "raw", value: "" });
   }
 };
 
-// Query/Terminal 等大状态 store 专用 JSON 持久化适配器：把 stringify 与 SQLite 写入都延后到防抖窗口结束后执行。
+// Query/Terminal 等大状态 store 专用 JSON 持久化适配器：把 stringify 与 snapshot 写回都延后到防抖窗口结束后执行。
 export function createDebouncedTauriJsonStorage<T>(): PersistStorage<T> {
   return {
     getItem: async (key: string): Promise<StorageValue<T> | null> => loadJsonStorageValue<T>(key),
     setItem: async (key: string, value: StorageValue<T>): Promise<void> => {
       if (!writeEnabled) return;
-      scheduleStorageWrite(key, { kind: "json", value }); // 行内注释：先暂存对象快照，避免每次状态变更都立即 stringify。
+      scheduleStorageWrite(key, { kind: "json", value });
     },
     removeItem: async (key: string): Promise<void> => {
       if (!writeEnabled) return;
-      scheduleStorageWrite(key, { kind: "raw", value: "" }); // 行内注释：删除仍复用同一调度通道，保证顺序与覆盖语义一致。
+      scheduleStorageWrite(key, { kind: "raw", value: "" });
     }
   };
 }

@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dashboard Tools 设计稿</title>
+    <link rel="stylesheet" href="./assets/styles.css" />
+  </head>
+  <body>
+    <!-- Tools 工作台设计稿：强调工具入口卡片与近期活跃状态。 -->
+    <main class="mockup-page">
+      <a class="back-link" href="./index.html">← 返回设计稿总览</a>
+      <section class="shell glass fade-up">
+        <!-- 左侧导航：与其它主工作台页面保持完全一致的壳层。 -->
+        <aside class="rail">
+          <div class="brand-badge">SF</div>
+          <nav class="rail-nav">
+            <a class="rail-button" data-label="Query" href="./dashboard-query.html">Q</a>
+            <a class="rail-button" data-label="Terminal" href="./dashboard-terminal.html">T</a>
+            <a class="rail-button active" data-label="Tools" href="./dashboard-tools.html">◎</a>
+            <a class="rail-button" data-label="Settings" href="./dashboard-settings.html">S</a>
+          </nav>
+          <div class="rail-footer">
+            <a class="rail-button" data-label="Auth Window" href="./auth-window.html">⎋</a>
+          </div>
+        </aside>
+
+        <div class="main-panel">
+          <!-- 工具页头部：突出工具集的价值和最近活动状态。 -->
+          <header class="context-header">
+            <div>
+              <p class="eyebrow">Utility Capsules</p>
+              <h1 class="header-title">Diff / Format / Inspect Toolkit</h1>
+              <p class="header-meta">把常用辅助能力统一收束进一套更具未来感的工具入口，不再是传统后台的平面卡片宫格。</p>
+            </div>
+            <div class="header-actions">
+              <div class="search-shell">搜索工具、最近打开的标签、差异主题...</div>
+              <span class="pill"><span class="pill-dot dot-success"></span>3 Tools Online</span>
+            </div>
+          </header>
+
+          <section class="workspace-grid" style="grid-template-columns: 1fr;">
+            <!-- Hero 卡片：放工具面板说明与快捷入口。 -->
+            <article class="panel-card glass fade-up delay-1">
+              <div class="row-between">
+                <div>
+                  <h3>Tools Overview</h3>
+                  <p class="panel-caption">工具页更像“能力中心”，大卡片承载功能、状态、近期使用和进入入口。</p>
+                </div>
+                <div class="button-row">
+                  <span class="button button-secondary">最近标签</span>
+                  <span class="button button-primary">新建对比</span>
+                </div>
+              </div>
+              <div class="hero-strip" style="margin-top: 18px;">
+                <article class="metric-card interactive">
+                  <div class="metric-label">今日使用次数</div>
+                  <div class="metric-value">27</div>
+                  <div class="metric-foot">JSON Diff 为当前最活跃工具</div>
+                </article>
+                <article class="metric-card interactive">
+                  <div class="metric-label">活跃标签页</div>
+                  <div class="metric-value">08</div>
+                  <div class="metric-foot">保持工具状态常驻，减少重复创建</div>
+                </article>
+                <article class="metric-card interactive">
+                  <div class="metric-label">最近输出</div>
+                  <div class="metric-value">2.4 MB</div>
+                  <div class="metric-foot">格式化和对比结果可跨工作区复制</div>
+                </article>
+              </div>
+            </article>
+
+            <!-- 工具大卡片：分别表现 JSON 格式化、文本对比、JSON 对比。 -->
+            <section class="tool-grid fade-up delay-2">
+              <article class="tool-capsule interactive">
+                <div>
+                  <div class="row-between">
+                    <strong>JSON Formatter</strong>
+                    <span class="pill"><span class="pill-dot dot-success"></span>Ready</span>
+                  </div>
+                  <p class="panel-caption">将原始 JSON 输入、格式化结果和树形浏览合并成一个玻璃态工作站。</p>
+                </div>
+                <div class="editor-body">
+                  <div class="code-line long"></div>
+                  <div class="code-line medium"></div>
+                  <div class="code-line short"></div>
+                </div>
+                <div class="row-between">
+                  <span class="pill">多标签常驻</span>
+                  <span class="button button-primary">进入工具</span>
+                </div>
+              </article>
+
+              <article class="tool-capsule interactive">
+                <div>
+                  <div class="row-between">
+                    <strong>Text Diff</strong>
+                    <span class="pill"><span class="pill-dot dot-info"></span>Hot</span>
+                  </div>
+                  <p class="panel-caption">左右双栏文本对比以更宽阔的对照画布呈现，支持文件段落级视觉高亮。</p>
+                </div>
+                <div class="table-frame" style="padding: 14px;">
+                  <div class="table-row" style="grid-template-columns: 1fr 1fr;">
+                    <div class="mono">- old value</div>
+                    <div class="mono">+ new value</div>
+                  </div>
+                  <div class="table-row" style="grid-template-columns: 1fr 1fr;">
+                    <div class="mono">- legacy branch</div>
+                    <div class="mono">+ design branch</div>
+                  </div>
+                </div>
+                <div class="row-between">
+                  <span class="pill">拖拽排序 / 重命名</span>
+                  <span class="button button-primary">进入工具</span>
+                </div>
+              </article>
+
+              <article class="tool-capsule interactive">
+                <div>
+                  <div class="row-between">
+                    <strong>JSON Diff</strong>
+                    <span class="pill"><span class="pill-dot dot-warning"></span>Recent</span>
+                  </div>
+                  <p class="panel-caption">语义级 JSON 差异更适合用数据块和颜色层级表达，而不是单纯文本高亮。</p>
+                </div>
+                <div class="skeleton-block">
+                  <div class="skeleton-line long"></div>
+                  <div class="skeleton-line medium" style="margin-top: 14px;"></div>
+                  <div class="skeleton-line short" style="margin-top: 14px;"></div>
+                </div>
+                <div class="row-between">
+                  <span class="pill">结构化差异</span>
+                  <span class="button button-primary">进入工具</span>
+                </div>
+              </article>
+            </section>
+          </section>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

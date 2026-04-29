@@ -6,16 +6,9 @@ import { useAppStore } from "../../../../store/useAppStore";
 import { buildMysqlMutationPlan } from "../logic/mysqlMutationPlanner.ts";
 import { resolveMysqlResultUpdateCapability } from "../logic/mysqlUpdateCapability.ts";
 import { isMysqlBlankValue } from "../logic/mysqlValueSemantics.ts";
+import { collectMysqlMissingRequiredFields } from "../logic/mysqlCreateValidation.ts";
 
 type MysqlDdlState = Record<string, { loading: boolean; data: ObjectDdl | null; error: string }>;
-
-// MySQL 新增行必填字段缺失信息。
-type MysqlMissingRequiredFieldItem = {
-  // 行号（从 1 开始，便于用户在表格里定位）。
-  row: number;
-  // 当前行缺失的字段名列表。
-  fields: string[];
-};
 
 // 判断单元格值是否可视为“未输入”。
 function isBlankCellValue(value: unknown): boolean {
@@ -26,41 +19,11 @@ function isBlankCellValue(value: unknown): boolean {
   return false;
 }
 
-// 收集 MySQL 新增行中“NOT NULL 且无默认值”的缺失字段。
-function collectMysqlMissingRequiredFields(
-  records: Record<string, unknown>[],
-  describe: ObjectDescribe
-): MysqlMissingRequiredFieldItem[] {
-  // 只校验创建时可写、非可空、无默认值，且排除自增/生成列。
-  const requiredFields = describe.fields.filter((field) => {
-    if (!field.createable || field.nillable) return false;
-    const defaultValue = field.metadata?.columnDefault;
-    if (defaultValue !== null && defaultValue !== undefined) return false;
-    const extraText = String(field.metadata?.extra || "").toLowerCase();
-    if (extraText.includes("auto_increment") || extraText.includes("generated")) return false;
-    return true;
-  });
-  if (requiredFields.length === 0) return [];
-
-  const missingItems: MysqlMissingRequiredFieldItem[] = [];
-  records.forEach((record, rowIndex) => {
-    // 仅对前端本地新增行做必填校验。
-    if (!record.__isNew) return;
-    const missingFieldNames = requiredFields
-      .filter((field) => isMysqlBlankValue(record[field.name]))
-      .map((field) => field.name);
-    if (missingFieldNames.length > 0) {
-      missingItems.push({ row: rowIndex + 1, fields: missingFieldNames });
-    }
-  });
-  return missingItems;
-}
-
 // 收集 Salesforce 新增行中“创建必填字段”的缺失字段。
 function collectSalesforceMissingRequiredFields(
   records: Record<string, unknown>[],
   describe: ObjectDescribe
-): MysqlMissingRequiredFieldItem[] {
+): Array<{ row: number; fields: string[] }> {
   // Salesforce 必填判定：可创建 + 不可空；并排除“系统默认赋值/自动编号/公式字段”。
   const requiredFields = describe.fields.filter((field) => {
     if (!field.createable || field.nillable) return false;
@@ -71,7 +34,7 @@ function collectSalesforceMissingRequiredFields(
   });
   if (requiredFields.length === 0) return [];
 
-  const missingItems: MysqlMissingRequiredFieldItem[] = [];
+  const missingItems: Array<{ row: number; fields: string[] }> = [];
   records.forEach((record, rowIndex) => {
     // 仅校验本地新增行，避免影响普通更新场景。
     if (!record.__isNew) return;

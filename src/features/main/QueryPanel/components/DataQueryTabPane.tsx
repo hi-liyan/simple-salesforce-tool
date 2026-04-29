@@ -8,6 +8,7 @@ import { api } from "../../../../api";
 import { useAppStore } from "../../../../store/useAppStore";
 import { buildObjectTabBindingKey, MutationPreviewItem, Notice, ObjectDdl, TabState } from "../../../../types";
 import { buildMysqlMutationPlan, mergeMysqlPreviewSqlItems } from "../logic/mysqlMutationPlanner.ts";
+import { hasMysqlMissingRequiredFields } from "../logic/mysqlCreateValidation.ts";
 import { resolveMysqlResultUpdateCapability } from "../logic/mysqlUpdateCapability.ts";
 import { buildSourceSurfacePalette } from "../logic/sourceColor.ts";
 import type { QueryOverrides } from "../types";
@@ -383,6 +384,7 @@ function QueryBar({
 
   // 执行查询：优先使用草稿覆盖值，保证点击查询时使用最新输入。
   function handleQueryClick() {
+    if (activeTab.loading) return;
     // 查询前先取消防抖回写，避免“点击查询后又被旧定时器回写”产生错觉。
     clearTimers();
     // 主动回写一次，保证 UI 切换 Tab 或其它地方读取 store 时拿到一致值。
@@ -415,6 +417,7 @@ function QueryBar({
             suggestions={mysqlWhereSuggestions}
             defaultWidth={360}
             allowClear
+            onSubmit={handleQueryClick}
           />
         ) : (
           <SalesforceSmartInput
@@ -430,6 +433,7 @@ function QueryBar({
             suggestions={salesforceWhereSuggestions}
             defaultWidth={360}
             allowClear
+            onSubmit={handleQueryClick}
           />
         )}
 
@@ -448,6 +452,7 @@ function QueryBar({
               suggestions={mysqlSortSuggestions}
               defaultWidth={300}
               allowClear
+              onSubmit={handleQueryClick}
             />
 
             <div className="w-[90px]">
@@ -481,6 +486,7 @@ function QueryBar({
               suggestions={salesforceSortSuggestions}
               defaultWidth={300}
               allowClear
+              onSubmit={handleQueryClick}
             />
 
             <div className="w-[90px]">
@@ -579,8 +585,15 @@ export function DataQueryTabPane({
   const mysqlResultReadonlyReason = isMysqlSource && !mysqlResultUpdateCapability.editable
     ? mysqlResultUpdateCapability.reason
     : "";
+  // MySQL 新建行必填缺失：用于前置禁用“执行更新”，避免用户点了才收到错误。
+  const mysqlHasMissingRequiredCreateFields = useMemo(
+    () => isMysqlSource && Boolean(activeTab?.describe) && hasMysqlMissingRequiredFields(activeTab?.result.records || [], activeTab?.describe || null),
+    [isMysqlSource, activeTab?.describe, activeTab?.result.records]
+  );
+  const mysqlApplyDisabledReason = mysqlResultReadonlyReason
+    || (mysqlHasMissingRequiredCreateFields ? "存在 NOT NULL 且无默认值的新增字段未填写，请先补全红色高亮字段。" : "");
   // “执行更新”按钮是否可用：可用时使用绿色强调，强化“可提交”感知。
-  const canApplyPendingChanges = Boolean(activeTab && !activeTab.loading && hasPendingChanges && !mysqlResultReadonlyReason);
+  const canApplyPendingChanges = Boolean(activeTab && !activeTab.loading && hasPendingChanges && !mysqlApplyDisabledReason);
   // 工具栏背景色：将数据源颜色转换为浅色表面背景，避免顶部工具栏过重抢视觉焦点。
   const toolbarBackgroundColor = buildSourceSurfacePalette(String(activeTab?.sourceColor || "").trim())?.backgroundColor || "#FFFFFF";
   // 工具栏按钮统一尺寸：使用 34px 中间档高度（介于 h-8 与 h-9 之间）。
@@ -1081,8 +1094,8 @@ export function DataQueryTabPane({
                 </button>
                 <button
                   className={applyButtonClassName}
-                  disabled={activeTab.loading || !hasPendingChanges || Boolean(mysqlResultReadonlyReason)}
-                  title={mysqlResultReadonlyReason || undefined}
+                  disabled={activeTab.loading || !hasPendingChanges || Boolean(mysqlApplyDisabledReason)}
+                  title={mysqlApplyDisabledReason || undefined}
                   onClick={() => void handleApplyPendingChangesClick()}
                 >
                   <Play size={13} />
@@ -1578,7 +1591,7 @@ export function DataQueryTabPane({
                           <div className="flex flex-wrap gap-2">
                             {item.fields.map((field) => (
                               <span key={`${item.op}:${item.operationIndex}:${field.name}`} className="rounded border border-base-300 bg-base-200/60 px-2 py-1">
-                                {field.name} = {field.kind === "null" ? "NULL" : JSON.stringify(field.value)}
+                                {field.name} = {field.kind === "null" ? "NULL" : field.kind === "default" ? "DEFAULT" : JSON.stringify(field.value)}
                               </span>
                             ))}
                           </div>
