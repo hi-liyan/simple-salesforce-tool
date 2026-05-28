@@ -1090,7 +1090,7 @@ export function DataQueryTabPane({
                   onClick={onDeleteCheckedRecords}
                 >
                   <Trash2 size={13} />
-                  删除勾选({activeTab.selectedRecordIds.length})
+                  删除选中({activeTab.selectedRecordIds.length})
                 </button>
                 <button
                   className={applyButtonClassName}
@@ -1181,7 +1181,6 @@ export function DataQueryTabPane({
                 sourceId={selectedSourceId}
                 selectedSourceType={selectedSourceType}
                 objectName={activeTab.objectName}
-                onToggleRecord={onToggleRecord}
                 onToggleAll={onToggleAllRecords}
                 onEditCell={onEditCell}
                 onShowMessage={onShowMessage}

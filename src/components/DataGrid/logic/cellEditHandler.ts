@@ -1,6 +1,4 @@
-import {
-  GridCellKind,
-} from "@glideapps/glide-data-grid";
+import { GridCellKind } from "@glideapps/glide-data-grid";
 import type {
   CellClickedEventArgs,
   EditableGridCell,
@@ -43,10 +41,6 @@ type CreateCellEditedHandlerParams = {
   effectiveSalesforceTimezone: string | null;
   // 当前数据源类型：用于区分 Salesforce/MySQL 保存格式。
   selectedSourceType?: string;
-  // 行键提取器：统一获取 recordId。
-  getRecordKey: (rowIndex: number) => string;
-  // 勾选状态回调。
-  onToggleRecord: (recordId: string, checked: boolean) => void;
   // 单元格编辑回调。
   onEditCell: (rowIndex: number, columnName: string, value: unknown) => void;
   // 用户提示回调。
@@ -60,20 +54,12 @@ export function createCellEditedHandler({
   fieldMetadataMap,
   effectiveSalesforceTimezone,
   selectedSourceType,
-  getRecordKey,
-  onToggleRecord,
   onEditCell,
   onShowMessage
 }: CreateCellEditedHandlerParams): (location: Item, newValue: EditableGridCell) => void {
   const isMysqlSource = (selectedSourceType || "salesforce").toLowerCase() === "mysql";
   return ([col, row], newValue) => {
     const columnId = String(columns[col]?.id ?? "");
-
-    if (columnId === "__select" && newValue.kind === GridCellKind.Boolean) {
-      const recordId = getRecordKey(row);
-      onToggleRecord(recordId, Boolean(newValue.data));
-      return;
-    }
 
     if (columnId === "__index" || columnId.startsWith("__")) {
       return;

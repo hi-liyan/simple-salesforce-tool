@@ -30,8 +30,8 @@ type CreateGetCellContentParams = {
   records: Record<string, unknown>[];
   // 字段元数据：用于推断类型、可编辑性与必填状态。
   fieldMetadataMap: Record<string, Record<string, unknown>>;
-  // 已选中记录集合：用于首列 checkbox 回显。
-  selectedRecordIds: string[];
+  // 已选中记录集合：用于整行高亮回显。
+  selectedRecordSet: Set<string>;
   // 脏单元格集合：用于高亮显示。
   dirtyCellSet: Set<string>;
   // 待删除记录集合：用于整行灰色高亮。
@@ -51,7 +51,7 @@ export function createGetCellContent({
   columns,
   records,
   fieldMetadataMap,
-  selectedRecordIds,
+  selectedRecordSet,
   dirtyCellSet,
   pendingDeleteRecordSet,
   effectiveSalesforceTimezone,
@@ -66,23 +66,13 @@ export function createGetCellContent({
     const record = records[row] || {};
     const recordId = getRecordKey(row);
     const isNewRow = Boolean(record.__isNew);
+    const isSelectedRow = selectedRecordSet.has(recordId);
     // 待删除行统一灰色高亮，便于用户识别“尚未提交删除”的记录。
     const isPendingDeleteRow = pendingDeleteRecordSet.has(recordId);
     // 新建行统一浅绿色高亮，便于用户识别“待提交新增”的记录。
     const isNewRowHighlight = isNewRow;
     // 行级样式：用于选择列/序号列等非业务字段单元格。
-    const rowThemeOverride = buildRowThemeOverride(isPendingDeleteRow, isNewRowHighlight);
-
-    if (columnId === "__select") {
-      return {
-        kind: GridCellKind.Boolean,
-        data: selectedRecordIds.includes(recordId),
-        allowOverlay: false,
-        readonly: recordId.startsWith("row:"),
-        // 行级高亮：确保选择列与数据列颜色一致。
-        themeOverride: rowThemeOverride
-      };
-    }
+    const rowThemeOverride = buildRowThemeOverride(isSelectedRow, isPendingDeleteRow, isNewRowHighlight);
 
     if (columnId === "__index") {
       const text = String(row + 1);
@@ -110,7 +100,13 @@ export function createGetCellContent({
     const isRequiredEmpty = requiredNewField && (isMysqlSource ? isMysqlBlankValue(raw) : isEmptyValue(raw));
     const isNullishValue = mysqlDisplayState.useNullPlaceholder;
 
-    const commonTheme = buildCellThemeOverride(isDirty, isRequiredEmpty, isPendingDeleteRow, isNewRowHighlight);
+    const commonTheme = buildCellThemeOverride(
+      isDirty,
+      isRequiredEmpty,
+      isSelectedRow,
+      isPendingDeleteRow,
+      isNewRowHighlight
+    );
     // 空值仅在展示态使用淡化样式，避免把编辑器里的输入文字也渲染成灰色。
     const nullPlaceholderStyle: "normal" | "faded" = isNullishValue ? "faded" : "normal";
 

@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
-import { GridColumn } from "@glideapps/glide-data-grid";
-import { buildHeaderDisplayLines } from "../renderers/drawHeader";
-import { estimateAutoColumnWidth } from "../utils/columnWidth";
+import type { GridColumn } from "@glideapps/glide-data-grid";
+import { buildHeaderDisplayLines } from "../renderers/drawHeader.ts";
+import { estimateAutoColumnWidth } from "../utils/columnWidth.ts";
 
 // 默认列宽采样行数：按表头 + 前 50 行内容估算，兼顾体验与性能。
 const DEFAULT_COLUMN_WIDTH_SAMPLE_ROWS = 50;
@@ -9,27 +9,56 @@ const DEFAULT_COLUMN_WIDTH_SAMPLE_ROWS = 50;
 type UseDataGridColumnsParams = {
   // 当前可见字段列表。
   visibleColumns: string[];
-  // 是否展示首列选择列。
-  showSelectionColumn: boolean;
   // 是否展示表头元数据 icon：影响表头右侧预留空间，从而影响最小列宽计算。
   showHeaderMetadata: boolean;
   // 当前记录列表：用于推导可选记录 Id。
   records: Record<string, unknown>[];
-  // 当前已选记录 Id。
-  selectedRecordIds: string[];
   // 字段元数据映射：MySQL 下用于识别主键列（columnKey=PRI）。
   fieldMetadataMap: Record<string, Record<string, unknown>>;
   // 当前数据源类型：用于按源类型切换记录 Id 提取策略。
   selectedSourceType?: string;
 };
 
-// DataGrid 列与勾选状态 Hook：统一管理列顺序、列宽和全选态。
+type BuildGridColumnsParams = {
+  // 业务字段列顺序。
+  displayColumns: string[];
+  // 表头最小宽度：防止列被拖得过窄。
+  headerMinWidths: Record<string, number>;
+  // 用户会话内调整后的列宽。
+  columnWidths: Record<string, number>;
+  // 自动估算列宽。
+  autoColumnWidths: Record<string, number>;
+};
+
+// 构造 DataGrid 列定义：首列固定为序号列，后续为业务字段列。
+export function buildGridColumns({
+  displayColumns,
+  headerMinWidths,
+  columnWidths,
+  autoColumnWidths
+}: BuildGridColumnsParams): GridColumn[] {
+  const dataColumns: GridColumn[] = displayColumns.map((column) => ({
+    id: column,
+    // 数据列表头由 drawHeader 自定义双行绘制，这里留空避免默认文案覆盖。
+    title: "",
+    width: Math.max(headerMinWidths[column] ?? 44, columnWidths[column] ?? autoColumnWidths[column] ?? 44)
+  }));
+
+  return [
+    {
+      id: "__index",
+      title: "#",
+      width: Math.max(headerMinWidths.__index ?? 56, columnWidths.__index ?? 56)
+    },
+    ...dataColumns
+  ];
+}
+
+// DataGrid 列配置 Hook：统一管理列顺序、列宽和稳定记录键映射。
 export function useDataGridColumns({
   visibleColumns,
-  showSelectionColumn,
   showHeaderMetadata,
   records,
-  selectedRecordIds,
   fieldMetadataMap,
   selectedSourceType
 }: UseDataGridColumnsParams) {
@@ -50,7 +79,6 @@ export function useDataGridColumns({
   const headerMinWidths = useMemo(() => {
     const widths: Record<string, number> = {
       // 特殊列：固定最小宽度（与 DataEditor minColumnWidth 保持一致的下限）。
-      __select: 44,
       __index: 56
     };
 
@@ -102,28 +130,16 @@ export function useDataGridColumns({
     return widths;
   }, [displayColumns, fieldMetadataMap, records]);
 
-  const columns = useMemo<GridColumn[]>(() => {
-    const dataColumns: GridColumn[] = displayColumns.map((column) => ({
-      id: column,
-      // 数据列标题由 drawHeader 自定义双行绘制，这里留空避免默认文案覆盖。
-      title: "",
-      width: Math.max(headerMinWidths[column] ?? 44, columnWidths[column] ?? autoColumnWidths[column] ?? 44)
-    }));
-
-    return [
-      ...(showSelectionColumn
-        ? [
-            {
-              id: "__select",
-              title: "",
-              width: Math.max(headerMinWidths.__select ?? 44, columnWidths.__select ?? 44)
-            }
-          ]
-        : []),
-      { id: "__index", title: "#", width: Math.max(headerMinWidths.__index ?? 56, columnWidths.__index ?? 56) },
-      ...dataColumns
-    ];
-  }, [displayColumns, columnWidths, showSelectionColumn, headerMinWidths, autoColumnWidths]);
+  const columns = useMemo<GridColumn[]>(
+    () =>
+      buildGridColumns({
+        displayColumns,
+        headerMinWidths,
+        columnWidths,
+        autoColumnWidths
+      }),
+    [displayColumns, headerMinWidths, columnWidths, autoColumnWidths]
+  );
 
   // MySQL 主键列：用于缺失 Id 时的勾选回退键。
   const mysqlPrimaryKeyField = useMemo(() => {
@@ -155,16 +171,11 @@ export function useDataGridColumns({
     [records, mysqlPrimaryKeyField]
   );
 
-  const allChecked = selectableIds.length > 0 && selectableIds.every((id) => selectedRecordIds.includes(id));
-  const hasAnyChecked = selectedRecordIds.some((id) => selectableIds.includes(id));
-
   return {
     columns,
     columnWidths,
     setColumnWidths,
     headerMinWidths,
-    allChecked,
-    hasAnyChecked,
     selectableIds
   };
 }

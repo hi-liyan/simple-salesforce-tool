@@ -36,7 +36,6 @@ export type DataGridProps = {
   objectName?: string;
   // 待删除记录 Id 列表：用于将整行标记为灰色背景。
   pendingDeleteRecordIds: string[];
-  onToggleRecord: (recordId: string, checked: boolean) => void;
   onToggleAll: (checked: boolean, recordIds: string[]) => void;
   onEditCell: (rowIndex: number, columnName: string, value: unknown) => void;
   onShowMessage: (message: string) => void;
@@ -46,8 +45,6 @@ export type DataGridProps = {
   enableReadonlyCellHint?: boolean;
   // 是否允许只读单元格双击打开 overlay（仅查看，不可编辑）。
   allowReadonlyOverlay?: boolean;
-  // 是否显示勾选列（首列 checkbox）。
-  showSelectionColumn?: boolean;
 };
 
 // 查询结果表：主入口只负责装配 hooks 与各模块能力。
@@ -64,14 +61,12 @@ export function DataGrid({
   selectedSourceType,
   objectName,
   pendingDeleteRecordIds,
-  onToggleRecord,
   onToggleAll,
   onEditCell,
   onShowMessage,
   showHeaderMetadata = true,
   enableReadonlyCellHint = true,
-  allowReadonlyOverlay = false,
-  showSelectionColumn = true
+  allowReadonlyOverlay = false
 }: DataGridProps) {
   const records = result.records;
   // 生效元数据：只读模式下统一覆写 createable/updateable，避免误触发编辑链路。
@@ -94,7 +89,7 @@ export function DataGrid({
     () => resolveSalesforceTimezone(salesforceTimezone),
     [salesforceTimezone]
   );
-  // MySQL 主键列名：当查询结果无 Id 时，用主键值作为记录键与勾选键。
+  // MySQL 主键列名：当查询结果无 Id 时，用主键值作为记录键与行选中键。
   const mysqlPrimaryKeyField = useMemo(() => {
     if ((selectedSourceType || "salesforce").toLowerCase() !== "mysql") return "";
     const field = Object.entries(effectiveFieldMetadataMap).find(
@@ -103,24 +98,16 @@ export function DataGrid({
     return field || "";
   }, [effectiveFieldMetadataMap, selectedSourceType]);
 
-  const {
-    columns,
-    setColumnWidths,
-    headerMinWidths,
-    allChecked,
-    hasAnyChecked,
-    selectableIds
-  } = useDataGridColumns({
+  const { columns, setColumnWidths, headerMinWidths, selectableIds } = useDataGridColumns({
     visibleColumns,
-    showSelectionColumn,
     showHeaderMetadata,
     records,
-    selectedRecordIds,
     fieldMetadataMap: effectiveFieldMetadataMap,
     selectedSourceType
   });
 
   const dirtyCellSet = useMemo(() => new Set(dirtyCellKeys), [dirtyCellKeys]);
+  const selectedRecordSet = useMemo(() => new Set(selectedRecordIds), [selectedRecordIds]);
   const pendingDeleteRecordSet = useMemo(() => new Set(pendingDeleteRecordIds), [pendingDeleteRecordIds]);
   const gridBodyRef = useRef<HTMLDivElement | null>(null);
   const { rowContextMenu, setRowContextMenu } = useDataGridContextMenu();
@@ -166,7 +153,7 @@ export function DataGrid({
         columns,
         records,
         fieldMetadataMap: effectiveFieldMetadataMap,
-        selectedRecordIds,
+        selectedRecordSet,
         dirtyCellSet,
         pendingDeleteRecordSet,
         effectiveSalesforceTimezone,
@@ -178,7 +165,7 @@ export function DataGrid({
       columns,
       records,
       effectiveFieldMetadataMap,
-      selectedRecordIds,
+      selectedRecordSet,
       dirtyCellSet,
       pendingDeleteRecordSet,
       effectiveSalesforceTimezone,
@@ -196,8 +183,6 @@ export function DataGrid({
         fieldMetadataMap: effectiveFieldMetadataMap,
         effectiveSalesforceTimezone,
         selectedSourceType,
-        getRecordKey,
-        onToggleRecord,
         onEditCell,
         onShowMessage
       }),
@@ -207,8 +192,6 @@ export function DataGrid({
       effectiveFieldMetadataMap,
       effectiveSalesforceTimezone,
       selectedSourceType,
-      getRecordKey,
-      onToggleRecord,
       onEditCell,
       onShowMessage
     ]
@@ -253,11 +236,9 @@ export function DataGrid({
     () =>
       createDrawHeader({
         fieldMetadataMap: effectiveFieldMetadataMap,
-        showHeaderMetadata,
-        allChecked,
-        hasAnyChecked
+        showHeaderMetadata
       }),
-    [effectiveFieldMetadataMap, showHeaderMetadata, allChecked, hasAnyChecked]
+    [effectiveFieldMetadataMap, showHeaderMetadata]
   );
 
   if (records.length === 0) {
@@ -281,8 +262,6 @@ export function DataGrid({
       selectedSourceType={selectedSourceType}
       selectedRecordIds={selectedRecordIds}
       showHeaderMetadata={showHeaderMetadata}
-      allChecked={allChecked}
-      hasAnyChecked={hasAnyChecked}
       selectableIds={selectableIds}
       gridBodyRef={gridBodyRef}
       rowContextMenu={rowContextMenu}

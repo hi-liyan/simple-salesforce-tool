@@ -23,8 +23,6 @@ function createMysqlHandler(params?: {
     },
     effectiveSalesforceTimezone: null,
     selectedSourceType: "mysql",
-    getRecordKey: () => "row-1",
-    onToggleRecord: () => undefined,
     onEditCell: (rowIndex, columnName, value) => {
       edited.push({ rowIndex, columnName, value });
     },

@@ -4,9 +4,16 @@ import { GridCell } from "@glideapps/glide-data-grid";
 export function buildCellThemeOverride(
   isDirty: boolean,
   requiredMissing: boolean,
+  selected: boolean,
   pendingDelete: boolean,
   isNewRow: boolean
 ): GridCell["themeOverride"] | undefined {
+  if (selected) {
+    return {
+      bgCell: "#dceeff",
+      bgCellMedium: "#c7e4ff"
+    };
+  }
   if (pendingDelete) {
     return {
       bgCell: "#eceff3",
@@ -36,9 +43,16 @@ export function buildCellThemeOverride(
 
 // 行级样式：用于选择列与序号列的统一高亮。
 export function buildRowThemeOverride(
+  selected: boolean,
   pendingDelete: boolean,
   isNewRow: boolean
 ): GridCell["themeOverride"] | undefined {
+  if (selected) {
+    return {
+      bgCell: "#dceeff",
+      bgCellMedium: "#c7e4ff"
+    };
+  }
   if (pendingDelete) {
     return {
       bgCell: "#eceff3",
