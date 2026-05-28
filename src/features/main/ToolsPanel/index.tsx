@@ -1,11 +1,12 @@
 import { useState } from "react";
-import { type LucideIcon, ArrowLeftRight, Braces, ChevronRight, Wrench } from "lucide-react";
+import { type LucideIcon, ArrowLeftRight, Braces, ChevronRight, QrCode, Wrench } from "lucide-react";
 import { JsonFormatterTool } from "./components/JsonFormatterTool";
 import { TextDiffTool } from "./components/TextDiffTool";
 import { JsonDiffTool } from "./components/JsonDiffTool";
+import { QrCodeTool } from "./components/QrCodeTool";
 
 // 工具标识：当前面板已实现的工具集合。
-type ToolItemId = "json-formatter" | "text-diff" | "json-diff";
+type ToolItemId = "json-formatter" | "text-diff" | "json-diff" | "qr-code";
 
 // 工具入口定义：驱动平铺入口卡片渲染。
 type ToolDefinition = {
@@ -43,6 +44,13 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     description: "提供 JSON 语义对比与双栏差异高亮，支持多 Tab、拖拽排序、重命名与懒恢复。",
     statusText: "已上线",
     icon: Braces
+  },
+  {
+    id: "qr-code",
+    title: "二维码生成",
+    description: "提供文本转二维码、参数配置、预览复制下载，以及带持久化能力的历史记录管理。",
+    statusText: "已上线",
+    icon: QrCode
   }
 ];
 
@@ -61,6 +69,10 @@ export function ToolsPanel() {
 
   if (activeToolId === "json-diff") {
     return <JsonDiffTool onBack={() => setActiveToolId(null)} />;
+  }
+
+  if (activeToolId === "qr-code") {
+    return <QrCodeTool onBack={() => setActiveToolId(null)} />;
   }
 
   return (

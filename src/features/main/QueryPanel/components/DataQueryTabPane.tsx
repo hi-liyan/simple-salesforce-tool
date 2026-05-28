@@ -304,22 +304,22 @@ function QueryBar({
   }, [limitDraft]);
 
   // 防抖计时器：避免每次按键都回写 store。
-  const whereTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
-  const sortTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
-  const limitTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
+  const whereTimerRef = useRef<number | null>(null);
+  const sortTimerRef = useRef<number | null>(null);
+  const limitTimerRef = useRef<number | null>(null);
 
   // 清理计时器：统一在切换 Tab 或卸载时执行，避免跨 Tab 写错目标。
   function clearTimers() {
     if (whereTimerRef.current) {
-      clearTimeout(whereTimerRef.current);
+      window.clearTimeout(whereTimerRef.current);
       whereTimerRef.current = null;
     }
     if (sortTimerRef.current) {
-      clearTimeout(sortTimerRef.current);
+      window.clearTimeout(sortTimerRef.current);
       sortTimerRef.current = null;
     }
     if (limitTimerRef.current) {
-      clearTimeout(limitTimerRef.current);
+      window.clearTimeout(limitTimerRef.current);
       limitTimerRef.current = null;
     }
   }
@@ -357,7 +357,7 @@ function QueryBar({
 
   // 防抖回写 WHERE：250ms 内连续输入只写一次 store。
   function scheduleWhereCommit(nextValue: string) {
-    if (whereTimerRef.current) clearTimeout(whereTimerRef.current);
+    if (whereTimerRef.current) window.clearTimeout(whereTimerRef.current);
     whereTimerRef.current = window.setTimeout(() => {
       whereTimerRef.current = null;
       commitWhereClause(nextValue); // 行内注释：防抖回写到“当前绑定 Tab”，避免切换后写错目标。
@@ -366,7 +366,7 @@ function QueryBar({
 
   // 防抖回写排序：250ms 内连续输入只写一次 store。
   function scheduleSortCommit(nextValue: string) {
-    if (sortTimerRef.current) clearTimeout(sortTimerRef.current);
+    if (sortTimerRef.current) window.clearTimeout(sortTimerRef.current);
     sortTimerRef.current = window.setTimeout(() => {
       sortTimerRef.current = null;
       commitSortClause(nextValue); // 行内注释：防抖回写到“当前绑定 Tab”，避免切换后写错目标。
@@ -375,7 +375,7 @@ function QueryBar({
 
   // 防抖回写 LIMIT：输入过程保持流畅，停顿后再同步 store。
   function scheduleLimitCommit(nextValue: number) {
-    if (limitTimerRef.current) clearTimeout(limitTimerRef.current);
+    if (limitTimerRef.current) window.clearTimeout(limitTimerRef.current);
     limitTimerRef.current = window.setTimeout(() => {
       limitTimerRef.current = null;
       commitLimit(nextValue); // 行内注释：防抖回写到“当前绑定 Tab”，避免切换后写错目标。

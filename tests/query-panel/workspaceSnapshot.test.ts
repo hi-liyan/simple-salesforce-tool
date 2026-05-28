@@ -88,3 +88,40 @@ test("restoreWorkspaceSnapshot: 应按 query/console/tool/terminal 分层恢复�
   assert.equal(restored.console.tabs[0].aiLoading, false);
   assert.equal(restored.console.tabs[0].aiStreamRequestId, "");
 });
+
+test("restoreWorkspaceSnapshot: 应恢复二维码工具的当前配置与历史记录", () => {
+  const snapshot = applyPersistedStateToWorkspaceSnapshot(createEmptyWorkspaceSnapshot(), "ui.qr-code-tool-store", {
+    state: {
+      inputText: "https://example.com",
+      options: {
+        errorCorrectionLevel: "H",
+        margin: 2,
+        scale: 8,
+        darkColor: "#000000",
+        lightColor: "#FFFFFF"
+      },
+      history: [
+        {
+          id: "qr-history-1",
+          inputText: "https://example.com",
+          createdAt: "2026-05-28T10:00:00.000Z",
+          options: {
+            errorCorrectionLevel: "H",
+            margin: 2,
+            scale: 8,
+            darkColor: "#000000",
+            lightColor: "#FFFFFF"
+          }
+        }
+      ]
+    },
+    version: 0
+  });
+
+  const restored = restoreWorkspaceSnapshot(snapshot);
+
+  assert.equal(restored.qrCode.inputText, "https://example.com");
+  assert.equal(restored.qrCode.options.errorCorrectionLevel, "H");
+  assert.equal(restored.qrCode.history.length, 1);
+  assert.equal(restored.qrCode.history[0].id, "qr-history-1");
+});
