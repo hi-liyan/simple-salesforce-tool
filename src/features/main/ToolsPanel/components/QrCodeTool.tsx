@@ -23,6 +23,15 @@ type QrCodeToolProps = {
   onBack: () => void;
 };
 
+type ColorPickerFieldProps = {
+  // 字段标题。
+  label: string;
+  // 当前颜色值。
+  value: string;
+  // 颜色变更回调。
+  onChange: (nextColor: string) => void;
+};
+
 // 默认示例文本：用于帮助用户快速验证二维码生成能力。
 const DEFAULT_SAMPLE_TEXT = "https://example.com/simple-salesforce-tool";
 
@@ -71,6 +80,96 @@ function downloadImage(dataUrl: string) {
   document.body.appendChild(anchor);
   anchor.click(); // 直接触发浏览器下载，不引入额外后端命令。
   document.body.removeChild(anchor);
+}
+
+// 归一化可编辑十六进制颜色：支持输入时去空格、补 #、统一转大写。
+function normalizeEditableHexColor(value: string): string {
+  const trimmedValue = value.trim().toUpperCase();
+  if (!trimmedValue) return "";
+  return trimmedValue.startsWith("#") ? trimmedValue : `#${trimmedValue}`;
+}
+
+// 判断是否为完整合法的十六进制颜色：仅接受 #RRGGBB。
+function isCompleteHexColor(value: string): boolean {
+  return /^#[0-9A-F]{6}$/u.test(value);
+}
+
+// 颜色选择器字段：使用显式色块按钮触发隐藏 input，避免原生控件整块区域都可点击。
+function ColorPickerField({ label, value, onChange }: ColorPickerFieldProps) {
+  // 隐藏原生选择器引用：由自定义按钮主动触发。
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  // 可编辑颜色草稿：允许用户直接在右侧输入十六进制值。
+  const [draftValue, setDraftValue] = useState(value);
+
+  // 外部颜色变化时同步草稿：保证色块点击取色后右侧文本立即更新。
+  useEffect(() => {
+    setDraftValue(value);
+  }, [value]);
+
+  // 提交颜色草稿：合法时回写到外层，非法时回退到当前有效颜色。
+  function commitDraftValue() {
+    const normalizedValue = normalizeEditableHexColor(draftValue);
+    if (isCompleteHexColor(normalizedValue)) {
+      setDraftValue(normalizedValue);
+      onChange(normalizedValue); // 行内注释：文本框输入完整合法颜色时同步驱动左侧色块与外层配置。
+      return;
+    }
+
+    setDraftValue(value); // 行内注释：非法输入在提交时回退到当前有效颜色，避免污染配置。
+  }
+
+  return (
+    <label className="form-control min-w-0">
+      {/* 参数标题：说明当前颜色作用。 */}
+      <span className="mb-1 text-[12px] text-neutral/60">{label}</span>
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
+        <button
+          type="button"
+          // 色块按钮：只在点击色块时打开系统取色器。
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-base-300 bg-base-100 shadow-sm transition hover:border-primary/30"
+          onClick={() => {
+            inputRef.current?.click(); // 行内注释：仅由显式色块按钮触发原生颜色面板。
+          }}
+          aria-label={`选择${label}颜色`}
+        >
+          <span className="h-6 w-6 rounded-md border border-neutral/20" style={{ backgroundColor: value }} />
+        </button>
+        <input
+          // 十六进制颜色输入框：允许直接编辑颜色值，并在合法时实时双向同步色块。
+          value={draftValue}
+          className="input input-bordered input-sm h-10 min-h-10 min-w-0 flex-[1_1_120px] rounded-xl px-3 font-mono text-[12px] uppercase"
+          placeholder="#FFFFFF"
+          onChange={(event) => {
+            const nextDraftValue = normalizeEditableHexColor(event.target.value);
+            setDraftValue(nextDraftValue); // 行内注释：输入过程中先更新草稿，保留用户编辑自由度。
+            if (isCompleteHexColor(nextDraftValue)) {
+              onChange(nextDraftValue); // 行内注释：当输入已构成完整合法颜色时，立即同步更新左侧色块。
+            }
+          }}
+          onBlur={() => {
+            commitDraftValue(); // 行内注释：失焦时提交草稿，确保输入框与有效颜色收敛一致。
+          }}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter") return;
+            event.preventDefault();
+            commitDraftValue(); // 行内注释：按回车时主动提交草稿，便于键盘连续调整颜色。
+          }}
+        />
+        <input
+          // 隐藏原生颜色输入：保留浏览器颜色选择能力，但不暴露整块点击区域。
+          ref={inputRef}
+          type="color"
+          value={value}
+          className="sr-only"
+          tabIndex={-1}
+          aria-hidden="true"
+          onChange={(event) => {
+            onChange(event.target.value); // 行内注释：原生取色结果回写到持久化配置。
+          }}
+        />
+      </div>
+    </label>
+  );
 }
 
 // 二维码工具页：提供文本生成、预览和历史恢复能力。
@@ -181,6 +280,15 @@ export function QrCodeTool({ onBack }: QrCodeToolProps) {
     setInputText(DEFAULT_SAMPLE_TEXT);
     patchOptions(DEFAULT_QR_CODE_OPTIONS);
     setNotice(null);
+  }
+
+  // 重置参数：恢复推荐二维码参数，但不影响当前输入文本和历史记录。
+  function resetOptions() {
+    patchOptions(DEFAULT_QR_CODE_OPTIONS);
+    setNotice({
+      tone: "success",
+      message: "二维码参数已重置为默认值。"
+    });
   }
 
   // 清空当前输入与预览，不影响已保存历史。
@@ -321,7 +429,7 @@ export function QrCodeTool({ onBack }: QrCodeToolProps) {
         <p className="text-[12px] text-neutral/60">支持二维码生成、历史记录持久化与下次进入后的自动恢复。</p>
       </div>
       {/* 工作区主体：左侧输入，中间参数与预览，右侧历史记录。 */}
-      <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-auto p-4 xl:grid-cols-[minmax(360px,1fr)_minmax(380px,0.9fr)_320px]">
+      <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-auto p-4 xl:grid-cols-[minmax(280px,0.82fr)_minmax(360px,1fr)_minmax(340px,0.92fr)]">
         {/* 左侧输入卡片：承载原始文本编辑与快捷动作。 */}
         <section className="flex min-h-[360px] min-w-0 flex-col overflow-hidden rounded-2xl border border-base-300 bg-base-100 shadow-sm">
           <div className="flex items-center justify-between gap-3 border-b border-base-300 px-4 py-3">
@@ -380,100 +488,106 @@ export function QrCodeTool({ onBack }: QrCodeToolProps) {
               </button>
             </div>
             {/* 参数表单：延续现有工具面板的紧凑控件风格。 */}
-            <div className="mt-4 grid grid-cols-2 gap-3">
-              <label className="form-control">
-                {/* 参数标题：说明纠错级别。 */}
-                <span className="mb-1 text-[12px] text-neutral/60">纠错级别</span>
-                <select
-                  // 纠错级别选择框。
-                  value={options.errorCorrectionLevel}
-                  className="select select-bordered select-sm h-10 min-h-10 rounded-xl text-[12px]"
-                  onChange={(event) => {
-                    patchOptions({
-                      errorCorrectionLevel: event.target.value as QrCodeErrorCorrectionLevel
-                    }); // 切换容错级别后立即写回持久化状态。
-                  }}
-                >
-                  {ERROR_CORRECTION_LEVEL_OPTIONS.map((item) => (
-                    <option key={item.value} value={item.value}>
-                      {item.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="form-control">
-                {/* 参数标题：说明边距。 */}
-                <span className="mb-1 text-[12px] text-neutral/60">边缘留白</span>
-                <input
-                  // 边距输入框：限制 0 到 8。
-                  type="number"
-                  min={0}
-                  max={8}
-                  step={1}
-                  value={options.margin}
-                  className="input input-bordered input-sm h-10 rounded-xl text-[12px]"
-                  onChange={(event) => {
-                    patchOptions({
-                      margin: Number(event.target.value)
-                    }); // 输入框原始值由 store 内部统一裁剪范围。
-                  }}
-                />
-              </label>
-              <label className="form-control">
-                {/* 参数标题：说明缩放倍率。 */}
-                <span className="mb-1 text-[12px] text-neutral/60">原胞大小</span>
-                <input
-                  // 缩放输入框：控制最终像素清晰度。
-                  type="number"
-                  min={4}
-                  max={12}
-                  step={1}
-                  value={options.scale}
-                  className="input input-bordered input-sm h-10 rounded-xl text-[12px]"
-                  onChange={(event) => {
-                    patchOptions({
-                      scale: Number(event.target.value)
-                    }); // 缩放值持久化后，后续历史恢复会直接带回当前配置。
-                  }}
-                />
-              </label>
-              <div className="grid grid-cols-2 gap-3">
-                <label className="form-control">
-                  {/* 参数标题：说明深色模块颜色。 */}
-                  <span className="mb-1 text-[12px] text-neutral/60">深色</span>
+            <div className="mt-4 grid grid-cols-1 gap-3">
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 2xl:grid-cols-3">
+                <label className="form-control min-w-0">
+                  {/* 参数标题：说明纠错级别。 */}
+                  <span className="mb-1 text-[12px] text-neutral/60">纠错级别</span>
+                  <select
+                    // 纠错级别选择框。
+                    value={options.errorCorrectionLevel}
+                    className="select select-bordered select-sm h-10 min-h-10 rounded-xl text-[12px]"
+                    onChange={(event) => {
+                      patchOptions({
+                        errorCorrectionLevel: event.target.value as QrCodeErrorCorrectionLevel
+                      }); // 切换容错级别后立即写回持久化状态。
+                    }}
+                  >
+                    {ERROR_CORRECTION_LEVEL_OPTIONS.map((item) => (
+                      <option key={item.value} value={item.value}>
+                        {item.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="form-control min-w-0">
+                  {/* 参数标题：说明边距。 */}
+                  <span className="mb-1 text-[12px] text-neutral/60">边缘留白</span>
                   <input
-                    // 深色取色器：控制二维码模块颜色。
-                    type="color"
+                    // 边距输入框：限制 0 到 8。
+                    type="number"
+                    min={0}
+                    max={8}
+                    step={1}
+                    value={options.margin}
+                    className="input input-bordered input-sm h-10 rounded-xl text-[12px]"
+                    onChange={(event) => {
+                      patchOptions({
+                        margin: Number(event.target.value)
+                      }); // 输入框原始值由 store 内部统一裁剪范围。
+                    }}
+                  />
+                </label>
+                <label className="form-control min-w-0">
+                  {/* 参数标题：说明缩放倍率。 */}
+                  <span className="mb-1 text-[12px] text-neutral/60">原胞大小</span>
+                  <input
+                    // 缩放输入框：控制最终像素清晰度。
+                    type="number"
+                    min={4}
+                    max={12}
+                    step={1}
+                    value={options.scale}
+                    className="input input-bordered input-sm h-10 rounded-xl text-[12px]"
+                    onChange={(event) => {
+                      patchOptions({
+                        scale: Number(event.target.value)
+                      }); // 缩放值持久化后，后续历史恢复会直接带回当前配置。
+                    }}
+                  />
+                </label>
+              </div>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 2xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_140px]">
+                <div className="min-w-0">
+                  <ColorPickerField
+                    label="深色"
                     value={options.darkColor}
-                    className="input input-bordered input-sm h-10 rounded-xl p-1"
-                    onChange={(event) => {
+                    onChange={(nextColor) => {
                       patchOptions({
-                        darkColor: event.target.value
-                      }); // 颜色控件直接输出十六进制颜色值。
+                        darkColor: nextColor
+                      });
                     }}
                   />
-                </label>
-                <label className="form-control">
-                  {/* 参数标题：说明浅色背景颜色。 */}
-                  <span className="mb-1 text-[12px] text-neutral/60">浅色</span>
-                  <input
-                    // 浅色取色器：控制二维码背景颜色。
-                    type="color"
+                </div>
+                <div className="min-w-0">
+                  <ColorPickerField
+                    label="浅色"
                     value={options.lightColor}
-                    className="input input-bordered input-sm h-10 rounded-xl p-1"
-                    onChange={(event) => {
+                    onChange={(nextColor) => {
                       patchOptions({
-                        lightColor: event.target.value
-                      }); // 颜色变更即时进入持久化快照。
+                        lightColor: nextColor
+                      });
                     }}
                   />
-                </label>
+                </div>
+                <div className="form-control min-w-0">
+                  {/* 参数标题：占位对齐色彩配置项。 */}
+                  <span className="mb-1 text-[12px] text-neutral/60">参数操作</span>
+                  <button
+                    type="button"
+                    // 重置参数按钮：仅恢复二维码参数，不影响文本和历史。
+                    className="btn btn-outline btn-sm h-10 min-h-10 w-full rounded-xl text-[12px]"
+                    onClick={resetOptions}
+                  >
+                    重置参数
+                  </button>
+                </div>
               </div>
             </div>
           </div>
           {/* 预览区：使用浅色渐变背景，保持与现有工具风格一致。 */}
           <div className="min-h-0 flex-1 bg-[linear-gradient(180deg,#fbfdff_0%,#f3f8ff_100%)] p-4">
-            <div className="flex h-full min-h-[320px] flex-col overflow-hidden rounded-2xl border border-base-300 bg-base-100/80 shadow-inner">
+            <div className="flex h-full min-h-[220px] flex-col overflow-hidden rounded-2xl border border-base-300 bg-base-100/80 shadow-inner md:min-h-[260px]">
               <div className="flex items-center justify-between gap-3 border-b border-base-300 px-4 py-3">
                 <div>
                   {/* 预览标题。 */}
@@ -492,15 +606,15 @@ export function QrCodeTool({ onBack }: QrCodeToolProps) {
                   </button>
                 </div>
               </div>
-              <div className="flex min-h-0 flex-1 items-center justify-center p-6">
+              <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-4 md:p-6">
                 {previewDataUrl ? (
                   // 成功态：展示居中的二维码图片。
-                  <div className="rounded-[28px] border border-base-300 bg-white p-5 shadow-sm">
+                  <div className="rounded-[28px] border border-base-300 bg-white p-4 shadow-sm md:p-5">
                     <img
                       // 预览图：展示当前生成结果。
                       src={previewDataUrl}
                       alt="生成的二维码预览"
-                      className="h-[240px] w-[240px] max-w-full object-contain"
+                      className="h-auto max-h-[220px] w-full max-w-[220px] object-contain md:max-h-[240px] md:max-w-[240px]"
                     />
                   </div>
                 ) : (
@@ -519,13 +633,13 @@ export function QrCodeTool({ onBack }: QrCodeToolProps) {
         </section>
         {/* 右侧历史记录卡片：承载恢复、单条删除和全部清空。 */}
         <section className="flex min-h-[360px] min-w-0 flex-col overflow-hidden rounded-2xl border border-base-300 bg-base-100 shadow-sm">
-          <div className="flex items-center justify-between gap-3 border-b border-base-300 px-4 py-3">
-            <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-start justify-between gap-3 border-b border-base-300 px-4 py-3">
+            <div className="flex min-w-0 flex-1 items-center gap-2">
               {/* 历史图标：强化该区域语义。 */}
-              <div className="flex h-9 w-9 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary">
                 <History size={16} />
               </div>
-              <div>
+              <div className="min-w-0">
                 {/* 历史标题。 */}
                 <h3 className="text-[14px] font-semibold text-neutral">历史记录</h3>
                 <p className="mt-1 text-[12px] text-neutral/60">最近生成的结果会固定保存在这里，下次进入工具仍可继续使用。</p>
@@ -534,7 +648,7 @@ export function QrCodeTool({ onBack }: QrCodeToolProps) {
             {/* 全部清空按钮：仅在存在历史时展示可用态。 */}
             <button
               type="button"
-              className="btn btn-ghost btn-sm h-8 min-h-8 gap-2 px-3 text-[12px] text-error"
+              className="btn btn-ghost btn-sm h-8 min-h-8 shrink-0 whitespace-nowrap gap-2 px-2.5 text-[12px] text-error"
               onClick={handleClearHistory}
               disabled={history.length === 0}
             >
@@ -566,16 +680,16 @@ export function QrCodeTool({ onBack }: QrCodeToolProps) {
                       }`}
                     >
                       <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
+                        <div className="min-w-0 flex-1">
                           {/* 历史文本摘要。 */}
                           <p className="truncate text-[13px] font-medium text-neutral">{entry.inputText}</p>
                           <p className="mt-1 text-[11px] text-neutral/55">{new Date(entry.createdAt).toLocaleString("zh-CN", { hour12: false })}</p>
                         </div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex shrink-0 items-center gap-1">
                           <button
                             type="button"
                             // 应用按钮：恢复这条历史对应的输入和参数。
-                            className="btn btn-ghost btn-xs h-7 min-h-7 px-2 text-[11px]"
+                            className="btn btn-ghost btn-xs h-7 min-h-7 whitespace-nowrap px-2 text-[11px]"
                             onClick={() => void handleApplyHistory(entry)}
                           >
                             使用
@@ -583,7 +697,7 @@ export function QrCodeTool({ onBack }: QrCodeToolProps) {
                           <button
                             type="button"
                             // 单条删除按钮：仅移除目标记录，不影响其它历史项。
-                            className="btn btn-ghost btn-xs h-7 min-h-7 px-2 text-error"
+                            className="btn btn-ghost btn-xs h-7 min-h-7 whitespace-nowrap px-2 text-error"
                             onClick={() => {
                               handleDeleteHistory(entry.id);
                             }}
