@@ -8,6 +8,7 @@ import {
   createCellClickedHandler,
   createCellEditedHandler
 } from "./logic/cellEditHandler";
+import { resolveBroadcastPasteEdits } from "./logic/paste";
 import { createProvideEditor } from "./editors/provideEditor";
 import { createDrawHeader } from "./renderers/drawHeader";
 import { useDataGridColumns } from "./hooks/useDataGridColumns";
@@ -228,6 +229,22 @@ export function DataGrid({
     newValues.forEach((item) => handleCellEdited(item.location, item.value as EditableGridCell));
   }, [handleCellEdited]);
 
+  const handlePaste = useCallback((
+    _target: Item,
+    values: readonly (readonly string[])[],
+    selectedLocations: readonly Item[]
+  ) => {
+    const broadcastEdits = resolveBroadcastPasteEdits({
+      selectedLocations,
+      pastedValues: values
+    });
+    if (!broadcastEdits) {
+      return true; // 行内注释：未命中特殊场景时继续走 Glide 默认矩形粘贴。
+    }
+    handleCellsEdited(broadcastEdits);
+    return false; // 行内注释：已手动分发批量编辑，阻止 Glide 再重复写入。
+  }, [handleCellsEdited]);
+
   const provideEditor = useMemo(
     () =>
       createProvideEditor({
@@ -305,6 +322,7 @@ export function DataGrid({
       onCellEdited={handleCellEdited}
       onCellClicked={handleCellClicked}
       onCellsEdited={handleCellsEdited}
+      onPaste={handlePaste}
       provideEditor={provideEditor}
       drawHeader={drawHeader}
     />

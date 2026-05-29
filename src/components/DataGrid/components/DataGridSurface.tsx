@@ -8,6 +8,7 @@ import { isHeaderInfoIconHit } from "../renderers/drawHeader";
 import { buildDisplayMetadataFromRaw } from "../../../utils/fieldMetadata";
 import { resolveRowContextMenuCapabilities } from "../logic/contextMenu";
 import { resolveIndexHeaderToggleSelection, resolveIndexRowSelection } from "../logic/selection.ts";
+import { resolveSelectedEditableLocations } from "../logic/paste.ts";
 import { getDataGridSelectionConfig } from "../logic/surfaceConfig.ts";
 
 // DataGrid 表头高度：与 DataEditor 的 headerHeight 配置保持一致。
@@ -95,6 +96,8 @@ type DataGridSurfaceProps = {
   onCellClicked: React.ComponentProps<typeof DataEditor>["onCellClicked"];
   // 批量编辑回调。
   onCellsEdited: (newValues: readonly EditListItem[]) => void;
+  // 粘贴回调：用于在特定场景下接管 Glide 默认粘贴行为。
+  onPaste: (target: Item, values: readonly (readonly string[])[], selectedLocations: readonly Item[]) => boolean;
   // 编辑器分发回调。
   provideEditor: NonNullable<React.ComponentProps<typeof DataEditor>["provideEditor"]>;
   // 表头绘制回调。
@@ -134,12 +137,15 @@ export function DataGridSurface({
   onCellEdited,
   onCellClicked,
   onCellsEdited,
+  onPaste,
   provideEditor,
   drawHeader
 }: DataGridSurfaceProps) {
   const selectionConfig = React.useMemo(() => getDataGridSelectionConfig(), []);
   // 受控选区状态：用于实现“点击 # 选整行”。
   const [gridSelection, setGridSelection] = React.useState<GridSelection | undefined>(undefined);
+  // 最新可粘贴目标单元格：在选区变化时同步写入，避免粘贴时读取到滞后的 React state。
+  const selectedPasteLocationsRef = React.useRef<readonly Item[]>([]);
   // 横向滚动条预留高度：仅在需要显示横向滚动条时才保留。
   const [scrollbarGutter, setScrollbarGutter] = React.useState(0);
   // 计算当前总列宽：用于绘制右侧空白区域遮罩（列较少时隐藏空白网格线）。
@@ -182,6 +188,7 @@ export function DataGridSurface({
   React.useEffect(() => {
     if (selectedRecordIds.length === 0) {
       setGridSelection(undefined); // 外层清空选中记录后，同步清空表格整行高亮。
+      selectedPasteLocationsRef.current = []; // 行内注释：整行选区清空后，同步丢弃粘贴目标快照。
     }
   }, [selectedRecordIds]);
 
@@ -194,6 +201,10 @@ export function DataGridSurface({
         selectableIds
       });
       setGridSelection(resolvedSelection.gridSelection);
+      selectedPasteLocationsRef.current = resolveSelectedEditableLocations({
+        gridSelection: resolvedSelection.gridSelection,
+        columns
+      });
       if (resolvedSelection.isIndexRowSelection) {
         onToggleAll(resolvedSelection.selectedRecordIds.length > 0, resolvedSelection.selectedRecordIds);
         return;
@@ -409,8 +420,8 @@ export function DataGridSurface({
           height="100%"
           // 支持区域选择时读取选区单元格。
           getCellsForSelection
-          // 启用二维粘贴（按行列拆分），行为与 Excel 类似。
-          onPaste
+          // 粘贴回调：默认沿用 Glide 的矩形粘贴，仅在特定多选场景下由上层接管。
+          onPaste={(target, values) => onPaste(target, values, selectedPasteLocationsRef.current)}
         />
         {/* 空白区遮罩：仅保留“有数据区域”的网格线，隐藏数据末行以下的网格背景。 */}
         {records.length > 0 && (
