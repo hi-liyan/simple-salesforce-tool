@@ -1087,8 +1087,8 @@ export function DataQueryTabPane({
     "btn btn-sm h-[30px] min-h-[30px] w-[30px] min-w-[30px] rounded-md border-0 bg-transparent px-0 text-neutral shadow-none hover:bg-base-200/80 hover:text-neutral disabled:bg-transparent disabled:text-neutral/35";
   // 删除按钮固定为错误色，但 hover 时保持同色，不做跳色反馈。
   const toolbarDangerButtonClassName = `${toolbarIconButtonClassName} text-error hover:text-error`;
-  // 激活型切换按钮：仅增强背景，不改变图标主色。
-  const toolbarActiveButtonClassName = `${toolbarIconButtonClassName} bg-base-200/90`;
+  // 激活型切换按钮：恢复白底强调，避免与普通 hover 态过于接近导致激活态不可辨认。
+  const toolbarActiveButtonClassName = `${toolbarIconButtonClassName} bg-white`;
 
   // 当前结果分页偏移量：从当前执行语句解析，保证刷新后分页器文案与实际结果一致。
   const currentResultOffset = useMemo(() => extractOffsetValue(activeTab?.currentSoql || ""), [activeTab?.currentSoql]);

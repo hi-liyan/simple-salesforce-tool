@@ -73,6 +73,12 @@ test("QueryPanel 工具栏: 按钮应改为无边框 hover 背景样式，并整
   assert.equal(source.includes("border-b border-base-300 px-3 py-1 overflow-x-auto"), true);
 });
 
+test("QueryPanel 工具栏: 激活态按钮应保留白色背景强调", () => {
+  const source = readFileSync(new URL("../../src/features/main/QueryPanel/components/DataQueryTabPane.tsx", import.meta.url), "utf8");
+
+  assert.equal(source.includes("const toolbarActiveButtonClassName = `${toolbarIconButtonClassName} bg-white`;"), true);
+});
+
 test("QueryPanel 工具栏: 禁用按钮也应通过外层容器显示 title", () => {
   const source = readFileSync(new URL("../../src/features/main/QueryPanel/components/DataQueryTabPane.tsx", import.meta.url), "utf8");
 
