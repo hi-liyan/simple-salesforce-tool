@@ -34,3 +34,10 @@ test("QueryPaginationToolbar: 应使用更紧凑的按钮与元素间距", () =>
   assert.equal(source.includes("w-[76px]"), true);
   assert.equal(source.includes("min-w-[72px]"), true);
 });
+
+test("QueryPanel 工具栏: MySQL DDL 与字段按钮应使用 DDL/FIELD 文本标识", () => {
+  const source = readFileSync(new URL("../../src/features/main/QueryPanel/components/DataQueryTabPane.tsx", import.meta.url), "utf8");
+
+  assert.equal(source.includes(">DDL<"), true);
+  assert.equal(source.includes(">FIELD<"), true);
+});

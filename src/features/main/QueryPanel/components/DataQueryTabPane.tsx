@@ -1097,7 +1097,7 @@ export function DataQueryTabPane({
                       aria-label={activeTab.showDrawer && activeDrawerView === "mysql-ddl" ? "隐藏 DDL" : "显示 DDL"}
                       onClick={() => onToggleDrawer("mysql-ddl")}
                     >
-                      <PanelRightOpen size={15} />
+                      <span className="text-[11px] font-semibold leading-none">DDL</span>
                     </button>
                     {/* MySQL 字段抽屉按钮：参考 Salesforce“字段与SOQL”中的字段勾选能力。 */}
                     <button
@@ -1107,7 +1107,7 @@ export function DataQueryTabPane({
                       aria-label={activeTab.showDrawer && activeDrawerView === "mysql-fields" ? "隐藏字段抽屉" : "显示字段抽屉"}
                       onClick={() => onToggleDrawer("mysql-fields")}
                     >
-                      <PanelRightOpen size={15} />
+                      <span className="text-[11px] font-semibold leading-none">FIELD</span>
                     </button>
                   </>
                 ) : (
