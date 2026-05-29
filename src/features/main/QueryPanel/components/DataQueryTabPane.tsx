@@ -696,8 +696,8 @@ export function DataQueryTabPane({
   const toolbarBackgroundColor = buildSourceSurfacePalette(String(activeTab?.sourceColor || "").trim())?.backgroundColor || "#FFFFFF";
   // “执行更新”按钮样式：icon-only 保持强调态，但 hover 时不改变主色。
   const applyButtonClassName = canApplyPendingChanges
-    ? "btn btn-sm h-[34px] min-h-[34px] w-[34px] min-w-[34px] border border-brand-600 bg-gradient-to-r from-brand-600 to-brand-500 px-0 text-white shadow-[0_6px_16px_rgba(18,158,242,0.25)] hover:border-brand-600 hover:from-brand-600 hover:to-brand-500 hover:text-white"
-    : "btn btn-sm h-[34px] min-h-[34px] w-[34px] min-w-[34px] border border-base-300 bg-white/80 px-0 text-neutral shadow-none hover:border-base-300 hover:bg-white hover:text-neutral disabled:border-base-200 disabled:bg-white/50 disabled:text-neutral/35";
+    ? "btn btn-sm h-[30px] min-h-[30px] w-[30px] min-w-[30px] rounded-md border-0 bg-brand-600 px-0 text-white shadow-none hover:bg-brand-600/90 hover:text-white disabled:bg-base-200/70 disabled:text-neutral/35"
+    : "btn btn-sm h-[30px] min-h-[30px] w-[30px] min-w-[30px] rounded-md border-0 bg-transparent px-0 text-neutral shadow-none hover:bg-base-200/80 hover:text-neutral disabled:bg-transparent disabled:text-neutral/35";
   // 字段搜索模式：支持“名称/标签”与“数据类型”两种过滤维度。
   const [fieldSearchMode, setFieldSearchMode] = useState<"nameOrLabel" | "dataType">("nameOrLabel");
   // 字段搜索关键词：用于过滤当前对象字段列表。
@@ -1046,11 +1046,11 @@ export function DataQueryTabPane({
   );
   // 工具栏图标按钮基础样式：统一改为 icon-only，hover 时保持颜色不跳变。
   const toolbarIconButtonClassName =
-    "btn btn-sm h-[34px] min-h-[34px] w-[34px] min-w-[34px] border border-base-300 bg-white/80 px-0 text-neutral shadow-none hover:border-base-300 hover:bg-white hover:text-neutral disabled:border-base-200 disabled:bg-white/50 disabled:text-neutral/35";
+    "btn btn-sm h-[30px] min-h-[30px] w-[30px] min-w-[30px] rounded-md border-0 bg-transparent px-0 text-neutral shadow-none hover:bg-base-200/80 hover:text-neutral disabled:bg-transparent disabled:text-neutral/35";
   // 删除按钮固定为错误色，但 hover 时保持同色，不做跳色反馈。
   const toolbarDangerButtonClassName = `${toolbarIconButtonClassName} text-error hover:text-error`;
-  // 激活型切换按钮：仅增强背景与边框，不改变图标主色。
-  const toolbarActiveButtonClassName = `${toolbarIconButtonClassName} bg-white border-base-300`;
+  // 激活型切换按钮：仅增强背景，不改变图标主色。
+  const toolbarActiveButtonClassName = `${toolbarIconButtonClassName} bg-base-200/90`;
 
   // 当前结果分页偏移量：从当前执行语句解析，保证刷新后分页器文案与实际结果一致。
   const currentResultOffset = useMemo(() => extractOffsetValue(activeTab?.currentSoql || ""), [activeTab?.currentSoql]);
@@ -1216,7 +1216,7 @@ export function DataQueryTabPane({
           {/* 左侧主内容区：工具栏 + 查询栏 + 表格 + 日志。 */}
           <div className="flex min-w-0 flex-1 flex-col">
             {/* 顶部工具栏背景：默认白色；如果数据源设置颜色，则整条按钮区域显示该颜色。 */}
-            <div className="border-b border-base-300 px-3 py-1.5 overflow-x-auto" style={{ backgroundColor: toolbarBackgroundColor }}>
+            <div className="border-b border-base-300 px-3 py-1 overflow-x-auto" style={{ backgroundColor: toolbarBackgroundColor }}>
               <div className="flex flex-row items-center gap-1 min-w-max">
                 <QueryPaginationToolbar
                   totalSize={activeTab.result.totalSize}
@@ -1227,7 +1227,7 @@ export function DataQueryTabPane({
                   onPageNavigate={handlePageNavigate}
                 />
                 {/* 分割线：拉满工具栏可视高度，并贴住上下边缘。 */}
-                <div className="-my-1.5 mx-0.5 w-px self-stretch bg-base-300/80" />
+                <div className="-my-1 mx-0.5 w-px self-stretch bg-base-300/80" />
                 <button
                   className={toolbarIconButtonClassName}
                   disabled={activeTab.loading || Boolean(mysqlResultReadonlyReason)}

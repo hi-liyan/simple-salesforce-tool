@@ -5,11 +5,11 @@ import { readFileSync } from "node:fs";
 test("QueryPanel 工具栏: 应将分页工具栏前置到新建记录前，并添加分割线", () => {
   const source = readFileSync(new URL("../../src/features/main/QueryPanel/components/DataQueryTabPane.tsx", import.meta.url), "utf8");
   const paginationToolbarIndex = source.indexOf("<QueryPaginationToolbar");
-  const separatorIndex = source.indexOf("className=\"-my-1.5 mx-0.5 w-px self-stretch bg-base-300/80\"");
+  const separatorIndex = source.indexOf("className=\"-my-1 mx-0.5 w-px self-stretch bg-base-300/80\"");
   const createRecordTitleIndex = source.indexOf("title={mysqlResultReadonlyReason || \"新建记录\"}");
 
   assert.equal(source.includes("QueryPaginationToolbar"), true);
-  assert.equal(source.includes("className=\"-my-1.5 mx-0.5 w-px self-stretch bg-base-300/80\""), true);
+  assert.equal(source.includes("className=\"-my-1 mx-0.5 w-px self-stretch bg-base-300/80\""), true);
   assert.notEqual(paginationToolbarIndex, -1);
   assert.notEqual(separatorIndex, -1);
   assert.notEqual(createRecordTitleIndex, -1);
@@ -58,4 +58,12 @@ test("QueryPanel 查询栏: 不应再渲染独立查询按钮，并应提供拖�
 
   assert.equal(source.includes("查询\n        </button>"), false);
   assert.equal(source.includes("aria-label=\"拖拽调整 WHERE 与排序输入框宽度\""), true);
+});
+
+test("QueryPanel 工具栏: 按钮应改为无边框 hover 背景样式，并整体收紧高度", () => {
+  const source = readFileSync(new URL("../../src/features/main/QueryPanel/components/DataQueryTabPane.tsx", import.meta.url), "utf8");
+
+  assert.equal(source.includes("btn btn-sm h-[30px] min-h-[30px] w-[30px] min-w-[30px] rounded-md border-0"), true);
+  assert.equal(source.includes("hover:bg-base-200/80"), true);
+  assert.equal(source.includes("border-b border-base-300 px-3 py-1 overflow-x-auto"), true);
 });

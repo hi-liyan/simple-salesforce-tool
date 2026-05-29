@@ -92,11 +92,11 @@ function drawFieldHeaderText(
     ctx.fillStyle = "#2f3a4a";
     ctx.font = "600 12px sans-serif";
     // 不传 maxWidth：避免 Canvas 为适配窄列而“横向缩放文本”，导致表头出现压缩效果。
-    ctx.fillText(headerLines.primary, textLeft, rect.y + 14);
+    ctx.fillText(headerLines.primary, textLeft, rect.y + 12);
 
     ctx.fillStyle = "#8b97a6";
     ctx.font = "500 11px sans-serif";
-    ctx.fillText(headerLines.secondary || "", textLeft, rect.y + 30);
+    ctx.fillText(headerLines.secondary || "", textLeft, rect.y + 25);
   } else {
     ctx.textAlign = "left";
     ctx.textBaseline = "middle";

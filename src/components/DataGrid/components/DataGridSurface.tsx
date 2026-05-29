@@ -11,7 +11,7 @@ import { resolveIndexHeaderToggleSelection, resolveIndexRowSelection } from "../
 import { getDataGridSelectionConfig } from "../logic/surfaceConfig.ts";
 
 // DataGrid 表头高度：与 DataEditor 的 headerHeight 配置保持一致。
-const DATA_GRID_HEADER_HEIGHT = 42;
+const DATA_GRID_HEADER_HEIGHT = 36;
 // DataGrid 数据行高度：与 DataEditor 的 rowHeight 配置保持一致。
 const DATA_GRID_ROW_HEIGHT = 30;
 // DataGrid 横向滚动条预留高度：在需要时才保留，避免无滚动条时留白。
