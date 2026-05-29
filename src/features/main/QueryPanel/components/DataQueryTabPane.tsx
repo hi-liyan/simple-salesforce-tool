@@ -488,7 +488,7 @@ function QueryBar({
       {/* 输入区：两栏默认各占 50%，支持拖拽调整并在内容过长时有限度自动扩张。 */}
       <div className="flex min-w-0 items-stretch">
         <div
-          className="flex min-w-0 shrink-0 items-center gap-2 px-3 py-1.5"
+          className="flex min-w-0 shrink-0 items-center gap-2 px-3 py-1"
           style={{ width: `${effectiveSplitRatio * 100}%` }}
         >
           {/* WHERE 前缀：用轻量图标 + 文本替代传统顶部 label。 */}
@@ -512,7 +512,7 @@ function QueryBar({
               maxWidth={maxAutoInputWidth}
               rootClassName="flex-1 min-w-0"
               surfaceClassName="flex min-w-0 items-center"
-              inputClassName="h-[30px] min-h-[30px] border-0 bg-transparent px-0 pr-8 text-[13px] shadow-none focus:border-0 focus:outline-none focus:ring-0"
+              inputClassName="h-[28px] min-h-[28px] border-0 bg-transparent px-0 pr-8 text-[13px] shadow-none focus:border-0 focus:outline-none focus:ring-0"
               hideLabel
               widthMode="stretch"
               onResolvedWidthChange={setWherePreferredWidth}
@@ -535,7 +535,7 @@ function QueryBar({
               maxWidth={maxAutoInputWidth}
               rootClassName="flex-1 min-w-0"
               surfaceClassName="flex min-w-0 items-center"
-              inputClassName="h-[30px] min-h-[30px] border-0 bg-transparent px-0 pr-8 text-[13px] shadow-none focus:border-0 focus:outline-none focus:ring-0"
+              inputClassName="h-[28px] min-h-[28px] border-0 bg-transparent px-0 pr-8 text-[13px] shadow-none focus:border-0 focus:outline-none focus:ring-0"
               hideLabel
               widthMode="stretch"
               onResolvedWidthChange={setWherePreferredWidth}
@@ -558,7 +558,7 @@ function QueryBar({
           <div className="h-5 w-px bg-base-300" />
         </div>
         <div
-          className="flex min-w-0 shrink-0 items-center gap-2 px-3 py-1.5"
+          className="flex min-w-0 shrink-0 items-center gap-2 px-3 py-1"
           style={{ width: `${(1 - effectiveSplitRatio) * 100}%` }}
         >
           {/* 排序前缀：沿用无边框扁平化样式，与 WHERE 保持视觉一致。 */}
@@ -582,7 +582,7 @@ function QueryBar({
               maxWidth={maxAutoInputWidth}
               rootClassName="flex-1 min-w-0"
               surfaceClassName="flex min-w-0 items-center"
-              inputClassName="h-[30px] min-h-[30px] border-0 bg-transparent px-0 pr-8 text-[13px] shadow-none focus:border-0 focus:outline-none focus:ring-0"
+              inputClassName="h-[28px] min-h-[28px] border-0 bg-transparent px-0 pr-8 text-[13px] shadow-none focus:border-0 focus:outline-none focus:ring-0"
               hideLabel
               widthMode="stretch"
               onResolvedWidthChange={setSortPreferredWidth}
@@ -605,7 +605,7 @@ function QueryBar({
               maxWidth={maxAutoInputWidth}
               rootClassName="flex-1 min-w-0"
               surfaceClassName="flex min-w-0 items-center"
-              inputClassName="h-[30px] min-h-[30px] border-0 bg-transparent px-0 pr-8 text-[13px] shadow-none focus:border-0 focus:outline-none focus:ring-0"
+              inputClassName="h-[28px] min-h-[28px] border-0 bg-transparent px-0 pr-8 text-[13px] shadow-none focus:border-0 focus:outline-none focus:ring-0"
               hideLabel
               widthMode="stretch"
               onResolvedWidthChange={setSortPreferredWidth}
