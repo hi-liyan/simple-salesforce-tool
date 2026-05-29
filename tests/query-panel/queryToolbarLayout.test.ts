@@ -68,6 +68,17 @@ test("QueryPanel 工具栏: 刷新前遇到未提交修改时应弹出确认模�
   assert.equal(source.includes("先撤回当前新增、编辑和删除标记，再重新查询当前结果。"), true);
 });
 
+test("QueryPanel 刷新确认弹窗: 应提供仅撤销修改按钮", () => {
+  const source = readFileSync(new URL("../../src/features/main/QueryPanel/components/DataQueryTabPane.tsx", import.meta.url), "utf8");
+
+  assert.equal(source.includes("function handleDiscardPendingChangesOnly()"), true);
+  assert.equal(source.includes("onDiscardPendingChanges(); // 行内注释：只撤回当前未提交修改，不触发重新查询。"), true);
+  assert.equal(source.includes(">仅撤销修改<"), true);
+  assert.equal(source.includes("className=\"btn btn-ghost btn-sm\""), true);
+  assert.equal(source.includes("className=\"btn btn-outline btn-sm\""), true);
+  assert.equal(source.includes("className=\"btn btn-warning btn-sm\""), true);
+});
+
 test("QueryPanel 查询栏: 不应再渲染独立查询按钮，并应提供拖拽分隔条", () => {
   const source = readFileSync(new URL("../../src/features/main/QueryPanel/components/DataQueryTabPane.tsx", import.meta.url), "utf8");
 

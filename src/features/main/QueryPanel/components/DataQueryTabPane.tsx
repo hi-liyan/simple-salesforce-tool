@@ -1144,6 +1144,13 @@ export function DataQueryTabPane({
     }); // 行内注释：确认后仍保留当前分页位置，仅重查同一页结果。
   }
 
+  // 仅撤销修改：保留当前查询结果与分页位置，不触发重新查询。
+  function handleDiscardPendingChangesOnly() {
+    if (!activeTab || activeTab.loading) return;
+    setRefreshConfirmOpen(false);
+    onDiscardPendingChanges(); // 行内注释：只撤回当前未提交修改，不触发重新查询。
+  }
+
   return (
     <>
       {/* 工作区全局提示。 */}
@@ -1256,10 +1263,7 @@ export function DataQueryTabPane({
           <div className="modal-box max-w-md p-0">
             <div className="border-b border-base-300 px-6 py-4">
               <div className="flex items-start justify-between gap-4">
-                <div>
-                  <h3 className="text-lg font-semibold">存在未提交修改</h3>
-                  <p className="mt-1 text-[12px] text-neutral/70">先撤回当前新增、编辑和删除标记，再重新查询当前结果。</p>
-                </div>
+                <h3 className="text-lg font-semibold">存在未提交修改</h3>
                 <button
                   className="btn btn-circle btn-ghost btn-sm"
                   onClick={() => setRefreshConfirmOpen(false)}
@@ -1270,13 +1274,14 @@ export function DataQueryTabPane({
               </div>
             </div>
             <div className="px-6 py-4 text-[13px] leading-6 text-neutral/75">
-              刷新后，本地尚未提交的修改不会保留。是否继续刷新？
+              刷新后，本地尚未提交的修改不会保留。请确认是否继续？
             </div>
             <div className="modal-action mt-0 border-t border-base-300 px-6 py-4">
-              <button className="btn btn-ghost" onClick={() => setRefreshConfirmOpen(false)}>
+              <button className="btn btn-ghost btn-sm" onClick={() => setRefreshConfirmOpen(false)}>
                 取消
               </button>
-              <button className="btn btn-warning" onClick={handleConfirmRefreshCurrentQuery}>
+              <button className="btn btn-outline btn-sm" onClick={handleDiscardPendingChangesOnly}>仅撤销修改</button>
+              <button className="btn btn-warning btn-sm" onClick={handleConfirmRefreshCurrentQuery}>
                 确认刷新
               </button>
             </div>
