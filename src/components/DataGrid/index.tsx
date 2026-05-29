@@ -267,10 +267,7 @@ export function DataGrid({
 
   return (
     <DataGridSurface
-      totalSize={result.totalSize}
       records={records}
-      pageSize={pageSize}
-      currentOffset={currentOffset}
       columns={columns}
       fieldMetadataMap={effectiveFieldMetadataMap}
       selectedSourceType={selectedSourceType}
@@ -301,8 +298,6 @@ export function DataGrid({
       onOpenRecordPage={() => {
         void openRecordPageFromMenu();
       }}
-      onPageSizeChange={onPageSizeChange}
-      onPageNavigate={onPageNavigate}
       getCellContent={getCellContent}
       onCellEdited={handleCellEdited}
       onCellClicked={handleCellClicked}

@@ -1,6 +1,5 @@
 import React from "react";
 import { DataEditor, EditableGridCell, EditListItem, GridCell, GridColumn, GridSelection, Item } from "@glideapps/glide-data-grid";
-import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-react";
 import { HeaderMetaPopover } from "./HeaderMetaPopover";
 import { RowContextMenu } from "./RowContextMenu";
 import { stringifyCellValue } from "../utils/value";
@@ -8,10 +7,8 @@ import { RowContextMenuState, HoveredHeaderMetaState } from "../types";
 import { isHeaderInfoIconHit } from "../renderers/drawHeader";
 import { buildDisplayMetadataFromRaw } from "../../../utils/fieldMetadata";
 import { resolveRowContextMenuCapabilities } from "../logic/contextMenu";
-import { buildQueryPaginationState } from "../logic/queryPagination.ts";
 import { resolveIndexRowSelection } from "../logic/selection.ts";
 import { getDataGridSelectionConfig } from "../logic/surfaceConfig.ts";
-import { normalizeQueryPageSize, PAGE_SIZE_PRESET_VALUES, resolveQueryPageSizeOption } from "../../../features/main/QueryPanel/logic/queryToolbar.ts";
 
 // DataGrid 表头高度：与 DataEditor 的 headerHeight 配置保持一致。
 const DATA_GRID_HEADER_HEIGHT = 42;
@@ -36,14 +33,8 @@ function getScrollbarSize(): number {
 }
 
 type DataGridSurfaceProps = {
-  // 查询总数（展示在工具栏）。
-  totalSize: number;
   // 当前行数据。
   records: Record<string, unknown>[];
-  // 当前每页条数：用于紧凑分页器显示。
-  pageSize: number;
-  // 当前偏移量：用于范围显示与翻页控制。
-  currentOffset: number;
   // 表格列定义。
   columns: GridColumn[];
   // 字段元数据映射。
@@ -96,10 +87,6 @@ type DataGridSurfaceProps = {
   onSetDefaultValue: () => void;
   // 右键菜单动作：打开记录页。
   onOpenRecordPage: () => void;
-  // 分页器条数切换：当前仅支持 page size，不支持真实翻页。
-  onPageSizeChange?: (pageSize: number) => void;
-  // 分页器翻页回调。
-  onPageNavigate?: (action: "first" | "previous" | "next" | "last") => void;
   // 单元格读取函数。
   getCellContent: (cell: Item) => GridCell;
   // 单元格编辑回调。
@@ -116,10 +103,7 @@ type DataGridSurfaceProps = {
 
 // DataGrid 渲染层：仅负责 DataEditor 与浮层/菜单的 UI 组装。
 export function DataGridSurface({
-  totalSize,
   records,
-  pageSize,
-  currentOffset,
   columns,
   fieldMetadataMap,
   selectedSourceType,
@@ -146,8 +130,6 @@ export function DataGridSurface({
   onSetNullish,
   onSetDefaultValue,
   onOpenRecordPage,
-  onPageSizeChange,
-  onPageNavigate,
   getCellContent,
   onCellEdited,
   onCellClicked,
@@ -158,23 +140,8 @@ export function DataGridSurface({
   const selectionConfig = React.useMemo(() => getDataGridSelectionConfig(), []);
   // 受控选区状态：用于实现“点击 # 选整行”。
   const [gridSelection, setGridSelection] = React.useState<GridSelection | undefined>(undefined);
-  // Page Size 下拉的自定义选项值：用于 select 组件承载 prompt 入口。
-  const CUSTOM_PAGE_SIZE_OPTION = "__custom__";
   // 横向滚动条预留高度：仅在需要显示横向滚动条时才保留。
   const [scrollbarGutter, setScrollbarGutter] = React.useState(0);
-  // 当前分页器状态：按已加载结果生成紧凑的“1-500 of 765”文案。
-  const paginationState = React.useMemo(
-    () =>
-      buildQueryPaginationState({
-        totalSize,
-        loadedRowCount: records.length,
-        pageSize,
-        currentOffset
-      }),
-    [currentOffset, pageSize, records.length, totalSize]
-  );
-  // 当前 Page Size 选项：复用 QueryPanel 的预设与 custom 识别逻辑。
-  const pageSizeOption = React.useMemo(() => resolveQueryPageSizeOption(pageSize), [pageSize]);
   // 计算当前总列宽：用于绘制右侧空白区域遮罩（列较少时隐藏空白网格线）。
   const totalColumnsWidth = React.useMemo(
     () => columns.reduce((sum, column) => {
@@ -239,86 +206,8 @@ export function DataGridSurface({
   );
 
   return (
-    // 表格容器：顶部统计栏 + 数据表格。
+    // 表格容器：仅承载数据表格主体与浮层。
     <div className="relative flex h-full min-h-0 flex-col">
-      {/* 顶部工具栏：仅显示统计。 */}
-      <div className="flex items-center justify-between gap-3 border-b border-base-300 px-3 py-1.5">
-        {/* 统计信息：保留总行数，便于结果集快速判断规模。 */}
-        <span className="text-[12px] text-neutral/70">Rows: {totalSize}</span>
-        {/* 紧凑分页器：承载 page size、范围信息与真实翻页入口。 */}
-        <div className="flex items-center gap-1 text-[12px] text-neutral/70">
-          <button
-            type="button"
-            className="btn btn-ghost btn-xs h-6 min-h-[24px] w-6 min-w-[24px] px-0 text-neutral/70 hover:bg-base-200 hover:text-neutral disabled:text-neutral/35"
-            disabled={!paginationState.canGoFirst || !onPageNavigate}
-            title="首页"
-            aria-label="首页"
-            onClick={() => onPageNavigate?.("first")}
-          >
-            <ChevronsLeft size={12} />
-          </button>
-          <button
-            type="button"
-            className="btn btn-ghost btn-xs h-6 min-h-[24px] w-6 min-w-[24px] px-0 text-neutral/70 hover:bg-base-200 hover:text-neutral disabled:text-neutral/35"
-            disabled={!paginationState.canGoPrevious || !onPageNavigate}
-            title="上一页"
-            aria-label="上一页"
-            onClick={() => onPageNavigate?.("previous")}
-          >
-            <ChevronLeft size={12} />
-          </button>
-          <select
-            className="select select-bordered select-xs h-6 min-h-[24px] w-[84px] border-base-300 bg-white px-2 text-[12px] font-medium text-neutral focus:outline-none"
-            value={pageSizeOption.kind === "custom" ? CUSTOM_PAGE_SIZE_OPTION : String(pageSizeOption.value)}
-            onChange={(event) => {
-              const nextValue = event.target.value;
-              if (!onPageSizeChange) return;
-              if (nextValue === CUSTOM_PAGE_SIZE_OPTION) {
-                const customInput = window.prompt("请输入 Page Size（1-2000）", String(pageSizeOption.value));
-                if (customInput === null) return;
-                onPageSizeChange(normalizeQueryPageSize(Number(customInput), pageSizeOption.value)); // 行内注释：自定义条数继续复用 QueryPanel 当前 limit。
-                return;
-              }
-              onPageSizeChange(normalizeQueryPageSize(Number(nextValue), pageSizeOption.value)); // 行内注释：预设值直接写回当前 limit。
-            }}
-            title="Page Size"
-            aria-label="Page Size"
-          >
-            {PAGE_SIZE_PRESET_VALUES.map((value) => (
-              <option key={`page-size-${value}`} value={value}>
-                {value}
-              </option>
-            ))}
-            {pageSizeOption.kind === "custom" && (
-              <option value={CUSTOM_PAGE_SIZE_OPTION}>{pageSizeOption.value}</option>
-            )}
-            <option value={CUSTOM_PAGE_SIZE_OPTION}>自定义...</option>
-          </select>
-          <span className="min-w-[86px] text-center font-medium text-neutral">{paginationState.rangeLabel}</span>
-          <span>{paginationState.totalLabel}</span>
-          <button
-            type="button"
-            className="btn btn-ghost btn-xs h-6 min-h-[24px] w-6 min-w-[24px] px-0 text-neutral/70 hover:bg-base-200 hover:text-neutral disabled:text-neutral/35"
-            disabled={!paginationState.canGoNext || !onPageNavigate}
-            title="下一页"
-            aria-label="下一页"
-            onClick={() => onPageNavigate?.("next")}
-          >
-            <ChevronRight size={12} />
-          </button>
-          <button
-            type="button"
-            className="btn btn-ghost btn-xs h-6 min-h-[24px] w-6 min-w-[24px] px-0 text-neutral/70 hover:bg-base-200 hover:text-neutral disabled:text-neutral/35"
-            disabled={!paginationState.canGoLast || !onPageNavigate}
-            title="末页"
-            aria-label="末页"
-            onClick={() => onPageNavigate?.("last")}
-          >
-            <ChevronsRight size={12} />
-          </button>
-        </div>
-      </div>
-
       {/* 数据表格主体。 */}
       <div ref={gridBodyRef} className="relative min-h-0 flex-1">
         {/* Glide Data Grid 组件：承载行列渲染、编辑、选择、列宽调整等核心交互。 */}

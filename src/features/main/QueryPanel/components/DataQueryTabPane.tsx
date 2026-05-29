@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { PanelRightOpen, Play, Plus, RotateCcw, ScrollText, Search, Trash2, X } from "lucide-react";
 import { ContextMenu, type ContextMenuEntry } from "../../../../components/ContextMenu";
 import { DataGrid } from "../../../../components/DataGrid";
+import { QueryPaginationToolbar } from "../../../../components/DataGrid/components/QueryPaginationToolbar";
 import { NoticeAlert } from "../../../../components/NoticeAlert";
 import { SoqlMonacoEditor } from "../../../../components/SoqlMonacoEditor";
 import { api } from "../../../../api";
@@ -1031,6 +1032,16 @@ export function DataQueryTabPane({
             {/* 顶部工具栏背景：默认白色；如果数据源设置颜色，则整条按钮区域显示该颜色。 */}
             <div className="border-b border-base-300 px-3 py-1.5 overflow-x-auto" style={{ backgroundColor: toolbarBackgroundColor }}>
               <div className="flex flex-row items-center gap-1 min-w-max">
+                <QueryPaginationToolbar
+                  totalSize={activeTab.result.totalSize}
+                  loadedRowCount={activeTab.result.records.length}
+                  pageSize={activeTab.limit}
+                  currentOffset={currentResultOffset}
+                  onPageSizeChange={handlePageSizeChange}
+                  onPageNavigate={handlePageNavigate}
+                />
+                {/* 分割线：将结果分页操作与后续记录/视图动作拆开。 */}
+                <div className="h-5 w-px bg-base-300/80" />
                 <button
                   className={toolbarIconButtonClassName}
                   disabled={activeTab.loading || Boolean(mysqlResultReadonlyReason)}
