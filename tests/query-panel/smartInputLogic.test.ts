@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   filterSmartInputSuggestions,
+  resolveQueryBarSplitRatio,
   resolveSmartInputEnterAction,
   resolveSmartInputWidth,
   shouldOpenSmartInputSuggestions
@@ -111,4 +112,43 @@ test("resolveSmartInputWidth: 长内容应扩张到最大宽度上限", () => {
   });
 
   assert.equal(width, 360);
+});
+
+test("resolveQueryBarSplitRatio: WHERE 内容变长时应优先向左扩张，而不是退回默认 50%", () => {
+  const ratio = resolveQueryBarSplitRatio({
+    splitRatio: 0.5,
+    contentWidth: 900,
+    wherePreferredWidth: 630,
+    sortPreferredWidth: 300,
+    minRatio: 0.3,
+    maxRatio: 0.7
+  });
+
+  assert.equal(ratio, 0.6774193548387096);
+});
+
+test("resolveQueryBarSplitRatio: 排序内容变长时应优先向右扩张，并保持左侧最小宽度", () => {
+  const ratio = resolveQueryBarSplitRatio({
+    splitRatio: 0.5,
+    contentWidth: 900,
+    wherePreferredWidth: 360,
+    sortPreferredWidth: 630,
+    minRatio: 0.3,
+    maxRatio: 0.7
+  });
+
+  assert.equal(ratio, 0.36363636363636365);
+});
+
+test("resolveQueryBarSplitRatio: 输入框内容虽未超过半栏，但连同前缀与内边距后应继续扩张", () => {
+  const ratio = resolveQueryBarSplitRatio({
+    splitRatio: 0.5,
+    contentWidth: 900,
+    wherePreferredWidth: 560,
+    sortPreferredWidth: 260,
+    minRatio: 0.3,
+    maxRatio: 0.7
+  });
+
+  assert.equal(ratio, 0.6222222222222222);
 });

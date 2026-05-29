@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { PanelRightOpen, Play, Plus, RotateCcw, ScrollText, Search, Trash2, X } from "lucide-react";
+import { ArrowUpDown, Filter, PanelRightOpen, Play, Plus, RefreshCw, ScrollText, Search, Trash2, X } from "lucide-react";
 import { ContextMenu, type ContextMenuEntry } from "../../../../components/ContextMenu";
 import { DataGrid } from "../../../../components/DataGrid";
 import { QueryPaginationToolbar } from "../../../../components/DataGrid/components/QueryPaginationToolbar";
@@ -17,6 +17,7 @@ import { buildSourceSurfacePalette } from "../logic/sourceColor.ts";
 import type { QueryOverrides } from "../types";
 import { MysqlSmartInput } from "./MysqlSmartInput";
 import { SalesforceSmartInput } from "./SalesforceSmartInput";
+import { resolveQueryBarSplitRatio } from "../logic/smartInput.ts";
 
 // MySQL 函数候选：覆盖常见字符串、日期、聚合、空值处理函数。
 const MYSQL_FUNCTION_SUGGESTIONS = [
@@ -231,9 +232,38 @@ function QueryBar({
   salesforceSortSuggestions,
   onQuery
 }: QueryBarProps) {
+  const QUERY_BAR_MIN_SPLIT_RATIO = 0.3;
+  const QUERY_BAR_MAX_SPLIT_RATIO = 0.7;
+  const QUERY_BAR_DIVIDER_WIDTH = 10;
+  const QUERY_BAR_SECTION_HORIZONTAL_PADDING = 24;
+  const QUERY_BAR_SECTION_GAP = 8;
   // Store：直接更新目标 Tab，避免“常驻挂载 + 防抖回写”在切换 Tab 后误写到其它 Tab。
   const patchTabInStore = useAppStore((state) => state.patchTab);
   const activeTabIdentity = activeTab.bindingKey || buildObjectTabBindingKey(activeTab.sourceId || "", activeTab.objectName);
+  // 查询栏根节点：用于读取当前可用宽度并约束拖拽范围。
+  const queryBarRef = useRef<HTMLDivElement | null>(null);
+  // WHERE 前缀节点：用于测量左侧固定占用宽度。
+  const wherePrefixRef = useRef<HTMLDivElement | null>(null);
+  // ORDER BY 前缀节点：用于测量右侧固定占用宽度。
+  const sortPrefixRef = useRef<HTMLDivElement | null>(null);
+  // 查询栏当前宽度：用于把拖拽比例转换成实际像素宽度。
+  const [queryBarWidth, setQueryBarWidth] = useState(0);
+  // 用户手动拖拽后的分栏比例：默认 50% / 50%，仅保留当前组件生命周期。
+  const [splitRatio, setSplitRatio] = useState(0.5);
+  // 是否正在拖拽 WHERE/排序分隔条。
+  const [draggingSplitResize, setDraggingSplitResize] = useState(false);
+  // WHERE 输入内容解析出的期望宽度：用于内容过长时自动申请更多分栏空间。
+  const [wherePreferredWidth, setWherePreferredWidth] = useState(360);
+  // 排序输入内容解析出的期望宽度：用于内容过长时自动申请更多分栏空间。
+  const [sortPreferredWidth, setSortPreferredWidth] = useState(300);
+  // WHERE 前缀当前宽度：供整块分栏诉求计算使用。
+  const [wherePrefixWidth, setWherePrefixWidth] = useState(0);
+  // ORDER BY 前缀当前宽度：供整块分栏诉求计算使用。
+  const [sortPrefixWidth, setSortPrefixWidth] = useState(0);
+  // 拖拽前 body 的 user-select 样式，结束后恢复。
+  const prevBodyUserSelectRef = useRef("");
+  // 拖拽前 body 的 cursor 样式，结束后恢复。
+  const prevBodyCursorRef = useRef("");
 
   // 回写 WHERE：按当前 QueryBar 绑定的对象 Tab 精准写入。
   function commitWhereClause(value: string) {
@@ -324,6 +354,81 @@ function QueryBar({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab.objectName]);
 
+  // 观测查询栏可用宽度：拖拽比例与自动扩张都依赖容器真实宽度。
+  useEffect(() => {
+    const root = queryBarRef.current;
+    if (!root) return;
+
+    const updateWidth = () => {
+      setQueryBarWidth(root.clientWidth);
+    };
+
+    updateWidth();
+    const observer = new ResizeObserver(() => {
+      updateWidth(); // 行内注释：容器宽度变化后立即重算两侧分栏约束。
+    });
+    observer.observe(root);
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
+
+  // 观测前缀宽度：自动扩张时需要把图标/文案固定占位一起算进去。
+  useEffect(() => {
+    const wherePrefixElement = wherePrefixRef.current;
+    const sortPrefixElement = sortPrefixRef.current;
+    if (!wherePrefixElement || !sortPrefixElement) return;
+
+    const updatePrefixWidths = () => {
+      setWherePrefixWidth(wherePrefixElement.offsetWidth);
+      setSortPrefixWidth(sortPrefixElement.offsetWidth);
+    };
+
+    updatePrefixWidths();
+    const observer = new ResizeObserver(() => {
+      updatePrefixWidths(); // 行内注释：字体或布局变化时同步刷新前缀占位宽度。
+    });
+    observer.observe(wherePrefixElement);
+    observer.observe(sortPrefixElement);
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
+
+  // 拖拽中根据鼠标位置更新分栏比例，并限制左右最小可见空间。
+  useEffect(() => {
+    if (!draggingSplitResize) return;
+
+    prevBodyUserSelectRef.current = document.body.style.userSelect;
+    prevBodyCursorRef.current = document.body.style.cursor;
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "col-resize";
+
+    const onMouseMove = (event: MouseEvent) => {
+      const root = queryBarRef.current;
+      if (!root) return;
+      const rect = root.getBoundingClientRect();
+      const usableWidth = rect.width - QUERY_BAR_DIVIDER_WIDTH;
+      if (usableWidth <= 0) return;
+      const rawRatio = (event.clientX - rect.left - QUERY_BAR_DIVIDER_WIDTH / 2) / usableWidth;
+      const nextRatio = Math.max(QUERY_BAR_MIN_SPLIT_RATIO, Math.min(QUERY_BAR_MAX_SPLIT_RATIO, rawRatio));
+      setSplitRatio(nextRatio); // 行内注释：拖拽过程仅更新当前会话内比例，不写持久化状态。
+    };
+
+    const onMouseUp = () => {
+      setDraggingSplitResize(false); // 行内注释：鼠标释放后结束拖拽态。
+    };
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+      document.body.style.userSelect = prevBodyUserSelectRef.current;
+      document.body.style.cursor = prevBodyCursorRef.current;
+    };
+  }, [draggingSplitResize]);
+
   // 防抖回写 WHERE：250ms 内连续输入只写一次 store。
   function scheduleWhereCommit(nextValue: string) {
     if (whereTimerRef.current) window.clearTimeout(whereTimerRef.current);
@@ -357,47 +462,111 @@ function QueryBar({
     });
   }
 
+  // 查询栏可分配宽度：扣掉中间拖拽热区，避免比例换算时累计误差。
+  const queryBarContentWidth = Math.max(0, queryBarWidth - QUERY_BAR_DIVIDER_WIDTH);
+  // 单侧输入框自动扩张的最大阈值：最多占 70%，避免把另一侧完全挤没。
+  const maxAutoInputWidth = Math.max(240, Math.floor(queryBarContentWidth * QUERY_BAR_MAX_SPLIT_RATIO));
+  // 左侧整块分栏的期望宽度：包含前缀、间距、内边距和输入框自身宽度。
+  const whereSectionPreferredWidth =
+    wherePreferredWidth + wherePrefixWidth + QUERY_BAR_SECTION_GAP + QUERY_BAR_SECTION_HORIZONTAL_PADDING;
+  // 右侧整块分栏的期望宽度：包含前缀、间距、内边距和输入框自身宽度。
+  const sortSectionPreferredWidth =
+    sortPreferredWidth + sortPrefixWidth + QUERY_BAR_SECTION_GAP + QUERY_BAR_SECTION_HORIZONTAL_PADDING;
+  // 基于“用户拖拽比例 + 内容期望宽度”求出最终分栏比例。
+  const effectiveSplitRatio = resolveQueryBarSplitRatio({
+    splitRatio,
+    contentWidth: queryBarContentWidth,
+    wherePreferredWidth: whereSectionPreferredWidth,
+    sortPreferredWidth: sortSectionPreferredWidth,
+    minRatio: QUERY_BAR_MIN_SPLIT_RATIO,
+    maxRatio: QUERY_BAR_MAX_SPLIT_RATIO
+  });
+
   return (
     // 查询栏容器：保持最小高度，避免内容区抖动。
-    <div className="border-b border-base-300 px-3 py-2">
-      {/* 输入区：按数据源类型切换 SQL/SOQL 提示与候选。 */}
-      <div className="flex min-w-max flex-row items-end gap-2">
-        {isMysqlSource ? (
-          <MysqlSmartInput
-            key={`mysql-where-${activeTab.objectName}`}
-            label="WHERE"
-            value={whereDraft}
-            placeholder="例如：status = 'ACTIVE' AND created_at >= '2025-01-01'"
-            // MySQL WHERE：仅更新草稿，防抖回写 store。
-            onChange={(value) => {
-              setWhereDraft(value); // 输入实时更新草稿，保证光标与输入联动不卡顿。
-              scheduleWhereCommit(value); // 防抖写入 store，避免触发全局重渲染。
-            }}
-            suggestions={mysqlWhereSuggestions}
-            defaultWidth={360}
-            allowClear
-            onSubmit={handleQueryClick}
-          />
-        ) : (
-          <SalesforceSmartInput
-            key={`soql-where-${activeTab.objectName}`}
-            label="WHERE"
-            value={whereDraft}
-            placeholder="例如：CreatedDate >= LAST_N_DAYS:7 AND Name LIKE 'Acme%'"
-            // Salesforce WHERE：仅更新草稿，防抖回写 store。
-            onChange={(value) => {
-              setWhereDraft(value); // 输入实时更新草稿。
-              scheduleWhereCommit(value); // 防抖写入 store。
-            }}
-            suggestions={salesforceWhereSuggestions}
-            defaultWidth={360}
-            allowClear
-            onSubmit={handleQueryClick}
-          />
-        )}
-
-        {isMysqlSource ? (
-          <>
+    <div ref={queryBarRef} className="border-b border-base-300 bg-base-100">
+      {/* 输入区：两栏默认各占 50%，支持拖拽调整并在内容过长时有限度自动扩张。 */}
+      <div className="flex min-w-0 items-stretch">
+        <div
+          className="flex min-w-0 shrink-0 items-center gap-2 px-3 py-1.5"
+          style={{ width: `${effectiveSplitRatio * 100}%` }}
+        >
+          {/* WHERE 前缀：用轻量图标 + 文本替代传统顶部 label。 */}
+          <div ref={wherePrefixRef} className="flex shrink-0 items-center gap-1.5 text-[12px] uppercase tracking-[0.08em] text-neutral/65">
+            <Filter size={12} />
+            <span>WHERE</span>
+          </div>
+          {isMysqlSource ? (
+            <MysqlSmartInput
+              key={`mysql-where-${activeTab.objectName}`}
+              label="WHERE"
+              value={whereDraft}
+              placeholder="例如：status = 'ACTIVE' AND created_at >= '2025-01-01'"
+              // MySQL WHERE：仅更新草稿，防抖回写 store。
+              onChange={(value) => {
+                setWhereDraft(value); // 输入实时更新草稿，保证光标与输入联动不卡顿。
+                scheduleWhereCommit(value); // 防抖写入 store，避免触发全局重渲染。
+              }}
+              suggestions={mysqlWhereSuggestions}
+              defaultWidth={360}
+              maxWidth={maxAutoInputWidth}
+              rootClassName="flex-1 min-w-0"
+              surfaceClassName="flex min-w-0 items-center"
+              inputClassName="h-[30px] min-h-[30px] border-0 bg-transparent px-0 pr-8 text-[13px] shadow-none focus:border-0 focus:outline-none focus:ring-0"
+              hideLabel
+              widthMode="stretch"
+              onResolvedWidthChange={setWherePreferredWidth}
+              allowClear
+              onSubmit={handleQueryClick}
+            />
+          ) : (
+            <SalesforceSmartInput
+              key={`soql-where-${activeTab.objectName}`}
+              label="WHERE"
+              value={whereDraft}
+              placeholder="例如：CreatedDate >= LAST_N_DAYS:7 AND Name LIKE 'Acme%'"
+              // Salesforce WHERE：仅更新草稿，防抖回写 store。
+              onChange={(value) => {
+                setWhereDraft(value); // 输入实时更新草稿。
+                scheduleWhereCommit(value); // 防抖写入 store。
+              }}
+              suggestions={salesforceWhereSuggestions}
+              defaultWidth={360}
+              maxWidth={maxAutoInputWidth}
+              rootClassName="flex-1 min-w-0"
+              surfaceClassName="flex min-w-0 items-center"
+              inputClassName="h-[30px] min-h-[30px] border-0 bg-transparent px-0 pr-8 text-[13px] shadow-none focus:border-0 focus:outline-none focus:ring-0"
+              hideLabel
+              widthMode="stretch"
+              onResolvedWidthChange={setWherePreferredWidth}
+              allowClear
+              onSubmit={handleQueryClick}
+            />
+          )}
+        </div>
+        {/* 中间拖拽条：支持手动调整 WHERE 与排序输入框宽度。 */}
+        <div
+          className="relative z-10 flex w-[10px] shrink-0 cursor-col-resize items-center justify-center bg-base-100"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="拖拽调整 WHERE 与排序输入框宽度"
+          onMouseDown={(event) => {
+            event.preventDefault(); // 阻止拖拽起点触发文本选中。
+            setDraggingSplitResize(true); // 行内注释：进入拖拽态后由全局 mousemove 统一处理比例变化。
+          }}
+        >
+          <div className="h-5 w-px bg-base-300" />
+        </div>
+        <div
+          className="flex min-w-0 shrink-0 items-center gap-2 px-3 py-1.5"
+          style={{ width: `${(1 - effectiveSplitRatio) * 100}%` }}
+        >
+          {/* 排序前缀：沿用无边框扁平化样式，与 WHERE 保持视觉一致。 */}
+          <div ref={sortPrefixRef} className="flex shrink-0 items-center gap-1.5 text-[12px] uppercase tracking-[0.08em] text-neutral/65">
+            <ArrowUpDown size={12} />
+            <span>ORDER BY</span>
+          </div>
+          {isMysqlSource ? (
             <MysqlSmartInput
               key={`mysql-sort-${activeTab.objectName}`}
               label="排序"
@@ -410,12 +579,17 @@ function QueryBar({
               }}
               suggestions={mysqlSortSuggestions}
               defaultWidth={300}
+              maxWidth={maxAutoInputWidth}
+              rootClassName="flex-1 min-w-0"
+              surfaceClassName="flex min-w-0 items-center"
+              inputClassName="h-[30px] min-h-[30px] border-0 bg-transparent px-0 pr-8 text-[13px] shadow-none focus:border-0 focus:outline-none focus:ring-0"
+              hideLabel
+              widthMode="stretch"
+              onResolvedWidthChange={setSortPreferredWidth}
               allowClear
               onSubmit={handleQueryClick}
             />
-          </>
-        ) : (
-          <>
+          ) : (
             <SalesforceSmartInput
               key={`soql-sort-${activeTab.objectName}`}
               label="排序"
@@ -428,17 +602,18 @@ function QueryBar({
               }}
               suggestions={salesforceSortSuggestions}
               defaultWidth={300}
+              maxWidth={maxAutoInputWidth}
+              rootClassName="flex-1 min-w-0"
+              surfaceClassName="flex min-w-0 items-center"
+              inputClassName="h-[30px] min-h-[30px] border-0 bg-transparent px-0 pr-8 text-[13px] shadow-none focus:border-0 focus:outline-none focus:ring-0"
+              hideLabel
+              widthMode="stretch"
+              onResolvedWidthChange={setSortPreferredWidth}
               allowClear
               onSubmit={handleQueryClick}
             />
-          </>
-        )}
-
-        {/* 查询按钮：点击时用草稿覆盖参数执行，保证查询使用最新输入。 */}
-        <button className="btn btn-primary btn-sm mt-5 h-[35px]" disabled={activeTab.loading} onClick={handleQueryClick}>
-          <Search size={14} />
-          查询
-        </button>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -907,6 +1082,17 @@ export function DataQueryTabPane({
     }); // 行内注释：翻页仅覆盖 offset，复用当前 where/sort/limit 条件重查下一页。
   }
 
+  // 刷新当前查询：始终按当前条件重查；若存在未提交修改，则先整体丢弃再刷新结果。
+  function handleRefreshCurrentQuery() {
+    if (!activeTab || activeTab.loading) return;
+    if (hasPendingChanges) {
+      onDiscardPendingChanges(); // 行内注释：刷新前先清掉本地新增/编辑/待删除，避免旧草稿残留在新结果里。
+    }
+    onQuery({
+      offset: currentResultOffset
+    }); // 行内注释：保留当前分页位置，仅重查同一页结果。
+  }
+
   return (
     <>
       {/* 工作区全局提示。 */}
@@ -1071,12 +1257,12 @@ export function DataQueryTabPane({
                 </button>
                 <button
                   className={toolbarIconButtonClassName}
-                  disabled={activeTab.loading || !hasPendingChanges}
-                  title="撤回修改"
-                  aria-label="撤回修改"
-                  onClick={onDiscardPendingChanges}
+                  disabled={activeTab.loading}
+                  title="刷新当前查询"
+                  aria-label="刷新当前查询"
+                  onClick={handleRefreshCurrentQuery}
                 >
-                  <RotateCcw size={15} />
+                  <RefreshCw size={15} />
                 </button>
                 <button
                   className={activeTab.showQueryBar ? toolbarActiveButtonClassName : toolbarIconButtonClassName}

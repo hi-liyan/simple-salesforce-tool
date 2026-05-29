@@ -57,6 +57,21 @@ type ResolveSmartInputWidthOptions = {
   measureText: (text: string) => number;
 };
 
+type ResolveQueryBarSplitRatioOptions = {
+  // 当前用户拖拽得到的分栏比例。
+  splitRatio: number;
+  // 查询栏可用于左右输入区分配的总宽度。
+  contentWidth: number;
+  // WHERE 输入框当前内容解析出的期望宽度。
+  wherePreferredWidth: number;
+  // 排序输入框当前内容解析出的期望宽度。
+  sortPreferredWidth: number;
+  // 单侧最小占比。
+  minRatio: number;
+  // 单侧最大占比。
+  maxRatio: number;
+};
+
 // SmartInput 回车动作：补全或提交查询。
 export type SmartInputEnterAction = "submit" | "apply-suggestion";
 
@@ -141,6 +156,31 @@ export function resolveSmartInputWidth({
     : defaultWidth;
   const preferredWidth = Math.max(defaultWidth, measuredWidth);
   return Math.max(minWidth, Math.min(maxWidth, preferredWidth));
+}
+
+// 解析查询栏分栏比例：优先满足内容宽度诉求，冲突时按诉求比例压缩，再受最小/最大占比约束。
+export function resolveQueryBarSplitRatio({
+  splitRatio,
+  contentWidth,
+  wherePreferredWidth,
+  sortPreferredWidth,
+  minRatio,
+  maxRatio
+}: ResolveQueryBarSplitRatioOptions): number {
+  const safeSplitRatio = Math.max(minRatio, Math.min(maxRatio, splitRatio));
+  if (contentWidth <= 0) return safeSplitRatio;
+
+  const safeWhereWidth = Math.max(0, wherePreferredWidth);
+  const safeSortWidth = Math.max(0, sortPreferredWidth);
+  const totalPreferredWidth = safeWhereWidth + safeSortWidth;
+  if (totalPreferredWidth <= 0) return safeSplitRatio;
+
+  const rawRatio =
+    totalPreferredWidth <= contentWidth
+      ? Math.max(safeSplitRatio, safeWhereWidth / contentWidth)
+      : safeWhereWidth / totalPreferredWidth;
+
+  return Math.max(minRatio, Math.min(maxRatio, rawRatio));
 }
 
 // 计算光标所在 token：供候选过滤与文本替换共用。

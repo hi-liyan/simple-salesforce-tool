@@ -41,3 +41,21 @@ test("QueryPanel 工具栏: MySQL DDL 与字段按钮应使用 DDL/FIELD 文本�
   assert.equal(source.includes(">DDL<"), true);
   assert.equal(source.includes(">FIELD<"), true);
 });
+
+test("QueryPanel 工具栏: 隐藏查询栏按钮前应改为刷新当前查询按钮，且不再依赖未提交状态禁用", () => {
+  const source = readFileSync(new URL("../../src/features/main/QueryPanel/components/DataQueryTabPane.tsx", import.meta.url), "utf8");
+  const refreshTitleIndex = source.indexOf("title=\"刷新当前查询\"");
+  const queryBarToggleIndex = source.indexOf("title={activeTab.showQueryBar ? \"隐藏查询栏\" : \"显示查询栏\"}");
+
+  assert.notEqual(refreshTitleIndex, -1);
+  assert.notEqual(queryBarToggleIndex, -1);
+  assert.equal(refreshTitleIndex < queryBarToggleIndex, true);
+  assert.equal(source.includes("disabled={activeTab.loading || !hasPendingChanges}"), false);
+});
+
+test("QueryPanel 查询栏: 不应再渲染独立查询按钮，并应提供拖拽分隔条", () => {
+  const source = readFileSync(new URL("../../src/features/main/QueryPanel/components/DataQueryTabPane.tsx", import.meta.url), "utf8");
+
+  assert.equal(source.includes("查询\n        </button>"), false);
+  assert.equal(source.includes("aria-label=\"拖拽调整 WHERE 与排序输入框宽度\""), true);
+});
