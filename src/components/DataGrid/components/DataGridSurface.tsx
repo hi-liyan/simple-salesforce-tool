@@ -7,7 +7,7 @@ import { RowContextMenuState, HoveredHeaderMetaState } from "../types";
 import { isHeaderInfoIconHit } from "../renderers/drawHeader";
 import { buildDisplayMetadataFromRaw } from "../../../utils/fieldMetadata";
 import { resolveRowContextMenuCapabilities } from "../logic/contextMenu";
-import { resolveIndexRowSelection } from "../logic/selection.ts";
+import { resolveIndexHeaderToggleSelection, resolveIndexRowSelection } from "../logic/selection.ts";
 import { getDataGridSelectionConfig } from "../logic/surfaceConfig.ts";
 
 // DataGrid 表头高度：与 DataEditor 的 headerHeight 配置保持一致。
@@ -308,7 +308,20 @@ export function DataGridSurface({
           drawHeader={drawHeader}
           onHeaderClicked={(col, event) => {
             const columnId = String(columns[col]?.id ?? "");
-            if (!columnId || columnId.startsWith("__")) {
+            if (!columnId) {
+              return;
+            }
+
+            if (columnId === "__index") {
+              const nextSelection = resolveIndexHeaderToggleSelection({
+                selectableIds,
+                selectedRecordIds
+              });
+              onToggleAll(nextSelection.checked, nextSelection.recordIds);
+              return;
+            }
+
+            if (columnId.startsWith("__")) {
               return;
             }
 

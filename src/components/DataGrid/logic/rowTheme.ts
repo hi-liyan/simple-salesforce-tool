@@ -1,4 +1,4 @@
-import { GridCell } from "@glideapps/glide-data-grid";
+import type { GridCell } from "@glideapps/glide-data-grid";
 
 // 根据元数据计算单元格样式（脏数据高亮 + 必填缺失红色提示）。
 export function buildCellThemeOverride(

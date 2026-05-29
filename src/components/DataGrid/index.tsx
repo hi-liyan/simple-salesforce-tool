@@ -115,7 +115,8 @@ export function DataGrid({
     showHeaderMetadata,
     records,
     fieldMetadataMap: effectiveFieldMetadataMap,
-    selectedSourceType
+    selectedSourceType,
+    currentOffset
   });
 
   const dirtyCellSet = useMemo(() => new Set(dirtyCellKeys), [dirtyCellKeys]);
@@ -171,6 +172,7 @@ export function DataGrid({
         effectiveSalesforceTimezone,
         selectedSourceType,
         getRecordKey,
+        currentOffset,
         allowReadonlyOverlay
       }),
     [
@@ -183,6 +185,7 @@ export function DataGrid({
       effectiveSalesforceTimezone,
       selectedSourceType,
       getRecordKey,
+      currentOffset,
       allowReadonlyOverlay
     ]
   );

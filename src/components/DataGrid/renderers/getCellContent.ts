@@ -1,27 +1,28 @@
-import { GridCell, GridCellKind, GridColumn, Item } from "@glideapps/glide-data-grid";
-import { buildCellThemeOverride, buildRowThemeOverride } from "../logic/rowTheme";
+import { GridCellKind } from "@glideapps/glide-data-grid";
+import type { GridCell, GridColumn, Item } from "@glideapps/glide-data-grid";
+import { buildCellThemeOverride, buildRowThemeOverride } from "../logic/rowTheme.ts";
 import { isMysqlBlankValue, resolveMysqlDisplayValue } from "../../../features/main/QueryPanel/logic/mysqlValueSemantics.ts";
 import {
   normalizeDateDisplayValue,
   normalizeDatetimeDisplayValue
-} from "../utils/datetime";
+} from "../utils/datetime.ts";
 import {
   isCellEditableByMeta,
   isRequiredOnCreate
-} from "../utils/field";
+} from "../utils/field.ts";
 import {
   getPicklistEditorOptions,
   normalizePicklistValue,
   resolvePicklistDisplayText
-} from "../utils/picklist";
+} from "../utils/picklist.ts";
 import {
   coerceNumber,
   getNullPlaceholderBySourceType,
   isEmptyValue,
   normalizeBooleanText,
   stringifyCellValue
-} from "../utils/value";
-import { resolveFieldTypeStrategy } from "../logic/fieldTypeStrategy";
+} from "../utils/value.ts";
+import { resolveFieldTypeStrategy } from "../logic/fieldTypeStrategy.ts";
 
 type CreateGetCellContentParams = {
   // 列定义：用于将坐标列索引映射为字段名。
@@ -42,6 +43,8 @@ type CreateGetCellContentParams = {
   selectedSourceType?: string;
   // 行键提取器：统一获取 recordId。
   getRecordKey: (rowIndex: number) => string;
+  // 当前分页偏移量：用于把序号列渲染为跨页连续编号。
+  currentOffset?: number;
   // 只读单元格是否允许双击打开 Overlay（仅查看不可编辑）。
   allowReadonlyOverlay?: boolean;
 };
@@ -57,6 +60,7 @@ export function createGetCellContent({
   effectiveSalesforceTimezone,
   selectedSourceType,
   getRecordKey,
+  currentOffset = 0,
   allowReadonlyOverlay = false
 }: CreateGetCellContentParams): (cell: Item) => GridCell {
   const isMysqlSource = (selectedSourceType || "salesforce").toLowerCase() === "mysql";
@@ -75,13 +79,14 @@ export function createGetCellContent({
     const rowThemeOverride = buildRowThemeOverride(isSelectedRow, isPendingDeleteRow, isNewRowHighlight);
 
     if (columnId === "__index") {
-      const text = String(row + 1);
+      const text = String(Math.max(0, Math.floor(currentOffset || 0)) + row + 1);
       return {
         kind: GridCellKind.Text,
         data: text,
         displayData: text,
         allowOverlay: false,
         readonly: true,
+        contentAlign: "center",
         // 行级高亮：确保序号列与数据列颜色一致。
         themeOverride: rowThemeOverride
       };

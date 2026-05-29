@@ -18,6 +18,20 @@ type IndexRowSelectionResult = {
   isIndexRowSelection: boolean;
 };
 
+type ResolveIndexHeaderToggleSelectionParams = {
+  // 当前页可选中的稳定记录 Id。
+  selectableIds: string[];
+  // 当前已选中的记录 Id：用于判断是否已全选当前页。
+  selectedRecordIds: string[];
+};
+
+type IndexHeaderToggleSelectionResult = {
+  // 是否应切换为全选状态。
+  checked: boolean;
+  // 点击 # 表头后应写回的记录 Id 列表。
+  recordIds: string[];
+};
+
 // 统一处理序号列选区：点击/拖拽序号列时，将单列选区扩展为整行选区。
 export function resolveIndexRowSelection({
   nextSelection,
@@ -79,5 +93,28 @@ export function resolveIndexRowSelection({
     },
     selectedRecordIds,
     isIndexRowSelection: true
+  };
+}
+
+// 统一处理 # 表头点击：仅切换当前页已加载行，不跨页推断未加载结果。
+export function resolveIndexHeaderToggleSelection({
+  selectableIds,
+  selectedRecordIds
+}: ResolveIndexHeaderToggleSelectionParams): IndexHeaderToggleSelectionResult {
+  const normalizedSelectableIds = selectableIds.filter((recordId) => Boolean(String(recordId || "").trim()));
+  const selectedRecordSet = new Set(selectedRecordIds);
+  const isCurrentPageFullySelected = normalizedSelectableIds.length > 0
+    && normalizedSelectableIds.every((recordId) => selectedRecordSet.has(recordId));
+
+  if (isCurrentPageFullySelected) {
+    return {
+      checked: false,
+      recordIds: []
+    };
+  }
+
+  return {
+    checked: true,
+    recordIds: normalizedSelectableIds
   };
 }

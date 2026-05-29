@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { CompactSelection, type GridSelection } from "@glideapps/glide-data-grid";
-import { resolveIndexRowSelection } from "../../src/components/DataGrid/logic/selection.ts";
+import { resolveIndexHeaderToggleSelection, resolveIndexRowSelection } from "../../src/components/DataGrid/logic/selection.ts";
 
 test("resolveIndexRowSelection: 拖拽序号列时应扩展为整行多选并返回命中的记录 Id", () => {
   const nextSelection: GridSelection = {
@@ -110,5 +110,29 @@ test("resolveIndexRowSelection: Ctrl 点击序号列追加离散多行时应合�
     y: 3,
     width: 3,
     height: 1
+  });
+});
+
+test("resolveIndexHeaderToggleSelection: 点击 # 表头时应选中当前页全部行", () => {
+  const result = resolveIndexHeaderToggleSelection({
+    selectableIds: ["row-1", "row-2", "row-3"],
+    selectedRecordIds: ["row-1"]
+  });
+
+  assert.deepEqual(result, {
+    checked: true,
+    recordIds: ["row-1", "row-2", "row-3"]
+  });
+});
+
+test("resolveIndexHeaderToggleSelection: 当前页已全选时再次点击 # 表头应取消全选", () => {
+  const result = resolveIndexHeaderToggleSelection({
+    selectableIds: ["row-1", "row-2"],
+    selectedRecordIds: ["row-1", "row-2", "row-9"]
+  });
+
+  assert.deepEqual(result, {
+    checked: false,
+    recordIds: []
   });
 });

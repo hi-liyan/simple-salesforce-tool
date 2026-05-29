@@ -17,6 +17,8 @@ type UseDataGridColumnsParams = {
   fieldMetadataMap: Record<string, Record<string, unknown>>;
   // 当前数据源类型：用于按源类型切换记录 Id 提取策略。
   selectedSourceType?: string;
+  // 当前分页偏移量：用于让序号列宽度按“真实最大序号”自适应。
+  currentOffset?: number;
 };
 
 type BuildGridColumnsParams = {
@@ -29,6 +31,34 @@ type BuildGridColumnsParams = {
   // 自动估算列宽。
   autoColumnWidths: Record<string, number>;
 };
+
+type BuildIndexColumnWidthParams = {
+  // 当前分页偏移量：第二页起序号需要承接上一页。
+  currentOffset: number;
+  // 当前页记录数：用于推导本页最大序号位数。
+  rowCount: number;
+};
+
+// 序号列宽度估算：按“最大序号文本宽度 + 左右边距”收紧，避免固定 56 过宽。
+export function buildIndexColumnWidth({ currentOffset, rowCount }: BuildIndexColumnWidthParams): number {
+  const normalizedOffset = Math.max(0, Math.floor(currentOffset || 0));
+  const normalizedRowCount = Math.max(1, Math.floor(rowCount || 0));
+  const maxSequenceNumber = normalizedOffset + normalizedRowCount;
+  const sequenceText = String(Math.max(1, maxSequenceNumber));
+  // 测试环境保持纯计算；浏览器环境使用 Canvas 提高宽度测量精度。
+  const ctx =
+    typeof document !== "undefined"
+      ? document.createElement("canvas").getContext("2d")
+      : null;
+  const textWidth = ctx
+    ? (() => {
+      ctx.font = "600 13px sans-serif"; // 行内注释：尽量与序号单元格实际字体接近，减少默认列宽跳动。
+      return ctx.measureText(sequenceText).width;
+    })()
+    : Array.from(sequenceText).length * 8;
+
+  return Math.max(36, Math.ceil(textWidth + 24));
+}
 
 // 构造 DataGrid 列定义：首列固定为序号列，后续为业务字段列。
 export function buildGridColumns({
@@ -47,7 +77,7 @@ export function buildGridColumns({
   return [
     {
       id: "__index",
-      title: "#",
+      title: "",
       width: Math.max(headerMinWidths.__index ?? 56, columnWidths.__index ?? 56)
     },
     ...dataColumns
@@ -60,7 +90,8 @@ export function useDataGridColumns({
   showHeaderMetadata,
   records,
   fieldMetadataMap,
-  selectedSourceType
+  selectedSourceType,
+  currentOffset = 0
 }: UseDataGridColumnsParams) {
   // 列宽状态：支持用户拖拽后即时更新列宽。
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
@@ -78,8 +109,11 @@ export function useDataGridColumns({
   // 表头最小列宽：使用 Canvas 测量表头文案宽度，保证表头不会因列过窄被“缩放压扁”。
   const headerMinWidths = useMemo(() => {
     const widths: Record<string, number> = {
-      // 特殊列：固定最小宽度（与 DataEditor minColumnWidth 保持一致的下限）。
-      __index: 56
+      // 特殊列：按当前页最大序号宽度收紧，避免固定值过宽。
+      __index: buildIndexColumnWidth({
+        currentOffset,
+        rowCount: records.length
+      })
     };
 
     // 在浏览器环境下使用 Canvas 精确测量；非浏览器环境（如测试运行时）回退到字符宽度估算。
@@ -114,7 +148,7 @@ export function useDataGridColumns({
     }
 
     return widths;
-  }, [displayColumns, fieldMetadataMap, showHeaderMetadata]);
+  }, [currentOffset, displayColumns, fieldMetadataMap, records.length, showHeaderMetadata]);
 
   // 内容驱动的默认列宽：按“表头 + 前 N 行采样内容”估算，替代固定 180/280 宽度。
   const autoColumnWidths = useMemo(() => {
