@@ -125,3 +125,32 @@ test("restoreWorkspaceSnapshot: 应恢复二维码工具的当前配置与历史
   assert.equal(restored.qrCode.history.length, 1);
   assert.equal(restored.qrCode.history[0].id, "qr-history-1");
 });
+
+test("restoreWorkspaceSnapshot: 应恢复 Unicode 编码转换工具的当前内容与历史记录", () => {
+  const snapshot = applyPersistedStateToWorkspaceSnapshot(createEmptyWorkspaceSnapshot(), "ui.unicode-converter-tool-store", {
+    state: {
+      inputText: "\\u4F60\\u597D",
+      outputText: "你好",
+      outputFormat: "js-unicode",
+      history: [
+        {
+          id: "unicode-history-1",
+          mode: "unicode-to-chinese",
+          inputText: "\\u4F60\\u597D",
+          outputText: "你好",
+          createdAt: "2026-05-29T10:00:00.000Z",
+          outputFormat: "js-unicode"
+        }
+      ]
+    },
+    version: 0
+  });
+
+  const restored = restoreWorkspaceSnapshot(snapshot);
+
+  assert.equal(restored.unicodeConverter.inputText, "\\u4F60\\u597D");
+  assert.equal(restored.unicodeConverter.outputText, "你好");
+  assert.equal(restored.unicodeConverter.outputFormat, "js-unicode");
+  assert.equal(restored.unicodeConverter.history.length, 1);
+  assert.equal(restored.unicodeConverter.history[0].id, "unicode-history-1");
+});

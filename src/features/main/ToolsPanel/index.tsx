@@ -1,9 +1,10 @@
-import { type LucideIcon, ArrowLeftRight, Braces, ChevronRight, QrCode, Wrench } from "lucide-react";
+import { type LucideIcon, ArrowLeftRight, Braces, ChevronRight, Languages, QrCode, Wrench } from "lucide-react";
 import { useAppStore, type ToolsPanelActiveToolId } from "../../../store/useAppStore";
 import { JsonFormatterTool } from "./components/JsonFormatterTool";
 import { TextDiffTool } from "./components/TextDiffTool";
 import { JsonDiffTool } from "./components/JsonDiffTool";
 import { QrCodeTool } from "./components/QrCodeTool";
+import { UnicodeConverterTool } from "./components/UnicodeConverterTool";
 
 // 工具标识：当前面板已实现的工具集合。
 type ToolItemId = Exclude<ToolsPanelActiveToolId, null>;
@@ -51,6 +52,13 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     description: "提供文本转二维码、参数配置、预览复制下载，以及带持久化能力的历史记录管理。",
     statusText: "已上线",
     icon: QrCode
+  },
+  {
+    id: "unicode-converter",
+    title: "Unicode 编码转换",
+    description: "提供 Unicode/中文/ASCII 双向转换，支持 `\\uXXXX` 与 HTML 实体双格式、结果持久化与历史记录管理。",
+    statusText: "已上线",
+    icon: Languages
   }
 ];
 
@@ -75,6 +83,10 @@ export function ToolsPanel() {
 
   if (activeToolId === "qr-code") {
     return <QrCodeTool onBack={() => setToolsPanelActiveToolId(null)} />;
+  }
+
+  if (activeToolId === "unicode-converter") {
+    return <UnicodeConverterTool onBack={() => setToolsPanelActiveToolId(null)} />;
   }
 
   return (

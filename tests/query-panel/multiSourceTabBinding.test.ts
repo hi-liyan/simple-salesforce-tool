@@ -129,12 +129,12 @@ test("useAppStore: 从 tools 切到其他 panel 再切回时，应保留上一�
   const store = useAppStore.getState();
 
   store.setViewMode("tools");
-  store.setToolsPanelActiveToolId("json-diff");
+  store.setToolsPanelActiveToolId("unicode-converter");
   store.setViewMode("query");
   store.setViewMode("tools");
 
   assert.equal(useAppStore.getState().viewMode, "tools");
-  assert.equal(useAppStore.getState().toolsPanelActiveToolId, "json-diff");
+  assert.equal(useAppStore.getState().toolsPanelActiveToolId, "unicode-converter");
 
   store.setToolsPanelActiveToolId(null);
   assert.equal(useAppStore.getState().toolsPanelActiveToolId, null);

@@ -7,7 +7,7 @@ import { hydrateTab } from "./queryTabHydration.ts";
 // 主页面视图模式：支持 Query 工作区、Terminal 工作区、工具页与设置页入口。
 export type MainViewMode = "query" | "terminal" | "tools" | "settings";
 // ToolsPanel 当前工具标识：仅用于跨 panel 切换保留最近一次工具页，不参与重启恢复。
-export type ToolsPanelActiveToolId = "json-formatter" | "text-diff" | "json-diff" | "qr-code" | null;
+export type ToolsPanelActiveToolId = "json-formatter" | "text-diff" | "json-diff" | "qr-code" | "unicode-converter" | null;
 
 // 旧版按 source 分桶的对象 Tab 持久化结构：用于历史快照兼容迁移。
 type LegacyPersistedSourceTabState = {

@@ -21,10 +21,15 @@ import type { JsonFormatterTab } from "./useJsonFormatterStore.ts";
 import type { JsonDiffTab } from "./useJsonDiffStore.ts";
 import type { TextDiffTab } from "./useTextDiffStore.ts";
 import type { QrCodeHistoryEntry, QrCodeOptions } from "../features/main/ToolsPanel/logic/qrCode.ts";
+import type {
+  UnicodeConverterHistoryEntry,
+  UnicodeConverterOutputFormat
+} from "../features/main/ToolsPanel/logic/unicodeConverter.ts";
 import type { PersistedSourceTreeUiState } from "../features/main/QueryPanel/logic/sourceTreePersistence.ts";
 import { normalizePersistedSourceTreeUiState } from "../features/main/QueryPanel/logic/sourceTreePersistence.ts";
 import { buildConsoleWorkspaceTabId, buildDataWorkspaceTabId } from "../features/main/QueryPanel/logic/workspaceTabs.ts";
 import { normalizeQrCodeToolPersistedState } from "../features/main/ToolsPanel/logic/qrCode.ts";
+import { normalizeUnicodeConverterToolPersistedState } from "../features/main/ToolsPanel/logic/unicodeConverter.ts";
 
 const APP_SELECTED_SOURCE_ID_KEY = "app.selectedSourceId";
 const APP_VIEW_MODE_KEY = "app.viewMode";
@@ -43,6 +48,10 @@ const TEXT_DIFF_ACTIVE_TAB_KEY = "tool.textDiff.activeTabId";
 const QR_CODE_INPUT_TEXT_KEY = "tool.qrCode.inputText";
 const QR_CODE_OPTIONS_KEY = "tool.qrCode.options";
 const QR_CODE_HISTORY_KEY = "tool.qrCode.history";
+const UNICODE_CONVERTER_INPUT_TEXT_KEY = "tool.unicodeConverter.inputText";
+const UNICODE_CONVERTER_OUTPUT_TEXT_KEY = "tool.unicodeConverter.outputText";
+const UNICODE_CONVERTER_OUTPUT_FORMAT_KEY = "tool.unicodeConverter.outputFormat";
+const UNICODE_CONVERTER_HISTORY_KEY = "tool.unicodeConverter.history";
 
 type AppStoreSlice = {
   selectedSourceId: string;
@@ -95,6 +104,13 @@ type QrCodeToolStoreSlice = {
   history: QrCodeHistoryEntry[];
 };
 
+type UnicodeConverterToolStoreSlice = {
+  inputText: string;
+  outputText: string;
+  outputFormat: UnicodeConverterOutputFormat;
+  history: UnicodeConverterHistoryEntry[];
+};
+
 /// 创建空的结构化工作区快照。
 export function createEmptyWorkspaceSnapshot(): WorkspaceSnapshotDto {
   return {
@@ -139,6 +155,8 @@ export function applyPersistedStateToWorkspaceSnapshot(
     applyTextDiffSlice(nextSnapshot, state as TextDiffStoreSlice | undefined);
   } else if (key === "ui.qr-code-tool-store") {
     applyQrCodeToolSlice(nextSnapshot, state as QrCodeToolStoreSlice | undefined);
+  } else if (key === "ui.unicode-converter-tool-store") {
+    applyUnicodeConverterToolSlice(nextSnapshot, state as UnicodeConverterToolStoreSlice | undefined);
   }
 
   rebuildWorkspaceTabs(nextSnapshot);
@@ -210,6 +228,12 @@ export function getPersistedStateFromWorkspaceSnapshot(
       version: 0
     };
   }
+  if (key === "ui.unicode-converter-tool-store") {
+    return {
+      state: restoreUnicodeConverterToolSlice(snapshot),
+      version: 0
+    };
+  }
   return null;
 }
 
@@ -238,7 +262,8 @@ export function restoreWorkspaceSnapshot(snapshot: WorkspaceSnapshotDto) {
     jsonFormatter: restoreJsonFormatterSlice(snapshot),
     jsonDiff: restoreJsonDiffSlice(snapshot),
     textDiff: restoreTextDiffSlice(snapshot),
-    qrCode: restoreQrCodeToolSlice(snapshot)
+    qrCode: restoreQrCodeToolSlice(snapshot),
+    unicodeConverter: restoreUnicodeConverterToolSlice(snapshot)
   };
 }
 
@@ -335,6 +360,15 @@ function applyQrCodeToolSlice(snapshot: WorkspaceSnapshotDto, state?: QrCodeTool
   snapshot.uiState[QR_CODE_INPUT_TEXT_KEY] = safeState.inputText;
   snapshot.uiState[QR_CODE_OPTIONS_KEY] = safeState.options;
   snapshot.uiState[QR_CODE_HISTORY_KEY] = safeState.history;
+}
+
+/// 将 Unicode 编码转换工具切片写入结构化快照。
+function applyUnicodeConverterToolSlice(snapshot: WorkspaceSnapshotDto, state?: UnicodeConverterToolStoreSlice) {
+  const safeState = normalizeUnicodeConverterToolPersistedState(state);
+  snapshot.uiState[UNICODE_CONVERTER_INPUT_TEXT_KEY] = safeState.inputText;
+  snapshot.uiState[UNICODE_CONVERTER_OUTPUT_TEXT_KEY] = safeState.outputText;
+  snapshot.uiState[UNICODE_CONVERTER_OUTPUT_FORMAT_KEY] = safeState.outputFormat;
+  snapshot.uiState[UNICODE_CONVERTER_HISTORY_KEY] = safeState.history;
 }
 
 /// 从结构化快照恢复 app store 状态。
@@ -465,6 +499,16 @@ function restoreQrCodeToolSlice(snapshot: WorkspaceSnapshotDto): QrCodeToolStore
     inputText: snapshot.uiState[QR_CODE_INPUT_TEXT_KEY],
     options: snapshot.uiState[QR_CODE_OPTIONS_KEY],
     history: snapshot.uiState[QR_CODE_HISTORY_KEY]
+  });
+}
+
+/// 从结构化快照恢复 Unicode 编码转换工具状态。
+function restoreUnicodeConverterToolSlice(snapshot: WorkspaceSnapshotDto): UnicodeConverterToolStoreSlice {
+  return normalizeUnicodeConverterToolPersistedState({
+    inputText: snapshot.uiState[UNICODE_CONVERTER_INPUT_TEXT_KEY],
+    outputText: snapshot.uiState[UNICODE_CONVERTER_OUTPUT_TEXT_KEY],
+    outputFormat: snapshot.uiState[UNICODE_CONVERTER_OUTPUT_FORMAT_KEY],
+    history: snapshot.uiState[UNICODE_CONVERTER_HISTORY_KEY]
   });
 }
 
