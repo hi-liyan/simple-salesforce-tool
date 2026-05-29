@@ -1,5 +1,5 @@
 import React from "react";
-import { CompactSelection, DataEditor, EditableGridCell, EditListItem, GridCell, GridColumn, GridSelection, Item } from "@glideapps/glide-data-grid";
+import { DataEditor, EditableGridCell, EditListItem, GridCell, GridColumn, GridSelection, Item } from "@glideapps/glide-data-grid";
 import { HeaderMetaPopover } from "./HeaderMetaPopover";
 import { RowContextMenu } from "./RowContextMenu";
 import { stringifyCellValue } from "../utils/value";
@@ -7,9 +7,12 @@ import { RowContextMenuState, HoveredHeaderMetaState } from "../types";
 import { isHeaderInfoIconHit } from "../renderers/drawHeader";
 import { buildDisplayMetadataFromRaw } from "../../../utils/fieldMetadata";
 import { resolveRowContextMenuCapabilities } from "../logic/contextMenu";
+import { resolveIndexHeaderToggleSelection, resolveIndexRowSelection } from "../logic/selection.ts";
+import { resolveSelectedEditableLocations } from "../logic/paste.ts";
+import { getDataGridSelectionConfig } from "../logic/surfaceConfig.ts";
 
 // DataGrid 表头高度：与 DataEditor 的 headerHeight 配置保持一致。
-const DATA_GRID_HEADER_HEIGHT = 42;
+const DATA_GRID_HEADER_HEIGHT = 30;
 // DataGrid 数据行高度：与 DataEditor 的 rowHeight 配置保持一致。
 const DATA_GRID_ROW_HEIGHT = 30;
 // DataGrid 横向滚动条预留高度：在需要时才保留，避免无滚动条时留白。
@@ -31,8 +34,6 @@ function getScrollbarSize(): number {
 }
 
 type DataGridSurfaceProps = {
-  // 查询总数（展示在工具栏）。
-  totalSize: number;
   // 当前行数据。
   records: Record<string, unknown>[];
   // 表格列定义。
@@ -45,10 +46,6 @@ type DataGridSurfaceProps = {
   selectedRecordIds: string[];
   // 是否展示表头元数据 icon。
   showHeaderMetadata: boolean;
-  // 全选态。
-  allChecked: boolean;
-  // 半选态。
-  hasAnyChecked: boolean;
   // 可选中记录 Id 列表。
   selectableIds: string[];
   // 表格主体容器 ref。
@@ -99,6 +96,8 @@ type DataGridSurfaceProps = {
   onCellClicked: React.ComponentProps<typeof DataEditor>["onCellClicked"];
   // 批量编辑回调。
   onCellsEdited: (newValues: readonly EditListItem[]) => void;
+  // 粘贴回调：用于在特定场景下接管 Glide 默认粘贴行为。
+  onPaste: (target: Item, values: readonly (readonly string[])[], selectedLocations: readonly Item[]) => boolean;
   // 编辑器分发回调。
   provideEditor: NonNullable<React.ComponentProps<typeof DataEditor>["provideEditor"]>;
   // 表头绘制回调。
@@ -107,15 +106,12 @@ type DataGridSurfaceProps = {
 
 // DataGrid 渲染层：仅负责 DataEditor 与浮层/菜单的 UI 组装。
 export function DataGridSurface({
-  totalSize,
   records,
   columns,
   fieldMetadataMap,
   selectedSourceType,
   selectedRecordIds,
   showHeaderMetadata,
-  allChecked,
-  hasAnyChecked,
   selectableIds,
   gridBodyRef,
   rowContextMenu,
@@ -141,11 +137,15 @@ export function DataGridSurface({
   onCellEdited,
   onCellClicked,
   onCellsEdited,
+  onPaste,
   provideEditor,
   drawHeader
 }: DataGridSurfaceProps) {
+  const selectionConfig = React.useMemo(() => getDataGridSelectionConfig(), []);
   // 受控选区状态：用于实现“点击 # 选整行”。
   const [gridSelection, setGridSelection] = React.useState<GridSelection | undefined>(undefined);
+  // 最新可粘贴目标单元格：在选区变化时同步写入，避免粘贴时读取到滞后的 React state。
+  const selectedPasteLocationsRef = React.useRef<readonly Item[]>([]);
   // 横向滚动条预留高度：仅在需要显示横向滚动条时才保留。
   const [scrollbarGutter, setScrollbarGutter] = React.useState(0);
   // 计算当前总列宽：用于绘制右侧空白区域遮罩（列较少时隐藏空白网格线）。
@@ -185,58 +185,50 @@ export function DataGridSurface({
     };
   }, [gridBodyRef, totalColumnsWidth]);
 
+  React.useEffect(() => {
+    if (selectedRecordIds.length === 0) {
+      setGridSelection(undefined); // 外层清空选中记录后，同步清空表格整行高亮。
+      selectedPasteLocationsRef.current = []; // 行内注释：整行选区清空后，同步丢弃粘贴目标快照。
+    }
+  }, [selectedRecordIds]);
+
   // 统一处理选区变更：命中 # 序号列时，将默认单元格选区改写为整行选区。
   const handleGridSelectionChange = React.useCallback(
     (nextSelection: GridSelection) => {
-      const current = nextSelection.current;
-      if (!current) {
-        setGridSelection(nextSelection);
-        return;
-      }
-      const [col, row] = current.cell;
-      const columnId = String(columns[col]?.id ?? "");
-      if (columnId !== "__index") {
-        setGridSelection(nextSelection);
-        return;
-      }
-      const startCol = columns.findIndex((item) => String(item.id ?? "") === "__index");
-      const safeStartCol = startCol >= 0 ? startCol : 0;
-      const rowRange = {
-        x: safeStartCol,
-        y: row,
-        width: Math.max(1, columns.length - safeStartCol),
-        height: 1
-      };
-      setGridSelection({
-        current: {
-          cell: [safeStartCol, row],
-          range: rowRange,
-          rangeStack: []
-        },
-        columns: CompactSelection.empty(),
-        rows: CompactSelection.empty()
+      const resolvedSelection = resolveIndexRowSelection({
+        nextSelection,
+        columns,
+        selectableIds
       });
+      setGridSelection(resolvedSelection.gridSelection);
+      selectedPasteLocationsRef.current = resolveSelectedEditableLocations({
+        gridSelection: resolvedSelection.gridSelection,
+        columns
+      });
+      if (resolvedSelection.isIndexRowSelection) {
+        onToggleAll(resolvedSelection.selectedRecordIds.length > 0, resolvedSelection.selectedRecordIds);
+        return;
+      }
+      if (selectedRecordIds.length > 0) {
+        onToggleAll(false, []); // 点击普通单元格时清空行选中，避免删除/批处理命中旧选区。
+      }
     },
-    [columns]
+    [columns, selectableIds, onToggleAll, selectedRecordIds.length]
   );
 
   return (
-    // 表格容器：顶部统计栏 + 数据表格。
+    // 表格容器：仅承载数据表格主体与浮层。
     <div className="relative flex h-full min-h-0 flex-col">
-      {/* 顶部工具栏：仅显示统计。 */}
-      <div className="flex items-center gap-1.5 border-b border-base-300 px-3 py-1">
-        {/* 统计信息。 */}
-        <span className="text-[12px] text-neutral/70">
-          Rows: {totalSize}
-        </span>
-      </div>
-
       {/* 数据表格主体。 */}
       <div ref={gridBodyRef} className="relative min-h-0 flex-1">
         {/* Glide Data Grid 组件：承载行列渲染、编辑、选择、列宽调整等核心交互。 */}
         <DataEditor
-          // 列定义：包含选择列、序号列和业务字段列。
+          // 列定义：包含冻结序号列和业务字段列。
           columns={columns}
+          // 冻结首列序号：横向滚动时始终保留左侧行头。
+          freezeColumns={selectionConfig.freezeColumns}
+          // 启用多矩形选区：桌面端支持 Ctrl/Command 追加离散选区，是数据库客户端常见交互。
+          rangeSelect={selectionConfig.rangeSelect}
           // 受控选区：用于支持自定义的整行选中行为。
           gridSelection={gridSelection}
           onGridSelectionChange={handleGridSelectionChange}
@@ -274,7 +266,6 @@ export function DataGridSurface({
             if (!copyColumnId) return;
             const record = records[row] || {};
             const copyRecord = records[copyRow] || {};
-            const copyRecordId = String(copyRecord.Id ?? "").trim();
             const recordId = String(record.Id ?? "").trim();
             const isDataColumn = !columnId.startsWith("__");
             const metadata = isDataColumn ? (fieldMetadataMap[columnId] || {}) : {};
@@ -290,13 +281,11 @@ export function DataGridSurface({
               gridSelection,
               columns,
               records,
-              selectedRecordIds,
               getCellContent,
               copyCol,
               copyRow,
               copyColumnId,
-              copyRecord,
-              copyRecordId
+              copyRecord
             );
 
             const gridRect = gridBodyRef.current?.getBoundingClientRect();
@@ -326,17 +315,24 @@ export function DataGridSurface({
           onCellsEdited={onCellsEdited}
           // 使用 Glide 内置 overlay 机制渲染字段专属编辑器。
           provideEditor={provideEditor}
-          // 自定义首列表头复选框样式，使其与行内复选框视觉一致。
+          // 自定义字段表头双行绘制与元数据图标。
           drawHeader={drawHeader}
-          // 点击首列表头可切换全选状态。
           onHeaderClicked={(col, event) => {
             const columnId = String(columns[col]?.id ?? "");
-            if (columnId === "__select") {
-              onToggleAll(!allChecked, selectableIds);
+            if (!columnId) {
               return;
             }
 
-            if (!columnId || columnId.startsWith("__")) {
+            if (columnId === "__index") {
+              const nextSelection = resolveIndexHeaderToggleSelection({
+                selectableIds,
+                selectedRecordIds
+              });
+              onToggleAll(nextSelection.checked, nextSelection.recordIds);
+              return;
+            }
+
+            if (columnId.startsWith("__")) {
               return;
             }
 
@@ -424,8 +420,8 @@ export function DataGridSurface({
           height="100%"
           // 支持区域选择时读取选区单元格。
           getCellsForSelection
-          // 启用二维粘贴（按行列拆分），行为与 Excel 类似。
-          onPaste
+          // 粘贴回调：默认沿用 Glide 的矩形粘贴，仅在特定多选场景下由上层接管。
+          onPaste={(target, values) => onPaste(target, values, selectedPasteLocationsRef.current)}
         />
         {/* 空白区遮罩：仅保留“有数据区域”的网格线，隐藏数据末行以下的网格背景。 */}
         {records.length > 0 && (
@@ -512,13 +508,11 @@ function buildCopyTextBySelection(
   gridSelection: GridSelection | undefined,
   columns: GridColumn[],
   records: Record<string, unknown>[],
-  selectedRecordIds: string[],
   getCellContent: (cell: Item) => GridCell,
   fallbackCol: number,
   fallbackRow: number,
   fallbackColumnId: string,
-  fallbackRecord: Record<string, unknown>,
-  fallbackRecordId: string
+  fallbackRecord: Record<string, unknown>
 ): string {
   const currentSelection = gridSelection?.current;
   if (currentSelection) {
@@ -554,7 +548,6 @@ function buildCopyTextBySelection(
   const fallbackCell = getCellContent([fallbackCol, fallbackRow]);
   const fallbackByGrid = gridCellToText(fallbackCell);
   if (fallbackByGrid !== "") return fallbackByGrid;
-  if (fallbackColumnId === "__select") return String(selectedRecordIds.includes(fallbackRecordId));
   if (fallbackColumnId === "__index") return String(fallbackRow + 1);
   return stringifyCellValue(fallbackRecord[fallbackColumnId]);
 }

@@ -1,27 +1,28 @@
-import { GridCell, GridCellKind, GridColumn, Item } from "@glideapps/glide-data-grid";
-import { buildCellThemeOverride, buildRowThemeOverride } from "../logic/rowTheme";
+import { GridCellKind } from "@glideapps/glide-data-grid";
+import type { GridCell, GridColumn, Item } from "@glideapps/glide-data-grid";
+import { buildCellThemeOverride, buildRowThemeOverride } from "../logic/rowTheme.ts";
 import { isMysqlBlankValue, resolveMysqlDisplayValue } from "../../../features/main/QueryPanel/logic/mysqlValueSemantics.ts";
 import {
   normalizeDateDisplayValue,
   normalizeDatetimeDisplayValue
-} from "../utils/datetime";
+} from "../utils/datetime.ts";
 import {
   isCellEditableByMeta,
   isRequiredOnCreate
-} from "../utils/field";
+} from "../utils/field.ts";
 import {
   getPicklistEditorOptions,
   normalizePicklistValue,
   resolvePicklistDisplayText
-} from "../utils/picklist";
+} from "../utils/picklist.ts";
 import {
   coerceNumber,
   getNullPlaceholderBySourceType,
   isEmptyValue,
   normalizeBooleanText,
   stringifyCellValue
-} from "../utils/value";
-import { resolveFieldTypeStrategy } from "../logic/fieldTypeStrategy";
+} from "../utils/value.ts";
+import { resolveFieldTypeStrategy } from "../logic/fieldTypeStrategy.ts";
 
 type CreateGetCellContentParams = {
   // 列定义：用于将坐标列索引映射为字段名。
@@ -30,8 +31,8 @@ type CreateGetCellContentParams = {
   records: Record<string, unknown>[];
   // 字段元数据：用于推断类型、可编辑性与必填状态。
   fieldMetadataMap: Record<string, Record<string, unknown>>;
-  // 已选中记录集合：用于首列 checkbox 回显。
-  selectedRecordIds: string[];
+  // 已选中记录集合：用于整行高亮回显。
+  selectedRecordSet: Set<string>;
   // 脏单元格集合：用于高亮显示。
   dirtyCellSet: Set<string>;
   // 待删除记录集合：用于整行灰色高亮。
@@ -42,6 +43,8 @@ type CreateGetCellContentParams = {
   selectedSourceType?: string;
   // 行键提取器：统一获取 recordId。
   getRecordKey: (rowIndex: number) => string;
+  // 当前分页偏移量：用于把序号列渲染为跨页连续编号。
+  currentOffset?: number;
   // 只读单元格是否允许双击打开 Overlay（仅查看不可编辑）。
   allowReadonlyOverlay?: boolean;
 };
@@ -51,12 +54,13 @@ export function createGetCellContent({
   columns,
   records,
   fieldMetadataMap,
-  selectedRecordIds,
+  selectedRecordSet,
   dirtyCellSet,
   pendingDeleteRecordSet,
   effectiveSalesforceTimezone,
   selectedSourceType,
   getRecordKey,
+  currentOffset = 0,
   allowReadonlyOverlay = false
 }: CreateGetCellContentParams): (cell: Item) => GridCell {
   const isMysqlSource = (selectedSourceType || "salesforce").toLowerCase() === "mysql";
@@ -66,32 +70,23 @@ export function createGetCellContent({
     const record = records[row] || {};
     const recordId = getRecordKey(row);
     const isNewRow = Boolean(record.__isNew);
+    const isSelectedRow = selectedRecordSet.has(recordId);
     // 待删除行统一灰色高亮，便于用户识别“尚未提交删除”的记录。
     const isPendingDeleteRow = pendingDeleteRecordSet.has(recordId);
     // 新建行统一浅绿色高亮，便于用户识别“待提交新增”的记录。
     const isNewRowHighlight = isNewRow;
     // 行级样式：用于选择列/序号列等非业务字段单元格。
-    const rowThemeOverride = buildRowThemeOverride(isPendingDeleteRow, isNewRowHighlight);
-
-    if (columnId === "__select") {
-      return {
-        kind: GridCellKind.Boolean,
-        data: selectedRecordIds.includes(recordId),
-        allowOverlay: false,
-        readonly: recordId.startsWith("row:"),
-        // 行级高亮：确保选择列与数据列颜色一致。
-        themeOverride: rowThemeOverride
-      };
-    }
+    const rowThemeOverride = buildRowThemeOverride(isSelectedRow, isPendingDeleteRow, isNewRowHighlight);
 
     if (columnId === "__index") {
-      const text = String(row + 1);
+      const text = String(Math.max(0, Math.floor(currentOffset || 0)) + row + 1);
       return {
         kind: GridCellKind.Text,
         data: text,
         displayData: text,
         allowOverlay: false,
         readonly: true,
+        contentAlign: "center",
         // 行级高亮：确保序号列与数据列颜色一致。
         themeOverride: rowThemeOverride
       };
@@ -110,7 +105,13 @@ export function createGetCellContent({
     const isRequiredEmpty = requiredNewField && (isMysqlSource ? isMysqlBlankValue(raw) : isEmptyValue(raw));
     const isNullishValue = mysqlDisplayState.useNullPlaceholder;
 
-    const commonTheme = buildCellThemeOverride(isDirty, isRequiredEmpty, isPendingDeleteRow, isNewRowHighlight);
+    const commonTheme = buildCellThemeOverride(
+      isDirty,
+      isRequiredEmpty,
+      isSelectedRow,
+      isPendingDeleteRow,
+      isNewRowHighlight
+    );
     // 空值仅在展示态使用淡化样式，避免把编辑器里的输入文字也渲染成灰色。
     const nullPlaceholderStyle: "normal" | "faded" = isNullishValue ? "faded" : "normal";
 

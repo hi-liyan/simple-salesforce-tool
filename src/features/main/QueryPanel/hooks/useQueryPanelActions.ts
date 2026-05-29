@@ -100,6 +100,7 @@ type UseQueryPanelActionsInput = {
     limitOverride?: number,
     directionOverride?: "ASC" | "DESC",
     sortClauseOverride?: string,
+    offsetOverride?: number,
     fallbackTab?: TabState
   ) => Promise<void>;
   // 执行自定义 SQL/SOQL。
@@ -293,6 +294,7 @@ export function useQueryPanelActions({
         // 查询触发支持覆盖草稿参数：用于 UI 在防抖回写之前直接执行最新输入。
         const whereClauseOverride = overrides?.whereClause;
         const limitOverride = overrides?.limit;
+        const offsetOverride = overrides?.offset;
         const sortClauseOverride = overrides?.sortClause;
         const sortFieldOverride = overrides?.sortField;
         const sortDirectionOverride = overrides?.sortDirection;
@@ -304,6 +306,7 @@ export function useQueryPanelActions({
           limitOverride ?? activeTab.limit,
           sortDirectionOverride ?? activeTab.sortDirection,
           sortClauseOverride ?? activeTab.sortClause,
+          offsetOverride,
           activeTab
         );
       },

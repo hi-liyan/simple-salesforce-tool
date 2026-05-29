@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { PanelRightOpen, Play, Plus, RotateCcw, ScrollText, Search, Trash2, X } from "lucide-react";
+import { createPortal } from "react-dom";
+import { ArrowUpDown, Filter, PanelRightOpen, Play, Plus, RefreshCw, ScrollText, Search, Trash2, X } from "lucide-react";
 import { ContextMenu, type ContextMenuEntry } from "../../../../components/ContextMenu";
 import { DataGrid } from "../../../../components/DataGrid";
+import { QueryPaginationToolbar } from "../../../../components/DataGrid/components/QueryPaginationToolbar";
 import { NoticeAlert } from "../../../../components/NoticeAlert";
 import { SoqlMonacoEditor } from "../../../../components/SoqlMonacoEditor";
 import { api } from "../../../../api";
@@ -9,11 +11,14 @@ import { useAppStore } from "../../../../store/useAppStore";
 import { buildObjectTabBindingKey, MutationPreviewItem, Notice, ObjectDdl, TabState } from "../../../../types";
 import { buildMysqlMutationPlan, mergeMysqlPreviewSqlItems } from "../logic/mysqlMutationPlanner.ts";
 import { hasMysqlMissingRequiredFields } from "../logic/mysqlCreateValidation.ts";
+import { resolveQueryPageNavigationOffset } from "../../../../components/DataGrid/logic/queryPagination.ts";
+import { extractOffsetValue } from "../logic/queryUtils.ts";
 import { resolveMysqlResultUpdateCapability } from "../logic/mysqlUpdateCapability.ts";
 import { buildSourceSurfacePalette } from "../logic/sourceColor.ts";
 import type { QueryOverrides } from "../types";
 import { MysqlSmartInput } from "./MysqlSmartInput";
 import { SalesforceSmartInput } from "./SalesforceSmartInput";
+import { resolveQueryBarSplitRatio } from "../logic/smartInput.ts";
 
 // MySQL 函数候选：覆盖常见字符串、日期、聚合、空值处理函数。
 const MYSQL_FUNCTION_SUGGESTIONS = [
@@ -165,11 +170,7 @@ type DataQueryTabPaneProps = {
   onRefreshMysqlDdl: () => void;
   onToggleQueryBar: () => void;
   onToggleLogs: () => void;
-  onWhereChange: (value: string) => void;
   onLimitChange: (value: number) => void;
-  onSortFieldChange: (value: string) => void;
-  onSortDirectionChange: (value: "ASC" | "DESC") => void;
-  onSortClauseChange: (value: string) => void;
   onQuery: (overrides?: QueryOverrides) => void;
   onToggleRecord: (recordId: string, checked: boolean) => void;
   onToggleAllRecords: (checked: boolean, recordIds: string[]) => void;
@@ -201,12 +202,6 @@ type QueryBarProps = {
   salesforceWhereSuggestions: string[];
   // Salesforce 排序候选词。
   salesforceSortSuggestions: string[];
-  // 写入 WHERE：用于防抖回写到 store。
-  onWhereChange: (value: string) => void;
-  // 写入 LIMIT：用于防抖回写到 store。
-  onLimitChange: (value: number) => void;
-  // 写入排序表达式：用于防抖回写到 store。
-  onSortClauseChange: (value: string) => void;
   // 执行查询：支持用草稿覆盖值执行，避免依赖 store 回写完成。
   onQuery: (overrides?: QueryOverrides) => void;
 };
@@ -228,6 +223,44 @@ type MysqlMutationPreviewState = {
   items: MutationPreviewItem[];
 };
 
+type ToolbarActionButtonProps = {
+  // 按钮标题：供 hover 提示与 aria 复用。
+  title: string;
+  // 无障碍标签：默认与 title 一致。
+  ariaLabel?: string;
+  // 是否禁用。
+  disabled?: boolean;
+  // 按钮样式类名。
+  className: string;
+  // 点击事件。
+  onClick: () => void;
+  // 按钮内容。
+  children: React.ReactNode;
+};
+
+// 工具栏按钮包装器：将 title 放到外层可 hover 容器，解决 disabled button 无法显示原生提示的问题。
+function ToolbarActionButton({
+  title,
+  ariaLabel,
+  disabled = false,
+  className,
+  onClick,
+  children
+}: ToolbarActionButtonProps) {
+  return (
+    <span className="inline-flex" title={title}>
+      <button
+        className={`${className} ${disabled ? "pointer-events-none" : ""}`.trim()}
+        disabled={disabled}
+        aria-label={ariaLabel || title}
+        onClick={onClick}
+      >
+        {children}
+      </button>
+    </span>
+  );
+}
+
 // 查询栏：将输入草稿隔离在子组件内，避免输入时触发 DataGrid 等重组件重渲染导致卡顿。
 function QueryBar({
   activeTab,
@@ -236,23 +269,44 @@ function QueryBar({
   mysqlSortSuggestions,
   salesforceWhereSuggestions,
   salesforceSortSuggestions,
-  onWhereChange,
-  onLimitChange,
-  onSortClauseChange,
   onQuery
 }: QueryBarProps) {
+  const QUERY_BAR_MIN_SPLIT_RATIO = 0.3;
+  const QUERY_BAR_MAX_SPLIT_RATIO = 0.7;
+  const QUERY_BAR_DIVIDER_WIDTH = 10;
+  const QUERY_BAR_SECTION_HORIZONTAL_PADDING = 24;
+  const QUERY_BAR_SECTION_GAP = 8;
   // Store：直接更新目标 Tab，避免“常驻挂载 + 防抖回写”在切换 Tab 后误写到其它 Tab。
   const patchTabInStore = useAppStore((state) => state.patchTab);
   const activeTabIdentity = activeTab.bindingKey || buildObjectTabBindingKey(activeTab.sourceId || "", activeTab.objectName);
+  // 查询栏根节点：用于读取当前可用宽度并约束拖拽范围。
+  const queryBarRef = useRef<HTMLDivElement | null>(null);
+  // WHERE 前缀节点：用于测量左侧固定占用宽度。
+  const wherePrefixRef = useRef<HTMLDivElement | null>(null);
+  // ORDER BY 前缀节点：用于测量右侧固定占用宽度。
+  const sortPrefixRef = useRef<HTMLDivElement | null>(null);
+  // 查询栏当前宽度：用于把拖拽比例转换成实际像素宽度。
+  const [queryBarWidth, setQueryBarWidth] = useState(0);
+  // 用户手动拖拽后的分栏比例：默认 50% / 50%，仅保留当前组件生命周期。
+  const [splitRatio, setSplitRatio] = useState(0.5);
+  // 是否正在拖拽 WHERE/排序分隔条。
+  const [draggingSplitResize, setDraggingSplitResize] = useState(false);
+  // WHERE 输入内容解析出的期望宽度：用于内容过长时自动申请更多分栏空间。
+  const [wherePreferredWidth, setWherePreferredWidth] = useState(360);
+  // 排序输入内容解析出的期望宽度：用于内容过长时自动申请更多分栏空间。
+  const [sortPreferredWidth, setSortPreferredWidth] = useState(300);
+  // WHERE 前缀当前宽度：供整块分栏诉求计算使用。
+  const [wherePrefixWidth, setWherePrefixWidth] = useState(0);
+  // ORDER BY 前缀当前宽度：供整块分栏诉求计算使用。
+  const [sortPrefixWidth, setSortPrefixWidth] = useState(0);
+  // 拖拽前 body 的 user-select 样式，结束后恢复。
+  const prevBodyUserSelectRef = useRef("");
+  // 拖拽前 body 的 cursor 样式，结束后恢复。
+  const prevBodyCursorRef = useRef("");
 
   // 回写 WHERE：按当前 QueryBar 绑定的对象 Tab 精准写入。
   function commitWhereClause(value: string) {
     patchTabInStore(activeTabIdentity, (item) => ({ ...item, whereClause: value })); // 行内注释：仅更新目标 Tab 的 WHERE，避免跨 Tab 串写。
-  }
-
-  // 回写 LIMIT：按当前 QueryBar 绑定的对象 Tab 精准写入。
-  function commitLimit(value: number) {
-    patchTabInStore(activeTabIdentity, (item) => ({ ...item, limit: value })); // 行内注释：仅更新目标 Tab 的 LIMIT，避免跨 Tab 串写。
   }
 
   // 回写排序表达式：同步兼容旧版 sortField/sortDirection 显示逻辑。
@@ -286,41 +340,30 @@ function QueryBar({
   const [sortDraft, setSortDraft] = useState(
     activeTab.sortClause || (activeTab.sortField ? `${activeTab.sortField} ${activeTab.sortDirection}` : "")
   );
-  // LIMIT 草稿：输入时保持数字态，避免直接写入 store 触发全局重渲染。
-  const [limitDraft, setLimitDraft] = useState(activeTab.limit);
 
   // 草稿引用：用于在 effect 清理阶段读取最新草稿值。
   const whereDraftRef = useRef(whereDraft);
   const sortDraftRef = useRef(sortDraft);
-  const limitDraftRef = useRef(limitDraft);
   useEffect(() => {
     whereDraftRef.current = whereDraft;
   }, [whereDraft]);
   useEffect(() => {
     sortDraftRef.current = sortDraft;
   }, [sortDraft]);
-  useEffect(() => {
-    limitDraftRef.current = limitDraft;
-  }, [limitDraft]);
 
   // 防抖计时器：避免每次按键都回写 store。
-  const whereTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
-  const sortTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
-  const limitTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
+  const whereTimerRef = useRef<number | null>(null);
+  const sortTimerRef = useRef<number | null>(null);
 
   // 清理计时器：统一在切换 Tab 或卸载时执行，避免跨 Tab 写错目标。
   function clearTimers() {
     if (whereTimerRef.current) {
-      clearTimeout(whereTimerRef.current);
+      window.clearTimeout(whereTimerRef.current);
       whereTimerRef.current = null;
     }
     if (sortTimerRef.current) {
-      clearTimeout(sortTimerRef.current);
+      window.clearTimeout(sortTimerRef.current);
       sortTimerRef.current = null;
-    }
-    if (limitTimerRef.current) {
-      clearTimeout(limitTimerRef.current);
-      limitTimerRef.current = null;
     }
   }
 
@@ -329,7 +372,6 @@ function QueryBar({
     clearTimers(); // 先取消旧 Tab 的防抖回写，避免写入新 Tab。
     setWhereDraft(activeTab.whereClause);
     setSortDraft(activeTab.sortClause || (activeTab.sortField ? `${activeTab.sortField} ${activeTab.sortDirection}` : ""));
-    setLimitDraft(activeTab.limit);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab.objectName]);
 
@@ -342,10 +384,6 @@ function QueryBar({
       if (whereDraftRef.current !== activeTab.whereClause) {
         commitWhereClause(whereDraftRef.current); // 行内注释：切换 Tab 前强制回写到“当前绑定 Tab”。
       }
-      const nextLimit = limitDraftRef.current;
-      if (nextLimit !== activeTab.limit) {
-        commitLimit(nextLimit); // 行内注释：切换 Tab 前强制回写到“当前绑定 Tab”。
-      }
       // 排序草稿与 store 的 sortClause/旧版 sortField 显示可能存在差异，这里统一回写 sortClause。
       const nextSortDraft = sortDraftRef.current;
       if (nextSortDraft !== (activeTab.sortClause || (activeTab.sortField ? `${activeTab.sortField} ${activeTab.sortDirection}` : ""))) {
@@ -355,9 +393,84 @@ function QueryBar({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab.objectName]);
 
+  // 观测查询栏可用宽度：拖拽比例与自动扩张都依赖容器真实宽度。
+  useEffect(() => {
+    const root = queryBarRef.current;
+    if (!root) return;
+
+    const updateWidth = () => {
+      setQueryBarWidth(root.clientWidth);
+    };
+
+    updateWidth();
+    const observer = new ResizeObserver(() => {
+      updateWidth(); // 行内注释：容器宽度变化后立即重算两侧分栏约束。
+    });
+    observer.observe(root);
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
+
+  // 观测前缀宽度：自动扩张时需要把图标/文案固定占位一起算进去。
+  useEffect(() => {
+    const wherePrefixElement = wherePrefixRef.current;
+    const sortPrefixElement = sortPrefixRef.current;
+    if (!wherePrefixElement || !sortPrefixElement) return;
+
+    const updatePrefixWidths = () => {
+      setWherePrefixWidth(wherePrefixElement.offsetWidth);
+      setSortPrefixWidth(sortPrefixElement.offsetWidth);
+    };
+
+    updatePrefixWidths();
+    const observer = new ResizeObserver(() => {
+      updatePrefixWidths(); // 行内注释：字体或布局变化时同步刷新前缀占位宽度。
+    });
+    observer.observe(wherePrefixElement);
+    observer.observe(sortPrefixElement);
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
+
+  // 拖拽中根据鼠标位置更新分栏比例，并限制左右最小可见空间。
+  useEffect(() => {
+    if (!draggingSplitResize) return;
+
+    prevBodyUserSelectRef.current = document.body.style.userSelect;
+    prevBodyCursorRef.current = document.body.style.cursor;
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "col-resize";
+
+    const onMouseMove = (event: MouseEvent) => {
+      const root = queryBarRef.current;
+      if (!root) return;
+      const rect = root.getBoundingClientRect();
+      const usableWidth = rect.width - QUERY_BAR_DIVIDER_WIDTH;
+      if (usableWidth <= 0) return;
+      const rawRatio = (event.clientX - rect.left - QUERY_BAR_DIVIDER_WIDTH / 2) / usableWidth;
+      const nextRatio = Math.max(QUERY_BAR_MIN_SPLIT_RATIO, Math.min(QUERY_BAR_MAX_SPLIT_RATIO, rawRatio));
+      setSplitRatio(nextRatio); // 行内注释：拖拽过程仅更新当前会话内比例，不写持久化状态。
+    };
+
+    const onMouseUp = () => {
+      setDraggingSplitResize(false); // 行内注释：鼠标释放后结束拖拽态。
+    };
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+      document.body.style.userSelect = prevBodyUserSelectRef.current;
+      document.body.style.cursor = prevBodyCursorRef.current;
+    };
+  }, [draggingSplitResize]);
+
   // 防抖回写 WHERE：250ms 内连续输入只写一次 store。
   function scheduleWhereCommit(nextValue: string) {
-    if (whereTimerRef.current) clearTimeout(whereTimerRef.current);
+    if (whereTimerRef.current) window.clearTimeout(whereTimerRef.current);
     whereTimerRef.current = window.setTimeout(() => {
       whereTimerRef.current = null;
       commitWhereClause(nextValue); // 行内注释：防抖回写到“当前绑定 Tab”，避免切换后写错目标。
@@ -366,19 +479,10 @@ function QueryBar({
 
   // 防抖回写排序：250ms 内连续输入只写一次 store。
   function scheduleSortCommit(nextValue: string) {
-    if (sortTimerRef.current) clearTimeout(sortTimerRef.current);
+    if (sortTimerRef.current) window.clearTimeout(sortTimerRef.current);
     sortTimerRef.current = window.setTimeout(() => {
       sortTimerRef.current = null;
       commitSortClause(nextValue); // 行内注释：防抖回写到“当前绑定 Tab”，避免切换后写错目标。
-    }, 250);
-  }
-
-  // 防抖回写 LIMIT：输入过程保持流畅，停顿后再同步 store。
-  function scheduleLimitCommit(nextValue: number) {
-    if (limitTimerRef.current) clearTimeout(limitTimerRef.current);
-    limitTimerRef.current = window.setTimeout(() => {
-      limitTimerRef.current = null;
-      commitLimit(nextValue); // 行内注释：防抖回写到“当前绑定 Tab”，避免切换后写错目标。
     }, 250);
   }
 
@@ -389,56 +493,119 @@ function QueryBar({
     clearTimers();
     // 主动回写一次，保证 UI 切换 Tab 或其它地方读取 store 时拿到一致值。
     commitWhereClause(whereDraftRef.current); // 行内注释：执行前强制写入 store，保证后续依赖值一致。
-    commitLimit(limitDraftRef.current); // 行内注释：执行前强制写入 store，保证后续依赖值一致。
     commitSortClause(sortDraftRef.current); // 行内注释：执行前强制写入 store，保证后续依赖值一致。
     onQuery({
       whereClause: whereDraftRef.current,
-      limit: limitDraftRef.current,
-      sortClause: sortDraftRef.current
+      sortClause: sortDraftRef.current,
+      offset: 0
     });
   }
 
+  // 查询栏可分配宽度：扣掉中间拖拽热区，避免比例换算时累计误差。
+  const queryBarContentWidth = Math.max(0, queryBarWidth - QUERY_BAR_DIVIDER_WIDTH);
+  // 单侧输入框自动扩张的最大阈值：最多占 70%，避免把另一侧完全挤没。
+  const maxAutoInputWidth = Math.max(240, Math.floor(queryBarContentWidth * QUERY_BAR_MAX_SPLIT_RATIO));
+  // 左侧整块分栏的期望宽度：包含前缀、间距、内边距和输入框自身宽度。
+  const whereSectionPreferredWidth =
+    wherePreferredWidth + wherePrefixWidth + QUERY_BAR_SECTION_GAP + QUERY_BAR_SECTION_HORIZONTAL_PADDING;
+  // 右侧整块分栏的期望宽度：包含前缀、间距、内边距和输入框自身宽度。
+  const sortSectionPreferredWidth =
+    sortPreferredWidth + sortPrefixWidth + QUERY_BAR_SECTION_GAP + QUERY_BAR_SECTION_HORIZONTAL_PADDING;
+  // 基于“用户拖拽比例 + 内容期望宽度”求出最终分栏比例。
+  const effectiveSplitRatio = resolveQueryBarSplitRatio({
+    splitRatio,
+    contentWidth: queryBarContentWidth,
+    wherePreferredWidth: whereSectionPreferredWidth,
+    sortPreferredWidth: sortSectionPreferredWidth,
+    minRatio: QUERY_BAR_MIN_SPLIT_RATIO,
+    maxRatio: QUERY_BAR_MAX_SPLIT_RATIO
+  });
+
   return (
     // 查询栏容器：保持最小高度，避免内容区抖动。
-    <div className="border-b border-base-300 px-3 py-2">
-      {/* 输入区：按数据源类型切换 SQL/SOQL 提示与候选。 */}
-      <div className="flex min-w-max flex-row items-end gap-2">
-        {isMysqlSource ? (
-          <MysqlSmartInput
-            key={`mysql-where-${activeTab.objectName}`}
-            label="WHERE"
-            value={whereDraft}
-            placeholder="例如：status = 'ACTIVE' AND created_at >= '2025-01-01'"
-            // MySQL WHERE：仅更新草稿，防抖回写 store。
-            onChange={(value) => {
-              setWhereDraft(value); // 输入实时更新草稿，保证光标与输入联动不卡顿。
-              scheduleWhereCommit(value); // 防抖写入 store，避免触发全局重渲染。
-            }}
-            suggestions={mysqlWhereSuggestions}
-            defaultWidth={360}
-            allowClear
-            onSubmit={handleQueryClick}
-          />
-        ) : (
-          <SalesforceSmartInput
-            key={`soql-where-${activeTab.objectName}`}
-            label="WHERE"
-            value={whereDraft}
-            placeholder="例如：CreatedDate >= LAST_N_DAYS:7 AND Name LIKE 'Acme%'"
-            // Salesforce WHERE：仅更新草稿，防抖回写 store。
-            onChange={(value) => {
-              setWhereDraft(value); // 输入实时更新草稿。
-              scheduleWhereCommit(value); // 防抖写入 store。
-            }}
-            suggestions={salesforceWhereSuggestions}
-            defaultWidth={360}
-            allowClear
-            onSubmit={handleQueryClick}
-          />
-        )}
-
-        {isMysqlSource ? (
-          <>
+    <div ref={queryBarRef} className="border-b border-base-300 bg-base-100">
+      {/* 输入区：两栏默认各占 50%，支持拖拽调整并在内容过长时有限度自动扩张。 */}
+      <div className="flex min-w-0 items-stretch">
+        <div
+          className="flex min-w-0 shrink-0 items-center gap-2 px-3 py-0"
+          style={{ width: `${effectiveSplitRatio * 100}%` }}
+        >
+          {/* WHERE 前缀：用轻量图标 + 文本替代传统顶部 label。 */}
+          <div ref={wherePrefixRef} className="flex shrink-0 items-center gap-1.5 text-[12px] uppercase tracking-[0.08em] text-neutral/65">
+            <Filter size={12} />
+            <span>WHERE</span>
+          </div>
+          {isMysqlSource ? (
+            <MysqlSmartInput
+              key={`mysql-where-${activeTab.objectName}`}
+              label="WHERE"
+              value={whereDraft}
+              placeholder="例如：status = 'ACTIVE' AND created_at >= '2025-01-01'"
+              // MySQL WHERE：仅更新草稿，防抖回写 store。
+              onChange={(value) => {
+                setWhereDraft(value); // 输入实时更新草稿，保证光标与输入联动不卡顿。
+                scheduleWhereCommit(value); // 防抖写入 store，避免触发全局重渲染。
+              }}
+              suggestions={mysqlWhereSuggestions}
+              defaultWidth={360}
+              maxWidth={maxAutoInputWidth}
+              rootClassName="flex-1 min-w-0"
+              surfaceClassName="flex min-w-0 items-center"
+              inputClassName="h-[30px] min-h-[30px] border-0 bg-transparent px-0 pr-8 text-[13px] shadow-none focus:border-0 focus:outline-none focus:ring-0"
+              hideLabel
+              widthMode="stretch"
+              onResolvedWidthChange={setWherePreferredWidth}
+              allowClear
+              onSubmit={handleQueryClick}
+            />
+          ) : (
+            <SalesforceSmartInput
+              key={`soql-where-${activeTab.objectName}`}
+              label="WHERE"
+              value={whereDraft}
+              placeholder="例如：CreatedDate >= LAST_N_DAYS:7 AND Name LIKE 'Acme%'"
+              // Salesforce WHERE：仅更新草稿，防抖回写 store。
+              onChange={(value) => {
+                setWhereDraft(value); // 输入实时更新草稿。
+                scheduleWhereCommit(value); // 防抖写入 store。
+              }}
+              suggestions={salesforceWhereSuggestions}
+              defaultWidth={360}
+              maxWidth={maxAutoInputWidth}
+              rootClassName="flex-1 min-w-0"
+              surfaceClassName="flex min-w-0 items-center"
+              inputClassName="h-[30px] min-h-[30px] border-0 bg-transparent px-0 pr-8 text-[13px] shadow-none focus:border-0 focus:outline-none focus:ring-0"
+              hideLabel
+              widthMode="stretch"
+              onResolvedWidthChange={setWherePreferredWidth}
+              allowClear
+              onSubmit={handleQueryClick}
+            />
+          )}
+        </div>
+        {/* 中间拖拽条：支持手动调整 WHERE 与排序输入框宽度。 */}
+        <div
+          className="relative z-10 flex w-[10px] shrink-0 cursor-col-resize items-center justify-center bg-base-100"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="拖拽调整 WHERE 与排序输入框宽度"
+          onMouseDown={(event) => {
+            event.preventDefault(); // 阻止拖拽起点触发文本选中。
+            setDraggingSplitResize(true); // 行内注释：进入拖拽态后由全局 mousemove 统一处理比例变化。
+          }}
+        >
+          <div className="self-stretch w-px bg-base-300" />
+        </div>
+        <div
+          className="flex min-w-0 shrink-0 items-center gap-2 px-3 py-0"
+          style={{ width: `${(1 - effectiveSplitRatio) * 100}%` }}
+        >
+          {/* 排序前缀：沿用无边框扁平化样式，与 WHERE 保持视觉一致。 */}
+          <div ref={sortPrefixRef} className="flex shrink-0 items-center gap-1.5 text-[12px] uppercase tracking-[0.08em] text-neutral/65">
+            <ArrowUpDown size={12} />
+            <span>ORDER BY</span>
+          </div>
+          {isMysqlSource ? (
             <MysqlSmartInput
               key={`mysql-sort-${activeTab.objectName}`}
               label="排序"
@@ -451,28 +618,17 @@ function QueryBar({
               }}
               suggestions={mysqlSortSuggestions}
               defaultWidth={300}
+              maxWidth={maxAutoInputWidth}
+              rootClassName="flex-1 min-w-0"
+              surfaceClassName="flex min-w-0 items-center"
+              inputClassName="h-[30px] min-h-[30px] border-0 bg-transparent px-0 pr-8 text-[13px] shadow-none focus:border-0 focus:outline-none focus:ring-0"
+              hideLabel
+              widthMode="stretch"
+              onResolvedWidthChange={setSortPreferredWidth}
               allowClear
               onSubmit={handleQueryClick}
             />
-
-            <div className="w-[90px]">
-              {/* LIMIT 标题。 */}
-              <label className="mb-1 block text-[12px]">LIMIT</label>
-              {/* LIMIT 输入框：输入时不立即回写 store，避免全局重渲染导致卡顿。 */}
-              <input
-                className="input input-bordered input-sm h-[38px] min-h-[38px] w-full leading-[20px]"
-                type="number"
-                value={limitDraft}
-                onChange={(event) => {
-                  const next = Number(event.target.value || 200);
-                  setLimitDraft(next); // 输入实时更新草稿。
-                  scheduleLimitCommit(next); // 防抖写入 store。
-                }}
-              />
-            </div>
-          </>
-        ) : (
-          <>
+          ) : (
             <SalesforceSmartInput
               key={`soql-sort-${activeTab.objectName}`}
               label="排序"
@@ -485,33 +641,18 @@ function QueryBar({
               }}
               suggestions={salesforceSortSuggestions}
               defaultWidth={300}
+              maxWidth={maxAutoInputWidth}
+              rootClassName="flex-1 min-w-0"
+              surfaceClassName="flex min-w-0 items-center"
+              inputClassName="h-[30px] min-h-[30px] border-0 bg-transparent px-0 pr-8 text-[13px] shadow-none focus:border-0 focus:outline-none focus:ring-0"
+              hideLabel
+              widthMode="stretch"
+              onResolvedWidthChange={setSortPreferredWidth}
               allowClear
               onSubmit={handleQueryClick}
             />
-
-            <div className="w-[90px]">
-              {/* LIMIT 标题。 */}
-              <label className="mb-1 block text-[12px]">LIMIT</label>
-              {/* LIMIT 输入框：输入时不立即回写 store。 */}
-              <input
-                className="input input-bordered input-sm h-[38px] min-h-[38px] w-full leading-[20px]"
-                type="number"
-                value={limitDraft}
-                onChange={(event) => {
-                  const next = Number(event.target.value || 200);
-                  setLimitDraft(next); // 输入实时更新草稿。
-                  scheduleLimitCommit(next); // 防抖写入 store。
-                }}
-              />
-            </div>
-          </>
-        )}
-
-        {/* 查询按钮：点击时用草稿覆盖参数执行，保证查询使用最新输入。 */}
-        <button className="btn btn-primary btn-sm mt-5 h-[35px]" disabled={activeTab.loading} onClick={handleQueryClick}>
-          <Search size={14} />
-          查询
-        </button>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -548,11 +689,7 @@ export function DataQueryTabPane({
   onRefreshMysqlDdl,
   onToggleQueryBar,
   onToggleLogs,
-  onWhereChange,
   onLimitChange,
-  onSortFieldChange,
-  onSortDirectionChange,
-  onSortClauseChange,
   onQuery,
   onToggleRecord,
   onToggleAllRecords,
@@ -596,18 +733,18 @@ export function DataQueryTabPane({
   const canApplyPendingChanges = Boolean(activeTab && !activeTab.loading && hasPendingChanges && !mysqlApplyDisabledReason);
   // 工具栏背景色：将数据源颜色转换为浅色表面背景，避免顶部工具栏过重抢视觉焦点。
   const toolbarBackgroundColor = buildSourceSurfacePalette(String(activeTab?.sourceColor || "").trim())?.backgroundColor || "#FFFFFF";
-  // 工具栏按钮统一尺寸：使用 34px 中间档高度（介于 h-8 与 h-9 之间）。
-  const toolbarButtonClassName = "btn btn-outline btn-sm h-[34px] min-h-[34px]";
-  // “执行更新”按钮样式：可用态使用蓝青渐变强调，贴合项目品牌色并提升可见性。
+  // “执行更新”按钮样式：icon-only 保持强调态，但 hover 时不改变主色。
   const applyButtonClassName = canApplyPendingChanges
-    ? "btn btn-sm h-[34px] min-h-[34px] border border-brand-600 bg-gradient-to-r from-brand-600 to-brand-500 text-white shadow-[0_6px_16px_rgba(18,158,242,0.25)] hover:from-brand-700 hover:to-brand-600"
-    : toolbarButtonClassName;
+    ? "btn btn-sm h-[30px] min-h-[30px] w-[30px] min-w-[30px] rounded-md border-0 bg-brand-600 px-0 text-white shadow-none hover:bg-brand-600/90 hover:text-white disabled:bg-base-200/70 disabled:text-neutral/35"
+    : "btn btn-sm h-[30px] min-h-[30px] w-[30px] min-w-[30px] rounded-md border-0 bg-transparent px-0 text-neutral shadow-none hover:bg-base-200/80 hover:text-neutral disabled:bg-transparent disabled:text-neutral/35";
   // 字段搜索模式：支持“名称/标签”与“数据类型”两种过滤维度。
   const [fieldSearchMode, setFieldSearchMode] = useState<"nameOrLabel" | "dataType">("nameOrLabel");
   // 字段搜索关键词：用于过滤当前对象字段列表。
   const [fieldSearchKeyword, setFieldSearchKeyword] = useState("");
   // MySQL 字段抽屉搜索关键词：仅按字段名过滤。
   const [mysqlFieldSearchKeyword, setMysqlFieldSearchKeyword] = useState("");
+  // 刷新确认弹窗开关：存在未提交修改时，刷新前要求用户明确确认丢弃。
+  const [refreshConfirmOpen, setRefreshConfirmOpen] = useState(false);
   // 当前抽屉视图：MySQL 支持 DDL / 字段两种视图；Salesforce 固定复合抽屉。
   const activeDrawerView = isMysqlSource
     ? activeTab?.drawerView === "mysql-fields"
@@ -948,13 +1085,217 @@ export function DataQueryTabPane({
       ),
     [mysqlMutationPreviewState.items]
   );
+  // 工具栏图标按钮基础样式：统一改为 icon-only，hover 时保持颜色不跳变。
+  const toolbarIconButtonClassName =
+    "btn btn-sm h-[30px] min-h-[30px] w-[30px] min-w-[30px] rounded-md border-0 bg-transparent px-0 text-neutral shadow-none hover:bg-base-200/80 hover:text-neutral disabled:bg-transparent disabled:text-neutral/35";
+  // 删除按钮固定为错误色，但 hover 时保持同色，不做跳色反馈。
+  const toolbarDangerButtonClassName = `${toolbarIconButtonClassName} text-error hover:text-error`;
+  // 激活型切换按钮：恢复白底强调，避免与普通 hover 态过于接近导致激活态不可辨认。
+  const toolbarActiveButtonClassName = `${toolbarIconButtonClassName} bg-white`;
+
+  // 当前结果分页偏移量：从当前执行语句解析，保证刷新后分页器文案与实际结果一致。
+  const currentResultOffset = useMemo(() => extractOffsetValue(activeTab?.currentSoql || ""), [activeTab?.currentSoql]);
+
+  // 修改 Page Size：立即重查第一页，避免只改 limit 不刷新结果。
+  function handlePageSizeChange(nextPageSize: number) {
+    if (!activeTab || activeTab.loading) return;
+    onLimitChange(nextPageSize); // 行内注释：先同步 store 中的 limit，保证分页器与查询栏状态一致。
+    onQuery({
+      limit: nextPageSize,
+      offset: 0
+    }); // 行内注释：切换 page size 后总是回到第一页并立即重查。
+  }
+
+  // 分页导航：基于当前 offset/page size 计算下一次查询偏移量。
+  function handlePageNavigate(action: "first" | "previous" | "next" | "last") {
+    if (!activeTab || activeTab.loading) return;
+    const currentOffset = currentResultOffset;
+    const nextOffset = resolveQueryPageNavigationOffset({
+      action,
+      totalSize: activeTab.result.totalSize || 0,
+      loadedRowCount: activeTab.result.records.length,
+      pageSize: activeTab.limit || 200,
+      currentOffset: currentResultOffset
+    });
+    if (nextOffset === currentOffset) return;
+    onQuery({
+      offset: nextOffset
+    }); // 行内注释：翻页仅覆盖 offset，复用当前 where/sort/limit 条件重查下一页。
+  }
+
+  // 刷新当前查询：始终按当前条件重查；若存在未提交修改，则先整体丢弃再刷新结果。
+  function handleRefreshCurrentQuery() {
+    if (!activeTab || activeTab.loading) return;
+    if (hasPendingChanges) {
+      setRefreshConfirmOpen(true);
+      return;
+    }
+    onQuery({
+      offset: currentResultOffset
+    }); // 行内注释：保留当前分页位置，仅重查同一页结果。
+  }
+
+  // 确认刷新：先撤回本地未提交修改，再按当前分页位置重查。
+  function handleConfirmRefreshCurrentQuery() {
+    if (!activeTab || activeTab.loading) return;
+    setRefreshConfirmOpen(false);
+    onDiscardPendingChanges(); // 行内注释：刷新前先清掉本地新增/编辑/待删除，避免旧草稿残留在新结果里。
+    onQuery({
+      offset: currentResultOffset
+    }); // 行内注释：确认后仍保留当前分页位置，仅重查同一页结果。
+  }
+
+  // 仅撤销修改：保留当前查询结果与分页位置，不触发重新查询。
+  function handleDiscardPendingChangesOnly() {
+    if (!activeTab || activeTab.loading) return;
+    setRefreshConfirmOpen(false);
+    onDiscardPendingChanges(); // 行内注释：只撤回当前未提交修改，不触发重新查询。
+  }
+
+  // 工作区弹窗挂载点：使用页面级 portal，避免右侧 pane 的 z-index stacking context 盖不住左侧搜索框。
+  const modalPortalRoot = typeof document !== "undefined" ? document.getElementById("portal") || document.body : null;
+
+  // 刷新确认弹窗：点击刷新且存在未提交修改时提示用户确认处理方式。
+  const refreshConfirmModal = refreshConfirmOpen ? (
+    <div className="modal modal-open">
+      <div className="modal-box max-w-md p-0">
+        <div className="border-b border-base-300 px-6 py-4">
+          <div className="flex items-start justify-between gap-4">
+            <h3 className="text-lg font-semibold">存在未提交修改</h3>
+            <button
+              className="btn btn-circle btn-ghost btn-sm"
+              onClick={() => setRefreshConfirmOpen(false)}
+              aria-label="关闭刷新确认弹窗"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        </div>
+        <div className="px-6 py-4 text-[13px] leading-6 text-neutral/75">
+          刷新后，本地尚未提交的修改不会保留。请确认是否继续？
+        </div>
+        <div className="modal-action mt-0 border-t border-base-300 px-6 py-4">
+          <button className="btn btn-ghost btn-sm" onClick={() => setRefreshConfirmOpen(false)}>
+            取消
+          </button>
+          <button className="btn btn-outline btn-sm" onClick={handleDiscardPendingChangesOnly}>仅撤销修改</button>
+          <button className="btn btn-warning btn-sm" onClick={handleConfirmRefreshCurrentQuery}>
+            确认刷新
+          </button>
+        </div>
+      </div>
+    </div>
+  ) : null;
+
+  // MySQL 提交前预览弹窗：让用户在真正提交前确认 create/update/delete 与 NULL 写入摘要。
+  const mysqlMutationPreviewModal = mysqlMutationPreviewState.open ? (
+    <div className="modal modal-open">
+      {/* 弹窗主体：保持中等宽度，兼顾 SQL 预览与移动端可读性。 */}
+      <div className="modal-box max-w-4xl p-0">
+        {/* 头部：展示本次提交动作概览。 */}
+        <div className="border-b border-base-300 px-6 py-4">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h3 className="text-lg font-semibold">MySQL 提交前预览</h3>
+              <p className="mt-1 text-[12px] text-neutral/70">
+                新增 {mysqlMutationPreviewState.createCount} 行，更新 {mysqlMutationPreviewState.updateCount} 行，删除{" "}
+                {mysqlMutationPreviewState.deleteCount} 行，写入 NULL {mysqlPreviewNullWriteCount} 个字段。
+              </p>
+            </div>
+            {/* 关闭按钮：执行中禁用，避免用户误以为提交已取消。 */}
+            <button
+              className="btn btn-circle btn-ghost btn-sm"
+              onClick={closeMysqlMutationPreview}
+              disabled={mysqlMutationPreviewState.loading}
+              aria-label="关闭提交前预览"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        </div>
+
+        {/* 主体内容：逐条展示结构化摘要与预览 SQL。 */}
+        <div className="max-h-[70vh] overflow-auto px-6 py-4">
+          {mysqlMutationPreviewState.error && (
+            <div className="mb-4 rounded border border-error/30 bg-error/10 px-3 py-2 text-[12px] text-error">
+              {mysqlMutationPreviewState.error}
+            </div>
+          )}
+          {mysqlMutationPreviewState.items.length === 0 ? (
+            <div className="rounded border border-base-300 bg-base-200/40 px-3 py-6 text-center text-[12px] text-neutral/70">
+              当前没有可提交的 MySQL 变更。
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {mysqlMutationPreviewState.items.map((item) => (
+                <section key={`${item.op}:${item.operationIndex}:${item.rowStableId}`} className="rounded border border-base-300 bg-base-100">
+                  {/* 预览项头部：展示操作类型与定位信息。 */}
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-base-300 px-3 py-2 text-[12px]">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`badge badge-sm ${
+                          item.op === "create" ? "badge-success" : item.op === "update" ? "badge-info" : "badge-error"
+                        }`}
+                      >
+                        {item.op === "create" ? "新增" : item.op === "update" ? "更新" : "删除"}
+                      </span>
+                      <span className="text-neutral/80">
+                        {item.rowLocator ? `定位值：${item.rowLocator}` : `行标识：${item.rowStableId}`}
+                      </span>
+                    </div>
+                    <span className="text-neutral/60">序号 #{item.operationIndex + 1}</span>
+                  </div>
+
+                  {/* 字段摘要：优先让用户看清本条操作会写哪些值。 */}
+                  <div className="px-3 py-2 text-[12px]">
+                    {item.fields.length === 0 ? (
+                      <div className="text-neutral/70">该操作不包含字段写入。</div>
+                    ) : (
+                      <div className="flex flex-wrap gap-2">
+                        {item.fields.map((field) => (
+                          <span key={`${item.op}:${item.operationIndex}:${field.name}`} className="rounded border border-base-300 bg-base-200/60 px-2 py-1">
+                            {field.name} = {field.kind === "null" ? "NULL" : field.kind === "default" ? "DEFAULT" : JSON.stringify(field.value)}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* SQL 预览：使用后端真实归一化逻辑生成，避免前端拼串与实际执行不一致。 */}
+                  <div className="border-t border-base-300 px-3 py-2">
+                    <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded bg-base-200/40 p-2 text-[12px]">
+                      {item.previewSql || (mysqlMutationPreviewState.loading ? "正在生成预览 SQL..." : "暂无预览 SQL。")}
+                    </pre>
+                  </div>
+                </section>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* 底部动作区：确认后才真正执行数据库写入。 */}
+        <div className="modal-action mt-0 border-t border-base-300 px-6 py-4">
+          <button className="btn btn-ghost btn-sm" onClick={closeMysqlMutationPreview} disabled={mysqlMutationPreviewState.loading}>
+            取消
+          </button>
+          <button
+            className="btn btn-primary btn-sm"
+            onClick={() => void handleConfirmMysqlMutationPreview()}
+            disabled={mysqlMutationPreviewState.loading || mysqlMutationPreviewState.items.length === 0}
+          >
+            {mysqlMutationPreviewState.loading ? "执行中..." : "确认执行"}
+          </button>
+        </div>
+      </div>
+    </div>
+  ) : null;
 
   return (
     <>
       {/* 工作区全局提示。 */}
       {workspaceNotice && (
         <NoticeAlert
-          tone={workspaceNotice.type === "error" ? "error" : "success"}
+          tone={workspaceNotice.type === "error" ? "error" : workspaceNotice.type === "warning" ? "warning" : "success"}
           message={workspaceNotice.message}
           onClose={onCloseWorkspaceNotice}
           className="fixed right-4 top-4 z-[60] max-w-[380px] shadow-lg"
@@ -1056,13 +1397,15 @@ export function DataQueryTabPane({
         </>
       )}
 
+      {modalPortalRoot && refreshConfirmModal && createPortal(refreshConfirmModal, modalPortalRoot)}
+
       {activeTab && (
         // 主工作区。
         <div className="relative flex h-full min-h-0 w-full overflow-hidden">
           {/* 当前 Tab 提示。 */}
           {activeTab.notice && (
             <NoticeAlert
-              tone={activeTab.notice.type === "error" ? "error" : "success"}
+              tone={activeTab.notice.type === "error" ? "error" : activeTab.notice.type === "warning" ? "warning" : "success"}
               message={activeTab.notice.message}
               onClose={onCloseActiveTabNotice}
               className="absolute right-3 top-2.5 z-40 max-w-[380px] shadow"
@@ -1072,74 +1415,108 @@ export function DataQueryTabPane({
           {/* 左侧主内容区：工具栏 + 查询栏 + 表格 + 日志。 */}
           <div className="flex min-w-0 flex-1 flex-col">
             {/* 顶部工具栏背景：默认白色；如果数据源设置颜色，则整条按钮区域显示该颜色。 */}
-            <div className="border-b border-base-300 px-3 py-1.5 overflow-x-auto" style={{ backgroundColor: toolbarBackgroundColor }}>
+            <div className="border-b border-base-300 px-3 py-1 overflow-x-auto" style={{ backgroundColor: toolbarBackgroundColor }}>
               <div className="flex flex-row items-center gap-1 min-w-max">
-                <button
-                  className={toolbarButtonClassName}
+                <QueryPaginationToolbar
+                  totalSize={activeTab.result.totalSize}
+                  loadedRowCount={activeTab.result.records.length}
+                  pageSize={activeTab.limit}
+                  currentOffset={currentResultOffset}
+                  onPageSizeChange={handlePageSizeChange}
+                  onPageNavigate={handlePageNavigate}
+                />
+                {/* 分割线：拉满工具栏可视高度，并贴住上下边缘。 */}
+                <div className="-my-1 mx-0.5 w-px self-stretch bg-base-300/80" />
+                <ToolbarActionButton
+                  className={toolbarIconButtonClassName}
                   disabled={activeTab.loading || Boolean(mysqlResultReadonlyReason)}
-                  title={mysqlResultReadonlyReason || undefined}
+                  title={mysqlResultReadonlyReason || "新建记录"}
+                  ariaLabel="新建记录"
                   onClick={onCreateRecord}
                 >
-                  <Plus size={13} />
-                  新建记录
-                </button>
-                <button
-                  className={`${toolbarButtonClassName} btn-error`}
+                  <Plus size={15} />
+                </ToolbarActionButton>
+                <ToolbarActionButton
+                  className={toolbarDangerButtonClassName}
                   disabled={activeTab.loading || activeTab.selectedRecordIds.length === 0 || Boolean(mysqlResultReadonlyReason)}
-                  title={mysqlResultReadonlyReason || undefined}
+                  title={mysqlResultReadonlyReason || `删除选中（${activeTab.selectedRecordIds.length}）`}
+                  ariaLabel={`删除选中（${activeTab.selectedRecordIds.length}）`}
                   onClick={onDeleteCheckedRecords}
                 >
-                  <Trash2 size={13} />
-                  删除勾选({activeTab.selectedRecordIds.length})
-                </button>
-                <button
+                  <Trash2 size={15} />
+                </ToolbarActionButton>
+                <ToolbarActionButton
                   className={applyButtonClassName}
                   disabled={activeTab.loading || !hasPendingChanges || Boolean(mysqlApplyDisabledReason)}
-                  title={mysqlApplyDisabledReason || undefined}
+                  title={mysqlApplyDisabledReason || "执行更新"}
+                  ariaLabel="执行更新"
                   onClick={() => void handleApplyPendingChangesClick()}
                 >
-                  <Play size={13} />
-                  执行更新
-                </button>
-                <button className={toolbarButtonClassName} disabled={activeTab.loading || !hasPendingChanges} onClick={onDiscardPendingChanges}>
-                  <RotateCcw size={13} />
-                  撤回修改
-                </button>
-                <button className={toolbarButtonClassName} disabled={activeTab.loading} onClick={onToggleQueryBar}>
-                  <Search size={13} />
-                  {activeTab.showQueryBar ? "隐藏查询栏" : "显示查询栏"}
-                </button>
+                  <Play size={15} />
+                </ToolbarActionButton>
+                <ToolbarActionButton
+                  className={toolbarIconButtonClassName}
+                  disabled={activeTab.loading}
+                  title="刷新当前查询"
+                  ariaLabel="刷新当前查询"
+                  onClick={handleRefreshCurrentQuery}
+                >
+                  <RefreshCw size={15} />
+                </ToolbarActionButton>
+                {/* 分组分隔线：将刷新动作与后续面板切换动作分开。 */}
+                <div className="-my-1 mx-0.5 w-px self-stretch bg-base-300/80" />
+                <ToolbarActionButton
+                  className={activeTab.showQueryBar ? toolbarActiveButtonClassName : toolbarIconButtonClassName}
+                  disabled={activeTab.loading}
+                  title={activeTab.showQueryBar ? "隐藏查询栏" : "显示查询栏"}
+                  ariaLabel={activeTab.showQueryBar ? "隐藏查询栏" : "显示查询栏"}
+                  onClick={onToggleQueryBar}
+                >
+                  <Search size={15} />
+                </ToolbarActionButton>
                 {isMysqlSource ? (
                   <>
                     {/* MySQL DDL 抽屉按钮：点击同按钮可关闭，再次点击可打开。 */}
-                    <button
-                      className={`${toolbarButtonClassName} ${activeTab.showDrawer && activeDrawerView === "mysql-ddl" ? "btn-active" : ""}`}
+                    <ToolbarActionButton
+                      className={activeTab.showDrawer && activeDrawerView === "mysql-ddl" ? toolbarActiveButtonClassName : toolbarIconButtonClassName}
                       disabled={activeTab.loading}
+                      title={activeTab.showDrawer && activeDrawerView === "mysql-ddl" ? "隐藏 DDL" : "显示 DDL"}
+                      ariaLabel={activeTab.showDrawer && activeDrawerView === "mysql-ddl" ? "隐藏 DDL" : "显示 DDL"}
                       onClick={() => onToggleDrawer("mysql-ddl")}
                     >
-                      <PanelRightOpen size={13} />
-                      DDL
-                    </button>
+                      <span className="text-[11px] font-semibold leading-none">DDL</span>
+                    </ToolbarActionButton>
                     {/* MySQL 字段抽屉按钮：参考 Salesforce“字段与SOQL”中的字段勾选能力。 */}
-                    <button
-                      className={`${toolbarButtonClassName} ${activeTab.showDrawer && activeDrawerView === "mysql-fields" ? "btn-active" : ""}`}
+                    <ToolbarActionButton
+                      className={activeTab.showDrawer && activeDrawerView === "mysql-fields" ? toolbarActiveButtonClassName : toolbarIconButtonClassName}
                       disabled={activeTab.loading}
+                      title={activeTab.showDrawer && activeDrawerView === "mysql-fields" ? "隐藏字段抽屉" : "显示字段抽屉"}
+                      ariaLabel={activeTab.showDrawer && activeDrawerView === "mysql-fields" ? "隐藏字段抽屉" : "显示字段抽屉"}
                       onClick={() => onToggleDrawer("mysql-fields")}
                     >
-                      <PanelRightOpen size={13} />
-                      字段
-                    </button>
+                      <span className="text-[11px] font-semibold leading-none">FIELD</span>
+                    </ToolbarActionButton>
                   </>
                 ) : (
-                  <button className={toolbarButtonClassName} disabled={activeTab.loading} onClick={() => onToggleDrawer("salesforce")}>
-                    <PanelRightOpen size={13} />
-                    字段与SOQL
-                  </button>
+                  <ToolbarActionButton
+                    className={activeTab.showDrawer ? toolbarActiveButtonClassName : toolbarIconButtonClassName}
+                    disabled={activeTab.loading}
+                    title={activeTab.showDrawer ? "隐藏字段与 SOQL" : "显示字段与 SOQL"}
+                    ariaLabel={activeTab.showDrawer ? "隐藏字段与 SOQL" : "显示字段与 SOQL"}
+                    onClick={() => onToggleDrawer("salesforce")}
+                  >
+                    <PanelRightOpen size={15} />
+                  </ToolbarActionButton>
                 )}
-                <button className={toolbarButtonClassName} disabled={activeTab.loading} onClick={onToggleLogs}>
-                  <ScrollText size={13} />
-                  日志
-                </button>
+                <ToolbarActionButton
+                  className={activeTab.showLogs ? toolbarActiveButtonClassName : toolbarIconButtonClassName}
+                  disabled={activeTab.loading}
+                  title={activeTab.showLogs ? "隐藏日志" : "显示日志"}
+                  ariaLabel={activeTab.showLogs ? "隐藏日志" : "显示日志"}
+                  onClick={onToggleLogs}
+                >
+                  <ScrollText size={15} />
+                </ToolbarActionButton>
               </div>
             </div>
 
@@ -1159,9 +1536,6 @@ export function DataQueryTabPane({
                 mysqlSortSuggestions={mysqlSortSuggestions}
                 salesforceWhereSuggestions={salesforceWhereSuggestions}
                 salesforceSortSuggestions={salesforceSortSuggestions}
-                onWhereChange={onWhereChange}
-                onLimitChange={onLimitChange}
-                onSortClauseChange={onSortClauseChange}
                 onQuery={onQuery}
               />
             )}
@@ -1170,6 +1544,8 @@ export function DataQueryTabPane({
             <div className="min-h-0 flex-1">
               <DataGrid
                 result={activeTab.result}
+                pageSize={activeTab.limit}
+                currentOffset={currentResultOffset}
                 visibleColumns={visibleColumns}
                 fieldMetadataMap={fieldMetadataMap}
                 dirtyCellKeys={activeTab.dirtyCellKeys}
@@ -1181,7 +1557,8 @@ export function DataQueryTabPane({
                 sourceId={selectedSourceId}
                 selectedSourceType={selectedSourceType}
                 objectName={activeTab.objectName}
-                onToggleRecord={onToggleRecord}
+                onPageSizeChange={handlePageSizeChange}
+                onPageNavigate={handlePageNavigate}
                 onToggleAll={onToggleAllRecords}
                 onEditCell={onEditCell}
                 onShowMessage={onShowMessage}
@@ -1524,108 +1901,7 @@ export function DataQueryTabPane({
         </div>
       )}
 
-      {/* MySQL 提交前预览弹窗：让用户在真正提交前确认 create/update/delete 与 NULL 写入摘要。 */}
-      {mysqlMutationPreviewState.open && (
-        <div className="modal modal-open">
-          {/* 弹窗主体：保持中等宽度，兼顾 SQL 预览与移动端可读性。 */}
-          <div className="modal-box max-w-4xl p-0">
-            {/* 头部：展示本次提交动作概览。 */}
-            <div className="border-b border-base-300 px-6 py-4">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <h3 className="text-lg font-semibold">MySQL 提交前预览</h3>
-                  <p className="mt-1 text-[12px] text-neutral/70">
-                    新增 {mysqlMutationPreviewState.createCount} 行，更新 {mysqlMutationPreviewState.updateCount} 行，删除{" "}
-                    {mysqlMutationPreviewState.deleteCount} 行，写入 NULL {mysqlPreviewNullWriteCount} 个字段。
-                  </p>
-                </div>
-                {/* 关闭按钮：执行中禁用，避免用户误以为提交已取消。 */}
-                <button
-                  className="btn btn-circle btn-ghost btn-sm"
-                  onClick={closeMysqlMutationPreview}
-                  disabled={mysqlMutationPreviewState.loading}
-                  aria-label="关闭提交前预览"
-                >
-                  <X size={16} />
-                </button>
-              </div>
-            </div>
-
-            {/* 主体内容：逐条展示结构化摘要与预览 SQL。 */}
-            <div className="max-h-[70vh] overflow-auto px-6 py-4">
-              {mysqlMutationPreviewState.error && (
-                <div className="mb-4 rounded border border-error/30 bg-error/10 px-3 py-2 text-[12px] text-error">
-                  {mysqlMutationPreviewState.error}
-                </div>
-              )}
-              {mysqlMutationPreviewState.items.length === 0 ? (
-                <div className="rounded border border-base-300 bg-base-200/40 px-3 py-6 text-center text-[12px] text-neutral/70">
-                  当前没有可提交的 MySQL 变更。
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {mysqlMutationPreviewState.items.map((item) => (
-                    <section key={`${item.op}:${item.operationIndex}:${item.rowStableId}`} className="rounded border border-base-300 bg-base-100">
-                      {/* 预览项头部：展示操作类型与定位信息。 */}
-                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-base-300 px-3 py-2 text-[12px]">
-                        <div className="flex items-center gap-2">
-                          <span
-                            className={`badge badge-sm ${
-                              item.op === "create" ? "badge-success" : item.op === "update" ? "badge-info" : "badge-error"
-                            }`}
-                          >
-                            {item.op === "create" ? "新增" : item.op === "update" ? "更新" : "删除"}
-                          </span>
-                          <span className="text-neutral/80">
-                            {item.rowLocator ? `定位值：${item.rowLocator}` : `行标识：${item.rowStableId}`}
-                          </span>
-                        </div>
-                        <span className="text-neutral/60">序号 #{item.operationIndex + 1}</span>
-                      </div>
-
-                      {/* 字段摘要：优先让用户看清本条操作会写哪些值。 */}
-                      <div className="px-3 py-2 text-[12px]">
-                        {item.fields.length === 0 ? (
-                          <div className="text-neutral/70">该操作不包含字段写入。</div>
-                        ) : (
-                          <div className="flex flex-wrap gap-2">
-                            {item.fields.map((field) => (
-                              <span key={`${item.op}:${item.operationIndex}:${field.name}`} className="rounded border border-base-300 bg-base-200/60 px-2 py-1">
-                                {field.name} = {field.kind === "null" ? "NULL" : field.kind === "default" ? "DEFAULT" : JSON.stringify(field.value)}
-                              </span>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-
-                      {/* SQL 预览：使用后端真实归一化逻辑生成，避免前端拼串与实际执行不一致。 */}
-                      <div className="border-t border-base-300 px-3 py-2">
-                        <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded bg-base-200/40 p-2 text-[12px]">
-                          {item.previewSql || (mysqlMutationPreviewState.loading ? "正在生成预览 SQL..." : "暂无预览 SQL。")}
-                        </pre>
-                      </div>
-                    </section>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* 底部动作区：确认后才真正执行数据库写入。 */}
-            <div className="modal-action mt-0 border-t border-base-300 px-6 py-4">
-              <button className="btn btn-ghost" onClick={closeMysqlMutationPreview} disabled={mysqlMutationPreviewState.loading}>
-                取消
-              </button>
-              <button
-                className="btn btn-primary"
-                onClick={() => void handleConfirmMysqlMutationPreview()}
-                disabled={mysqlMutationPreviewState.loading || mysqlMutationPreviewState.items.length === 0}
-              >
-                {mysqlMutationPreviewState.loading ? "执行中..." : "确认执行"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {modalPortalRoot && mysqlMutationPreviewModal && createPortal(mysqlMutationPreviewModal, modalPortalRoot)}
     </>
   );
 }

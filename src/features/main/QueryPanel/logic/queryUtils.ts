@@ -115,9 +115,16 @@ export function extractWhereClause(soql: string, objectName: string): string | n
   if (!match) return null;
   const tail = match[1].trim();
 
-  const whereMatch = tail.match(/^where\s+(.+?)(\s+order\s+by\s+|\s+limit\s+|$)/i);
+  const whereMatch = tail.match(/^where\s+(.+?)(\s+order\s+by\s+|\s+limit\s+|\s+offset\s+|$)/i);
   if (!whereMatch) return "";
   return whereMatch[1].trim();
+}
+
+// 从 SQL/SOQL 中提取 OFFSET 数值；未命中时回退为 0。
+export function extractOffsetValue(queryText: string): number {
+  const match = String(queryText || "").match(/\boffset\s+(\d+)\b/i);
+  if (!match) return 0;
+  return Math.max(0, Number(match[1] || 0));
 }
 
 // 构建标准查询语句：按 sourceType 生成 SQL 或 SOQL。
@@ -129,13 +136,14 @@ export function buildQueryStatement(
   sortField: string,
   sortDirection: "ASC" | "DESC",
   limit: number,
-  sortClause: string
+  sortClause: string,
+  offset = 0
 ): string {
   const normalizedType = (sourceType || "salesforce").toLowerCase();
   if (normalizedType === "mysql") {
-    return buildQuerySql(objectName, selectedFields, whereClause, sortClause, limit);
+    return buildQuerySql(objectName, selectedFields, whereClause, sortClause, limit, offset);
   }
-  return buildQuerySoql(objectName, selectedFields, whereClause, sortField, sortDirection, sortClause, limit);
+  return buildQuerySoql(objectName, selectedFields, whereClause, sortField, sortDirection, sortClause, limit, offset);
 }
 
 // 构建标准 SOQL 查询语句。
@@ -146,7 +154,8 @@ function buildQuerySoql(
   sortField: string,
   sortDirection: "ASC" | "DESC",
   sortClause: string,
-  limit: number
+  limit: number,
+  offset: number
 ): string {
   const fields = selectedFields.length > 0 ? selectedFields : ["Id"];
   // SELECT 字段逐行展开：生成“真实换行”的多行 SOQL，避免编辑器内只有单行内容。
@@ -159,7 +168,8 @@ function buildQuerySoql(
     : sortField.trim()
       ? `\nORDER BY ${sortField} ${sortDirection}`
       : "";
-  return `SELECT\n${selectFieldsSegment}\nFROM ${objectName}${whereSegment}${orderBySegment}\nLIMIT ${limit}`;
+  const offsetSegment = offset > 0 ? `\nOFFSET ${offset}` : "";
+  return `SELECT\n${selectFieldsSegment}\nFROM ${objectName}${whereSegment}${orderBySegment}\nLIMIT ${limit}${offsetSegment}`;
 }
 
 // 构建标准 SQL 查询语句（MySQL）。
@@ -168,7 +178,8 @@ function buildQuerySql(
   selectedFields: string[],
   whereClause: string,
   sortClause: string,
-  limit: number
+  limit: number,
+  offset: number
 ): string {
   const fields = selectedFields.length > 0 ? selectedFields : ["Id"];
   // SELECT 字段逐行展开：统一多行风格，便于用户快速审阅。
@@ -177,7 +188,8 @@ function buildQuerySql(
   // MySQL 排序支持手动表达式输入，允许多字段/函数排序。
   const normalizedSortClause = sortClause.trim().replace(/^order\s+by\s+/i, "");
   const orderBySegment = normalizedSortClause ? `\nORDER BY ${normalizedSortClause}` : "";
-  return `SELECT\n${selectFieldsSegment}\nFROM ${objectName}${whereSegment}${orderBySegment}\nLIMIT ${limit}`;
+  const offsetSegment = offset > 0 ? `\nOFFSET ${offset}` : "";
+  return `SELECT\n${selectFieldsSegment}\nFROM ${objectName}${whereSegment}${orderBySegment}\nLIMIT ${limit}${offsetSegment}`;
 }
 
 // 判断字段是否可排序：依据后端返回的字段元数据 `sortable`。

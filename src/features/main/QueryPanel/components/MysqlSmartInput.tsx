@@ -21,6 +21,18 @@ type MysqlSmartInputProps = {
   suggestions: string[];
   // 输入框默认宽度。
   defaultWidth: number;
+  // 输入框根容器附加样式。
+  rootClassName?: string;
+  // 输入框表面容器附加样式。
+  surfaceClassName?: string;
+  // 输入框附加样式。
+  inputClassName?: string;
+  // 是否隐藏顶部标题。
+  hideLabel?: boolean;
+  // 宽度模式：fixed=维持原有自适应宽度；stretch=由父容器撑满。
+  widthMode?: "fixed" | "stretch";
+  // 解析出的期望宽度回调：供父容器在 stretch 模式下决定是否扩张分栏。
+  onResolvedWidthChange?: (width: number) => void;
   // 输入框最小宽度。
   minWidth?: number;
   // 输入框最大宽度。
@@ -41,6 +53,12 @@ export function MysqlSmartInput({
   onChange,
   suggestions,
   defaultWidth,
+  rootClassName = "",
+  surfaceClassName = "",
+  inputClassName = "",
+  hideLabel = false,
+  widthMode = "fixed",
+  onResolvedWidthChange,
   minWidth = 220,
   maxWidth = 640,
   allowClear = false,
@@ -119,7 +137,8 @@ export function MysqlSmartInput({
       }
     });
     setWidth(nextWidth);
-  }, [allowClear, defaultWidth, maxWidth, minWidth, placeholder, value]);
+    onResolvedWidthChange?.(nextWidth); // 行内注释：把测得的期望宽度回传给父容器，供分栏布局做自适应扩张。
+  }, [allowClear, defaultWidth, maxWidth, minWidth, onResolvedWidthChange, placeholder, value]);
 
   // 插入候选词：替换当前 token，并恢复光标位置。
   function applySuggestion(item: string) {
@@ -198,18 +217,22 @@ export function MysqlSmartInput({
   }
 
   return (
-    // 外层容器：宽度跟随内容自适应。
-    <div ref={rootRef} className="relative shrink-0" style={{ width }}>
+    // 外层容器：默认维持内容自适应；stretch 模式下改为占满父容器。
+    <div
+      ref={rootRef}
+      className={`relative ${widthMode === "stretch" ? "min-w-0 w-full" : "shrink-0"} ${rootClassName}`.trim()}
+      style={widthMode === "stretch" ? undefined : { width }}
+    >
       {/* 隐藏测量节点：用于以真实字体样式计算文本宽度。 */}
       <span ref={measureRef} className="pointer-events-none absolute left-0 top-0 invisible whitespace-pre text-sm leading-[20px]" aria-hidden="true" />
       {/* 输入框标题。 */}
-      <label className="mb-1 block text-[12px]">{label}</label>
+      {!hideLabel ? <label className="mb-1 block text-[12px]">{label}</label> : null}
       {/* 输入框主体。 */}
-      <div className="relative">
+      <div className={`relative ${surfaceClassName}`.trim()}>
         {/* 单行输入框：保留自动补全与光标 token 替换，placeholder 垂直居中。 */}
         <input
           ref={inputRef}
-          className="input input-bordered input-sm h-[38px] min-h-[38px] w-full pr-8 leading-[20px]"
+          className={`input input-bordered input-sm h-[38px] min-h-[38px] w-full pr-8 leading-[20px] ${inputClassName}`.trim()}
           value={value}
           placeholder={placeholder}
           autoCorrect="off"

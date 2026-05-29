@@ -1,37 +1,99 @@
 import { useMemo, useState } from "react";
-import { GridColumn } from "@glideapps/glide-data-grid";
-import { buildHeaderDisplayLines } from "../renderers/drawHeader";
-import { estimateAutoColumnWidth } from "../utils/columnWidth";
+import type { GridColumn } from "@glideapps/glide-data-grid";
+import { buildHeaderDisplayLines } from "../renderers/drawHeader.ts";
+import { estimateAutoColumnWidth } from "../utils/columnWidth.ts";
 
 // 默认列宽采样行数：按表头 + 前 50 行内容估算，兼顾体验与性能。
 const DEFAULT_COLUMN_WIDTH_SAMPLE_ROWS = 50;
+// 序号列默认宽度：仅在缺少测量结果时兜底，避免回退到过宽的旧值。
+const DEFAULT_INDEX_COLUMN_WIDTH = 48;
 
 type UseDataGridColumnsParams = {
   // 当前可见字段列表。
   visibleColumns: string[];
-  // 是否展示首列选择列。
-  showSelectionColumn: boolean;
   // 是否展示表头元数据 icon：影响表头右侧预留空间，从而影响最小列宽计算。
   showHeaderMetadata: boolean;
   // 当前记录列表：用于推导可选记录 Id。
   records: Record<string, unknown>[];
-  // 当前已选记录 Id。
-  selectedRecordIds: string[];
   // 字段元数据映射：MySQL 下用于识别主键列（columnKey=PRI）。
   fieldMetadataMap: Record<string, Record<string, unknown>>;
   // 当前数据源类型：用于按源类型切换记录 Id 提取策略。
   selectedSourceType?: string;
+  // 当前分页偏移量：用于让序号列宽度按“真实最大序号”自适应。
+  currentOffset?: number;
 };
 
-// DataGrid 列与勾选状态 Hook：统一管理列顺序、列宽和全选态。
+type BuildGridColumnsParams = {
+  // 业务字段列顺序。
+  displayColumns: string[];
+  // 表头最小宽度：防止列被拖得过窄。
+  headerMinWidths: Record<string, number>;
+  // 用户会话内调整后的列宽。
+  columnWidths: Record<string, number>;
+  // 自动估算列宽。
+  autoColumnWidths: Record<string, number>;
+};
+
+type BuildIndexColumnWidthParams = {
+  // 当前分页偏移量：第二页起序号需要承接上一页。
+  currentOffset: number;
+  // 当前页记录数：用于推导本页最大序号位数。
+  rowCount: number;
+};
+
+// 序号列宽度估算：按“最大序号文本宽度 + 更紧的左右边距”收紧，避免首列占用过多水平空间。
+export function buildIndexColumnWidth({ currentOffset, rowCount }: BuildIndexColumnWidthParams): number {
+  const normalizedOffset = Math.max(0, Math.floor(currentOffset || 0));
+  const normalizedRowCount = Math.max(1, Math.floor(rowCount || 0));
+  const maxSequenceNumber = normalizedOffset + normalizedRowCount;
+  const sequenceText = String(Math.max(1, maxSequenceNumber));
+  // 测试环境保持纯计算；浏览器环境使用 Canvas 提高宽度测量精度。
+  const ctx =
+    typeof document !== "undefined"
+      ? document.createElement("canvas").getContext("2d")
+      : null;
+  const textWidth = ctx
+    ? (() => {
+      ctx.font = "600 13px sans-serif"; // 行内注释：尽量与序号单元格实际字体接近，减少默认列宽跳动。
+      return ctx.measureText(sequenceText).width;
+    })()
+    : Array.from(sequenceText).length * 8;
+
+  return Math.max(32, Math.ceil(textWidth + 14));
+}
+
+// 构造 DataGrid 列定义：首列固定为序号列，后续为业务字段列。
+export function buildGridColumns({
+  displayColumns,
+  headerMinWidths,
+  columnWidths,
+  autoColumnWidths
+}: BuildGridColumnsParams): GridColumn[] {
+  const dataColumns: GridColumn[] = displayColumns.map((column) => ({
+    id: column,
+    // 数据列表头由 drawHeader 自定义双行绘制，这里留空避免默认文案覆盖。
+    title: "",
+    width: Math.max(headerMinWidths[column] ?? 44, columnWidths[column] ?? autoColumnWidths[column] ?? 44)
+  }));
+
+  return [
+    {
+      id: "__index",
+      title: "",
+      width: Math.max(columnWidths.__index ?? 0, headerMinWidths.__index ?? DEFAULT_INDEX_COLUMN_WIDTH)
+    },
+    ...dataColumns
+  ];
+}
+
+// DataGrid 列配置 Hook：统一管理列顺序、列宽和稳定记录键映射。
 export function useDataGridColumns({
   visibleColumns,
-  showSelectionColumn,
   showHeaderMetadata,
   records,
-  selectedRecordIds,
   fieldMetadataMap,
-  selectedSourceType
+  selectedSourceType,
+  currentOffset = 0
 }: UseDataGridColumnsParams) {
   // 列宽状态：支持用户拖拽后即时更新列宽。
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
@@ -49,9 +111,11 @@ export function useDataGridColumns({
   // 表头最小列宽：使用 Canvas 测量表头文案宽度，保证表头不会因列过窄被“缩放压扁”。
   const headerMinWidths = useMemo(() => {
     const widths: Record<string, number> = {
-      // 特殊列：固定最小宽度（与 DataEditor minColumnWidth 保持一致的下限）。
-      __select: 44,
-      __index: 56
+      // 特殊列：按当前页最大序号宽度收紧，避免固定值过宽。
+      __index: buildIndexColumnWidth({
+        currentOffset,
+        rowCount: records.length
+      })
     };
 
     // 在浏览器环境下使用 Canvas 精确测量；非浏览器环境（如测试运行时）回退到字符宽度估算。
@@ -86,7 +150,7 @@ export function useDataGridColumns({
     }
 
     return widths;
-  }, [displayColumns, fieldMetadataMap, showHeaderMetadata]);
+  }, [currentOffset, displayColumns, fieldMetadataMap, records.length, showHeaderMetadata]);
 
   // 内容驱动的默认列宽：按“表头 + 前 N 行采样内容”估算，替代固定 180/280 宽度。
   const autoColumnWidths = useMemo(() => {
@@ -102,28 +166,16 @@ export function useDataGridColumns({
     return widths;
   }, [displayColumns, fieldMetadataMap, records]);
 
-  const columns = useMemo<GridColumn[]>(() => {
-    const dataColumns: GridColumn[] = displayColumns.map((column) => ({
-      id: column,
-      // 数据列标题由 drawHeader 自定义双行绘制，这里留空避免默认文案覆盖。
-      title: "",
-      width: Math.max(headerMinWidths[column] ?? 44, columnWidths[column] ?? autoColumnWidths[column] ?? 44)
-    }));
-
-    return [
-      ...(showSelectionColumn
-        ? [
-            {
-              id: "__select",
-              title: "",
-              width: Math.max(headerMinWidths.__select ?? 44, columnWidths.__select ?? 44)
-            }
-          ]
-        : []),
-      { id: "__index", title: "#", width: Math.max(headerMinWidths.__index ?? 56, columnWidths.__index ?? 56) },
-      ...dataColumns
-    ];
-  }, [displayColumns, columnWidths, showSelectionColumn, headerMinWidths, autoColumnWidths]);
+  const columns = useMemo<GridColumn[]>(
+    () =>
+      buildGridColumns({
+        displayColumns,
+        headerMinWidths,
+        columnWidths,
+        autoColumnWidths
+      }),
+    [displayColumns, headerMinWidths, columnWidths, autoColumnWidths]
+  );
 
   // MySQL 主键列：用于缺失 Id 时的勾选回退键。
   const mysqlPrimaryKeyField = useMemo(() => {
@@ -155,16 +207,11 @@ export function useDataGridColumns({
     [records, mysqlPrimaryKeyField]
   );
 
-  const allChecked = selectableIds.length > 0 && selectableIds.every((id) => selectedRecordIds.includes(id));
-  const hasAnyChecked = selectedRecordIds.some((id) => selectableIds.includes(id));
-
   return {
     columns,
     columnWidths,
     setColumnWidths,
     headerMinWidths,
-    allChecked,
-    hasAnyChecked,
     selectableIds
   };
 }

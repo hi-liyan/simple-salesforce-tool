@@ -1,8 +1,10 @@
 import { useCallback } from "react";
 import { api } from "../../../../api";
 import { buildObjectTabBindingKey, ObjectDescribe, QueryResult, TabLog, TabState } from "../../../../types";
+import { resolveExecutedQueryStatementState } from "../../../../components/DataGrid/logic/queryPagination.ts";
 import { resolveQueryExecutionContext } from "../logic/queryExecutionContext.ts";
 import { ensureQueryTabReady } from "../logic/queryExecutionPreflight.ts";
+import { extractOffsetValue } from "../logic/queryUtils.ts";
 
 type UseQueryExecutionInput = {
   // 当前选中数据源 ID。
@@ -36,7 +38,8 @@ type UseQueryExecutionInput = {
     sortField: string,
     sortDirection: "ASC" | "DESC",
     limit: number,
-    sortClause: string
+    sortClause: string,
+    offset?: number
   ) => string;
   // 归一化查询结果。
   normalizeQueryResult: (input: QueryResult) => QueryResult;
@@ -94,6 +97,7 @@ export function useQueryExecution({
       limitOverride?: number,
       directionOverride?: "ASC" | "DESC",
       sortClauseOverride?: string,
+      offsetOverride?: number,
       fallbackTab?: TabState
     ) => {
       const executionContext = resolveQueryExecutionContext({
@@ -144,6 +148,7 @@ export function useQueryExecution({
 
       const whereClause = (whereOverride ?? tab?.whereClause ?? "").trim();
       const limit = Math.max(1, Math.min(2000, limitOverride ?? tab?.limit ?? 200));
+      const offset = Math.max(0, offsetOverride ?? extractOffsetValue(tab?.currentSoql || ""));
       const normalizedType = resolvedSourceType.toLowerCase();
       const sortableFieldSet = new Set(getSortableFieldNames(describe));
       const rawSortField = (sortFieldOverride ?? tab?.sortField ?? "").trim();
@@ -188,7 +193,8 @@ export function useQueryExecution({
           sortField,
           sortDirection,
           limit,
-          sortClause
+          sortClause,
+          offset
         );
         const rawResult = await api.queryRecords(resolvedSourceId, soql, tabObjectName);
         const normalizedResult = normalizeQueryResult(rawResult);
@@ -233,7 +239,7 @@ export function useQueryExecution({
           success: false,
           request: `object=${tabObjectName}, where=${whereClause}, sort=${
             normalizedType === "mysql" ? (sortClause || "无排序") : sortField ? `${sortField} ${sortDirection}` : "无排序"
-          }, limit=${limit}`,
+          }, limit=${limit}, offset=${offset}`,
           summary: "查询失败。",
           errorMessage: String(error)
         });
@@ -285,6 +291,13 @@ export function useQueryExecution({
         records: normalizedRecords
       };
       const nextVisibility = buildVisibilityFromSoql(activeTab.soqlDraft, activeTab.describe, activeTab.columnVisibility);
+      const nextStatementState = resolveExecutedQueryStatementState({
+        queryText: activeTab.soqlDraft,
+        fallbackLimit: activeTab.limit,
+        fallbackSortField: activeTab.sortField,
+        fallbackSortDirection: activeTab.sortDirection,
+        fallbackSortClause: activeTab.sortClause
+      });
 
       patchTab(activeTabBindingKey, (item) => ({
         ...item,
@@ -293,6 +306,10 @@ export function useQueryExecution({
         selectedRecordIds: [],
         pendingDeleteRecordIds: [],
         currentSoql: activeTab.soqlDraft,
+        limit: nextStatementState.limit,
+        sortField: nextStatementState.sortField,
+        sortDirection: nextStatementState.sortDirection,
+        sortClause: nextStatementState.sortClause,
         columnVisibility: nextVisibility,
         dirtyCellKeys: [],
         baselineRecords: buildBaselineRecords(normalizedRecords, {

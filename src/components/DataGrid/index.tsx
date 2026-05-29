@@ -8,6 +8,7 @@ import {
   createCellClickedHandler,
   createCellEditedHandler
 } from "./logic/cellEditHandler";
+import { resolveBroadcastPasteEdits } from "./logic/paste";
 import { createProvideEditor } from "./editors/provideEditor";
 import { createDrawHeader } from "./renderers/drawHeader";
 import { useDataGridColumns } from "./hooks/useDataGridColumns";
@@ -18,6 +19,10 @@ import { DataGridSurface } from "./components/DataGridSurface";
 
 export type DataGridProps = {
   result: QueryResult;
+  // 当前每页条数：用于结果头部分页器展示。
+  pageSize?: number;
+  // 当前偏移量：用于分页器范围文案与翻页状态。
+  currentOffset?: number;
   visibleColumns: string[];
   fieldMetadataMap: Record<string, Record<string, unknown>>;
   dirtyCellKeys: string[];
@@ -36,7 +41,6 @@ export type DataGridProps = {
   objectName?: string;
   // 待删除记录 Id 列表：用于将整行标记为灰色背景。
   pendingDeleteRecordIds: string[];
-  onToggleRecord: (recordId: string, checked: boolean) => void;
   onToggleAll: (checked: boolean, recordIds: string[]) => void;
   onEditCell: (rowIndex: number, columnName: string, value: unknown) => void;
   onShowMessage: (message: string) => void;
@@ -46,13 +50,17 @@ export type DataGridProps = {
   enableReadonlyCellHint?: boolean;
   // 是否允许只读单元格双击打开 overlay（仅查看，不可编辑）。
   allowReadonlyOverlay?: boolean;
-  // 是否显示勾选列（首列 checkbox）。
-  showSelectionColumn?: boolean;
+  // 修改每页条数：用于分页器下拉回写 QueryPanel 当前 limit。
+  onPageSizeChange?: (pageSize: number) => void;
+  // 分页导航：用于首页/上一页/下一页/末页触发重查。
+  onPageNavigate?: (action: "first" | "previous" | "next" | "last") => void;
 };
 
 // 查询结果表：主入口只负责装配 hooks 与各模块能力。
 export function DataGrid({
   result,
+  pageSize = 200,
+  currentOffset = 0,
   visibleColumns,
   fieldMetadataMap,
   dirtyCellKeys,
@@ -64,14 +72,14 @@ export function DataGrid({
   selectedSourceType,
   objectName,
   pendingDeleteRecordIds,
-  onToggleRecord,
   onToggleAll,
   onEditCell,
   onShowMessage,
   showHeaderMetadata = true,
   enableReadonlyCellHint = true,
   allowReadonlyOverlay = false,
-  showSelectionColumn = true
+  onPageSizeChange,
+  onPageNavigate
 }: DataGridProps) {
   const records = result.records;
   // 生效元数据：只读模式下统一覆写 createable/updateable，避免误触发编辑链路。
@@ -94,7 +102,7 @@ export function DataGrid({
     () => resolveSalesforceTimezone(salesforceTimezone),
     [salesforceTimezone]
   );
-  // MySQL 主键列名：当查询结果无 Id 时，用主键值作为记录键与勾选键。
+  // MySQL 主键列名：当查询结果无 Id 时，用主键值作为记录键与行选中键。
   const mysqlPrimaryKeyField = useMemo(() => {
     if ((selectedSourceType || "salesforce").toLowerCase() !== "mysql") return "";
     const field = Object.entries(effectiveFieldMetadataMap).find(
@@ -103,24 +111,17 @@ export function DataGrid({
     return field || "";
   }, [effectiveFieldMetadataMap, selectedSourceType]);
 
-  const {
-    columns,
-    setColumnWidths,
-    headerMinWidths,
-    allChecked,
-    hasAnyChecked,
-    selectableIds
-  } = useDataGridColumns({
+  const { columns, setColumnWidths, headerMinWidths, selectableIds } = useDataGridColumns({
     visibleColumns,
-    showSelectionColumn,
     showHeaderMetadata,
     records,
-    selectedRecordIds,
     fieldMetadataMap: effectiveFieldMetadataMap,
-    selectedSourceType
+    selectedSourceType,
+    currentOffset
   });
 
   const dirtyCellSet = useMemo(() => new Set(dirtyCellKeys), [dirtyCellKeys]);
+  const selectedRecordSet = useMemo(() => new Set(selectedRecordIds), [selectedRecordIds]);
   const pendingDeleteRecordSet = useMemo(() => new Set(pendingDeleteRecordIds), [pendingDeleteRecordIds]);
   const gridBodyRef = useRef<HTMLDivElement | null>(null);
   const { rowContextMenu, setRowContextMenu } = useDataGridContextMenu();
@@ -166,24 +167,26 @@ export function DataGrid({
         columns,
         records,
         fieldMetadataMap: effectiveFieldMetadataMap,
-        selectedRecordIds,
+        selectedRecordSet,
         dirtyCellSet,
         pendingDeleteRecordSet,
         effectiveSalesforceTimezone,
         selectedSourceType,
         getRecordKey,
+        currentOffset,
         allowReadonlyOverlay
       }),
     [
       columns,
       records,
       effectiveFieldMetadataMap,
-      selectedRecordIds,
+      selectedRecordSet,
       dirtyCellSet,
       pendingDeleteRecordSet,
       effectiveSalesforceTimezone,
       selectedSourceType,
       getRecordKey,
+      currentOffset,
       allowReadonlyOverlay
     ]
   );
@@ -196,8 +199,6 @@ export function DataGrid({
         fieldMetadataMap: effectiveFieldMetadataMap,
         effectiveSalesforceTimezone,
         selectedSourceType,
-        getRecordKey,
-        onToggleRecord,
         onEditCell,
         onShowMessage
       }),
@@ -207,8 +208,6 @@ export function DataGrid({
       effectiveFieldMetadataMap,
       effectiveSalesforceTimezone,
       selectedSourceType,
-      getRecordKey,
-      onToggleRecord,
       onEditCell,
       onShowMessage
     ]
@@ -229,6 +228,22 @@ export function DataGrid({
   const handleCellsEdited = useCallback((newValues: readonly EditListItem[]) => {
     newValues.forEach((item) => handleCellEdited(item.location, item.value as EditableGridCell));
   }, [handleCellEdited]);
+
+  const handlePaste = useCallback((
+    _target: Item,
+    values: readonly (readonly string[])[],
+    selectedLocations: readonly Item[]
+  ) => {
+    const broadcastEdits = resolveBroadcastPasteEdits({
+      selectedLocations,
+      pastedValues: values
+    });
+    if (!broadcastEdits) {
+      return true; // 行内注释：未命中特殊场景时继续走 Glide 默认矩形粘贴。
+    }
+    handleCellsEdited(broadcastEdits);
+    return false; // 行内注释：已手动分发批量编辑，阻止 Glide 再重复写入。
+  }, [handleCellsEdited]);
 
   const provideEditor = useMemo(
     () =>
@@ -253,11 +268,9 @@ export function DataGrid({
     () =>
       createDrawHeader({
         fieldMetadataMap: effectiveFieldMetadataMap,
-        showHeaderMetadata,
-        allChecked,
-        hasAnyChecked
+        showHeaderMetadata
       }),
-    [effectiveFieldMetadataMap, showHeaderMetadata, allChecked, hasAnyChecked]
+    [effectiveFieldMetadataMap, showHeaderMetadata]
   );
 
   if (records.length === 0) {
@@ -274,15 +287,12 @@ export function DataGrid({
 
   return (
     <DataGridSurface
-      totalSize={result.totalSize}
       records={records}
       columns={columns}
       fieldMetadataMap={effectiveFieldMetadataMap}
       selectedSourceType={selectedSourceType}
       selectedRecordIds={selectedRecordIds}
       showHeaderMetadata={showHeaderMetadata}
-      allChecked={allChecked}
-      hasAnyChecked={hasAnyChecked}
       selectableIds={selectableIds}
       gridBodyRef={gridBodyRef}
       rowContextMenu={rowContextMenu}
@@ -312,6 +322,7 @@ export function DataGrid({
       onCellEdited={handleCellEdited}
       onCellClicked={handleCellClicked}
       onCellsEdited={handleCellsEdited}
+      onPaste={handlePaste}
       provideEditor={provideEditor}
       drawHeader={drawHeader}
     />

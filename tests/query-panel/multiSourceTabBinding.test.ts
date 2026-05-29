@@ -8,8 +8,10 @@ import { useSoqlExecutorStore } from "../../src/store/useSoqlExecutorStore.ts";
 function resetAppStoreState() {
   useAppStore.setState({
     selectedSourceId: "",
+    viewMode: "query",
     tabs: [],
     activeTabObjectName: "",
+    toolsPanelActiveToolId: null,
     loading: false
   });
 }
@@ -120,6 +122,22 @@ test("useAppStore: 切换 selectedSourceId 后不应丢失已打开的多 source
     useAppStore.getState().tabs.map((tab) => tab.bindingKey),
     ["sf-1::Account", "mysql-1::users"]
   );
+});
+
+test("useAppStore: 从 tools 切到其他 panel 再切回时，应保留上一次工具页", () => {
+  resetAppStoreState();
+  const store = useAppStore.getState();
+
+  store.setViewMode("tools");
+  store.setToolsPanelActiveToolId("unicode-converter");
+  store.setViewMode("query");
+  store.setViewMode("tools");
+
+  assert.equal(useAppStore.getState().viewMode, "tools");
+  assert.equal(useAppStore.getState().toolsPanelActiveToolId, "unicode-converter");
+
+  store.setToolsPanelActiveToolId(null);
+  assert.equal(useAppStore.getState().toolsPanelActiveToolId, null);
 });
 
 test("console tabs: 应永久绑定创建时 sourceId/sourceType/sourceName/sourceColor", () => {

@@ -977,15 +977,6 @@ export function SoqlExecutorWorkspace({
                     pendingDeleteRecordIds={[]}
                     enableReadonlyCellHint={false}
                     allowReadonlyOverlay={true}
-                    showSelectionColumn={false}
-                    onToggleRecord={(recordId, checked) => {
-                      patchActiveTab((tab) => ({
-                        ...tab,
-                        selectedRecordIds: checked
-                          ? Array.from(new Set([...tab.selectedRecordIds, recordId]))
-                          : tab.selectedRecordIds.filter((id) => id !== recordId)
-                      }));
-                    }}
                     onToggleAll={(checked, recordIds) => {
                       patchActiveTab((tab) => ({
                         ...tab,

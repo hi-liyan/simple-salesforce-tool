@@ -276,11 +276,7 @@ export function QueryPanel({ viewState, actions }: QueryPanelProps) {
                   onRefreshMysqlDdl={actions.onRefreshMysqlDdl}
                   onToggleQueryBar={actions.onToggleQueryBar}
                   onToggleLogs={actions.onToggleLogs}
-                  onWhereChange={actions.onWhereChange}
                   onLimitChange={actions.onLimitChange}
-                  onSortFieldChange={actions.onSortFieldChange}
-                  onSortDirectionChange={actions.onSortDirectionChange}
-                  onSortClauseChange={actions.onSortClauseChange}
                   onQuery={actions.onQuery}
                   onToggleRecord={actions.onToggleRecord}
                   onToggleAllRecords={actions.onToggleAllRecords}

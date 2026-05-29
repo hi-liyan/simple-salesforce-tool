@@ -8,77 +8,22 @@ type CreateDrawHeaderParams = {
   fieldMetadataMap: Record<string, Record<string, unknown>>;
   // 是否展示元数据 info icon。
   showHeaderMetadata: boolean;
-  // 全选态。
-  allChecked: boolean;
-  // 半选态。
-  hasAnyChecked: boolean;
 };
 
-// 构建表头绘制器：包含字段双行标题与首列复选框绘制。
+// 构建表头绘制器：仅负责字段双行标题与元数据信息图标。
 export function createDrawHeader({
   fieldMetadataMap,
-  showHeaderMetadata,
-  allChecked,
-  hasAnyChecked
+  showHeaderMetadata
 }: CreateDrawHeaderParams): DataEditorDrawHeader {
   return (args, drawContent) => {
     drawContent();
     const columnId = String(args.column.id ?? "");
-    if (columnId !== "__select") {
-      if (columnId.startsWith("__")) return;
-      // 业务字段表头：第一行显示 Field Name，第二行显示 Label（小字浅色）。
-      drawFieldHeaderText(args.ctx, args.rect, columnId, fieldMetadataMap[columnId] || {}, showHeaderMetadata);
-      if (showHeaderMetadata) {
-        drawHeaderInfoIcon(args.ctx, args.rect);
-      }
-      return;
+    if (columnId.startsWith("__")) return;
+    // 业务字段表头：第一行显示 Field Name，第二行显示 Label（小字浅色）。
+    drawFieldHeaderText(args.ctx, args.rect, columnId, fieldMetadataMap[columnId] || {}, showHeaderMetadata);
+    if (showHeaderMetadata) {
+      drawHeaderInfoIcon(args.ctx, args.rect);
     }
-
-    const { ctx, rect } = args;
-    const size = 14;
-    const x = rect.x + Math.floor((rect.width - size) / 2);
-    const y = rect.y + Math.floor((rect.height - size) / 2);
-    const radius = 2;
-
-    ctx.save();
-    ctx.beginPath();
-    ctx.moveTo(x + radius, y);
-    ctx.lineTo(x + size - radius, y);
-    ctx.quadraticCurveTo(x + size, y, x + size, y + radius);
-    ctx.lineTo(x + size, y + size - radius);
-    ctx.quadraticCurveTo(x + size, y + size, x + size - radius, y + size);
-    ctx.lineTo(x + radius, y + size);
-    ctx.quadraticCurveTo(x, y + size, x, y + size - radius);
-    ctx.lineTo(x, y + radius);
-    ctx.quadraticCurveTo(x, y, x + radius, y);
-    ctx.closePath();
-    ctx.fillStyle = allChecked || hasAnyChecked ? "#0176d3" : "#ffffff";
-    ctx.fill();
-    ctx.lineWidth = 1;
-    ctx.strokeStyle = allChecked || hasAnyChecked ? "#0176d3" : "#98a4b4";
-    ctx.stroke();
-
-    if (allChecked) {
-      ctx.beginPath();
-      ctx.moveTo(x + 3, y + 7);
-      ctx.lineTo(x + 6, y + 10);
-      ctx.lineTo(x + 11, y + 4);
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = "#ffffff";
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-      ctx.stroke();
-    } else if (hasAnyChecked) {
-      ctx.beginPath();
-      ctx.moveTo(x + 3, y + 7);
-      ctx.lineTo(x + 11, y + 7);
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = "#ffffff";
-      ctx.lineCap = "round";
-      ctx.stroke();
-    }
-
-    ctx.restore();
   };
 }
 
@@ -147,11 +92,11 @@ function drawFieldHeaderText(
     ctx.fillStyle = "#2f3a4a";
     ctx.font = "600 12px sans-serif";
     // 不传 maxWidth：避免 Canvas 为适配窄列而“横向缩放文本”，导致表头出现压缩效果。
-    ctx.fillText(headerLines.primary, textLeft, rect.y + 14);
+    ctx.fillText(headerLines.primary, textLeft, rect.y + 10);
 
     ctx.fillStyle = "#8b97a6";
     ctx.font = "500 11px sans-serif";
-    ctx.fillText(headerLines.secondary || "", textLeft, rect.y + 30);
+    ctx.fillText(headerLines.secondary || "", textLeft, rect.y + 21);
   } else {
     ctx.textAlign = "left";
     ctx.textBaseline = "middle";

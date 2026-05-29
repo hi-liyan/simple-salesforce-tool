@@ -246,7 +246,7 @@ export type RowUpdateCapability = {
 
 // 页面提示消息。
 export type Notice = {
-  type: "error" | "success";
+  type: "error" | "success" | "warning";
   message: string;
 };
 
