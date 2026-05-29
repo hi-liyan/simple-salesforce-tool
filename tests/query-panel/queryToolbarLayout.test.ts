@@ -48,11 +48,14 @@ test("QueryPanel 工具栏: MySQL DDL 与字段按钮应使用 DDL/FIELD 文本�
 test("QueryPanel 工具栏: 隐藏查询栏按钮前应改为刷新当前查询按钮，且不再依赖未提交状态禁用", () => {
   const source = readFileSync(new URL("../../src/features/main/QueryPanel/components/DataQueryTabPane.tsx", import.meta.url), "utf8");
   const refreshTitleIndex = source.indexOf("title=\"刷新当前查询\"");
+  const separatorAfterRefreshIndex = source.indexOf("{/* 分组分隔线：将刷新动作与后续面板切换动作分开。 */}");
   const queryBarToggleIndex = source.indexOf("title={activeTab.showQueryBar ? \"隐藏查询栏\" : \"显示查询栏\"}");
 
   assert.notEqual(refreshTitleIndex, -1);
+  assert.notEqual(separatorAfterRefreshIndex, -1);
   assert.notEqual(queryBarToggleIndex, -1);
-  assert.equal(refreshTitleIndex < queryBarToggleIndex, true);
+  assert.equal(refreshTitleIndex < separatorAfterRefreshIndex, true);
+  assert.equal(separatorAfterRefreshIndex < queryBarToggleIndex, true);
   assert.equal(source.includes("disabled={activeTab.loading || !hasPendingChanges}"), false);
 });
 
@@ -63,6 +66,17 @@ test("QueryPanel 查询栏: 不应再渲染独立查询按钮，并应提供拖�
   assert.equal(source.includes("aria-label=\"拖拽调整 WHERE 与排序输入框宽度\""), true);
   assert.equal(source.includes("className=\"self-stretch w-px bg-base-300\""), true);
   assert.equal(source.includes("className=\"h-5 w-px bg-base-300\""), false);
+});
+
+test("QueryPanel 查询栏: WHERE/ORDER BY 输入行应收紧到与工具栏控件同高", () => {
+  const source = readFileSync(new URL("../../src/features/main/QueryPanel/components/DataQueryTabPane.tsx", import.meta.url), "utf8");
+
+  assert.equal(source.includes("className=\"flex min-w-0 shrink-0 items-center gap-2 px-3 py-0\""), true);
+  assert.equal(
+    source.includes('inputClassName="h-[30px] min-h-[30px] border-0 bg-transparent px-0 pr-8 text-[13px] shadow-none focus:border-0 focus:outline-none focus:ring-0"'),
+    true
+  );
+  assert.equal(source.includes('inputClassName="h-[28px] min-h-[28px] border-0 bg-transparent px-0 pr-8 text-[13px] shadow-none focus:border-0 focus:outline-none focus:ring-0"'), false);
 });
 
 test("QueryPanel 工具栏: 按钮应改为无边框 hover 背景样式，并整体收紧高度", () => {

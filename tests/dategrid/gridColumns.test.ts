@@ -6,7 +6,7 @@ test("buildGridColumns: 第一列应固定为序号列且不再生成 checkbox �
   const columns = buildGridColumns({
     displayColumns: ["Name", "Status"],
     headerMinWidths: {
-      __index: 56,
+      __index: 48,
       Name: 88,
       Status: 96
     },
@@ -35,5 +35,6 @@ test("buildIndexColumnWidth: 翻页后应按最大序号位数自适应宽度", 
   });
 
   assert.equal(firstPageWidth < laterPageWidth, true);
-  assert.equal(firstPageWidth < 56, true);
+  assert.equal(firstPageWidth <= 36, true);
+  assert.equal(laterPageWidth < 48, true);
 });

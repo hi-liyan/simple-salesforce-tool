@@ -20,7 +20,7 @@ test("DataGrid 表头: 应使用更紧凑的表头高度与双行文字基线", 
   const surfaceSource = readFileSync(new URL("../../src/components/DataGrid/components/DataGridSurface.tsx", import.meta.url), "utf8");
   const headerSource = readFileSync(new URL("../../src/components/DataGrid/renderers/drawHeader.ts", import.meta.url), "utf8");
 
-  assert.equal(surfaceSource.includes("const DATA_GRID_HEADER_HEIGHT = 36;"), true);
-  assert.equal(headerSource.includes("ctx.fillText(headerLines.primary, textLeft, rect.y + 12);"), true);
-  assert.equal(headerSource.includes("ctx.fillText(headerLines.secondary || \"\", textLeft, rect.y + 25);"), true);
+  assert.equal(surfaceSource.includes("const DATA_GRID_HEADER_HEIGHT = 30;"), true);
+  assert.equal(headerSource.includes("ctx.fillText(headerLines.primary, textLeft, rect.y + 10);"), true);
+  assert.equal(headerSource.includes("ctx.fillText(headerLines.secondary || \"\", textLeft, rect.y + 21);"), true);
 });

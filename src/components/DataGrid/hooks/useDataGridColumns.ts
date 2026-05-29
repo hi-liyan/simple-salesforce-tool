@@ -5,6 +5,8 @@ import { estimateAutoColumnWidth } from "../utils/columnWidth.ts";
 
 // 默认列宽采样行数：按表头 + 前 50 行内容估算，兼顾体验与性能。
 const DEFAULT_COLUMN_WIDTH_SAMPLE_ROWS = 50;
+// 序号列默认宽度：仅在缺少测量结果时兜底，避免回退到过宽的旧值。
+const DEFAULT_INDEX_COLUMN_WIDTH = 48;
 
 type UseDataGridColumnsParams = {
   // 当前可见字段列表。
@@ -39,7 +41,7 @@ type BuildIndexColumnWidthParams = {
   rowCount: number;
 };
 
-// 序号列宽度估算：按“最大序号文本宽度 + 左右边距”收紧，避免固定 56 过宽。
+// 序号列宽度估算：按“最大序号文本宽度 + 更紧的左右边距”收紧，避免首列占用过多水平空间。
 export function buildIndexColumnWidth({ currentOffset, rowCount }: BuildIndexColumnWidthParams): number {
   const normalizedOffset = Math.max(0, Math.floor(currentOffset || 0));
   const normalizedRowCount = Math.max(1, Math.floor(rowCount || 0));
@@ -57,7 +59,7 @@ export function buildIndexColumnWidth({ currentOffset, rowCount }: BuildIndexCol
     })()
     : Array.from(sequenceText).length * 8;
 
-  return Math.max(36, Math.ceil(textWidth + 24));
+  return Math.max(32, Math.ceil(textWidth + 14));
 }
 
 // 构造 DataGrid 列定义：首列固定为序号列，后续为业务字段列。
@@ -78,7 +80,7 @@ export function buildGridColumns({
     {
       id: "__index",
       title: "",
-      width: Math.max(headerMinWidths.__index ?? 56, columnWidths.__index ?? 56)
+      width: Math.max(columnWidths.__index ?? 0, headerMinWidths.__index ?? DEFAULT_INDEX_COLUMN_WIDTH)
     },
     ...dataColumns
   ];
