@@ -24,6 +24,45 @@ type QueryPaginationToolbarProps = {
   className?: string;
 };
 
+type PaginationActionButtonProps = {
+  // 按钮标题：用于 hover 提示与 aria 标签复用。
+  title: string;
+  // 无障碍标签：默认与 title 一致。
+  ariaLabel?: string;
+  // 是否禁用：沿用分页状态控制按钮可用性。
+  disabled?: boolean;
+  // 点击事件：触发首页/上一页/下一页/末页翻页。
+  onClick: () => void;
+  // 按钮内容：通常为翻页图标。
+  children: React.ReactNode;
+};
+
+// 分页工具栏按钮包装器：与 QueryPanel 工具栏保持一致，确保禁用按钮仍能显示 title。
+function PaginationActionButton({
+  title,
+  ariaLabel,
+  disabled = false,
+  onClick,
+  children
+}: PaginationActionButtonProps) {
+  const paginationIconButtonClassName =
+    "btn btn-sm h-[30px] min-h-[30px] w-[30px] min-w-[30px] rounded-md border-0 bg-transparent px-0 text-neutral shadow-none hover:bg-base-200/80 hover:text-neutral disabled:bg-transparent disabled:text-neutral/35";
+
+  return (
+    <span className="inline-flex" title={title}>
+      <button
+        type="button"
+        className={`${paginationIconButtonClassName} ${disabled ? "pointer-events-none" : ""}`.trim()}
+        disabled={disabled}
+        aria-label={ariaLabel || title}
+        onClick={onClick}
+      >
+        {children}
+      </button>
+    </span>
+  );
+}
+
 // QueryPanel 结果分页工具栏：抽离自 DataGrid 顶部条，供主工具栏复用。
 export function QueryPaginationToolbar({
   totalSize,
@@ -53,26 +92,22 @@ export function QueryPaginationToolbar({
   return (
     // 分页工具栏：承载 page size、范围文案与翻页入口。
     <div className={`flex items-center gap-0.5 text-[12px] text-neutral/70 ${className}`.trim()}>
-      <button
-        type="button"
-        className="btn btn-ghost btn-xs h-5 min-h-[20px] w-5 min-w-[20px] px-0 text-neutral/70 hover:bg-base-200 hover:text-neutral disabled:text-neutral/35"
+      <PaginationActionButton
         disabled={!paginationState.canGoFirst || !onPageNavigate}
         title="首页"
-        aria-label="首页"
+        ariaLabel="首页"
         onClick={() => onPageNavigate?.("first")}
       >
         <ChevronsLeft size={12} />
-      </button>
-      <button
-        type="button"
-        className="btn btn-ghost btn-xs h-5 min-h-[20px] w-5 min-w-[20px] px-0 text-neutral/70 hover:bg-base-200 hover:text-neutral disabled:text-neutral/35"
+      </PaginationActionButton>
+      <PaginationActionButton
         disabled={!paginationState.canGoPrevious || !onPageNavigate}
         title="上一页"
-        aria-label="上一页"
+        ariaLabel="上一页"
         onClick={() => onPageNavigate?.("previous")}
       >
         <ChevronLeft size={12} />
-      </button>
+      </PaginationActionButton>
       <select
         className="select select-bordered select-xs h-5 min-h-[20px] w-[76px] border-base-300 bg-white px-1.5 text-[12px] font-medium text-neutral focus:outline-none"
         value={pageSizeOption.kind === "custom" ? CUSTOM_PAGE_SIZE_OPTION : String(pageSizeOption.value)}
@@ -98,28 +133,26 @@ export function QueryPaginationToolbar({
         {pageSizeOption.kind === "custom" && <option value={CUSTOM_PAGE_SIZE_OPTION}>{pageSizeOption.value}</option>}
         <option value={CUSTOM_PAGE_SIZE_OPTION}>自定义...</option>
       </select>
-      <span className="min-w-[72px] text-center font-medium text-neutral">{paginationState.rangeLabel}</span>
-      <span>{paginationState.totalLabel}</span>
-      <button
-        type="button"
-        className="btn btn-ghost btn-xs h-5 min-h-[20px] w-5 min-w-[20px] px-0 text-neutral/70 hover:bg-base-200 hover:text-neutral disabled:text-neutral/35"
+      <div className="flex items-center">
+        <span className="min-w-[72px] text-center font-medium text-neutral">{paginationState.rangeLabel}</span>
+        <span>{paginationState.totalLabel}</span>
+      </div>
+      <PaginationActionButton
         disabled={!paginationState.canGoNext || !onPageNavigate}
         title="下一页"
-        aria-label="下一页"
+        ariaLabel="下一页"
         onClick={() => onPageNavigate?.("next")}
       >
         <ChevronRight size={12} />
-      </button>
-      <button
-        type="button"
-        className="btn btn-ghost btn-xs h-5 min-h-[20px] w-5 min-w-[20px] px-0 text-neutral/70 hover:bg-base-200 hover:text-neutral disabled:text-neutral/35"
+      </PaginationActionButton>
+      <PaginationActionButton
         disabled={!paginationState.canGoLast || !onPageNavigate}
         title="末页"
-        aria-label="末页"
+        ariaLabel="末页"
         onClick={() => onPageNavigate?.("last")}
       >
         <ChevronsRight size={12} />
-      </button>
+      </PaginationActionButton>
     </div>
   );
 }

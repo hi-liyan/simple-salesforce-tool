@@ -30,9 +30,12 @@ test("QueryPaginationToolbar: 应使用更紧凑的按钮与元素间距", () =>
   const source = readFileSync(new URL("../../src/components/DataGrid/components/QueryPaginationToolbar.tsx", import.meta.url), "utf8");
 
   assert.equal(source.includes("gap-0.5"), true);
-  assert.equal(source.includes("h-5 min-h-[20px] w-5 min-w-[20px]"), true);
+  assert.equal(source.includes("btn btn-sm h-[30px] min-h-[30px] w-[30px] min-w-[30px] rounded-md border-0"), true);
+  assert.equal(source.includes("hover:bg-base-200/80 hover:text-neutral disabled:bg-transparent disabled:text-neutral/35"), true);
   assert.equal(source.includes("w-[76px]"), true);
   assert.equal(source.includes("min-w-[72px]"), true);
+  assert.equal(source.includes("<span className=\"inline-flex\" title={title}>"), true);
+  assert.equal(source.includes("pointer-events-none"), true);
 });
 
 test("QueryPanel 工具栏: MySQL DDL 与字段按钮应使用 DDL/FIELD 文本标识", () => {
@@ -58,6 +61,8 @@ test("QueryPanel 查询栏: 不应再渲染独立查询按钮，并应提供拖�
 
   assert.equal(source.includes("查询\n        </button>"), false);
   assert.equal(source.includes("aria-label=\"拖拽调整 WHERE 与排序输入框宽度\""), true);
+  assert.equal(source.includes("className=\"self-stretch w-px bg-base-300\""), true);
+  assert.equal(source.includes("className=\"h-5 w-px bg-base-300\""), false);
 });
 
 test("QueryPanel 工具栏: 按钮应改为无边框 hover 背景样式，并整体收紧高度", () => {

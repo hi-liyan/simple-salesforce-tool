@@ -593,7 +593,7 @@ function QueryBar({
             setDraggingSplitResize(true); // 行内注释：进入拖拽态后由全局 mousemove 统一处理比例变化。
           }}
         >
-          <div className="h-5 w-px bg-base-300" />
+          <div className="self-stretch w-px bg-base-300" />
         </div>
         <div
           className="flex min-w-0 shrink-0 items-center gap-2 px-3 py-1"
