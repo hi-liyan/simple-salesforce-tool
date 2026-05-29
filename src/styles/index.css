@@ -18,6 +18,11 @@ body,
   overflow: hidden;
 }
 
+/* 弹窗遮罩：应用本身是固定全屏布局，取消 DaisyUI modal 对根节点预留滚动条宽度，避免右侧露出竖条。 */
+:root:has(:is(.modal-open, .modal:target, .modal-toggle:checked + .modal, .modal[open])) {
+  scrollbar-gutter: auto;
+}
+
 * {
   box-sizing: border-box;
 }

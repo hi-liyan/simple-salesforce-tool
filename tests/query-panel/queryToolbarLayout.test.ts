@@ -88,6 +88,13 @@ test("QueryPanel 工作区弹窗: 应通过页面级 portal 避免被左侧搜�
   assert.equal(source.includes("createPortal(mysqlMutationPreviewModal, modalPortalRoot)"), true);
 });
 
+test("QueryPanel 弹窗遮罩: 应取消 DaisyUI 根节点滚动条预留空间", () => {
+  const source = readFileSync(new URL("../../src/styles/index.css", import.meta.url), "utf8");
+
+  assert.equal(source.includes(":root:has(:is(.modal-open, .modal:target, .modal-toggle:checked + .modal, .modal[open]))"), true);
+  assert.equal(source.includes("scrollbar-gutter: auto;"), true);
+});
+
 test("QueryPanel 查询栏: 不应再渲染独立查询按钮，并应提供拖拽分隔条", () => {
   const source = readFileSync(new URL("../../src/features/main/QueryPanel/components/DataQueryTabPane.tsx", import.meta.url), "utf8");
 
