@@ -222,6 +222,44 @@ type MysqlMutationPreviewState = {
   items: MutationPreviewItem[];
 };
 
+type ToolbarActionButtonProps = {
+  // 按钮标题：供 hover 提示与 aria 复用。
+  title: string;
+  // 无障碍标签：默认与 title 一致。
+  ariaLabel?: string;
+  // 是否禁用。
+  disabled?: boolean;
+  // 按钮样式类名。
+  className: string;
+  // 点击事件。
+  onClick: () => void;
+  // 按钮内容。
+  children: React.ReactNode;
+};
+
+// 工具栏按钮包装器：将 title 放到外层可 hover 容器，解决 disabled button 无法显示原生提示的问题。
+function ToolbarActionButton({
+  title,
+  ariaLabel,
+  disabled = false,
+  className,
+  onClick,
+  children
+}: ToolbarActionButtonProps) {
+  return (
+    <span className="inline-flex" title={title}>
+      <button
+        className={`${className} ${disabled ? "pointer-events-none" : ""}`.trim()}
+        disabled={disabled}
+        aria-label={ariaLabel || title}
+        onClick={onClick}
+      >
+        {children}
+      </button>
+    </span>
+  );
+}
+
 // 查询栏：将输入草稿隔离在子组件内，避免输入时触发 DataGrid 等重组件重渲染导致卡顿。
 function QueryBar({
   activeTab,
@@ -1228,94 +1266,94 @@ export function DataQueryTabPane({
                 />
                 {/* 分割线：拉满工具栏可视高度，并贴住上下边缘。 */}
                 <div className="-my-1 mx-0.5 w-px self-stretch bg-base-300/80" />
-                <button
+                <ToolbarActionButton
                   className={toolbarIconButtonClassName}
                   disabled={activeTab.loading || Boolean(mysqlResultReadonlyReason)}
                   title={mysqlResultReadonlyReason || "新建记录"}
-                  aria-label="新建记录"
+                  ariaLabel="新建记录"
                   onClick={onCreateRecord}
                 >
                   <Plus size={15} />
-                </button>
-                <button
+                </ToolbarActionButton>
+                <ToolbarActionButton
                   className={toolbarDangerButtonClassName}
                   disabled={activeTab.loading || activeTab.selectedRecordIds.length === 0 || Boolean(mysqlResultReadonlyReason)}
                   title={mysqlResultReadonlyReason || `删除选中（${activeTab.selectedRecordIds.length}）`}
-                  aria-label={`删除选中（${activeTab.selectedRecordIds.length}）`}
+                  ariaLabel={`删除选中（${activeTab.selectedRecordIds.length}）`}
                   onClick={onDeleteCheckedRecords}
                 >
                   <Trash2 size={15} />
-                </button>
-                <button
+                </ToolbarActionButton>
+                <ToolbarActionButton
                   className={applyButtonClassName}
                   disabled={activeTab.loading || !hasPendingChanges || Boolean(mysqlApplyDisabledReason)}
                   title={mysqlApplyDisabledReason || "执行更新"}
-                  aria-label="执行更新"
+                  ariaLabel="执行更新"
                   onClick={() => void handleApplyPendingChangesClick()}
                 >
                   <Play size={15} />
-                </button>
-                <button
+                </ToolbarActionButton>
+                <ToolbarActionButton
                   className={toolbarIconButtonClassName}
                   disabled={activeTab.loading}
                   title="刷新当前查询"
-                  aria-label="刷新当前查询"
+                  ariaLabel="刷新当前查询"
                   onClick={handleRefreshCurrentQuery}
                 >
                   <RefreshCw size={15} />
-                </button>
-                <button
+                </ToolbarActionButton>
+                <ToolbarActionButton
                   className={activeTab.showQueryBar ? toolbarActiveButtonClassName : toolbarIconButtonClassName}
                   disabled={activeTab.loading}
                   title={activeTab.showQueryBar ? "隐藏查询栏" : "显示查询栏"}
-                  aria-label={activeTab.showQueryBar ? "隐藏查询栏" : "显示查询栏"}
+                  ariaLabel={activeTab.showQueryBar ? "隐藏查询栏" : "显示查询栏"}
                   onClick={onToggleQueryBar}
                 >
                   <Search size={15} />
-                </button>
+                </ToolbarActionButton>
                 {isMysqlSource ? (
                   <>
                     {/* MySQL DDL 抽屉按钮：点击同按钮可关闭，再次点击可打开。 */}
-                    <button
+                    <ToolbarActionButton
                       className={activeTab.showDrawer && activeDrawerView === "mysql-ddl" ? toolbarActiveButtonClassName : toolbarIconButtonClassName}
                       disabled={activeTab.loading}
                       title={activeTab.showDrawer && activeDrawerView === "mysql-ddl" ? "隐藏 DDL" : "显示 DDL"}
-                      aria-label={activeTab.showDrawer && activeDrawerView === "mysql-ddl" ? "隐藏 DDL" : "显示 DDL"}
+                      ariaLabel={activeTab.showDrawer && activeDrawerView === "mysql-ddl" ? "隐藏 DDL" : "显示 DDL"}
                       onClick={() => onToggleDrawer("mysql-ddl")}
                     >
                       <span className="text-[11px] font-semibold leading-none">DDL</span>
-                    </button>
+                    </ToolbarActionButton>
                     {/* MySQL 字段抽屉按钮：参考 Salesforce“字段与SOQL”中的字段勾选能力。 */}
-                    <button
+                    <ToolbarActionButton
                       className={activeTab.showDrawer && activeDrawerView === "mysql-fields" ? toolbarActiveButtonClassName : toolbarIconButtonClassName}
                       disabled={activeTab.loading}
                       title={activeTab.showDrawer && activeDrawerView === "mysql-fields" ? "隐藏字段抽屉" : "显示字段抽屉"}
-                      aria-label={activeTab.showDrawer && activeDrawerView === "mysql-fields" ? "隐藏字段抽屉" : "显示字段抽屉"}
+                      ariaLabel={activeTab.showDrawer && activeDrawerView === "mysql-fields" ? "隐藏字段抽屉" : "显示字段抽屉"}
                       onClick={() => onToggleDrawer("mysql-fields")}
                     >
                       <span className="text-[11px] font-semibold leading-none">FIELD</span>
-                    </button>
+                    </ToolbarActionButton>
                   </>
                 ) : (
-                  <button
+                  <ToolbarActionButton
                     className={activeTab.showDrawer ? toolbarActiveButtonClassName : toolbarIconButtonClassName}
                     disabled={activeTab.loading}
                     title={activeTab.showDrawer ? "隐藏字段与 SOQL" : "显示字段与 SOQL"}
-                    aria-label={activeTab.showDrawer ? "隐藏字段与 SOQL" : "显示字段与 SOQL"}
+                    ariaLabel={activeTab.showDrawer ? "隐藏字段与 SOQL" : "显示字段与 SOQL"}
                     onClick={() => onToggleDrawer("salesforce")}
                   >
                     <PanelRightOpen size={15} />
-                  </button>
+                  </ToolbarActionButton>
                 )}
-                <button
+                <ToolbarActionButton
                   className={activeTab.showLogs ? toolbarActiveButtonClassName : toolbarIconButtonClassName}
                   disabled={activeTab.loading}
                   title={activeTab.showLogs ? "隐藏日志" : "显示日志"}
-                  aria-label={activeTab.showLogs ? "隐藏日志" : "显示日志"}
+                  ariaLabel={activeTab.showLogs ? "隐藏日志" : "显示日志"}
                   onClick={onToggleLogs}
                 >
                   <ScrollText size={15} />
-                </button>
+                </ToolbarActionButton>
               </div>
             </div>
 
