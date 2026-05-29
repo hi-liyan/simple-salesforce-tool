@@ -65,7 +65,7 @@ test("QueryPanel 工具栏: 刷新前遇到未提交修改时应弹出确认模�
   assert.equal(source.includes("const [refreshConfirmOpen, setRefreshConfirmOpen] = useState(false);"), true);
   assert.equal(source.includes("if (hasPendingChanges) {\n      setRefreshConfirmOpen(true);"), true);
   assert.equal(source.includes("存在未提交修改"), true);
-  assert.equal(source.includes("先撤回当前新增、编辑和删除标记，再重新查询当前结果。"), true);
+  assert.equal(source.includes("刷新后，本地尚未提交的修改不会保留。请确认是否继续？"), true);
 });
 
 test("QueryPanel 刷新确认弹窗: 应提供仅撤销修改按钮", () => {
@@ -77,6 +77,15 @@ test("QueryPanel 刷新确认弹窗: 应提供仅撤销修改按钮", () => {
   assert.equal(source.includes("className=\"btn btn-ghost btn-sm\""), true);
   assert.equal(source.includes("className=\"btn btn-outline btn-sm\""), true);
   assert.equal(source.includes("className=\"btn btn-warning btn-sm\""), true);
+});
+
+test("QueryPanel 工作区弹窗: 应通过页面级 portal 避免被左侧搜索层级盖住", () => {
+  const source = readFileSync(new URL("../../src/features/main/QueryPanel/components/DataQueryTabPane.tsx", import.meta.url), "utf8");
+
+  assert.equal(source.includes("import { createPortal } from \"react-dom\";"), true);
+  assert.equal(source.includes("const modalPortalRoot = typeof document !== \"undefined\" ? document.getElementById(\"portal\") || document.body : null;"), true);
+  assert.equal(source.includes("createPortal(refreshConfirmModal, modalPortalRoot)"), true);
+  assert.equal(source.includes("createPortal(mysqlMutationPreviewModal, modalPortalRoot)"), true);
 });
 
 test("QueryPanel 查询栏: 不应再渲染独立查询按钮，并应提供拖拽分隔条", () => {

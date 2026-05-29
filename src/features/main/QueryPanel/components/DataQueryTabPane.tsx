@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { ArrowUpDown, Filter, PanelRightOpen, Play, Plus, RefreshCw, ScrollText, Search, Trash2, X } from "lucide-react";
 import { ContextMenu, type ContextMenuEntry } from "../../../../components/ContextMenu";
 import { DataGrid } from "../../../../components/DataGrid";
@@ -1151,6 +1152,144 @@ export function DataQueryTabPane({
     onDiscardPendingChanges(); // 行内注释：只撤回当前未提交修改，不触发重新查询。
   }
 
+  // 工作区弹窗挂载点：使用页面级 portal，避免右侧 pane 的 z-index stacking context 盖不住左侧搜索框。
+  const modalPortalRoot = typeof document !== "undefined" ? document.getElementById("portal") || document.body : null;
+
+  // 刷新确认弹窗：点击刷新且存在未提交修改时提示用户确认处理方式。
+  const refreshConfirmModal = refreshConfirmOpen ? (
+    <div className="modal modal-open">
+      <div className="modal-box max-w-md p-0">
+        <div className="border-b border-base-300 px-6 py-4">
+          <div className="flex items-start justify-between gap-4">
+            <h3 className="text-lg font-semibold">存在未提交修改</h3>
+            <button
+              className="btn btn-circle btn-ghost btn-sm"
+              onClick={() => setRefreshConfirmOpen(false)}
+              aria-label="关闭刷新确认弹窗"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        </div>
+        <div className="px-6 py-4 text-[13px] leading-6 text-neutral/75">
+          刷新后，本地尚未提交的修改不会保留。请确认是否继续？
+        </div>
+        <div className="modal-action mt-0 border-t border-base-300 px-6 py-4">
+          <button className="btn btn-ghost btn-sm" onClick={() => setRefreshConfirmOpen(false)}>
+            取消
+          </button>
+          <button className="btn btn-outline btn-sm" onClick={handleDiscardPendingChangesOnly}>仅撤销修改</button>
+          <button className="btn btn-warning btn-sm" onClick={handleConfirmRefreshCurrentQuery}>
+            确认刷新
+          </button>
+        </div>
+      </div>
+    </div>
+  ) : null;
+
+  // MySQL 提交前预览弹窗：让用户在真正提交前确认 create/update/delete 与 NULL 写入摘要。
+  const mysqlMutationPreviewModal = mysqlMutationPreviewState.open ? (
+    <div className="modal modal-open">
+      {/* 弹窗主体：保持中等宽度，兼顾 SQL 预览与移动端可读性。 */}
+      <div className="modal-box max-w-4xl p-0">
+        {/* 头部：展示本次提交动作概览。 */}
+        <div className="border-b border-base-300 px-6 py-4">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h3 className="text-lg font-semibold">MySQL 提交前预览</h3>
+              <p className="mt-1 text-[12px] text-neutral/70">
+                新增 {mysqlMutationPreviewState.createCount} 行，更新 {mysqlMutationPreviewState.updateCount} 行，删除{" "}
+                {mysqlMutationPreviewState.deleteCount} 行，写入 NULL {mysqlPreviewNullWriteCount} 个字段。
+              </p>
+            </div>
+            {/* 关闭按钮：执行中禁用，避免用户误以为提交已取消。 */}
+            <button
+              className="btn btn-circle btn-ghost btn-sm"
+              onClick={closeMysqlMutationPreview}
+              disabled={mysqlMutationPreviewState.loading}
+              aria-label="关闭提交前预览"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        </div>
+
+        {/* 主体内容：逐条展示结构化摘要与预览 SQL。 */}
+        <div className="max-h-[70vh] overflow-auto px-6 py-4">
+          {mysqlMutationPreviewState.error && (
+            <div className="mb-4 rounded border border-error/30 bg-error/10 px-3 py-2 text-[12px] text-error">
+              {mysqlMutationPreviewState.error}
+            </div>
+          )}
+          {mysqlMutationPreviewState.items.length === 0 ? (
+            <div className="rounded border border-base-300 bg-base-200/40 px-3 py-6 text-center text-[12px] text-neutral/70">
+              当前没有可提交的 MySQL 变更。
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {mysqlMutationPreviewState.items.map((item) => (
+                <section key={`${item.op}:${item.operationIndex}:${item.rowStableId}`} className="rounded border border-base-300 bg-base-100">
+                  {/* 预览项头部：展示操作类型与定位信息。 */}
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-base-300 px-3 py-2 text-[12px]">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`badge badge-sm ${
+                          item.op === "create" ? "badge-success" : item.op === "update" ? "badge-info" : "badge-error"
+                        }`}
+                      >
+                        {item.op === "create" ? "新增" : item.op === "update" ? "更新" : "删除"}
+                      </span>
+                      <span className="text-neutral/80">
+                        {item.rowLocator ? `定位值：${item.rowLocator}` : `行标识：${item.rowStableId}`}
+                      </span>
+                    </div>
+                    <span className="text-neutral/60">序号 #{item.operationIndex + 1}</span>
+                  </div>
+
+                  {/* 字段摘要：优先让用户看清本条操作会写哪些值。 */}
+                  <div className="px-3 py-2 text-[12px]">
+                    {item.fields.length === 0 ? (
+                      <div className="text-neutral/70">该操作不包含字段写入。</div>
+                    ) : (
+                      <div className="flex flex-wrap gap-2">
+                        {item.fields.map((field) => (
+                          <span key={`${item.op}:${item.operationIndex}:${field.name}`} className="rounded border border-base-300 bg-base-200/60 px-2 py-1">
+                            {field.name} = {field.kind === "null" ? "NULL" : field.kind === "default" ? "DEFAULT" : JSON.stringify(field.value)}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* SQL 预览：使用后端真实归一化逻辑生成，避免前端拼串与实际执行不一致。 */}
+                  <div className="border-t border-base-300 px-3 py-2">
+                    <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded bg-base-200/40 p-2 text-[12px]">
+                      {item.previewSql || (mysqlMutationPreviewState.loading ? "正在生成预览 SQL..." : "暂无预览 SQL。")}
+                    </pre>
+                  </div>
+                </section>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* 底部动作区：确认后才真正执行数据库写入。 */}
+        <div className="modal-action mt-0 border-t border-base-300 px-6 py-4">
+          <button className="btn btn-ghost" onClick={closeMysqlMutationPreview} disabled={mysqlMutationPreviewState.loading}>
+            取消
+          </button>
+          <button
+            className="btn btn-primary"
+            onClick={() => void handleConfirmMysqlMutationPreview()}
+            disabled={mysqlMutationPreviewState.loading || mysqlMutationPreviewState.items.length === 0}
+          >
+            {mysqlMutationPreviewState.loading ? "执行中..." : "确认执行"}
+          </button>
+        </div>
+      </div>
+    </div>
+  ) : null;
+
   return (
     <>
       {/* 工作区全局提示。 */}
@@ -1258,36 +1397,7 @@ export function DataQueryTabPane({
         </>
       )}
 
-      {refreshConfirmOpen && (
-        <div className="modal modal-open">
-          <div className="modal-box max-w-md p-0">
-            <div className="border-b border-base-300 px-6 py-4">
-              <div className="flex items-start justify-between gap-4">
-                <h3 className="text-lg font-semibold">存在未提交修改</h3>
-                <button
-                  className="btn btn-circle btn-ghost btn-sm"
-                  onClick={() => setRefreshConfirmOpen(false)}
-                  aria-label="关闭刷新确认弹窗"
-                >
-                  <X size={16} />
-                </button>
-              </div>
-            </div>
-            <div className="px-6 py-4 text-[13px] leading-6 text-neutral/75">
-              刷新后，本地尚未提交的修改不会保留。请确认是否继续？
-            </div>
-            <div className="modal-action mt-0 border-t border-base-300 px-6 py-4">
-              <button className="btn btn-ghost btn-sm" onClick={() => setRefreshConfirmOpen(false)}>
-                取消
-              </button>
-              <button className="btn btn-outline btn-sm" onClick={handleDiscardPendingChangesOnly}>仅撤销修改</button>
-              <button className="btn btn-warning btn-sm" onClick={handleConfirmRefreshCurrentQuery}>
-                确认刷新
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {modalPortalRoot && refreshConfirmModal && createPortal(refreshConfirmModal, modalPortalRoot)}
 
       {activeTab && (
         // 主工作区。
@@ -1791,108 +1901,7 @@ export function DataQueryTabPane({
         </div>
       )}
 
-      {/* MySQL 提交前预览弹窗：让用户在真正提交前确认 create/update/delete 与 NULL 写入摘要。 */}
-      {mysqlMutationPreviewState.open && (
-        <div className="modal modal-open">
-          {/* 弹窗主体：保持中等宽度，兼顾 SQL 预览与移动端可读性。 */}
-          <div className="modal-box max-w-4xl p-0">
-            {/* 头部：展示本次提交动作概览。 */}
-            <div className="border-b border-base-300 px-6 py-4">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <h3 className="text-lg font-semibold">MySQL 提交前预览</h3>
-                  <p className="mt-1 text-[12px] text-neutral/70">
-                    新增 {mysqlMutationPreviewState.createCount} 行，更新 {mysqlMutationPreviewState.updateCount} 行，删除{" "}
-                    {mysqlMutationPreviewState.deleteCount} 行，写入 NULL {mysqlPreviewNullWriteCount} 个字段。
-                  </p>
-                </div>
-                {/* 关闭按钮：执行中禁用，避免用户误以为提交已取消。 */}
-                <button
-                  className="btn btn-circle btn-ghost btn-sm"
-                  onClick={closeMysqlMutationPreview}
-                  disabled={mysqlMutationPreviewState.loading}
-                  aria-label="关闭提交前预览"
-                >
-                  <X size={16} />
-                </button>
-              </div>
-            </div>
-
-            {/* 主体内容：逐条展示结构化摘要与预览 SQL。 */}
-            <div className="max-h-[70vh] overflow-auto px-6 py-4">
-              {mysqlMutationPreviewState.error && (
-                <div className="mb-4 rounded border border-error/30 bg-error/10 px-3 py-2 text-[12px] text-error">
-                  {mysqlMutationPreviewState.error}
-                </div>
-              )}
-              {mysqlMutationPreviewState.items.length === 0 ? (
-                <div className="rounded border border-base-300 bg-base-200/40 px-3 py-6 text-center text-[12px] text-neutral/70">
-                  当前没有可提交的 MySQL 变更。
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {mysqlMutationPreviewState.items.map((item) => (
-                    <section key={`${item.op}:${item.operationIndex}:${item.rowStableId}`} className="rounded border border-base-300 bg-base-100">
-                      {/* 预览项头部：展示操作类型与定位信息。 */}
-                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-base-300 px-3 py-2 text-[12px]">
-                        <div className="flex items-center gap-2">
-                          <span
-                            className={`badge badge-sm ${
-                              item.op === "create" ? "badge-success" : item.op === "update" ? "badge-info" : "badge-error"
-                            }`}
-                          >
-                            {item.op === "create" ? "新增" : item.op === "update" ? "更新" : "删除"}
-                          </span>
-                          <span className="text-neutral/80">
-                            {item.rowLocator ? `定位值：${item.rowLocator}` : `行标识：${item.rowStableId}`}
-                          </span>
-                        </div>
-                        <span className="text-neutral/60">序号 #{item.operationIndex + 1}</span>
-                      </div>
-
-                      {/* 字段摘要：优先让用户看清本条操作会写哪些值。 */}
-                      <div className="px-3 py-2 text-[12px]">
-                        {item.fields.length === 0 ? (
-                          <div className="text-neutral/70">该操作不包含字段写入。</div>
-                        ) : (
-                          <div className="flex flex-wrap gap-2">
-                            {item.fields.map((field) => (
-                              <span key={`${item.op}:${item.operationIndex}:${field.name}`} className="rounded border border-base-300 bg-base-200/60 px-2 py-1">
-                                {field.name} = {field.kind === "null" ? "NULL" : field.kind === "default" ? "DEFAULT" : JSON.stringify(field.value)}
-                              </span>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-
-                      {/* SQL 预览：使用后端真实归一化逻辑生成，避免前端拼串与实际执行不一致。 */}
-                      <div className="border-t border-base-300 px-3 py-2">
-                        <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded bg-base-200/40 p-2 text-[12px]">
-                          {item.previewSql || (mysqlMutationPreviewState.loading ? "正在生成预览 SQL..." : "暂无预览 SQL。")}
-                        </pre>
-                      </div>
-                    </section>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* 底部动作区：确认后才真正执行数据库写入。 */}
-            <div className="modal-action mt-0 border-t border-base-300 px-6 py-4">
-              <button className="btn btn-ghost" onClick={closeMysqlMutationPreview} disabled={mysqlMutationPreviewState.loading}>
-                取消
-              </button>
-              <button
-                className="btn btn-primary"
-                onClick={() => void handleConfirmMysqlMutationPreview()}
-                disabled={mysqlMutationPreviewState.loading || mysqlMutationPreviewState.items.length === 0}
-              >
-                {mysqlMutationPreviewState.loading ? "执行中..." : "确认执行"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {modalPortalRoot && mysqlMutationPreviewModal && createPortal(mysqlMutationPreviewModal, modalPortalRoot)}
     </>
   );
 }
