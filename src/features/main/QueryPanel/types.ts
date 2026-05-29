@@ -17,6 +17,8 @@ export type QueryOverrides = {
   whereClause?: string;
   // LIMIT 条数。
   limit?: number;
+  // OFFSET 偏移量：用于分页器切换页码。
+  offset?: number;
   // 排序字段（仅 Salesforce 且未提供 sortClause 时生效）。
   sortField?: string;
   // 排序方向（仅 Salesforce 且未提供 sortClause 时生效）。

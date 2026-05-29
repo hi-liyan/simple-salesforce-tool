@@ -7,6 +7,7 @@ import { buildMysqlMutationPlan } from "../logic/mysqlMutationPlanner.ts";
 import { resolveMysqlResultUpdateCapability } from "../logic/mysqlUpdateCapability.ts";
 import { isMysqlBlankValue } from "../logic/mysqlValueSemantics.ts";
 import { collectMysqlMissingRequiredFields } from "../logic/mysqlCreateValidation.ts";
+import { extractOffsetValue } from "../logic/queryUtils.ts";
 
 type MysqlDdlState = Record<string, { loading: boolean; data: ObjectDdl | null; error: string }>;
 
@@ -74,6 +75,7 @@ type UseQueryPanelRuntimeInput = {
     limitOverride?: number,
     directionOverride?: "ASC" | "DESC",
     sortClauseOverride?: string,
+    offsetOverride?: number,
     fallbackTab?: TabState
   ) => Promise<void>;
   // 从 DB 读取字段可见性。
@@ -95,7 +97,8 @@ type UseQueryPanelRuntimeInput = {
     sortField: string,
     sortDirection: "ASC" | "DESC",
     limit: number,
-    sortClause: string
+    sortClause: string,
+    offset?: number
   ) => string;
   // 归一化查询结果。
   normalizeQueryResult: (input: { totalSize: number; records: Record<string, unknown>[] }) => {
@@ -241,7 +244,8 @@ export function useQueryPanelRuntime({
           columnVisibility: persistedVisibility
         }));
 
-        await queryTabData(bindingKey, describe, "", defaultSortField, 200, "DESC", undefined, newTab);
+        await queryTabData(bindingKey, describe, "", defaultSortField, 200, "DESC", undefined, undefined, newTab);
+
       } catch (error) {
         patchTab(bindingKey, (tab) => ({
           ...tab,
@@ -293,6 +297,7 @@ export function useQueryPanelRuntime({
 
         const whereClause = (freshTab.whereClause ?? "").trim();
         const limit = Math.max(1, Math.min(2000, freshTab.limit ?? 200));
+        const offset = Math.max(0, extractOffsetValue(freshTab.currentSoql || ""));
         const normalizedType = String(freshTab.sourceType || selectedSourceType || "salesforce").toLowerCase();
         // MySQL 恢复查询时补齐主键字段，确保基线键与表格高亮键一致。
         const mysqlPrimaryKeyField = normalizedType === "mysql"
@@ -323,7 +328,8 @@ export function useQueryPanelRuntime({
           sortField,
           sortDirection,
           limit,
-          sortClause
+          sortClause,
+          offset
         );
         const rawResult = await api.queryRecords(resolvedSourceId, soql, freshTab.objectName);
         const normalizedResult = normalizeQueryResult(rawResult);

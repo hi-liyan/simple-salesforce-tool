@@ -1,5 +1,5 @@
 import { ReusableTabs } from "../../../../components/tabs/ReusableTabs";
-import { buildSourceSurfacePalette } from "../logic/sourceColor.ts";
+import { buildWorkspaceTabSurfaceStyles } from "../logic/workspaceTabVisuals.ts";
 import { QueryWorkspaceTabItem } from "../types";
 
 type QueryWorkspaceTabsProps = {
@@ -29,24 +29,14 @@ export function QueryWorkspaceTabs({
   return (
     <ReusableTabs
       tabs={tabs.map((tab) => {
-        const surfacePalette = buildSourceSurfacePalette(tab.sourceColor || "");
+        const surfaceStyles = buildWorkspaceTabSurfaceStyles(tab.sourceColor || "");
         return {
           id: tab.id,
           title: tab.title,
           closable: true,
           renameable: false,
-          surfaceStyle: surfacePalette
-            ? {
-                backgroundColor: surfacePalette.backgroundColor,
-                borderColor: surfacePalette.borderColor
-              }
-            : undefined,
-          activeSurfaceStyle: surfacePalette
-            ? {
-                backgroundColor: surfacePalette.activeBackgroundColor,
-                borderColor: surfacePalette.borderColor
-              }
-            : undefined
+          surfaceStyle: surfaceStyles.surfaceStyle,
+          activeSurfaceStyle: surfaceStyles.activeSurfaceStyle
         };
       })}
       activeTabId={activeTabId}

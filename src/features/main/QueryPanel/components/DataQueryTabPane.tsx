@@ -9,6 +9,8 @@ import { useAppStore } from "../../../../store/useAppStore";
 import { buildObjectTabBindingKey, MutationPreviewItem, Notice, ObjectDdl, TabState } from "../../../../types";
 import { buildMysqlMutationPlan, mergeMysqlPreviewSqlItems } from "../logic/mysqlMutationPlanner.ts";
 import { hasMysqlMissingRequiredFields } from "../logic/mysqlCreateValidation.ts";
+import { resolveQueryPageNavigationOffset } from "../../../../components/DataGrid/logic/queryPagination.ts";
+import { extractOffsetValue } from "../logic/queryUtils.ts";
 import { resolveMysqlResultUpdateCapability } from "../logic/mysqlUpdateCapability.ts";
 import { buildSourceSurfacePalette } from "../logic/sourceColor.ts";
 import type { QueryOverrides } from "../types";
@@ -165,11 +167,7 @@ type DataQueryTabPaneProps = {
   onRefreshMysqlDdl: () => void;
   onToggleQueryBar: () => void;
   onToggleLogs: () => void;
-  onWhereChange: (value: string) => void;
   onLimitChange: (value: number) => void;
-  onSortFieldChange: (value: string) => void;
-  onSortDirectionChange: (value: "ASC" | "DESC") => void;
-  onSortClauseChange: (value: string) => void;
   onQuery: (overrides?: QueryOverrides) => void;
   onToggleRecord: (recordId: string, checked: boolean) => void;
   onToggleAllRecords: (checked: boolean, recordIds: string[]) => void;
@@ -201,12 +199,6 @@ type QueryBarProps = {
   salesforceWhereSuggestions: string[];
   // Salesforce 排序候选词。
   salesforceSortSuggestions: string[];
-  // 写入 WHERE：用于防抖回写到 store。
-  onWhereChange: (value: string) => void;
-  // 写入 LIMIT：用于防抖回写到 store。
-  onLimitChange: (value: number) => void;
-  // 写入排序表达式：用于防抖回写到 store。
-  onSortClauseChange: (value: string) => void;
   // 执行查询：支持用草稿覆盖值执行，避免依赖 store 回写完成。
   onQuery: (overrides?: QueryOverrides) => void;
 };
@@ -236,9 +228,6 @@ function QueryBar({
   mysqlSortSuggestions,
   salesforceWhereSuggestions,
   salesforceSortSuggestions,
-  onWhereChange,
-  onLimitChange,
-  onSortClauseChange,
   onQuery
 }: QueryBarProps) {
   // Store：直接更新目标 Tab，避免“常驻挂载 + 防抖回写”在切换 Tab 后误写到其它 Tab。
@@ -248,11 +237,6 @@ function QueryBar({
   // 回写 WHERE：按当前 QueryBar 绑定的对象 Tab 精准写入。
   function commitWhereClause(value: string) {
     patchTabInStore(activeTabIdentity, (item) => ({ ...item, whereClause: value })); // 行内注释：仅更新目标 Tab 的 WHERE，避免跨 Tab 串写。
-  }
-
-  // 回写 LIMIT：按当前 QueryBar 绑定的对象 Tab 精准写入。
-  function commitLimit(value: number) {
-    patchTabInStore(activeTabIdentity, (item) => ({ ...item, limit: value })); // 行内注释：仅更新目标 Tab 的 LIMIT，避免跨 Tab 串写。
   }
 
   // 回写排序表达式：同步兼容旧版 sortField/sortDirection 显示逻辑。
@@ -286,27 +270,20 @@ function QueryBar({
   const [sortDraft, setSortDraft] = useState(
     activeTab.sortClause || (activeTab.sortField ? `${activeTab.sortField} ${activeTab.sortDirection}` : "")
   );
-  // LIMIT 草稿：输入时保持数字态，避免直接写入 store 触发全局重渲染。
-  const [limitDraft, setLimitDraft] = useState(activeTab.limit);
 
   // 草稿引用：用于在 effect 清理阶段读取最新草稿值。
   const whereDraftRef = useRef(whereDraft);
   const sortDraftRef = useRef(sortDraft);
-  const limitDraftRef = useRef(limitDraft);
   useEffect(() => {
     whereDraftRef.current = whereDraft;
   }, [whereDraft]);
   useEffect(() => {
     sortDraftRef.current = sortDraft;
   }, [sortDraft]);
-  useEffect(() => {
-    limitDraftRef.current = limitDraft;
-  }, [limitDraft]);
 
   // 防抖计时器：避免每次按键都回写 store。
   const whereTimerRef = useRef<number | null>(null);
   const sortTimerRef = useRef<number | null>(null);
-  const limitTimerRef = useRef<number | null>(null);
 
   // 清理计时器：统一在切换 Tab 或卸载时执行，避免跨 Tab 写错目标。
   function clearTimers() {
@@ -318,10 +295,6 @@ function QueryBar({
       window.clearTimeout(sortTimerRef.current);
       sortTimerRef.current = null;
     }
-    if (limitTimerRef.current) {
-      window.clearTimeout(limitTimerRef.current);
-      limitTimerRef.current = null;
-    }
   }
 
   // 刷新草稿：切换对象 Tab 时从 store 值重置草稿，并同步清理计时器。
@@ -329,7 +302,6 @@ function QueryBar({
     clearTimers(); // 先取消旧 Tab 的防抖回写，避免写入新 Tab。
     setWhereDraft(activeTab.whereClause);
     setSortDraft(activeTab.sortClause || (activeTab.sortField ? `${activeTab.sortField} ${activeTab.sortDirection}` : ""));
-    setLimitDraft(activeTab.limit);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab.objectName]);
 
@@ -341,10 +313,6 @@ function QueryBar({
       // 仅在草稿与 store 不一致时回写，避免无意义的状态更新。
       if (whereDraftRef.current !== activeTab.whereClause) {
         commitWhereClause(whereDraftRef.current); // 行内注释：切换 Tab 前强制回写到“当前绑定 Tab”。
-      }
-      const nextLimit = limitDraftRef.current;
-      if (nextLimit !== activeTab.limit) {
-        commitLimit(nextLimit); // 行内注释：切换 Tab 前强制回写到“当前绑定 Tab”。
       }
       // 排序草稿与 store 的 sortClause/旧版 sortField 显示可能存在差异，这里统一回写 sortClause。
       const nextSortDraft = sortDraftRef.current;
@@ -373,15 +341,6 @@ function QueryBar({
     }, 250);
   }
 
-  // 防抖回写 LIMIT：输入过程保持流畅，停顿后再同步 store。
-  function scheduleLimitCommit(nextValue: number) {
-    if (limitTimerRef.current) window.clearTimeout(limitTimerRef.current);
-    limitTimerRef.current = window.setTimeout(() => {
-      limitTimerRef.current = null;
-      commitLimit(nextValue); // 行内注释：防抖回写到“当前绑定 Tab”，避免切换后写错目标。
-    }, 250);
-  }
-
   // 执行查询：优先使用草稿覆盖值，保证点击查询时使用最新输入。
   function handleQueryClick() {
     if (activeTab.loading) return;
@@ -389,12 +348,11 @@ function QueryBar({
     clearTimers();
     // 主动回写一次，保证 UI 切换 Tab 或其它地方读取 store 时拿到一致值。
     commitWhereClause(whereDraftRef.current); // 行内注释：执行前强制写入 store，保证后续依赖值一致。
-    commitLimit(limitDraftRef.current); // 行内注释：执行前强制写入 store，保证后续依赖值一致。
     commitSortClause(sortDraftRef.current); // 行内注释：执行前强制写入 store，保证后续依赖值一致。
     onQuery({
       whereClause: whereDraftRef.current,
-      limit: limitDraftRef.current,
-      sortClause: sortDraftRef.current
+      sortClause: sortDraftRef.current,
+      offset: 0
     });
   }
 
@@ -454,22 +412,6 @@ function QueryBar({
               allowClear
               onSubmit={handleQueryClick}
             />
-
-            <div className="w-[90px]">
-              {/* LIMIT 标题。 */}
-              <label className="mb-1 block text-[12px]">LIMIT</label>
-              {/* LIMIT 输入框：输入时不立即回写 store，避免全局重渲染导致卡顿。 */}
-              <input
-                className="input input-bordered input-sm h-[38px] min-h-[38px] w-full leading-[20px]"
-                type="number"
-                value={limitDraft}
-                onChange={(event) => {
-                  const next = Number(event.target.value || 200);
-                  setLimitDraft(next); // 输入实时更新草稿。
-                  scheduleLimitCommit(next); // 防抖写入 store。
-                }}
-              />
-            </div>
           </>
         ) : (
           <>
@@ -488,22 +430,6 @@ function QueryBar({
               allowClear
               onSubmit={handleQueryClick}
             />
-
-            <div className="w-[90px]">
-              {/* LIMIT 标题。 */}
-              <label className="mb-1 block text-[12px]">LIMIT</label>
-              {/* LIMIT 输入框：输入时不立即回写 store。 */}
-              <input
-                className="input input-bordered input-sm h-[38px] min-h-[38px] w-full leading-[20px]"
-                type="number"
-                value={limitDraft}
-                onChange={(event) => {
-                  const next = Number(event.target.value || 200);
-                  setLimitDraft(next); // 输入实时更新草稿。
-                  scheduleLimitCommit(next); // 防抖写入 store。
-                }}
-              />
-            </div>
           </>
         )}
 
@@ -548,11 +474,7 @@ export function DataQueryTabPane({
   onRefreshMysqlDdl,
   onToggleQueryBar,
   onToggleLogs,
-  onWhereChange,
   onLimitChange,
-  onSortFieldChange,
-  onSortDirectionChange,
-  onSortClauseChange,
   onQuery,
   onToggleRecord,
   onToggleAllRecords,
@@ -596,12 +518,10 @@ export function DataQueryTabPane({
   const canApplyPendingChanges = Boolean(activeTab && !activeTab.loading && hasPendingChanges && !mysqlApplyDisabledReason);
   // 工具栏背景色：将数据源颜色转换为浅色表面背景，避免顶部工具栏过重抢视觉焦点。
   const toolbarBackgroundColor = buildSourceSurfacePalette(String(activeTab?.sourceColor || "").trim())?.backgroundColor || "#FFFFFF";
-  // 工具栏按钮统一尺寸：使用 34px 中间档高度（介于 h-8 与 h-9 之间）。
-  const toolbarButtonClassName = "btn btn-outline btn-sm h-[34px] min-h-[34px]";
-  // “执行更新”按钮样式：可用态使用蓝青渐变强调，贴合项目品牌色并提升可见性。
+  // “执行更新”按钮样式：icon-only 保持强调态，但 hover 时不改变主色。
   const applyButtonClassName = canApplyPendingChanges
-    ? "btn btn-sm h-[34px] min-h-[34px] border border-brand-600 bg-gradient-to-r from-brand-600 to-brand-500 text-white shadow-[0_6px_16px_rgba(18,158,242,0.25)] hover:from-brand-700 hover:to-brand-600"
-    : toolbarButtonClassName;
+    ? "btn btn-sm h-[34px] min-h-[34px] w-[34px] min-w-[34px] border border-brand-600 bg-gradient-to-r from-brand-600 to-brand-500 px-0 text-white shadow-[0_6px_16px_rgba(18,158,242,0.25)] hover:border-brand-600 hover:from-brand-600 hover:to-brand-500 hover:text-white"
+    : "btn btn-sm h-[34px] min-h-[34px] w-[34px] min-w-[34px] border border-base-300 bg-white/80 px-0 text-neutral shadow-none hover:border-base-300 hover:bg-white hover:text-neutral disabled:border-base-200 disabled:bg-white/50 disabled:text-neutral/35";
   // 字段搜索模式：支持“名称/标签”与“数据类型”两种过滤维度。
   const [fieldSearchMode, setFieldSearchMode] = useState<"nameOrLabel" | "dataType">("nameOrLabel");
   // 字段搜索关键词：用于过滤当前对象字段列表。
@@ -948,6 +868,43 @@ export function DataQueryTabPane({
       ),
     [mysqlMutationPreviewState.items]
   );
+  // 工具栏图标按钮基础样式：统一改为 icon-only，hover 时保持颜色不跳变。
+  const toolbarIconButtonClassName =
+    "btn btn-sm h-[34px] min-h-[34px] w-[34px] min-w-[34px] border border-base-300 bg-white/80 px-0 text-neutral shadow-none hover:border-base-300 hover:bg-white hover:text-neutral disabled:border-base-200 disabled:bg-white/50 disabled:text-neutral/35";
+  // 删除按钮固定为错误色，但 hover 时保持同色，不做跳色反馈。
+  const toolbarDangerButtonClassName = `${toolbarIconButtonClassName} text-error hover:text-error`;
+  // 激活型切换按钮：仅增强背景与边框，不改变图标主色。
+  const toolbarActiveButtonClassName = `${toolbarIconButtonClassName} bg-white border-base-300`;
+
+  // 当前结果分页偏移量：从当前执行语句解析，保证刷新后分页器文案与实际结果一致。
+  const currentResultOffset = useMemo(() => extractOffsetValue(activeTab?.currentSoql || ""), [activeTab?.currentSoql]);
+
+  // 修改 Page Size：立即重查第一页，避免只改 limit 不刷新结果。
+  function handlePageSizeChange(nextPageSize: number) {
+    if (!activeTab || activeTab.loading) return;
+    onLimitChange(nextPageSize); // 行内注释：先同步 store 中的 limit，保证分页器与查询栏状态一致。
+    onQuery({
+      limit: nextPageSize,
+      offset: 0
+    }); // 行内注释：切换 page size 后总是回到第一页并立即重查。
+  }
+
+  // 分页导航：基于当前 offset/page size 计算下一次查询偏移量。
+  function handlePageNavigate(action: "first" | "previous" | "next" | "last") {
+    if (!activeTab || activeTab.loading) return;
+    const currentOffset = currentResultOffset;
+    const nextOffset = resolveQueryPageNavigationOffset({
+      action,
+      totalSize: activeTab.result.totalSize || 0,
+      loadedRowCount: activeTab.result.records.length,
+      pageSize: activeTab.limit || 200,
+      currentOffset: currentResultOffset
+    });
+    if (nextOffset === currentOffset) return;
+    onQuery({
+      offset: nextOffset
+    }); // 行内注释：翻页仅覆盖 offset，复用当前 where/sort/limit 条件重查下一页。
+  }
 
   return (
     <>
@@ -1075,70 +1032,92 @@ export function DataQueryTabPane({
             <div className="border-b border-base-300 px-3 py-1.5 overflow-x-auto" style={{ backgroundColor: toolbarBackgroundColor }}>
               <div className="flex flex-row items-center gap-1 min-w-max">
                 <button
-                  className={toolbarButtonClassName}
+                  className={toolbarIconButtonClassName}
                   disabled={activeTab.loading || Boolean(mysqlResultReadonlyReason)}
-                  title={mysqlResultReadonlyReason || undefined}
+                  title={mysqlResultReadonlyReason || "新建记录"}
+                  aria-label="新建记录"
                   onClick={onCreateRecord}
                 >
-                  <Plus size={13} />
-                  新建记录
+                  <Plus size={15} />
                 </button>
                 <button
-                  className={`${toolbarButtonClassName} btn-error`}
+                  className={toolbarDangerButtonClassName}
                   disabled={activeTab.loading || activeTab.selectedRecordIds.length === 0 || Boolean(mysqlResultReadonlyReason)}
-                  title={mysqlResultReadonlyReason || undefined}
+                  title={mysqlResultReadonlyReason || `删除选中（${activeTab.selectedRecordIds.length}）`}
+                  aria-label={`删除选中（${activeTab.selectedRecordIds.length}）`}
                   onClick={onDeleteCheckedRecords}
                 >
-                  <Trash2 size={13} />
-                  删除选中({activeTab.selectedRecordIds.length})
+                  <Trash2 size={15} />
                 </button>
                 <button
                   className={applyButtonClassName}
                   disabled={activeTab.loading || !hasPendingChanges || Boolean(mysqlApplyDisabledReason)}
-                  title={mysqlApplyDisabledReason || undefined}
+                  title={mysqlApplyDisabledReason || "执行更新"}
+                  aria-label="执行更新"
                   onClick={() => void handleApplyPendingChangesClick()}
                 >
-                  <Play size={13} />
-                  执行更新
+                  <Play size={15} />
                 </button>
-                <button className={toolbarButtonClassName} disabled={activeTab.loading || !hasPendingChanges} onClick={onDiscardPendingChanges}>
-                  <RotateCcw size={13} />
-                  撤回修改
+                <button
+                  className={toolbarIconButtonClassName}
+                  disabled={activeTab.loading || !hasPendingChanges}
+                  title="撤回修改"
+                  aria-label="撤回修改"
+                  onClick={onDiscardPendingChanges}
+                >
+                  <RotateCcw size={15} />
                 </button>
-                <button className={toolbarButtonClassName} disabled={activeTab.loading} onClick={onToggleQueryBar}>
-                  <Search size={13} />
-                  {activeTab.showQueryBar ? "隐藏查询栏" : "显示查询栏"}
+                <button
+                  className={activeTab.showQueryBar ? toolbarActiveButtonClassName : toolbarIconButtonClassName}
+                  disabled={activeTab.loading}
+                  title={activeTab.showQueryBar ? "隐藏查询栏" : "显示查询栏"}
+                  aria-label={activeTab.showQueryBar ? "隐藏查询栏" : "显示查询栏"}
+                  onClick={onToggleQueryBar}
+                >
+                  <Search size={15} />
                 </button>
                 {isMysqlSource ? (
                   <>
                     {/* MySQL DDL 抽屉按钮：点击同按钮可关闭，再次点击可打开。 */}
                     <button
-                      className={`${toolbarButtonClassName} ${activeTab.showDrawer && activeDrawerView === "mysql-ddl" ? "btn-active" : ""}`}
+                      className={activeTab.showDrawer && activeDrawerView === "mysql-ddl" ? toolbarActiveButtonClassName : toolbarIconButtonClassName}
                       disabled={activeTab.loading}
+                      title={activeTab.showDrawer && activeDrawerView === "mysql-ddl" ? "隐藏 DDL" : "显示 DDL"}
+                      aria-label={activeTab.showDrawer && activeDrawerView === "mysql-ddl" ? "隐藏 DDL" : "显示 DDL"}
                       onClick={() => onToggleDrawer("mysql-ddl")}
                     >
-                      <PanelRightOpen size={13} />
-                      DDL
+                      <PanelRightOpen size={15} />
                     </button>
                     {/* MySQL 字段抽屉按钮：参考 Salesforce“字段与SOQL”中的字段勾选能力。 */}
                     <button
-                      className={`${toolbarButtonClassName} ${activeTab.showDrawer && activeDrawerView === "mysql-fields" ? "btn-active" : ""}`}
+                      className={activeTab.showDrawer && activeDrawerView === "mysql-fields" ? toolbarActiveButtonClassName : toolbarIconButtonClassName}
                       disabled={activeTab.loading}
+                      title={activeTab.showDrawer && activeDrawerView === "mysql-fields" ? "隐藏字段抽屉" : "显示字段抽屉"}
+                      aria-label={activeTab.showDrawer && activeDrawerView === "mysql-fields" ? "隐藏字段抽屉" : "显示字段抽屉"}
                       onClick={() => onToggleDrawer("mysql-fields")}
                     >
-                      <PanelRightOpen size={13} />
-                      字段
+                      <PanelRightOpen size={15} />
                     </button>
                   </>
                 ) : (
-                  <button className={toolbarButtonClassName} disabled={activeTab.loading} onClick={() => onToggleDrawer("salesforce")}>
-                    <PanelRightOpen size={13} />
-                    字段与SOQL
+                  <button
+                    className={activeTab.showDrawer ? toolbarActiveButtonClassName : toolbarIconButtonClassName}
+                    disabled={activeTab.loading}
+                    title={activeTab.showDrawer ? "隐藏字段与 SOQL" : "显示字段与 SOQL"}
+                    aria-label={activeTab.showDrawer ? "隐藏字段与 SOQL" : "显示字段与 SOQL"}
+                    onClick={() => onToggleDrawer("salesforce")}
+                  >
+                    <PanelRightOpen size={15} />
                   </button>
                 )}
-                <button className={toolbarButtonClassName} disabled={activeTab.loading} onClick={onToggleLogs}>
-                  <ScrollText size={13} />
-                  日志
+                <button
+                  className={activeTab.showLogs ? toolbarActiveButtonClassName : toolbarIconButtonClassName}
+                  disabled={activeTab.loading}
+                  title={activeTab.showLogs ? "隐藏日志" : "显示日志"}
+                  aria-label={activeTab.showLogs ? "隐藏日志" : "显示日志"}
+                  onClick={onToggleLogs}
+                >
+                  <ScrollText size={15} />
                 </button>
               </div>
             </div>
@@ -1159,9 +1138,6 @@ export function DataQueryTabPane({
                 mysqlSortSuggestions={mysqlSortSuggestions}
                 salesforceWhereSuggestions={salesforceWhereSuggestions}
                 salesforceSortSuggestions={salesforceSortSuggestions}
-                onWhereChange={onWhereChange}
-                onLimitChange={onLimitChange}
-                onSortClauseChange={onSortClauseChange}
                 onQuery={onQuery}
               />
             )}
@@ -1170,6 +1146,8 @@ export function DataQueryTabPane({
             <div className="min-h-0 flex-1">
               <DataGrid
                 result={activeTab.result}
+                pageSize={activeTab.limit}
+                currentOffset={currentResultOffset}
                 visibleColumns={visibleColumns}
                 fieldMetadataMap={fieldMetadataMap}
                 dirtyCellKeys={activeTab.dirtyCellKeys}
@@ -1181,6 +1159,8 @@ export function DataQueryTabPane({
                 sourceId={selectedSourceId}
                 selectedSourceType={selectedSourceType}
                 objectName={activeTab.objectName}
+                onPageSizeChange={handlePageSizeChange}
+                onPageNavigate={handlePageNavigate}
                 onToggleAll={onToggleAllRecords}
                 onEditCell={onEditCell}
                 onShowMessage={onShowMessage}

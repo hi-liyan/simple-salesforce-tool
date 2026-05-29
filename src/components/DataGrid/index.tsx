@@ -18,6 +18,10 @@ import { DataGridSurface } from "./components/DataGridSurface";
 
 export type DataGridProps = {
   result: QueryResult;
+  // 当前每页条数：用于结果头部分页器展示。
+  pageSize?: number;
+  // 当前偏移量：用于分页器范围文案与翻页状态。
+  currentOffset?: number;
   visibleColumns: string[];
   fieldMetadataMap: Record<string, Record<string, unknown>>;
   dirtyCellKeys: string[];
@@ -45,11 +49,17 @@ export type DataGridProps = {
   enableReadonlyCellHint?: boolean;
   // 是否允许只读单元格双击打开 overlay（仅查看，不可编辑）。
   allowReadonlyOverlay?: boolean;
+  // 修改每页条数：用于分页器下拉回写 QueryPanel 当前 limit。
+  onPageSizeChange?: (pageSize: number) => void;
+  // 分页导航：用于首页/上一页/下一页/末页触发重查。
+  onPageNavigate?: (action: "first" | "previous" | "next" | "last") => void;
 };
 
 // 查询结果表：主入口只负责装配 hooks 与各模块能力。
 export function DataGrid({
   result,
+  pageSize = 200,
+  currentOffset = 0,
   visibleColumns,
   fieldMetadataMap,
   dirtyCellKeys,
@@ -66,7 +76,9 @@ export function DataGrid({
   onShowMessage,
   showHeaderMetadata = true,
   enableReadonlyCellHint = true,
-  allowReadonlyOverlay = false
+  allowReadonlyOverlay = false,
+  onPageSizeChange,
+  onPageNavigate
 }: DataGridProps) {
   const records = result.records;
   // 生效元数据：只读模式下统一覆写 createable/updateable，避免误触发编辑链路。
@@ -257,6 +269,8 @@ export function DataGrid({
     <DataGridSurface
       totalSize={result.totalSize}
       records={records}
+      pageSize={pageSize}
+      currentOffset={currentOffset}
       columns={columns}
       fieldMetadataMap={effectiveFieldMetadataMap}
       selectedSourceType={selectedSourceType}
@@ -287,6 +301,8 @@ export function DataGrid({
       onOpenRecordPage={() => {
         void openRecordPageFromMenu();
       }}
+      onPageSizeChange={onPageSizeChange}
+      onPageNavigate={onPageNavigate}
       getCellContent={getCellContent}
       onCellEdited={handleCellEdited}
       onCellClicked={handleCellClicked}

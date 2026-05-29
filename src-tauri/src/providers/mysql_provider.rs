@@ -488,6 +488,18 @@ impl MySqlProvider {
             None
         };
         let inferred_column_types = build_column_type_map_from_describe(describe);
+        // 根查询显式带 LIMIT/OFFSET 时额外统计真实总数，避免前端只能按当前页条数猜测分页状态。
+        let has_paginated_clause = has_top_level_limit_or_offset(query_text);
+        let total_size = if has_paginated_clause {
+            let count_query = build_total_count_query(query_text);
+            let total_count: i64 = sqlx::query_scalar(&count_query)
+                .fetch_one(&pool)
+                .await
+                .map_err(|error| AppError::Db(format!("执行 MySQL 总数统计失败: {error}")))?;
+            usize::try_from(total_count.max(0)).unwrap_or(0)
+        } else {
+            0
+        };
 
         let rows = sqlx::query(query_text)
             .fetch_all(&pool)
@@ -509,7 +521,11 @@ impl MySqlProvider {
         }
 
         Ok(QueryResult {
-            total_size: records.len(),
+            total_size: if has_paginated_clause {
+                total_size
+            } else {
+                records.len()
+            },
             records,
         })
     }
@@ -1002,6 +1018,117 @@ fn infer_table_name_from_query(query_text: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+/// 判断当前位置是否命中完整关键字，避免把字段名或字符串内容误判为子句。
+fn is_keyword_matched(query_text: &str, start_index: usize, keyword: &str) -> bool {
+    let lower_query_text = query_text.to_ascii_lowercase();
+    let lower_keyword = keyword.to_ascii_lowercase();
+    if !lower_query_text[start_index..].starts_with(&lower_keyword) {
+        return false;
+    }
+    let before_char = if start_index > 0 {
+        query_text[..start_index].chars().next_back().unwrap_or(' ')
+    } else {
+        ' '
+    };
+    let after_index = start_index + keyword.len();
+    let after_char = query_text[after_index..].chars().next().unwrap_or(' ');
+    !before_char.is_ascii_alphanumeric()
+        && before_char != '_'
+        && !after_char.is_ascii_alphanumeric()
+        && after_char != '_'
+}
+
+/// 查找顶层关键字位置：忽略括号内子查询与字符串字面量中的同名片段。
+fn find_top_level_keyword_index(
+    query_text: &str,
+    keyword: &str,
+    from_index: usize,
+) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut string_quote: Option<char> = None;
+
+    for (index, ch) in query_text.char_indices() {
+        if index < from_index {
+            continue;
+        }
+        if let Some(quote) = string_quote {
+            if ch == quote {
+                let previous_char = query_text[..index].chars().next_back().unwrap_or('\0');
+                if previous_char != '\\' {
+                    string_quote = None;
+                }
+            }
+            continue;
+        }
+        if ch == '\'' || ch == '"' {
+            let previous_char = query_text[..index].chars().next_back().unwrap_or('\0');
+            if previous_char != '\\' {
+                string_quote = Some(ch);
+            }
+            continue;
+        }
+        if ch == '(' {
+            depth += 1;
+            continue;
+        }
+        if ch == ')' {
+            depth = depth.saturating_sub(1);
+            continue;
+        }
+        if depth == 0 && is_keyword_matched(query_text, index, keyword) {
+            return Some(index);
+        }
+    }
+
+    None
+}
+
+/// 去掉尾部 `;`，避免包装子查询时生成非法 SQL。
+fn trim_trailing_semicolon(query_text: &str) -> &str {
+    query_text.trim().trim_end_matches(';').trim_end()
+}
+
+/// 删除根查询级 LIMIT/OFFSET 片段，保留子查询中的分页内容。
+fn strip_top_level_limit_offset_clause(query_text: &str) -> String {
+    let normalized = trim_trailing_semicolon(query_text);
+    let limit_index = find_top_level_keyword_index(normalized, "limit", 0);
+    let offset_index = find_top_level_keyword_index(normalized, "offset", 0);
+    let cut_index = match (limit_index, offset_index) {
+        (Some(limit), Some(offset)) => Some(limit.min(offset)),
+        (Some(limit), None) => Some(limit),
+        (None, Some(offset)) => Some(offset),
+        (None, None) => None,
+    };
+    cut_index
+        .map(|index| normalized[..index].trim_end().to_string())
+        .unwrap_or_else(|| normalized.to_string())
+}
+
+/// 删除根查询级 ORDER BY，供 COUNT 包装复用，避免排序参与统计执行计划。
+fn strip_top_level_order_by_clause(query_text: &str) -> String {
+    let normalized = trim_trailing_semicolon(query_text);
+    find_top_level_keyword_index(normalized, "order by", 0)
+        .map(|index| normalized[..index].trim_end().to_string())
+        .unwrap_or_else(|| normalized.to_string())
+}
+
+/// 判断根查询是否显式带 LIMIT/OFFSET，用于决定是否执行额外 COUNT。
+fn has_top_level_limit_or_offset(query_text: &str) -> bool {
+    let normalized = trim_trailing_semicolon(query_text);
+    find_top_level_keyword_index(normalized, "limit", 0).is_some()
+        || find_top_level_keyword_index(normalized, "offset", 0).is_some()
+}
+
+/// 为分页查询构造真实总数统计 SQL：去掉根查询 ORDER BY/LIMIT/OFFSET 后再包成子查询。
+fn build_total_count_query(query_text: &str) -> String {
+    let without_pagination = strip_top_level_limit_offset_clause(query_text);
+    let without_order = strip_top_level_order_by_clause(&without_pagination);
+    format!(
+        "SELECT COUNT(*) AS total_count FROM ({}) AS query_panel_total",
+        without_order.trim()
+    )
 }
 
 /// 解析表主键（优先 config.primaryKey，否则从 information_schema 读取）。
@@ -1829,9 +1956,9 @@ fn decode_optional_row_string(row: &MySqlRow, index: usize) -> Option<String> {
 mod tests {
     use super::{
         build_column_type_map_from_describe, build_delete_preview_sql, build_insert_preview_sql,
-        build_update_preview_sql, ensure_rows_affected_or_fail, infer_mysql_field_write_capability,
-        normalize_create_values, normalize_mysql_type_name, normalize_update_values,
-        resolve_mysql_result_type,
+        build_total_count_query, build_update_preview_sql, ensure_rows_affected_or_fail,
+        infer_mysql_field_write_capability, normalize_create_values, normalize_mysql_type_name,
+        normalize_update_values, resolve_mysql_result_type, strip_top_level_limit_offset_clause,
     };
     use crate::models::ObjectDescribe;
     use serde_json::{json, Value};
@@ -1988,6 +2115,30 @@ mod tests {
             .expect("存在 describe 时应返回字段类型映射");
 
         assert_eq!(map.get("status"), Some(&"tinyint(1)".to_string()));
+    }
+
+    #[test]
+    fn strip_top_level_limit_offset_clause_should_remove_root_pagination_only() {
+        let normalized = strip_top_level_limit_offset_clause(
+            "SELECT id, (SELECT child_id FROM child ORDER BY created_at DESC LIMIT 3) AS latest_child FROM orders ORDER BY created_at DESC LIMIT 50 OFFSET 100",
+        );
+
+        assert_eq!(
+            normalized,
+            "SELECT id, (SELECT child_id FROM child ORDER BY created_at DESC LIMIT 3) AS latest_child FROM orders ORDER BY created_at DESC"
+        );
+    }
+
+    #[test]
+    fn build_total_count_query_should_wrap_query_without_root_limit_offset() {
+        let count_sql = build_total_count_query(
+            "SELECT id, name FROM orders WHERE status = 'OPEN' ORDER BY created_at DESC LIMIT 50 OFFSET 100",
+        );
+
+        assert_eq!(
+            count_sql,
+            "SELECT COUNT(*) AS total_count FROM (SELECT id, name FROM orders WHERE status = 'OPEN') AS query_panel_total"
+        );
     }
 
     #[test]
