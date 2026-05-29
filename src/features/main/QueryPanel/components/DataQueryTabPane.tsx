@@ -1275,11 +1275,11 @@ export function DataQueryTabPane({
 
         {/* 底部动作区：确认后才真正执行数据库写入。 */}
         <div className="modal-action mt-0 border-t border-base-300 px-6 py-4">
-          <button className="btn btn-ghost" onClick={closeMysqlMutationPreview} disabled={mysqlMutationPreviewState.loading}>
+          <button className="btn btn-ghost btn-sm" onClick={closeMysqlMutationPreview} disabled={mysqlMutationPreviewState.loading}>
             取消
           </button>
           <button
-            className="btn btn-primary"
+            className="btn btn-primary btn-sm"
             onClick={() => void handleConfirmMysqlMutationPreview()}
             disabled={mysqlMutationPreviewState.loading || mysqlMutationPreviewState.items.length === 0}
           >

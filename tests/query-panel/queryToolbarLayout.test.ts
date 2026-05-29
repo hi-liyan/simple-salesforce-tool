@@ -79,6 +79,13 @@ test("QueryPanel 刷新确认弹窗: 应提供仅撤销修改按钮", () => {
   assert.equal(source.includes("className=\"btn btn-warning btn-sm\""), true);
 });
 
+test("QueryPanel MySQL 提交前预览弹窗: 底部按钮尺寸应与未提交修改弹窗一致", () => {
+  const source = readFileSync(new URL("../../src/features/main/QueryPanel/components/DataQueryTabPane.tsx", import.meta.url), "utf8");
+
+  assert.equal(source.includes("className=\"btn btn-ghost btn-sm\" onClick={closeMysqlMutationPreview}"), true);
+  assert.equal(source.includes("className=\"btn btn-primary btn-sm\""), true);
+});
+
 test("QueryPanel 工作区弹窗: 应通过页面级 portal 避免被左侧搜索层级盖住", () => {
   const source = readFileSync(new URL("../../src/features/main/QueryPanel/components/DataQueryTabPane.tsx", import.meta.url), "utf8");
 
