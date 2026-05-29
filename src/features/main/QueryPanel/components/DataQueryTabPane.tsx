@@ -1040,8 +1040,8 @@ export function DataQueryTabPane({
                   onPageSizeChange={handlePageSizeChange}
                   onPageNavigate={handlePageNavigate}
                 />
-                {/* 分割线：将结果分页操作与后续记录/视图动作拆开。 */}
-                <div className="h-5 w-px bg-base-300/80" />
+                {/* 分割线：拉满工具栏可视高度，并贴住上下边缘。 */}
+                <div className="-my-1.5 mx-0.5 w-px self-stretch bg-base-300/80" />
                 <button
                   className={toolbarIconButtonClassName}
                   disabled={activeTab.loading || Boolean(mysqlResultReadonlyReason)}

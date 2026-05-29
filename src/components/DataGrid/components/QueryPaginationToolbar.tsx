@@ -52,10 +52,10 @@ export function QueryPaginationToolbar({
 
   return (
     // 分页工具栏：承载 page size、范围文案与翻页入口。
-    <div className={`flex items-center gap-1 text-[12px] text-neutral/70 ${className}`.trim()}>
+    <div className={`flex items-center gap-0.5 text-[12px] text-neutral/70 ${className}`.trim()}>
       <button
         type="button"
-        className="btn btn-ghost btn-xs h-6 min-h-[24px] w-6 min-w-[24px] px-0 text-neutral/70 hover:bg-base-200 hover:text-neutral disabled:text-neutral/35"
+        className="btn btn-ghost btn-xs h-5 min-h-[20px] w-5 min-w-[20px] px-0 text-neutral/70 hover:bg-base-200 hover:text-neutral disabled:text-neutral/35"
         disabled={!paginationState.canGoFirst || !onPageNavigate}
         title="首页"
         aria-label="首页"
@@ -65,7 +65,7 @@ export function QueryPaginationToolbar({
       </button>
       <button
         type="button"
-        className="btn btn-ghost btn-xs h-6 min-h-[24px] w-6 min-w-[24px] px-0 text-neutral/70 hover:bg-base-200 hover:text-neutral disabled:text-neutral/35"
+        className="btn btn-ghost btn-xs h-5 min-h-[20px] w-5 min-w-[20px] px-0 text-neutral/70 hover:bg-base-200 hover:text-neutral disabled:text-neutral/35"
         disabled={!paginationState.canGoPrevious || !onPageNavigate}
         title="上一页"
         aria-label="上一页"
@@ -74,7 +74,7 @@ export function QueryPaginationToolbar({
         <ChevronLeft size={12} />
       </button>
       <select
-        className="select select-bordered select-xs h-6 min-h-[24px] w-[84px] border-base-300 bg-white px-2 text-[12px] font-medium text-neutral focus:outline-none"
+        className="select select-bordered select-xs h-5 min-h-[20px] w-[76px] border-base-300 bg-white px-1.5 text-[12px] font-medium text-neutral focus:outline-none"
         value={pageSizeOption.kind === "custom" ? CUSTOM_PAGE_SIZE_OPTION : String(pageSizeOption.value)}
         onChange={(event) => {
           const nextValue = event.target.value;
@@ -98,11 +98,11 @@ export function QueryPaginationToolbar({
         {pageSizeOption.kind === "custom" && <option value={CUSTOM_PAGE_SIZE_OPTION}>{pageSizeOption.value}</option>}
         <option value={CUSTOM_PAGE_SIZE_OPTION}>自定义...</option>
       </select>
-      <span className="min-w-[86px] text-center font-medium text-neutral">{paginationState.rangeLabel}</span>
+      <span className="min-w-[72px] text-center font-medium text-neutral">{paginationState.rangeLabel}</span>
       <span>{paginationState.totalLabel}</span>
       <button
         type="button"
-        className="btn btn-ghost btn-xs h-6 min-h-[24px] w-6 min-w-[24px] px-0 text-neutral/70 hover:bg-base-200 hover:text-neutral disabled:text-neutral/35"
+        className="btn btn-ghost btn-xs h-5 min-h-[20px] w-5 min-w-[20px] px-0 text-neutral/70 hover:bg-base-200 hover:text-neutral disabled:text-neutral/35"
         disabled={!paginationState.canGoNext || !onPageNavigate}
         title="下一页"
         aria-label="下一页"
@@ -112,7 +112,7 @@ export function QueryPaginationToolbar({
       </button>
       <button
         type="button"
-        className="btn btn-ghost btn-xs h-6 min-h-[24px] w-6 min-w-[24px] px-0 text-neutral/70 hover:bg-base-200 hover:text-neutral disabled:text-neutral/35"
+        className="btn btn-ghost btn-xs h-5 min-h-[20px] w-5 min-w-[20px] px-0 text-neutral/70 hover:bg-base-200 hover:text-neutral disabled:text-neutral/35"
         disabled={!paginationState.canGoLast || !onPageNavigate}
         title="末页"
         aria-label="末页"
