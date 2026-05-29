@@ -573,7 +573,7 @@ export function useQueryPanelRuntime({
         ...item,
         pendingDeleteRecordIds: Array.from(new Set([...item.pendingDeleteRecordIds, ...item.selectedRecordIds])),
         selectedRecordIds: [],
-        notice: { type: "success", message: `已标记 ${activeTab.selectedRecordIds.length} 条记录，执行更新时删除。` }
+        notice: { type: "warning", message: `已标记 ${activeTab.selectedRecordIds.length} 条记录，执行更新时删除。` }
       }));
       appendTabLog(activeTabBindingKey, {
         action: "DELETE",

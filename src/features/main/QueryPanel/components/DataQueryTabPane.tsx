@@ -742,6 +742,8 @@ export function DataQueryTabPane({
   const [fieldSearchKeyword, setFieldSearchKeyword] = useState("");
   // MySQL 字段抽屉搜索关键词：仅按字段名过滤。
   const [mysqlFieldSearchKeyword, setMysqlFieldSearchKeyword] = useState("");
+  // 刷新确认弹窗开关：存在未提交修改时，刷新前要求用户明确确认丢弃。
+  const [refreshConfirmOpen, setRefreshConfirmOpen] = useState(false);
   // 当前抽屉视图：MySQL 支持 DDL / 字段两种视图；Salesforce 固定复合抽屉。
   const activeDrawerView = isMysqlSource
     ? activeTab?.drawerView === "mysql-fields"
@@ -1124,11 +1126,22 @@ export function DataQueryTabPane({
   function handleRefreshCurrentQuery() {
     if (!activeTab || activeTab.loading) return;
     if (hasPendingChanges) {
-      onDiscardPendingChanges(); // 行内注释：刷新前先清掉本地新增/编辑/待删除，避免旧草稿残留在新结果里。
+      setRefreshConfirmOpen(true);
+      return;
     }
     onQuery({
       offset: currentResultOffset
     }); // 行内注释：保留当前分页位置，仅重查同一页结果。
+  }
+
+  // 确认刷新：先撤回本地未提交修改，再按当前分页位置重查。
+  function handleConfirmRefreshCurrentQuery() {
+    if (!activeTab || activeTab.loading) return;
+    setRefreshConfirmOpen(false);
+    onDiscardPendingChanges(); // 行内注释：刷新前先清掉本地新增/编辑/待删除，避免旧草稿残留在新结果里。
+    onQuery({
+      offset: currentResultOffset
+    }); // 行内注释：确认后仍保留当前分页位置，仅重查同一页结果。
   }
 
   return (
@@ -1136,7 +1149,7 @@ export function DataQueryTabPane({
       {/* 工作区全局提示。 */}
       {workspaceNotice && (
         <NoticeAlert
-          tone={workspaceNotice.type === "error" ? "error" : "success"}
+          tone={workspaceNotice.type === "error" ? "error" : workspaceNotice.type === "warning" ? "warning" : "success"}
           message={workspaceNotice.message}
           onClose={onCloseWorkspaceNotice}
           className="fixed right-4 top-4 z-[60] max-w-[380px] shadow-lg"
@@ -1238,13 +1251,46 @@ export function DataQueryTabPane({
         </>
       )}
 
+      {refreshConfirmOpen && (
+        <div className="modal modal-open">
+          <div className="modal-box max-w-md p-0">
+            <div className="border-b border-base-300 px-6 py-4">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h3 className="text-lg font-semibold">存在未提交修改</h3>
+                  <p className="mt-1 text-[12px] text-neutral/70">先撤回当前新增、编辑和删除标记，再重新查询当前结果。</p>
+                </div>
+                <button
+                  className="btn btn-circle btn-ghost btn-sm"
+                  onClick={() => setRefreshConfirmOpen(false)}
+                  aria-label="关闭刷新确认弹窗"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+            </div>
+            <div className="px-6 py-4 text-[13px] leading-6 text-neutral/75">
+              刷新后，本地尚未提交的修改不会保留。是否继续刷新？
+            </div>
+            <div className="modal-action mt-0 border-t border-base-300 px-6 py-4">
+              <button className="btn btn-ghost" onClick={() => setRefreshConfirmOpen(false)}>
+                取消
+              </button>
+              <button className="btn btn-warning" onClick={handleConfirmRefreshCurrentQuery}>
+                确认刷新
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {activeTab && (
         // 主工作区。
         <div className="relative flex h-full min-h-0 w-full overflow-hidden">
           {/* 当前 Tab 提示。 */}
           {activeTab.notice && (
             <NoticeAlert
-              tone={activeTab.notice.type === "error" ? "error" : "success"}
+              tone={activeTab.notice.type === "error" ? "error" : activeTab.notice.type === "warning" ? "warning" : "success"}
               message={activeTab.notice.message}
               onClose={onCloseActiveTabNotice}
               className="absolute right-3 top-2.5 z-40 max-w-[380px] shadow"

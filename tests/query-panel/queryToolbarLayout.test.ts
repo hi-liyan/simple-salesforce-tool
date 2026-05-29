@@ -59,6 +59,15 @@ test("QueryPanel 工具栏: 隐藏查询栏按钮前应改为刷新当前查询�
   assert.equal(source.includes("disabled={activeTab.loading || !hasPendingChanges}"), false);
 });
 
+test("QueryPanel 工具栏: 刷新前遇到未提交修改时应弹出确认模态框", () => {
+  const source = readFileSync(new URL("../../src/features/main/QueryPanel/components/DataQueryTabPane.tsx", import.meta.url), "utf8");
+
+  assert.equal(source.includes("const [refreshConfirmOpen, setRefreshConfirmOpen] = useState(false);"), true);
+  assert.equal(source.includes("if (hasPendingChanges) {\n      setRefreshConfirmOpen(true);"), true);
+  assert.equal(source.includes("存在未提交修改"), true);
+  assert.equal(source.includes("先撤回当前新增、编辑和删除标记，再重新查询当前结果。"), true);
+});
+
 test("QueryPanel 查询栏: 不应再渲染独立查询按钮，并应提供拖拽分隔条", () => {
   const source = readFileSync(new URL("../../src/features/main/QueryPanel/components/DataQueryTabPane.tsx", import.meta.url), "utf8");
 
