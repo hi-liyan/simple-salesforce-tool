@@ -1,12 +1,12 @@
-import { useState } from "react";
 import { type LucideIcon, ArrowLeftRight, Braces, ChevronRight, QrCode, Wrench } from "lucide-react";
+import { useAppStore, type ToolsPanelActiveToolId } from "../../../store/useAppStore";
 import { JsonFormatterTool } from "./components/JsonFormatterTool";
 import { TextDiffTool } from "./components/TextDiffTool";
 import { JsonDiffTool } from "./components/JsonDiffTool";
 import { QrCodeTool } from "./components/QrCodeTool";
 
 // 工具标识：当前面板已实现的工具集合。
-type ToolItemId = "json-formatter" | "text-diff" | "json-diff" | "qr-code";
+type ToolItemId = Exclude<ToolsPanelActiveToolId, null>;
 
 // 工具入口定义：驱动平铺入口卡片渲染。
 type ToolDefinition = {
@@ -56,23 +56,25 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 
 // 工具面板：入口页平铺展示工具卡片，点击后进入对应工具页。
 export function ToolsPanel() {
-  // 当前激活工具：为空时展示入口页。
-  const [activeToolId, setActiveToolId] = useState<ToolItemId | null>(null);
+  // 当前激活工具：切换到其他 panel 再返回时，仍保留本次运行期最近一次工具页。
+  const activeToolId = useAppStore((state) => state.toolsPanelActiveToolId);
+  // 更新当前激活工具：返回入口页时清空，进入工具页时写入目标标识。
+  const setToolsPanelActiveToolId = useAppStore((state) => state.setToolsPanelActiveToolId);
 
   if (activeToolId === "json-formatter") {
-    return <JsonFormatterTool onBack={() => setActiveToolId(null)} />;
+    return <JsonFormatterTool onBack={() => setToolsPanelActiveToolId(null)} />;
   }
 
   if (activeToolId === "text-diff") {
-    return <TextDiffTool onBack={() => setActiveToolId(null)} />;
+    return <TextDiffTool onBack={() => setToolsPanelActiveToolId(null)} />;
   }
 
   if (activeToolId === "json-diff") {
-    return <JsonDiffTool onBack={() => setActiveToolId(null)} />;
+    return <JsonDiffTool onBack={() => setToolsPanelActiveToolId(null)} />;
   }
 
   if (activeToolId === "qr-code") {
-    return <QrCodeTool onBack={() => setActiveToolId(null)} />;
+    return <QrCodeTool onBack={() => setToolsPanelActiveToolId(null)} />;
   }
 
   return (
@@ -102,7 +104,7 @@ export function ToolsPanel() {
               // 工具入口卡片：点击后进入具体工具页。
               type="button"
               className="group flex min-h-[184px] flex-col rounded-3xl border border-base-300 bg-base-100 p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md"
-              onClick={() => setActiveToolId(tool.id)}
+              onClick={() => setToolsPanelActiveToolId(tool.id)}
             >
               {/* 卡片头部：图标与状态徽标。 */}
               <div className="flex items-start justify-between gap-3">

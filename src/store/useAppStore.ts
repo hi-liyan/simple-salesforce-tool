@@ -6,6 +6,8 @@ import { hydrateTab } from "./queryTabHydration.ts";
 
 // 主页面视图模式：支持 Query 工作区、Terminal 工作区、工具页与设置页入口。
 export type MainViewMode = "query" | "terminal" | "tools" | "settings";
+// ToolsPanel 当前工具标识：仅用于跨 panel 切换保留最近一次工具页，不参与重启恢复。
+export type ToolsPanelActiveToolId = "json-formatter" | "text-diff" | "json-diff" | "qr-code" | null;
 
 // 旧版按 source 分桶的对象 Tab 持久化结构：用于历史快照兼容迁移。
 type LegacyPersistedSourceTabState = {
@@ -106,6 +108,8 @@ type AppState = {
   tabs: TabState[];
   // 当前激活的对象唯一标识（优先 bindingKey）。
   activeTabObjectName: string;
+  // ToolsPanel 当前激活工具：仅保留本次运行时的最近访问工具页。
+  toolsPanelActiveToolId: ToolsPanelActiveToolId;
   // 页面级全局加载标记。
   loading: boolean;
   // 更新选中数据源。
@@ -116,6 +120,8 @@ type AppState = {
   setSoqlSidebarWidth: (width: number) => void;
   // 更新激活的 Tab。
   setActiveTabObjectName: (objectName: string) => void;
+  // 更新 ToolsPanel 当前激活工具。
+  setToolsPanelActiveToolId: (toolId: ToolsPanelActiveToolId) => void;
   // 批量设置 Tab 列表或使用更新函数。
   setTabs: (tabs: TabState[] | ((tabs: TabState[]) => TabState[])) => void;
   // 更新全局加载状态。
@@ -148,12 +154,14 @@ export const useAppStore = create<AppState>()(
       soqlSidebarWidth: 320,
       tabs: [],
       activeTabObjectName: "",
+      toolsPanelActiveToolId: null,
       loading: false,
 
       setSelectedSourceId: (sourceId) => set({ selectedSourceId: sourceId }),
       setViewMode: (viewMode) => set({ viewMode: normalizeMainViewMode(viewMode) }),
       setSoqlSidebarWidth: (width) => set({ soqlSidebarWidth: Math.max(240, Math.min(1200, Math.round(width))) }),
       setActiveTabObjectName: (objectName) => set({ activeTabObjectName: objectName }),
+      setToolsPanelActiveToolId: (toolId) => set({ toolsPanelActiveToolId: toolId }),
       setTabs: (tabs) =>
         set((state) => ({
           tabs: (typeof tabs === "function" ? tabs(state.tabs) : tabs).map((tab) => ensureTabBindingKey(tab))
@@ -225,6 +233,7 @@ export const useAppStore = create<AppState>()(
           soqlSidebarWidth: typeof state.soqlSidebarWidth === "number" ? state.soqlSidebarWidth : current.soqlSidebarWidth,
           tabs: normalized.tabs,
           activeTabObjectName: normalized.activeTabObjectName,
+          toolsPanelActiveToolId: null,
           // loading 始终从默认值开始。
           loading: false
         };
