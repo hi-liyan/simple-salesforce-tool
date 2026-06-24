@@ -6,6 +6,7 @@ mod command_storage;
 mod commands;
 mod error;
 mod llm;
+mod lan_file_receiver;
 mod models;
 mod providers;
 mod salesforce;
@@ -46,6 +47,7 @@ fn main() {
                 llm_conversations: Mutex::new(HashMap::new()),
                 llm_stream_cancels: Mutex::new(HashMap::new()),
                 terminal_sessions: Mutex::new(HashMap::new()),
+                lan_file_receiver: Mutex::new(None),
             });
 
             Ok(())
@@ -111,7 +113,14 @@ fn main() {
             commands::write_terminal_input,
             commands::resize_terminal_session,
             commands::close_terminal_session,
-            commands::open_elevated_terminal
+            commands::open_elevated_terminal,
+            lan_file_receiver::get_lan_file_receiver_status,
+            lan_file_receiver::start_lan_file_receiver,
+            lan_file_receiver::stop_lan_file_receiver,
+            lan_file_receiver::list_lan_file_receiver_files,
+            lan_file_receiver::read_lan_file_receiver_preview,
+            lan_file_receiver::delete_lan_file_receiver_file,
+            lan_file_receiver::clear_lan_file_receiver_files
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -124,6 +133,7 @@ fn main() {
         ) {
             if let Some(state) = app_handle.try_state::<AppState>() {
                 let _ = terminal::close_all_terminal_sessions(&state.terminal_sessions);
+                let _ = lan_file_receiver::close_lan_file_receiver_runtime(&state.lan_file_receiver);
             }
         }
     });

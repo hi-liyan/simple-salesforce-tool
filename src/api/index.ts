@@ -9,6 +9,9 @@ import type {
   CurrentUserContext,
   LlmSettings,
   LlmSettingsSavePayload,
+  LanFileReceiverItem,
+  LanFileReceiverPreviewPayload,
+  LanFileReceiverStatus,
   MutationExecutionResult,
   MutationPreviewSqlItem,
   ObjectDdl,
@@ -158,5 +161,20 @@ export const api = {
   // 保存终端 Shell 命令路径。
   saveTerminalShellCommand: (command: string) => invokeApi<void>("save_terminal_shell_command", { command }),
   // 以管理员身份打开终端（仅 Windows）。
-  openElevatedTerminal: () => invokeApi<void>("open_elevated_terminal")
+  openElevatedTerminal: () => invokeApi<void>("open_elevated_terminal"),
+  // 读取局域网文件接收服务当前状态。
+  getLanFileReceiverStatus: () => invokeApi<LanFileReceiverStatus>("get_lan_file_receiver_status"),
+  // 启动局域网文件接收服务。
+  startLanFileReceiver: () => invokeApi<LanFileReceiverStatus>("start_lan_file_receiver"),
+  // 停止局域网文件接收服务。
+  stopLanFileReceiver: () => invokeApi<void>("stop_lan_file_receiver"),
+  // 列出已接收文件。
+  listLanFileReceiverFiles: () => invokeApi<LanFileReceiverItem[]>("list_lan_file_receiver_files"),
+  // 读取指定文件的预览内容。
+  readLanFileReceiverPreview: (fileId: string) =>
+    invokeApi<LanFileReceiverPreviewPayload>("read_lan_file_receiver_preview", { fileId }),
+  // 删除单个已接收文件。
+  deleteLanFileReceiverFile: (fileId: string) => invokeApi<void>("delete_lan_file_receiver_file", { fileId }),
+  // 清空全部已接收文件。
+  clearLanFileReceiverFiles: () => invokeApi<void>("clear_lan_file_receiver_files")
 };

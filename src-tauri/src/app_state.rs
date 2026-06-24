@@ -6,6 +6,7 @@ use std::sync::Mutex;
 
 use tauri::Manager;
 
+use crate::lan_file_receiver::LanFileReceiverRuntime;
 use crate::llm::LlmChatMessage;
 use crate::salesforce::SalesforceClient;
 use crate::storage::Storage;
@@ -25,6 +26,8 @@ pub struct AppState {
     pub llm_stream_cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
     /// 终端会话池（按前端 Tab ID 持有 PTY 进程句柄）。
     pub terminal_sessions: Mutex<HashMap<String, TerminalSession>>,
+    /// 局域网文件接收服务运行时（包含端口与关闭句柄）。
+    pub lan_file_receiver: Mutex<Option<LanFileReceiverRuntime>>,
 }
 
 /// 解析并创建应用数据目录，确保数据库可持久化。
