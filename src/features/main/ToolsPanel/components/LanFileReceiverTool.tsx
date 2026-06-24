@@ -6,9 +6,12 @@ import {
   Copy,
   FolderDown,
   Image as ImageIcon,
+  Minus,
+  Plus,
   Search,
   Server,
   Smartphone,
+  RotateCcw,
   Trash2,
   Wifi,
   FileText,
@@ -47,6 +50,9 @@ const FILTER_TABS: FilterTabDefinition[] = [
   { id: "image", label: "仅图片" },
   { id: "text", label: "仅文本" }
 ];
+
+// 图片默认缩放比例：首次预览和重置时统一回到 50%。
+const DEFAULT_IMAGE_ZOOM = 0.5;
 
 // 复制文本到剪贴板：优先现代 API，失败时回退到隐藏 textarea。
 async function copyText(text: string): Promise<void> {
@@ -106,6 +112,8 @@ export function LanFileReceiverTool({ onBack }: LanFileReceiverToolProps) {
   const [filterKind, setFilterKind] = useState<LanFileReceiverFilterKind>("all");
   // 搜索关键字：按文件名和 MIME 模糊筛选。
   const [keyword, setKeyword] = useState("");
+  // 图片预览缩放比例：仅作用于右侧图片预览区域。
+  const [imageZoom, setImageZoom] = useState(DEFAULT_IMAGE_ZOOM);
   // 定时轮询句柄：服务开启时定期刷新接收结果。
   const pollingTimerRef = useRef<number | null>(null);
 
@@ -132,11 +140,16 @@ export function LanFileReceiverTool({ onBack }: LanFileReceiverToolProps) {
   const qrCodeUrl = useMemo(() => resolveLanFileReceiverQrUrl(status), [status]);
   // 二维码卡片是否可见：只在接收服务开启且存在可扫码地址时显示。
   const showQrCodeCard = useMemo(() => shouldShowLanFileReceiverQrCard(status), [status]);
+  // 当前主访问地址：优先展示推荐局域网地址，缺失时回退本机地址。
+  const currentAccessUrl = useMemo(() => qrCodeUrl || status?.localBaseUrl || "", [qrCodeUrl, status]);
 
   // 当前筛选结果中的图片数量：用于顶部摘要。
   const imageCount = useMemo(() => files.filter((item) => item.previewKind === "image").length, [files]);
   // 当前筛选结果中的文本数量：用于顶部摘要。
   const textCount = useMemo(() => files.filter((item) => item.previewKind === "text").length, [files]);
+
+  // 当前选中的文件实体：用于左侧列表高亮与右侧标题同步。
+  const selectedFile = useMemo(() => files.find((item) => item.id === selectedFileId) ?? null, [files, selectedFileId]);
 
   // 首次进入工具页时恢复状态，并监听上传成功事件做实时刷新。
   useEffect(() => {
@@ -222,6 +235,15 @@ export function LanFileReceiverTool({ onBack }: LanFileReceiverToolProps) {
       active = false;
     };
   }, [qrCodeUrl]);
+
+  // 切换预览文件或预览类型时重置图片缩放，避免上一张图的比例串到下一张。
+  useEffect(() => {
+    if (preview?.previewKind === "image") {
+      setImageZoom(DEFAULT_IMAGE_ZOOM);
+      return;
+    }
+    setImageZoom(DEFAULT_IMAGE_ZOOM);
+  }, [preview?.id, preview?.previewKind]);
 
   // 停止轮询：切换视图或工具卸载时统一清理定时器。
   function stopPolling() {
@@ -370,6 +392,11 @@ export function LanFileReceiverTool({ onBack }: LanFileReceiverToolProps) {
     }
   }
 
+  // 调整图片缩放比例：限制在合理范围内，保证桌面端预览稳定。
+  function handleChangeImageZoom(nextZoom: number) {
+    setImageZoom(Math.max(0.25, Math.min(3, Number(nextZoom.toFixed(2)))));
+  }
+
   // 清空全部接收记录：用于批量清理旧图片和临时文件。
   async function handleClearAllFiles() {
     if (files.length === 0) return;
@@ -412,8 +439,8 @@ export function LanFileReceiverTool({ onBack }: LanFileReceiverToolProps) {
   }
 
   return (
-    // 工具整体容器：顶部控制区 + 地址区 + 文件列表/预览双栏。
-    <div className="flex h-full min-h-0 w-full flex-col overflow-hidden bg-base-200/45">
+    // 工具整体容器：顶部紧凑工具栏 + 下方桌面程序式双栏工作区。
+    <div className="flex h-full min-h-0 w-full flex-col overflow-hidden bg-[#eef3f8]">
       {/* 顶部轻提示：反馈复制、删除和开关结果。 */}
       {notice ? (
         <NoticeAlert
@@ -423,117 +450,99 @@ export function LanFileReceiverTool({ onBack }: LanFileReceiverToolProps) {
           className="fixed right-4 top-4 z-[60] max-w-[380px] shadow-lg"
         />
       ) : null}
-      {/* 顶部返回区：保留回到工具入口页的路径。 */}
-      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-base-300 bg-base-100 px-5 py-3">
-        <button type="button" className="btn btn-ghost btn-sm h-8 min-h-8 gap-1 px-2 text-[12px]" onClick={onBack}>
-          {/* 返回图标：与文字一起强化回退语义。 */}
-          <ChevronLeft size={14} />
-          返回工具面板
-        </button>
-        {/* 顶部摘要：强调服务开关、地址分发和文件管理是完整闭环。 */}
-        <p className="text-[12px] text-neutral/60">支持开启局域网上传页、手机访问上传、多端自适应，以及桌面端预览与清理接收文件。</p>
-      </div>
-      {/* 主体工作区：紧凑连接信息区 + 下方文件列表/预览双栏。 */}
-      <div className="min-h-0 flex-1 overflow-auto p-4">
-        <div className="flex min-h-full flex-col gap-4">
-          {/* 连接信息区：只保留一个主地址，把控制项和二维码压缩到更紧凑的布局里。 */}
-          <section className={`grid grid-cols-1 gap-3 ${showQrCodeCard ? "2xl:grid-cols-[minmax(0,1.7fr)_280px]" : ""}`}>
-            <div className="rounded-3xl border border-base-300 bg-base-100 px-5 py-4 shadow-sm">
-              <div className="flex flex-col gap-3">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex min-w-0 items-center gap-3">
-                    {/* 标题图标：强化局域网接收语义。 */}
-                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary">
-                      <Wifi size={18} />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        {/* 标题。 */}
-                        <h2 className="text-[18px] font-semibold text-neutral">局域网接收文件</h2>
-                        <div className="flex items-center gap-2 rounded-full border border-base-300 bg-base-200/45 px-3 py-1">
-                          <span className="text-[12px] font-medium text-neutral">接收开关</span>
-                          <input
-                            // 开关控件：直接控制服务启停。
-                            type="checkbox"
-                            className="toggle toggle-primary toggle-sm"
-                            checked={status?.enabled === true}
-                            disabled={syncing}
-                            onChange={(event) => {
-                              void handleToggleReceiver(event.target.checked);
-                            }}
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="flex shrink-0 flex-wrap justify-end gap-2">
-                    <button
-                      type="button"
-                      className="btn btn-primary btn-sm h-9 min-h-9 gap-2 px-3 text-[12px]"
-                      disabled={!status?.enabled || !status.localBaseUrl || syncing}
-                      onClick={() => void handleOpenUploadPage()}
-                    >
-                      <Smartphone size={14} />
-                      打开上传页
-                    </button>
-                  </div>
-                </div>
-                <div className="flex flex-wrap items-center gap-2 text-[12px]">
-                  <span className={`rounded-full px-3 py-1 font-medium ${status?.enabled ? "bg-success/12 text-success" : "bg-base-200 text-neutral/70"}`}>
-                    {status?.enabled ? "已开启" : "未开启"}
-                  </span>
-                  <span className="rounded-full bg-base-200 px-3 py-1 text-neutral/70">端口 {status?.port ?? "--"}</span>
-                  <span className="rounded-full bg-base-200 px-3 py-1 text-neutral/70">文件 {files.length}</span>
-                  <span className="rounded-full bg-base-200 px-3 py-1 text-neutral/70">可预览 {imageCount + textCount}</span>
-                </div>
+      {/* 顶部桌面工具栏：在同一行集中返回、开关、状态和快捷动作。 */}
+      <div className="border-b border-slate-300 bg-[#f8fafc] px-4 py-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm h-8 min-h-8 gap-1 rounded-lg px-2 text-[12px] text-slate-700"
+            onClick={onBack}
+          >
+            {/* 返回图标：与文字一起强化回退语义。 */}
+            <ChevronLeft size={14} />
+            返回工具面板
+          </button>
+          <div className="h-5 w-px bg-slate-300" />
+          <div className="flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5">
+            <span className="text-[12px] font-medium text-slate-700">接收开关</span>
+            <input
+              // 开关控件：直接控制服务启停。
+              type="checkbox"
+              className="toggle toggle-primary toggle-sm"
+              checked={status?.enabled === true}
+              disabled={syncing}
+              onChange={(event) => {
+                void handleToggleReceiver(event.target.checked);
+              }}
+            />
+          </div>
+          <span className={`rounded-md border px-2 py-1 text-[12px] font-medium ${status?.enabled ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-slate-100 text-slate-600"}`}>
+            {status?.enabled ? "服务已开启" : "服务未开启"}
+          </span>
+          <span className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[12px] text-slate-600">端口 {status?.port ?? "--"}</span>
+          <span className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[12px] text-slate-600">文件 {files.length}</span>
+          <span className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[12px] text-slate-600">图片 {imageCount}</span>
+          <span className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[12px] text-slate-600">文本 {textCount}</span>
+          <div className="ml-auto flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              className="btn btn-sm h-8 min-h-8 gap-2 rounded-lg border border-slate-300 bg-white px-3 text-[12px] font-normal text-slate-700 hover:bg-slate-50"
+              disabled={!currentAccessUrl}
+              onClick={() => void handleCopyAddress(currentAccessUrl)}
+            >
+              <Copy size={13} />
+              复制地址
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm h-8 min-h-8 gap-2 rounded-lg border border-slate-300 bg-white px-3 text-[12px] font-normal text-slate-700 hover:bg-slate-50"
+              disabled={!status?.enabled || !status.localBaseUrl || syncing}
+              onClick={() => void handleOpenUploadPage()}
+            >
+              <Smartphone size={13} />
+              打开上传页
+            </button>
+          </div>
+        </div>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <div className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2">
+            <Wifi size={14} className="shrink-0 text-primary" />
+            <span className="shrink-0 text-[12px] text-slate-500">访问地址</span>
+            <code className="truncate text-[12px] text-slate-700">{currentAccessUrl || "服务开启后会在这里显示可访问地址"}</code>
+          </div>
+          {showQrCodeCard ? (
+            <div className="flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-2 py-1.5">
+              {qrCodeDataUrl ? (
+                <img
+                  // 紧凑二维码：保留扫码能力，但不再占据主内容区域。
+                  src={qrCodeDataUrl}
+                  alt="局域网上传页二维码"
+                  className="h-12 w-12 rounded-md border border-slate-200 object-contain"
+                />
+              ) : null}
+              <div className="text-[11px] leading-5 text-slate-500">
+                <p>手机扫码上传</p>
+                <p>局域网内可直接访问</p>
               </div>
             </div>
-            {showQrCodeCard ? (
-              <div className="rounded-3xl border border-base-300 bg-base-100 px-4 py-3 shadow-sm">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    {/* 二维码标题。 */}
-                    <h3 className="text-[14px] font-semibold text-neutral">扫码打开上传页</h3>
-                    <p className="mt-1 text-[12px] leading-5 text-neutral/60">局域网内设备可扫码直接访问上传页面</p>
-                  </div>
-                  <span className="rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-medium text-primary">扫码</span>
-                </div>
-                <div className="mt-3 flex justify-center rounded-3xl border border-base-300 bg-white p-3 shadow-sm">
-                  {qrCodeDataUrl ? (
-                    <img
-                      // 地址二维码：供手机直接扫码打开上传页。
-                      src={qrCodeDataUrl}
-                      alt="局域网上传页二维码"
-                      className="h-[168px] w-[168px] rounded-2xl object-contain"
-                    />
-                  ) : (
-                    <div className="flex h-[168px] w-[168px] items-center justify-center rounded-2xl bg-base-200/45 text-center text-[12px] leading-6 text-neutral/55">
-                      暂无可生成二维码的访问地址
-                    </div>
-                  )}
-                </div>
-                {qrCodeUrl ? (
-                  <div className="mt-3 rounded-2xl border border-base-300 bg-base-100 px-3 py-2.5 font-mono text-[12px] text-neutral">
-                    {qrCodeUrl}
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
-          </section>
-          {/* 下方双栏：左侧文件管理，右侧预览详情。 */}
-          <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 xl:grid-cols-[minmax(340px,0.84fr)_minmax(460px,1.16fr)]">
+          ) : null}
+        </div>
+      </div>
+      {/* 主体工作区：采用桌面程序常见的 sidebar + main 双栏布局。 */}
+      <div className="min-h-0 flex-1 overflow-hidden p-3">
+        <div className="grid h-full min-h-0 grid-cols-1 gap-3 xl:grid-cols-[320px_minmax(0,1fr)]">
             {/* 左侧文件管理区：筛选、搜索和删除动作集中在这里。 */}
-            <section className="flex min-h-[420px] min-w-0 flex-col overflow-hidden rounded-3xl border border-base-300 bg-base-100 shadow-sm">
-              <div className="border-b border-base-300 px-4 py-4">
-                <div className="flex flex-wrap items-start justify-between gap-3">
+            <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-slate-300 bg-white shadow-sm">
+              <div className="border-b border-slate-200 px-3 py-3">
+                <div className="flex flex-wrap items-start justify-between gap-2">
                   <div>
                     {/* 列表标题。 */}
-                    <h3 className="text-[15px] font-semibold text-neutral">已接收文件</h3>
-                    <p className="mt-1 text-[12px] text-neutral/60">上传成功后会实时出现在这里，支持按图片或文本快速聚焦。</p>
+                    <h3 className="text-[14px] font-semibold text-slate-800">已接收文件</h3>
+                    <p className="mt-1 text-[11px] text-slate-500">紧凑列表模式，支持筛选、搜索和批量清理。</p>
                   </div>
                   <button
                     type="button"
-                    className="btn btn-ghost btn-sm h-8 min-h-8 gap-2 px-3 text-[12px] text-error"
+                    className="btn btn-ghost btn-sm h-7 min-h-7 gap-1 rounded-lg px-2 text-[11px] text-error"
                     disabled={files.length === 0}
                     onClick={() => void handleClearAllFiles()}
                   >
@@ -541,13 +550,13 @@ export function LanFileReceiverTool({ onBack }: LanFileReceiverToolProps) {
                     清空全部
                   </button>
                 </div>
-                <div className="mt-4 flex flex-wrap gap-2">
+                <div className="mt-3 flex flex-wrap gap-1.5">
                   {FILTER_TABS.map((tab) => (
                     <button
                       key={tab.id}
                       type="button"
                       // 筛选按钮：用于在全部、图片和文本之间切换。
-                      className={`btn btn-sm h-8 min-h-8 rounded-full px-3 text-[12px] ${filterKind === tab.id ? "btn-primary" : "btn-ghost border border-base-300"}`}
+                      className={`btn btn-sm h-7 min-h-7 rounded-md px-2.5 text-[11px] ${filterKind === tab.id ? "btn-primary" : "btn-ghost border border-slate-300 bg-white text-slate-600"}`}
                       onClick={() => {
                         setFilterKind(tab.id);
                       }}
@@ -556,13 +565,13 @@ export function LanFileReceiverTool({ onBack }: LanFileReceiverToolProps) {
                     </button>
                   ))}
                 </div>
-                <label className="mt-4 flex items-center gap-2 rounded-2xl border border-base-300 bg-base-200/35 px-3 py-2">
+                <label className="mt-3 flex items-center gap-2 rounded-lg border border-slate-300 bg-slate-50 px-2.5 py-2">
                   {/* 搜索图标：强化输入区语义。 */}
-                  <Search size={15} className="text-neutral/45" />
+                  <Search size={14} className="text-slate-400" />
                   <input
                     // 搜索框：按文件名和 MIME 快速过滤。
                     value={keyword}
-                    className="w-full bg-transparent text-[13px] outline-none placeholder:text-neutral/40"
+                    className="w-full bg-transparent text-[12px] text-slate-700 outline-none placeholder:text-slate-400"
                     placeholder="搜索文件名或 MIME 类型"
                     onChange={(event) => {
                       setKeyword(event.target.value);
@@ -586,13 +595,13 @@ export function LanFileReceiverTool({ onBack }: LanFileReceiverToolProps) {
                     </div>
                   </div>
                 ) : (
-                  <div className="space-y-3">
+                  <div className="space-y-2">
                     {filteredFiles.map((item) => {
                       const active = item.id === selectedFileId;
                       return (
                         <div
                           key={item.id}
-                          className={`rounded-2xl border px-4 py-3 transition ${active ? "border-primary/35 bg-primary/10 shadow-sm" : "border-base-300 bg-base-100 hover:border-primary/25 hover:bg-base-200/35"}`}
+                          className={`rounded-lg border px-3 py-2.5 transition ${active ? "border-primary/35 bg-primary/10 shadow-sm" : "border-slate-200 bg-white hover:border-primary/25 hover:bg-slate-50"}`}
                         >
                           <button
                             type="button"
@@ -606,21 +615,21 @@ export function LanFileReceiverTool({ onBack }: LanFileReceiverToolProps) {
                             <div className="flex items-start justify-between gap-3">
                               <div className="min-w-0">
                                 {/* 文件名。 */}
-                                <p className="truncate text-[13px] font-medium text-neutral">{item.originalName}</p>
-                                <p className="mt-1 text-[11px] text-neutral/55">{new Date(item.receivedAt).toLocaleString("zh-CN", { hour12: false })}</p>
+                                <p className="truncate text-[12px] font-medium text-slate-800">{item.originalName}</p>
+                                <p className="mt-1 text-[10px] text-slate-500">{new Date(item.receivedAt).toLocaleString("zh-CN", { hour12: false })}</p>
                               </div>
-                              <span className="rounded-full bg-base-100 px-2.5 py-1 text-[11px] text-neutral/70">{resolvePreviewKindLabel(item.previewKind)}</span>
+                              <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] text-slate-600">{resolvePreviewKindLabel(item.previewKind)}</span>
                             </div>
-                            <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-neutral/60">
-                              <span className="rounded-xl bg-base-200/70 px-2 py-1">{formatLanFileSize(item.sizeBytes)}</span>
-                              <span className="rounded-xl bg-base-200/70 px-2 py-1">{item.mimeType}</span>
+                            <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] text-slate-500">
+                              <span className="rounded-md bg-slate-100 px-2 py-0.5">{formatLanFileSize(item.sizeBytes)}</span>
+                              <span className="rounded-md bg-slate-100 px-2 py-0.5">{item.mimeType}</span>
                             </div>
                           </button>
-                          <div className="mt-3 flex justify-end">
+                          <div className="mt-2 flex justify-end">
                             <button
                               type="button"
                               // 单条删除按钮：用于清理无用图片和临时文件。
-                              className="btn btn-ghost btn-xs h-7 min-h-7 gap-1 px-2 text-[11px] text-error"
+                              className="btn btn-ghost btn-xs h-6 min-h-6 gap-1 rounded-md px-2 text-[10px] text-error"
                               onClick={() => void handleDeleteFile(item.id)}
                             >
                               <Trash2 size={12} />
@@ -635,115 +644,154 @@ export function LanFileReceiverTool({ onBack }: LanFileReceiverToolProps) {
               </div>
             </section>
             {/* 右侧预览区：支持文本和图片直接预览，其它文件展示说明。 */}
-            <section className="flex min-h-[420px] min-w-0 flex-col overflow-hidden rounded-3xl border border-base-300 bg-base-100 shadow-sm">
-              <div className="border-b border-base-300 px-4 py-4">
+            <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-slate-300 bg-white shadow-sm">
+              <div className="border-b border-slate-200 px-4 py-3">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="flex min-w-0 items-center gap-3">
-                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
                       <Server size={16} />
                     </div>
                     <div className="min-w-0">
                       {/* 预览标题。 */}
-                      <h3 className="text-[15px] font-semibold text-neutral">文件预览</h3>
-                      <p className="mt-1 text-[12px] text-neutral/60">文本和图片会直接在这里展示，其它类型保留文件信息方便继续管理。</p>
+                      <h3 className="text-[14px] font-semibold text-slate-800">文件预览</h3>
+                      <p className="mt-1 text-[11px] text-slate-500">{selectedFile ? selectedFile.originalName : "选择左侧文件后在这里查看详情和预览"}</p>
                     </div>
                   </div>
+                  {preview?.previewKind === "image" ? (
+                    <div className="flex items-center gap-1 rounded-lg border border-slate-300 bg-slate-50 p-1">
+                      <button
+                        type="button"
+                        // 缩小按钮：按固定步进降低图片缩放比例。
+                        className="btn btn-ghost btn-xs h-7 min-h-7 w-7 rounded-md px-0 text-slate-700"
+                        onClick={() => handleChangeImageZoom(imageZoom - 0.25)}
+                      >
+                        <Minus size={12} />
+                      </button>
+                      <button
+                        type="button"
+                        // 重置按钮：一键恢复到默认 50% 预览比例。
+                        className="btn btn-ghost btn-xs h-7 min-h-7 gap-1 rounded-md px-2 text-[11px] text-slate-700"
+                        onClick={() => handleChangeImageZoom(DEFAULT_IMAGE_ZOOM)}
+                      >
+                        <RotateCcw size={11} />
+                        {Math.round(imageZoom * 100)}%
+                      </button>
+                      <button
+                        type="button"
+                        // 放大按钮：按固定步进提升图片缩放比例。
+                        className="btn btn-ghost btn-xs h-7 min-h-7 w-7 rounded-md px-0 text-slate-700"
+                        onClick={() => handleChangeImageZoom(imageZoom + 0.25)}
+                      >
+                        <Plus size={12} />
+                      </button>
+                    </div>
+                  ) : null}
                 </div>
               </div>
-              <div className="min-h-0 flex-1 overflow-auto bg-[linear-gradient(180deg,#fbfdff_0%,#f3f8ff_100%)] p-4">
+              <div className="min-h-0 flex-1 overflow-auto bg-[linear-gradient(180deg,#f8fbff_0%,#edf3f9_100%)] p-3">
                 {selectedFileId ? (
                   previewLoading ? (
-                    <div className="flex h-full min-h-[300px] items-center justify-center rounded-3xl border border-base-300 bg-base-100/80">
-                      <div className="flex items-center gap-3 rounded-2xl border border-base-300 bg-base-100 px-5 py-4 shadow-sm">
+                    <div className="flex h-full min-h-[300px] items-center justify-center rounded-xl border border-slate-300 bg-white/80">
+                      <div className="flex items-center gap-3 rounded-lg border border-slate-300 bg-white px-5 py-4 shadow-sm">
                         <span className="loading loading-spinner text-primary" style={{ width: 20, height: 20 }} />
                         <div>
                           {/* 加载标题。 */}
-                          <p className="text-[13px] font-medium text-neutral">正在加载文件预览</p>
-                          <p className="mt-1 text-[12px] text-neutral/60">会根据文件类型自动选择文本或图片预览方式。</p>
+                          <p className="text-[13px] font-medium text-slate-800">正在加载文件预览</p>
+                          <p className="mt-1 text-[12px] text-slate-500">会根据文件类型自动选择文本或图片预览方式。</p>
                         </div>
                       </div>
                     </div>
                   ) : preview ? (
-                    <div className="flex min-h-full flex-col gap-4">
-                      <div className="rounded-3xl border border-base-300 bg-base-100/88 p-4 shadow-sm">
-                        <div className="flex flex-wrap items-start justify-between gap-4">
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2 text-primary">
-                              {/* 类型图标：根据文件类型切换。 */}
-                              <PreviewKindIcon previewKind={preview.previewKind} />
-                              <span className="text-[12px] font-medium uppercase tracking-[0.16em]">{resolvePreviewKindLabel(preview.previewKind)}</span>
-                            </div>
-                            <h4 className="mt-3 break-all text-[16px] font-semibold text-neutral">{preview.originalName}</h4>
-                            <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-neutral/60">
-                              <span className="rounded-xl bg-base-200/70 px-2 py-1">{formatLanFileSize(preview.sizeBytes)}</span>
-                              <span className="rounded-xl bg-base-200/70 px-2 py-1">{preview.mimeType}</span>
-                              <span className="rounded-xl bg-base-200/70 px-2 py-1">{new Date(preview.receivedAt).toLocaleString("zh-CN", { hour12: false })}</span>
-                            </div>
-                          </div>
-                          <button
-                            type="button"
-                            className="btn btn-outline btn-sm h-9 min-h-9 gap-2 px-3 text-[12px]"
-                            onClick={() => void handleDeleteFile(preview.id)}
-                          >
-                            <Trash2 size={14} />
-                            删除当前文件
-                          </button>
-                        </div>
-                        {preview.previewMessage ? (
-                          <div className="mt-4 rounded-2xl border border-base-300 bg-base-200/45 px-4 py-3 text-[12px] leading-6 text-neutral/65">
-                            {preview.previewMessage}
-                          </div>
-                        ) : null}
-                      </div>
+                    <div className="flex min-h-full flex-col gap-3">
                       {preview.previewKind === "image" && preview.dataUrl ? (
-                        <div className="flex min-h-[320px] items-center justify-center rounded-3xl border border-base-300 bg-white/85 p-4 shadow-sm">
-                          <img
-                            // 图片预览：展示当前接收文件的图像内容。
-                            src={preview.dataUrl}
-                            alt={preview.originalName}
-                            className="h-auto max-h-[520px] w-full rounded-2xl object-contain"
-                          />
+                        <div className="min-h-[320px] overflow-auto p-1">
+                          <div className="flex min-h-[420px] items-center justify-center">
+                            <img
+                              // 图片预览：展示当前接收文件的图像内容，并支持按钮缩放。
+                              src={preview.dataUrl}
+                              alt={preview.originalName}
+                              className="max-w-none rounded-lg object-contain shadow-sm transition-transform"
+                              style={{
+                                maxHeight: "none",
+                                width: "auto",
+                                height: "auto",
+                                transform: `scale(${imageZoom})`,
+                                transformOrigin: "center center"
+                              }}
+                            />
+                          </div>
                         </div>
-                      ) : preview.previewKind === "text" ? (
-                        <div className="overflow-hidden rounded-3xl border border-base-300 bg-base-100 shadow-sm">
-                          <div className="border-b border-base-300 px-4 py-3 text-[12px] text-neutral/60">
+                      ) : (
+                        <div className="rounded-xl border border-slate-300 bg-white/90 p-4 shadow-sm">
+                          <div className="flex flex-wrap items-start justify-between gap-4">
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2 text-primary">
+                                {/* 类型图标：根据文件类型切换。 */}
+                                <PreviewKindIcon previewKind={preview.previewKind} />
+                                <span className="text-[12px] font-medium uppercase tracking-[0.16em]">{resolvePreviewKindLabel(preview.previewKind)}</span>
+                              </div>
+                              <h4 className="mt-3 break-all text-[15px] font-semibold text-slate-800">{preview.originalName}</h4>
+                              <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-slate-500">
+                                <span className="rounded-md bg-slate-100 px-2 py-1">{formatLanFileSize(preview.sizeBytes)}</span>
+                                <span className="rounded-md bg-slate-100 px-2 py-1">{preview.mimeType}</span>
+                                <span className="rounded-md bg-slate-100 px-2 py-1">{new Date(preview.receivedAt).toLocaleString("zh-CN", { hour12: false })}</span>
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              className="btn btn-outline btn-sm h-8 min-h-8 gap-2 rounded-lg px-3 text-[12px]"
+                              onClick={() => void handleDeleteFile(preview.id)}
+                            >
+                              <Trash2 size={14} />
+                              删除当前文件
+                            </button>
+                          </div>
+                          {preview.previewMessage ? (
+                            <div className="mt-4 rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-[12px] leading-6 text-slate-600">
+                              {preview.previewMessage}
+                            </div>
+                          ) : null}
+                        </div>
+                      )}
+                      {preview.previewKind === "text" ? (
+                        <div className="overflow-hidden rounded-xl border border-slate-300 bg-white shadow-sm">
+                          <div className="border-b border-slate-300 px-4 py-3 text-[12px] text-slate-500">
                             {preview.truncated ? "当前仅展示文件前 256 KB 文本内容。" : "当前文件文本内容如下。"}
                           </div>
-                          <pre className="max-h-[520px] overflow-auto whitespace-pre-wrap break-words p-4 font-mono text-[12px] leading-6 text-neutral">
+                          <pre className="max-h-[520px] overflow-auto whitespace-pre-wrap break-words bg-slate-50 p-4 font-mono text-[12px] leading-6 text-slate-800">
                             {preview.textContent || ""}
                           </pre>
                         </div>
-                      ) : (
-                        <div className="flex min-h-[280px] items-center justify-center rounded-3xl border border-dashed border-base-300 bg-base-100/75 px-6 text-center">
+                      ) : preview.previewKind === "unsupported" ? (
+                        <div className="flex min-h-[280px] items-center justify-center rounded-xl border border-dashed border-slate-300 bg-white/75 px-6 text-center">
                           <div className="max-w-[280px]">
-                            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+                            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-lg bg-primary/10 text-primary">
                               <FolderDown size={20} />
                             </div>
-                            <p className="mt-4 text-[14px] font-medium text-neutral">当前类型暂不支持直接预览</p>
-                            <p className="mt-2 text-[12px] leading-6 text-neutral/60">文件已经安全保留在本地，后续仍可继续筛选、删除，或保留给外部工具处理。</p>
+                            <p className="mt-4 text-[14px] font-medium text-slate-800">当前类型暂不支持直接预览</p>
+                            <p className="mt-2 text-[12px] leading-6 text-slate-500">文件已经安全保留在本地，后续仍可继续筛选、删除，或保留给外部工具处理。</p>
                           </div>
                         </div>
-                      )}
+                      ) : null}
                     </div>
                   ) : (
-                    <div className="flex h-full min-h-[300px] items-center justify-center rounded-3xl border border-dashed border-base-300 bg-base-100/75 px-6 text-center">
+                    <div className="flex h-full min-h-[300px] items-center justify-center rounded-xl border border-dashed border-slate-300 bg-white/75 px-6 text-center">
                       <div className="max-w-[260px]">
-                        <p className="text-[14px] font-medium text-neutral">预览加载失败</p>
-                        <p className="mt-2 text-[12px] leading-6 text-neutral/60">可以重新点击左侧文件列表项再试一次，或刷新当前工具状态。</p>
+                        <p className="text-[14px] font-medium text-slate-800">预览加载失败</p>
+                        <p className="mt-2 text-[12px] leading-6 text-slate-500">可以重新点击左侧文件列表项再试一次，或刷新当前工具状态。</p>
                       </div>
                     </div>
                   )
                 ) : (
-                  <div className="flex h-full min-h-[300px] items-center justify-center rounded-3xl border border-dashed border-base-300 bg-base-100/75 px-6 text-center">
+                  <div className="flex h-full min-h-[300px] items-center justify-center rounded-xl border border-dashed border-slate-300 bg-white/75 px-6 text-center">
                     <div className="max-w-[260px]">
-                      <p className="text-[14px] font-medium text-neutral">选择一个文件开始预览</p>
-                      <p className="mt-2 text-[12px] leading-6 text-neutral/60">图片会显示大图，文本会直接展示内容，其它类型则展示元信息和管理操作。</p>
+                      <p className="text-[14px] font-medium text-slate-800">选择一个文件开始预览</p>
+                      <p className="mt-2 text-[12px] leading-6 text-slate-500">图片支持按钮缩放，文本会直接展示内容，其它类型则展示元信息和管理操作。</p>
                     </div>
                   </div>
                 )}
               </div>
             </section>
-          </div>
         </div>
       </div>
     </div>
