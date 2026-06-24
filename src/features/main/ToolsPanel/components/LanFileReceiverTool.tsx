@@ -6,7 +6,6 @@ import {
   Copy,
   FolderDown,
   Image as ImageIcon,
-  RefreshCcw,
   Search,
   Server,
   Smartphone,
@@ -26,6 +25,7 @@ import {
   filterLanFileReceiverItems,
   formatLanFileSize,
   resolveLanFileReceiverQrUrl,
+  shouldShowLanFileReceiverQrCard,
   type LanFileReceiverFilterKind
 } from "../logic/lanFileReceiver.ts";
 
@@ -130,6 +130,8 @@ export function LanFileReceiverTool({ onBack }: LanFileReceiverToolProps) {
 
   // 二维码目标地址：优先推荐局域网地址，缺失时回退本机地址。
   const qrCodeUrl = useMemo(() => resolveLanFileReceiverQrUrl(status), [status]);
+  // 二维码卡片是否可见：只在接收服务开启且存在可扫码地址时显示。
+  const showQrCodeCard = useMemo(() => shouldShowLanFileReceiverQrCard(status), [status]);
 
   // 当前筛选结果中的图片数量：用于顶部摘要。
   const imageCount = useMemo(() => files.filter((item) => item.previewKind === "image").length, [files]);
@@ -161,17 +163,16 @@ export function LanFileReceiverTool({ onBack }: LanFileReceiverToolProps) {
     };
   }, []);
 
-  // 服务开关变化时更新轮询：开启后每 4 秒拉一次列表，停止后关闭轮询。
+  // 统一状态轮询：无论当前是否开启服务，都定期同步状态与文件列表。
   useEffect(() => {
     stopPolling();
-    if (!status?.enabled) return;
     pollingTimerRef.current = window.setInterval(() => {
       void refreshToolState(false);
     }, 4000);
     return () => {
       stopPolling();
     };
-  }, [status?.enabled]);
+  }, []);
 
   // 当筛选结果变化时，保持选中项有效并自动加载预览。
   useEffect(() => {
@@ -432,192 +433,95 @@ export function LanFileReceiverTool({ onBack }: LanFileReceiverToolProps) {
         {/* 顶部摘要：强调服务开关、地址分发和文件管理是完整闭环。 */}
         <p className="text-[12px] text-neutral/60">支持开启局域网上传页、手机访问上传、多端自适应，以及桌面端预览与清理接收文件。</p>
       </div>
-      {/* 主体工作区：顶部状态卡，下方左右双栏。 */}
+      {/* 主体工作区：紧凑连接信息区 + 下方文件列表/预览双栏。 */}
       <div className="min-h-0 flex-1 overflow-auto p-4">
         <div className="flex min-h-full flex-col gap-4">
-          {/* 状态卡：承载服务开关、总数和入口动作。 */}
-          <section className="rounded-3xl border border-base-300 bg-base-100 p-5 shadow-sm">
-            <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-3">
-                  {/* 标题图标：强化局域网接收语义。 */}
-                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
-                    <Wifi size={20} />
+          {/* 连接信息区：只保留一个主地址，把控制项和二维码压缩到更紧凑的布局里。 */}
+          <section className={`grid grid-cols-1 gap-3 ${showQrCodeCard ? "2xl:grid-cols-[minmax(0,1.7fr)_280px]" : ""}`}>
+            <div className="rounded-3xl border border-base-300 bg-base-100 px-5 py-4 shadow-sm">
+              <div className="flex flex-col gap-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-3">
+                    {/* 标题图标：强化局域网接收语义。 */}
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+                      <Wifi size={18} />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        {/* 标题。 */}
+                        <h2 className="text-[18px] font-semibold text-neutral">局域网接收文件</h2>
+                        <div className="flex items-center gap-2 rounded-full border border-base-300 bg-base-200/45 px-3 py-1">
+                          <span className="text-[12px] font-medium text-neutral">接收开关</span>
+                          <input
+                            // 开关控件：直接控制服务启停。
+                            type="checkbox"
+                            className="toggle toggle-primary toggle-sm"
+                            checked={status?.enabled === true}
+                            disabled={syncing}
+                            onChange={(event) => {
+                              void handleToggleReceiver(event.target.checked);
+                            }}
+                          />
+                        </div>
+                      </div>
+                    </div>
                   </div>
-                  <div className="min-w-0">
-                    {/* 标题。 */}
-                    <h2 className="text-[18px] font-semibold text-neutral">局域网接收文件</h2>
-                    <p className="mt-1 text-[12px] text-neutral/60">开启后会随机监听一个可用端口，并提供局域网可访问的上传页面。</p>
+                  <div className="flex shrink-0 flex-wrap justify-end gap-2">
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-sm h-9 min-h-9 gap-2 px-3 text-[12px]"
+                      disabled={!status?.enabled || !status.localBaseUrl || syncing}
+                      onClick={() => void handleOpenUploadPage()}
+                    >
+                      <Smartphone size={14} />
+                      打开上传页
+                    </button>
                   </div>
                 </div>
-                <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                  <div className="rounded-2xl border border-base-300 bg-base-200/45 px-4 py-3">
-                    <p className="text-[12px] text-neutral/55">接收状态</p>
-                    <p className={`mt-2 text-[15px] font-semibold ${status?.enabled ? "text-success" : "text-neutral"}`}>
-                      {status?.enabled ? "已开启" : "未开启"}
-                    </p>
-                  </div>
-                  <div className="rounded-2xl border border-base-300 bg-base-200/45 px-4 py-3">
-                    <p className="text-[12px] text-neutral/55">监听端口</p>
-                    <p className="mt-2 text-[15px] font-semibold text-neutral">{status?.port ?? "--"}</p>
-                  </div>
-                  <div className="rounded-2xl border border-base-300 bg-base-200/45 px-4 py-3">
-                    <p className="text-[12px] text-neutral/55">已接收文件</p>
-                    <p className="mt-2 text-[15px] font-semibold text-neutral">{files.length}</p>
-                  </div>
-                  <div className="rounded-2xl border border-base-300 bg-base-200/45 px-4 py-3">
-                    <p className="text-[12px] text-neutral/55">可直接预览</p>
-                    <p className="mt-2 text-[15px] font-semibold text-neutral">{imageCount + textCount}</p>
-                  </div>
+                <div className="flex flex-wrap items-center gap-2 text-[12px]">
+                  <span className={`rounded-full px-3 py-1 font-medium ${status?.enabled ? "bg-success/12 text-success" : "bg-base-200 text-neutral/70"}`}>
+                    {status?.enabled ? "已开启" : "未开启"}
+                  </span>
+                  <span className="rounded-full bg-base-200 px-3 py-1 text-neutral/70">端口 {status?.port ?? "--"}</span>
+                  <span className="rounded-full bg-base-200 px-3 py-1 text-neutral/70">文件 {files.length}</span>
+                  <span className="rounded-full bg-base-200 px-3 py-1 text-neutral/70">可预览 {imageCount + textCount}</span>
                 </div>
               </div>
-              {/* 开关和动作：满足进入页面即可开关接收服务的要求。 */}
-              <div className="flex shrink-0 flex-col gap-3 rounded-2xl border border-base-300 bg-base-200/45 p-4 xl:min-w-[280px]">
-                <div className="flex items-center justify-between gap-3">
+            </div>
+            {showQrCodeCard ? (
+              <div className="rounded-3xl border border-base-300 bg-base-100 px-4 py-3 shadow-sm">
+                <div className="flex items-start justify-between gap-3">
                   <div>
-                    {/* 开关标题。 */}
-                    <p className="text-[13px] font-medium text-neutral">接收开关</p>
-                    <p className="mt-1 text-[12px] text-neutral/60">关闭后局域网上传页立即失效，但已接收文件仍保留。</p>
+                    {/* 二维码标题。 */}
+                    <h3 className="text-[14px] font-semibold text-neutral">扫码打开上传页</h3>
+                    <p className="mt-1 text-[12px] leading-5 text-neutral/60">局域网内设备可扫码直接访问上传页面</p>
                   </div>
-                  <input
-                    // 开关控件：直接控制服务启停。
-                    type="checkbox"
-                    className="toggle toggle-primary toggle-lg"
-                    checked={status?.enabled === true}
-                    disabled={syncing}
-                    onChange={(event) => {
-                      void handleToggleReceiver(event.target.checked);
-                    }}
-                  />
+                  <span className="rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-medium text-primary">扫码</span>
                 </div>
-                <div className="flex flex-wrap gap-2">
-                  <button type="button" className="btn btn-outline btn-sm h-9 min-h-9 gap-2 px-3 text-[12px]" disabled={syncing} onClick={() => void refreshToolState(true)}>
-                    <RefreshCcw size={14} />
-                    刷新状态
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-primary btn-sm h-9 min-h-9 gap-2 px-3 text-[12px]"
-                    disabled={!status?.enabled || !status.localBaseUrl}
-                    onClick={() => void handleOpenUploadPage()}
-                  >
-                    <Smartphone size={14} />
-                    本机打开上传页
-                  </button>
+                <div className="mt-3 flex justify-center rounded-3xl border border-base-300 bg-white p-3 shadow-sm">
+                  {qrCodeDataUrl ? (
+                    <img
+                      // 地址二维码：供手机直接扫码打开上传页。
+                      src={qrCodeDataUrl}
+                      alt="局域网上传页二维码"
+                      className="h-[168px] w-[168px] rounded-2xl object-contain"
+                    />
+                  ) : (
+                    <div className="flex h-[168px] w-[168px] items-center justify-center rounded-2xl bg-base-200/45 text-center text-[12px] leading-6 text-neutral/55">
+                      暂无可生成二维码的访问地址
+                    </div>
+                  )}
                 </div>
-              </div>
-            </div>
-          </section>
-          {/* 地址卡片区：展示局域网设备应该访问的地址。 */}
-          <section className="rounded-3xl border border-base-300 bg-base-100 p-5 shadow-sm">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                {/* 地址区标题。 */}
-                <h3 className="text-[15px] font-semibold text-neutral">局域网访问地址</h3>
-                <p className="mt-1 text-[12px] text-neutral/60">其他设备只要和当前电脑处在同一局域网，访问下面任一地址即可打开上传页面。</p>
-              </div>
-              {status?.enabled && status.localBaseUrl ? (
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm h-8 min-h-8 gap-2 px-3 text-[12px]"
-                  onClick={() => void handleCopyAddress(status.localBaseUrl ?? "")}
-                >
-                  <Copy size={14} />
-                  复制本机地址
-                </button>
-              ) : null}
-            </div>
-            {status?.enabled ? (
-              status.accessUrls.length > 0 || status.localBaseUrl ? (
-                <div className="mt-4 grid grid-cols-1 gap-4 2xl:grid-cols-[minmax(0,1.4fr)_320px]">
-                  <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-                    {status.accessUrls.map((address) => (
-                      <div key={address.url} className={`rounded-2xl border px-4 py-4 ${address.isPreferred ? "border-primary/35 bg-primary/10" : "border-base-300 bg-base-200/40"}`}>
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            {/* 网卡标签。 */}
-                            <p className="truncate text-[13px] font-medium text-neutral">{address.label}</p>
-                            <p className="mt-1 text-[11px] text-neutral/55">{address.isPreferred ? "推荐优先发送给移动设备" : "可选地址"}</p>
-                          </div>
-                          {address.isPreferred ? (
-                            <span className="rounded-full bg-primary/15 px-2.5 py-1 text-[11px] font-medium text-primary">推荐</span>
-                          ) : null}
-                        </div>
-                        <div className="mt-4 rounded-2xl border border-base-300 bg-base-100 px-3 py-3 font-mono text-[12px] text-neutral">
-                          {address.url}
-                        </div>
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          <button
-                            type="button"
-                            className="btn btn-ghost btn-sm h-8 min-h-8 gap-2 px-3 text-[12px]"
-                            onClick={() => void handleCopyAddress(address.url)}
-                          >
-                            <Copy size={14} />
-                            复制地址
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                    {status.accessUrls.length === 0 && status.localBaseUrl ? (
-                      <div className="rounded-2xl border border-warning/30 bg-warning/10 px-4 py-4 text-[13px] text-warning">
-                        当前仅检测到本机地址，二维码会用于本机调试；若要让手机扫码直接打开，请先连接到可互通的局域网。
-                      </div>
-                    ) : null}
+                {qrCodeUrl ? (
+                  <div className="mt-3 rounded-2xl border border-base-300 bg-base-100 px-3 py-2.5 font-mono text-[12px] text-neutral">
+                    {qrCodeUrl}
                   </div>
-                  <div className="rounded-2xl border border-base-300 bg-base-200/40 p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        {/* 二维码标题。 */}
-                        <h4 className="text-[14px] font-semibold text-neutral">扫码打开上传页</h4>
-                        <p className="mt-1 text-[12px] leading-6 text-neutral/60">手机对准二维码即可直接打开当前上传页面，不需要手动输入地址。</p>
-                      </div>
-                      <div className="rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-medium text-primary">扫码</div>
-                    </div>
-                    <div className="mt-4 flex justify-center rounded-3xl border border-base-300 bg-white p-4 shadow-sm">
-                      {qrCodeDataUrl ? (
-                        <img
-                          // 地址二维码：供手机直接扫码打开上传页。
-                          src={qrCodeDataUrl}
-                          alt="局域网上传页二维码"
-                          className="h-[220px] w-[220px] rounded-2xl object-contain"
-                        />
-                      ) : (
-                        <div className="flex h-[220px] w-[220px] items-center justify-center rounded-2xl bg-base-200/45 text-center text-[12px] leading-6 text-neutral/55">
-                          暂无可生成二维码的访问地址
-                        </div>
-                      )}
-                    </div>
-                    {qrCodeUrl ? (
-                      <div className="mt-4 rounded-2xl border border-base-300 bg-base-100 px-3 py-3 font-mono text-[12px] text-neutral">
-                        {qrCodeUrl}
-                      </div>
-                    ) : null}
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-sm h-8 min-h-8 gap-2 px-3 text-[12px]"
-                        disabled={!qrCodeUrl}
-                        onClick={() => void handleCopyAddress(qrCodeUrl)}
-                      >
-                        <Copy size={14} />
-                        复制二维码地址
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div className="mt-4 rounded-2xl border border-warning/30 bg-warning/10 px-4 py-4 text-[13px] text-warning">
-                  当前未检测到可用的局域网 IPv4 地址。你仍可用本机地址自测上传页，也可以确认是否已连接到局域网或访客网络是否隔离。
-                </div>
-              )
-            ) : (
-              <div className="mt-4 rounded-2xl border border-dashed border-base-300 bg-base-200/30 px-4 py-5 text-[13px] text-neutral/60">
-                打开上方接收开关后，这里会展示当前电脑可被手机、平板等设备访问的 `ip:port` 地址。
+                ) : null}
               </div>
-            )}
+            ) : null}
           </section>
           {/* 下方双栏：左侧文件管理，右侧预览详情。 */}
-          <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 xl:grid-cols-[minmax(340px,0.9fr)_minmax(420px,1.1fr)]">
+          <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 xl:grid-cols-[minmax(340px,0.84fr)_minmax(460px,1.16fr)]">
             {/* 左侧文件管理区：筛选、搜索和删除动作集中在这里。 */}
             <section className="flex min-h-[420px] min-w-0 flex-col overflow-hidden rounded-3xl border border-base-300 bg-base-100 shadow-sm">
               <div className="border-b border-base-300 px-4 py-4">
@@ -744,16 +648,6 @@ export function LanFileReceiverTool({ onBack }: LanFileReceiverToolProps) {
                       <p className="mt-1 text-[12px] text-neutral/60">文本和图片会直接在这里展示，其它类型保留文件信息方便继续管理。</p>
                     </div>
                   </div>
-                  {status?.enabled && status.localBaseUrl && selectedFileId ? (
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm h-8 min-h-8 gap-2 px-3 text-[12px]"
-                      onClick={() => void handleOpenUploadPage()}
-                    >
-                      <Smartphone size={14} />
-                      打开上传页
-                    </button>
-                  ) : null}
                 </div>
               </div>
               <div className="min-h-0 flex-1 overflow-auto bg-[linear-gradient(180deg,#fbfdff_0%,#f3f8ff_100%)] p-4">

@@ -4,6 +4,7 @@ import {
   filterLanFileReceiverItems,
   formatLanFileSize,
   resolveLanFileReceiverQrUrl,
+  shouldShowLanFileReceiverQrCard,
   resolveLanFilePreviewKind,
   type LanFileReceiverItem
 } from "../../src/features/main/ToolsPanel/logic/lanFileReceiver.ts";
@@ -100,4 +101,28 @@ test("resolveLanFileReceiverQrUrl: 应优先返回推荐局域网地址，并在
   );
 
   assert.equal(resolveLanFileReceiverQrUrl(null), "");
+});
+
+test("shouldShowLanFileReceiverQrCard: 仅在服务开启且存在二维码地址时显示扫码卡片", () => {
+  assert.equal(
+    shouldShowLanFileReceiverQrCard({
+      enabled: true,
+      port: 8123,
+      localBaseUrl: "http://127.0.0.1:8123",
+      accessUrls: [],
+      fileCount: 0
+    }),
+    true
+  );
+
+  assert.equal(
+    shouldShowLanFileReceiverQrCard({
+      enabled: false,
+      port: null,
+      localBaseUrl: null,
+      accessUrls: [],
+      fileCount: 0
+    }),
+    false
+  );
 });

@@ -94,3 +94,8 @@ export function resolveLanFileReceiverQrUrl(status: LanFileReceiverStatus | null
   if (preferredAddress?.url) return preferredAddress.url;
   return status.localBaseUrl || "";
 }
+
+// 判断是否应展示二维码卡片：只有服务开启且存在可扫码地址时才显示。
+export function shouldShowLanFileReceiverQrCard(status: LanFileReceiverStatus | null): boolean {
+  return resolveLanFileReceiverQrUrl(status) !== "";
+}
