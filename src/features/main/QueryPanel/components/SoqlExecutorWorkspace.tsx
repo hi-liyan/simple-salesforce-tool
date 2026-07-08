@@ -977,6 +977,7 @@ export function SoqlExecutorWorkspace({
                     pendingDeleteRecordIds={[]}
                     enableReadonlyCellHint={false}
                     allowReadonlyOverlay={true}
+                    scrollStateKey={`console:${activeTab.id}`}
                     onToggleAll={(checked, recordIds) => {
                       patchActiveTab((tab) => ({
                         ...tab,

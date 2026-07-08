@@ -11,7 +11,7 @@ import { useQueryWorkspaceTabsStore } from "../store/useQueryWorkspaceTabsStore"
 import { useQuerySourceTreeStore } from "../store/useQuerySourceTreeStore";
 import { enableStorageWrite } from "../store/tauriStorage";
 import { checkGithubLatestVersion, waitForUiIdleFrame } from "../utils/versionUpdate";
-import { createStartupCoordinator, shouldMountQueryPanel } from "./mainPageStartup";
+import { createStartupCoordinator, shouldKeepQueryPanelMounted, shouldMountQueryPanel } from "./mainPageStartup";
 // 启动版本检查标志：避免 React StrictMode 在开发环境重复触发新版本通知。
 let startupVersionCheckTriggered = false;
 
@@ -127,6 +127,8 @@ export function MainPage() {
   const [startupState, setStartupState] = useState(() => mainPageStartupCoordinator.getSnapshot());
   // 新版本提示通知状态：有值时在右上角显示升级通知。
   const [versionUpdateNotice, setVersionUpdateNotice] = useState<VersionUpdateNoticeState | null>(null);
+  // Query 工作区是否已初始化：首次进入 Query 后保持挂载，避免切页时重建 DataGrid 等重组件。
+  const [queryPanelMounted, setQueryPanelMounted] = useState(() => shouldMountQueryPanel(viewMode, mainPageStartupCoordinator.getSnapshot().complete));
   // Terminal 面板是否已初始化：首次进入 Terminal 后保持挂载，避免切页时重建会话。
   const [terminalPanelMounted, setTerminalPanelMounted] = useState(viewMode === "terminal");
 
@@ -249,6 +251,12 @@ export function MainPage() {
     };
   }, []);
 
+  // 记录 Query 是否访问过：首次进入后保持挂载，仅通过显示/隐藏切换。
+  useEffect(() => {
+    if (!shouldKeepQueryPanelMounted(queryPanelMounted, viewMode, startupState.complete)) return;
+    setQueryPanelMounted(true);
+  }, [queryPanelMounted, startupState.complete, viewMode]);
+
   // 记录 Terminal 是否访问过：一旦访问即常驻挂载，仅通过显示/隐藏切换。
   useEffect(() => {
     if (viewMode !== "terminal") return;
@@ -349,17 +357,34 @@ export function MainPage() {
           </div>
         }
         content={
-          <>
-            {/* Query 工作区：对象树 + 数据/控制台统一 Tab，首次进入时按需加载。 */}
-            {shouldMountQueryPanel(viewMode, startupState.complete) && (
-              <Suspense fallback={<WorkspaceLoadingFallback title="正在加载 Query 工作区" />}>
-                {/* Query 工作区主体。 */}
-                <LazyQueryPanel viewState={queryPanelViewState} actions={queryPanelActions} />
-              </Suspense>
+          // 右侧工作区容器：统一使用绝对定位叠放各 panel，避免隐藏时通过 hidden 把 Query/DataGrid 尺寸打成 0。
+          <div className="relative h-full w-full">
+            {/* Query 工作区：首次进入后常驻挂载，切换视图仅隐藏，避免表格滚动与局部 UI 状态丢失。 */}
+            {queryPanelMounted && (
+              <div
+                className={
+                  shouldMountQueryPanel(viewMode, startupState.complete)
+                    ? "absolute inset-0 z-10 h-full w-full"
+                    : "absolute inset-0 z-0 h-full w-full invisible pointer-events-none"
+                }
+                aria-hidden={!shouldMountQueryPanel(viewMode, startupState.complete)}
+              >
+                <Suspense fallback={<WorkspaceLoadingFallback title="正在加载 Query 工作区" />}>
+                  {/* Query 工作区主体。 */}
+                  <LazyQueryPanel viewState={queryPanelViewState} actions={queryPanelActions} />
+                </Suspense>
+              </div>
             )}
             {/* Terminal 工作区：首次进入后常驻挂载，切换视图仅隐藏，避免终端进程重建。 */}
             {terminalPanelMounted && (
-              <div className={viewMode === "terminal" ? "h-full w-full" : "hidden h-full w-full"}>
+              <div
+                className={
+                  viewMode === "terminal"
+                    ? "absolute inset-0 z-10 h-full w-full"
+                    : "absolute inset-0 z-0 h-full w-full invisible pointer-events-none"
+                }
+                aria-hidden={viewMode !== "terminal"}
+              >
                 <Suspense fallback={<WorkspaceLoadingFallback title="正在加载 Terminal 工作区" />}>
                   {/* Terminal 工作区主体。 */}
                   <LazyTerminalPanel visible={viewMode === "terminal"} />
@@ -368,19 +393,23 @@ export function MainPage() {
             )}
             {/* 工具视图：首次进入时按需加载。 */}
             {viewMode === "tools" && (
-              <Suspense fallback={<WorkspaceLoadingFallback title="正在加载工具面板" />}>
-                {/* 工具面板主体。 */}
-                <LazyToolsPanel />
-              </Suspense>
+              <div className="absolute inset-0 z-10 h-full w-full">
+                <Suspense fallback={<WorkspaceLoadingFallback title="正在加载工具面板" />}>
+                  {/* 工具面板主体。 */}
+                  <LazyToolsPanel />
+                </Suspense>
+              </div>
             )}
             {/* 设置视图：首次进入时按需加载。 */}
             {viewMode === "settings" && (
-              <Suspense fallback={<WorkspaceLoadingFallback title="正在加载设置页" />}>
-                {/* 设置页主体。 */}
-                <LazySettingsPanel />
-              </Suspense>
+              <div className="absolute inset-0 z-10 h-full w-full">
+                <Suspense fallback={<WorkspaceLoadingFallback title="正在加载设置页" />}>
+                  {/* 设置页主体。 */}
+                  <LazySettingsPanel />
+                </Suspense>
+              </div>
             )}
-          </>
+          </div>
         }
       />
       {versionUpdateNotice && (

@@ -87,3 +87,8 @@ export function createStartupCoordinator<TStage>(initialStage: TStage) {
 export function shouldMountQueryPanel(viewMode: MainViewMode, startupComplete: boolean): boolean {
   return viewMode === "query" && startupComplete;
 }
+
+// 判断 QueryPanel 是否应继续保活：首次进入后即使切换到其他 Panel，也保持挂载以保留工作区内部状态。
+export function shouldKeepQueryPanelMounted(queryPanelMounted: boolean, viewMode: MainViewMode, startupComplete: boolean): boolean {
+  return queryPanelMounted || shouldMountQueryPanel(viewMode, startupComplete);
+}

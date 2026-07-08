@@ -1557,6 +1557,7 @@ export function DataQueryTabPane({
                 sourceId={selectedSourceId}
                 selectedSourceType={selectedSourceType}
                 objectName={activeTab.objectName}
+                scrollStateKey={`query:${activeTab.bindingKey}`}
                 onPageSizeChange={handlePageSizeChange}
                 onPageNavigate={handlePageNavigate}
                 onToggleAll={onToggleAllRecords}

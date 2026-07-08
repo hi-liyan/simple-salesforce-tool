@@ -16,6 +16,7 @@ import { useDataGridContextMenu } from "./hooks/useDataGridContextMenu";
 import { useHeaderMetaPopover } from "./hooks/useHeaderMetaPopover";
 import { useDataGridMenuActions } from "./hooks/useDataGridMenuActions";
 import { DataGridSurface } from "./components/DataGridSurface";
+import { useDataGridRuntimeScroll } from "../../store/useDataGridScrollStore";
 
 export type DataGridProps = {
   result: QueryResult;
@@ -54,6 +55,8 @@ export type DataGridProps = {
   onPageSizeChange?: (pageSize: number) => void;
   // 分页导航：用于首页/上一页/下一页/末页触发重查。
   onPageNavigate?: (action: "first" | "previous" | "next" | "last") => void;
+  // 运行态滚动状态 key：用于在当前会话内按 tab 记住横纵滚动位置。
+  scrollStateKey?: string;
 };
 
 // 查询结果表：主入口只负责装配 hooks 与各模块能力。
@@ -79,9 +82,12 @@ export function DataGrid({
   enableReadonlyCellHint = true,
   allowReadonlyOverlay = false,
   onPageSizeChange,
-  onPageNavigate
+  onPageNavigate,
+  scrollStateKey
 }: DataGridProps) {
   const records = result.records;
+  // 当前表格运行态滚动位置：按 key 绑定，仅在本次运行内保留。
+  const { scrollOffsetX, scrollOffsetY, onScrollOffsetChange } = useDataGridRuntimeScroll(scrollStateKey);
   // 生效元数据：只读模式下统一覆写 createable/updateable，避免误触发编辑链路。
   const effectiveFieldMetadataMap = useMemo(() => {
     if (!readOnlyMode) return fieldMetadataMap;
@@ -325,6 +331,9 @@ export function DataGrid({
       onPaste={handlePaste}
       provideEditor={provideEditor}
       drawHeader={drawHeader}
+      scrollOffsetX={scrollOffsetX}
+      scrollOffsetY={scrollOffsetY}
+      onScrollOffsetChange={onScrollOffsetChange}
     />
   );
 }

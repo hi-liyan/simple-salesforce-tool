@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { hydrateTab } from "../../src/store/queryTabHydration.ts";
-import { createStartupCoordinator, shouldMountQueryPanel } from "../../src/pages/mainPageStartup.ts";
+import { createStartupCoordinator, shouldKeepQueryPanelMounted, shouldMountQueryPanel } from "../../src/pages/mainPageStartup.ts";
 import { createPersistedQueryTabSnapshot } from "../../src/store/queryTabPersistence.ts";
 import type { TabState } from "../../src/types/index.ts";
 
@@ -110,6 +111,20 @@ test("shouldMountQueryPanel: 启动完成前不应挂载 Query 工作区", () =>
   assert.equal(shouldMountQueryPanel("query", false), false);
   assert.equal(shouldMountQueryPanel("query", true), true);
   assert.equal(shouldMountQueryPanel("settings", true), false);
+});
+
+test("shouldKeepQueryPanelMounted: 首次进入 Query 后切换到其他 Panel 也应保持挂载", () => {
+  assert.equal(shouldKeepQueryPanelMounted(false, "query", true), true);
+  assert.equal(shouldKeepQueryPanelMounted(true, "terminal", true), true);
+  assert.equal(shouldKeepQueryPanelMounted(true, "tools", true), true);
+  assert.equal(shouldKeepQueryPanelMounted(false, "settings", true), false);
+});
+
+test("MainPage: Query 工作区保活后切换 panel 不应再用 hidden 打断 DataGrid 尺寸", () => {
+  const source = readFileSync(new URL("../../src/pages/MainPage.tsx", import.meta.url), "utf8");
+
+  assert.equal(source.includes("invisible pointer-events-none"), true);
+  assert.equal(source.includes('shouldMountQueryPanel(viewMode, startupState.complete) ? "h-full w-full" : "hidden h-full w-full"'), false);
 });
 
 test("createPersistedQueryTabSnapshot: 应裁掉阻塞启动的大字段，仅保留恢复所需快照", () => {
