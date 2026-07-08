@@ -38,6 +38,8 @@ export type DataGridProps = {
   sourceId?: string;
   // 当前数据源类型：用于控制 Salesforce 专属菜单项显隐。
   selectedSourceType?: string;
+  // 是否严格保留 visibleColumns 的输入顺序。
+  preserveColumnOrder?: boolean;
   // 当前对象 API 名称：用于打开 Salesforce 记录页（可选）。
   objectName?: string;
   // 待删除记录 Id 列表：用于将整行标记为灰色背景。
@@ -73,6 +75,7 @@ export function DataGrid({
   salesforceTimezone,
   sourceId,
   selectedSourceType,
+  preserveColumnOrder = false,
   objectName,
   pendingDeleteRecordIds,
   onToggleAll,
@@ -119,6 +122,7 @@ export function DataGrid({
 
   const { columns, setColumnWidths, headerMinWidths, selectableIds } = useDataGridColumns({
     visibleColumns,
+    preserveColumnOrder,
     showHeaderMetadata,
     records,
     fieldMetadataMap: effectiveFieldMetadataMap,

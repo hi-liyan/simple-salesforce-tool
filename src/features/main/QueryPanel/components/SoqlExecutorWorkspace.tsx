@@ -10,6 +10,7 @@ import { api } from "../../../../api";
 import { useObjectsQuery } from "../../../../queries/salesforce";
 import { useSoqlExecutorStore, createSoqlExecutorTab, type SoqlExecutorTab, type AiConversationItem } from "../../../../store/useSoqlExecutorStore";
 import type { AiChatTurnV2Response, Notice, ObjectDescribe, QueryResult, SalesforceObject, TabLog } from "../../../../types";
+import { resolveMysqlConsoleVisibleColumns } from "../logic/mysqlConsoleColumnOrder.ts";
 
 type AiStreamChunkPayload = {
   // 流式请求 ID。
@@ -369,7 +370,16 @@ export function SoqlExecutorWorkspace({
   // 当前标签可见列：从结果记录动态抽取字段。
   const visibleColumns = useMemo(() => {
     if (!activeTab) return [];
-    return extractVisibleColumns(gridResult.records, isMysqlSource);
+    if (isMysqlSource) {
+      const latestSuccessfulQueryText = activeTab.logs.find((item) => item.action === "SOQL" && item.success)?.request || activeTab.soqlDraft;
+      const primaryObjectName = extractPrimaryObjectName(latestSuccessfulQueryText);
+      return resolveMysqlConsoleVisibleColumns({
+        queryText: latestSuccessfulQueryText,
+        describe: primaryObjectName ? objectDescribeMap[primaryObjectName] : null,
+        records: gridResult.records
+      });
+    }
+    return extractVisibleColumns(gridResult.records, false);
   }, [activeTab, gridResult.records, isMysqlSource]);
 
   // 当前标签字段元数据映射：优先使用 describe 的 label/type，再降级到值推断。
@@ -973,7 +983,8 @@ export function SoqlExecutorWorkspace({
                     dirtyCellKeys={[]}
                     selectedRecordIds={activeTab.selectedRecordIds}
                     salesforceTimezone={salesforceTimezone}
-                    selectedSourceType={selectedSourceType}
+                    selectedSourceType={effectiveSourceType}
+                    preserveColumnOrder={isMysqlSource}
                     pendingDeleteRecordIds={[]}
                     enableReadonlyCellHint={false}
                     allowReadonlyOverlay={true}
