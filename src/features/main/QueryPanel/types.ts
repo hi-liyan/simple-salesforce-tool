@@ -1,4 +1,4 @@
-import { Notice, ObjectDdl, ObjectDescribe, SalesforceObject, SalesforceSource, TabState } from "../../../types";
+import { MutationPreviewItem, Notice, ObjectDdl, ObjectDescribe, SalesforceObject, SalesforceSource, TabState } from "../../../types";
 import { MainViewMode } from "../../../store/useAppStore";
 
 // 单个对象的 MySQL DDL 加载状态：用于在抽屉内展示建表/索引/约束信息。
@@ -141,8 +141,8 @@ export type QueryPanelActions = {
   onCreateRecord: () => void;
   // 标记删除勾选记录。
   onDeleteCheckedRecords: () => void;
-  // 执行更新。
-  onApplyPendingChanges: () => void;
+  // 执行更新：MySQL 可携带预览弹窗中已生成的 SQL，供 Tab 操作日志复用。
+  onApplyPendingChanges: (options?: { mysqlPreviewItems?: MutationPreviewItem[] }) => void;
   // 撤销未提交修改。
   onDiscardPendingChanges: () => void;
   // 打开/关闭抽屉（可指定目标视图：MySQL DDL / MySQL 字段 / Salesforce）。

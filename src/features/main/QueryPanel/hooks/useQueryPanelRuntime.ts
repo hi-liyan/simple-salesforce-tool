@@ -8,6 +8,8 @@ import { resolveMysqlResultUpdateCapability } from "../logic/mysqlUpdateCapabili
 import { isMysqlBlankValue } from "../logic/mysqlValueSemantics.ts";
 import { collectMysqlMissingRequiredFields } from "../logic/mysqlCreateValidation.ts";
 import { extractOffsetValue } from "../logic/queryUtils.ts";
+import { buildMysqlMutationTabLogRequest } from "../logic/mysqlMutationLog.ts";
+import type { MutationPreviewItem } from "../../../../types/index.ts";
 
 type MysqlDdlState = Record<string, { loading: boolean; data: ObjectDdl | null; error: string }>;
 
@@ -628,7 +630,7 @@ export function useQueryPanelRuntime({
   }, [activeTab, patchTab, selectedSourceId, selectedSourceType]);
 
   // 执行新增/更新/删除提交。
-  const applyPendingChanges = useCallback(async () => {
+  const applyPendingChanges = useCallback(async (options?: { mysqlPreviewItems?: MutationPreviewItem[] }) => {
     const resolvedSourceId = activeTab?.sourceId || selectedSourceId;
     const resolvedSourceType = activeTab?.sourceType || selectedSourceType || "salesforce";
     if (!resolvedSourceId || !activeTab || !activeTab.describe) return;
@@ -696,6 +698,15 @@ export function useQueryPanelRuntime({
     const creates: Record<string, unknown>[] = mysqlMutationPlan?.creates || [];
     const updates: { recordId: string; values: Record<string, unknown> }[] = mysqlMutationPlan?.updates || [];
     const deletes: string[] = mysqlMutationPlan?.deletes || [];
+    // MySQL 操作日志请求体：优先复用预览弹窗里已生成的 SQL，失败时也能保留具体语句。
+    const mysqlMutationLogRequest = buildMysqlMutationTabLogRequest(
+      (options?.mysqlPreviewItems || []).map((item) => ({
+        op: item.op,
+        operationIndex: item.operationIndex,
+        previewSql: item.previewSql
+      }))
+    );
+    const fallbackMutationSummary = `creates=${creates.length}, updates=${updates.length}, deletes=${deletes.length}`;
 
     if (!isMysqlSource) {
       const dirtyCellSet = new Set(activeTab.dirtyCellKeys);
@@ -757,10 +768,17 @@ export function useQueryPanelRuntime({
           updates,
           deletes
         });
+        const executionLogRequest = buildMysqlMutationTabLogRequest(
+          executionResult.items.map((item) => ({
+            op: item.op,
+            operationIndex: item.operationIndex,
+            previewSql: item.previewSql
+          }))
+        );
         appendTabLog(activeTabBindingKey, {
           action: "UPSERT",
           success: true,
-          request: `creates=${creates.length}, updates=${updates.length}, deletes=${deletes.length}`,
+          request: executionLogRequest || mysqlMutationLogRequest || fallbackMutationSummary,
           summary: `执行更新成功，新增 ${executionResult.createCount} 条，更新 ${executionResult.updateCount} 条，删除 ${executionResult.deleteCount} 条。`
         });
       } else {
@@ -781,7 +799,7 @@ export function useQueryPanelRuntime({
         appendTabLog(activeTabBindingKey, {
           action: "UPSERT",
           success: true,
-          request: `creates=${creates.length}, updates=${updates.length}, deletes=${deletes.length}`,
+          request: fallbackMutationSummary,
           summary: `执行更新成功，新增 ${creates.length} 条，更新 ${updates.length} 条，删除 ${deletes.length} 条。`
         });
       }
@@ -800,7 +818,7 @@ export function useQueryPanelRuntime({
       appendTabLog(activeTabBindingKey, {
         action: "UPSERT",
         success: false,
-        request: `creates=${creates.length}, updates=${updates.length}, deletes=${deletes.length}`,
+        request: mysqlMutationLogRequest || fallbackMutationSummary,
         summary: "执行更新失败。",
         errorMessage: String(error)
       });

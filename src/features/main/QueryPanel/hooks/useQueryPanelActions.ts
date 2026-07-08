@@ -10,6 +10,7 @@ import {
   isMysqlDraftOmitValue,
   normalizeMysqlEditedCellValue
 } from "../logic/mysqlValueSemantics.ts";
+import type { MutationPreviewItem } from "../../../../types/index.ts";
 
 type EditableGridRecord = Record<string, unknown> & {
   // 是否为前端本地新增行。
@@ -81,8 +82,8 @@ type UseQueryPanelActionsInput = {
   createRecordQuickly: () => void;
   // 标记删除勾选记录。
   deleteCheckedRecords: () => Promise<void>;
-  // 提交未提交修改。
-  applyPendingChanges: () => Promise<void>;
+  // 提交未提交修改：MySQL 可复用预览弹窗中的 SQL 明细写入操作日志。
+  applyPendingChanges: (options?: { mysqlPreviewItems?: MutationPreviewItem[] }) => Promise<void>;
   // 撤销未提交修改。
   discardPendingChanges: () => void;
   // 切换字段/DDL 抽屉。
@@ -234,7 +235,7 @@ export function useQueryPanelActions({
       onCloseAllTabs: closeAllTabs,
       onCreateRecord: createRecordQuickly,
       onDeleteCheckedRecords: () => void deleteCheckedRecords(),
-      onApplyPendingChanges: () => void applyPendingChanges(),
+      onApplyPendingChanges: (options) => void applyPendingChanges(options),
       onDiscardPendingChanges: discardPendingChanges,
       onToggleDrawer: (drawerView) => void toggleDrawerForActiveTab(drawerView),
       onRefreshMysqlDdl: () => {

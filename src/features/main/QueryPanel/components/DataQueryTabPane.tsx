@@ -163,7 +163,8 @@ type DataQueryTabPaneProps = {
   onCloseAllTabs: () => void;
   onCreateRecord: () => void;
   onDeleteCheckedRecords: () => void;
-  onApplyPendingChanges: () => void;
+  // 执行更新：MySQL 可把预览弹窗中已生成的 SQL 明细透传给运行时日志。
+  onApplyPendingChanges: (options?: { mysqlPreviewItems?: MutationPreviewItem[] }) => void;
   onDiscardPendingChanges: () => void;
   onToggleDrawer: (drawerView?: "salesforce" | "mysql-ddl" | "mysql-fields") => void;
   // 刷新当前对象 DDL：仅 MySQL 抽屉使用。
@@ -1050,7 +1051,7 @@ export function DataQueryTabPane({
       loading: true,
       error: ""
     }));
-    await onApplyPendingChanges();
+    await onApplyPendingChanges({ mysqlPreviewItems: mysqlMutationPreviewState.items });
     setMysqlMutationPreviewState({
       open: false,
       loading: false,
