@@ -1,6 +1,14 @@
 // SmartInput 候选上限：统一约束输入框候选数量，避免浮层过长影响录入。
 export const SMART_INPUT_SUGGESTION_LIMIT = 12;
 
+// SmartInput 输入字体：选择字面更开阔、点击识别更轻松的字体，但保持非粗体观感。
+export const SMART_INPUT_TYPOGRAPHY_STYLE = Object.freeze({
+  fontFamily: 'Verdana, "Segoe UI", "Noto Sans SC", "Microsoft YaHei", sans-serif',
+  fontSize: "14px",
+  fontWeight: 500,
+  letterSpacing: 0
+});
+
 // SmartInput 当前 token 范围：用于在输入框中替换当前位置对应的片段。
 export type SmartInputTokenRange = {
   // 当前 token 起始位置。
@@ -75,9 +83,31 @@ type ResolveQueryBarSplitRatioOptions = {
 // SmartInput 回车动作：补全或提交查询。
 export type SmartInputEnterAction = "submit" | "apply-suggestion";
 
+// SmartInput 高亮类型：用于把字段、关键字和值映射到不同前景色。
+export type SmartInputHighlightKind = "field" | "keyword" | "value" | "plain";
+
+// SmartInput 高亮片段：保留原始文本与对应语义类型。
+export type SmartInputHighlightSegment = {
+  // 当前片段原始文本。
+  text: string;
+  // 当前片段语义类型。
+  kind: SmartInputHighlightKind;
+};
+
+type ResolveSmartInputHighlightSegmentsOptions = {
+  // 当前输入内容。
+  value: string;
+  // 需要高亮为关键字的词集合。
+  keywords: string[];
+  // 需要高亮为值的字面量集合。
+  valueLiterals?: string[];
+};
+
 const INPUT_HORIZONTAL_PADDING = 24;
 const CLEAR_BUTTON_RESERVED_WIDTH = 28;
 const INPUT_SAFE_GAP = 16;
+const HIGHLIGHT_IDENTIFIER_PATTERN = /[A-Za-z0-9_$.:]/;
+const HIGHLIGHT_NUMBER_PATTERN = /[0-9T:./+-]/;
 
 // 候选去重：忽略大小写并保留首次出现顺序。
 export function normalizeSmartInputSuggestions(suggestions: string[]): string[] {
@@ -202,4 +232,125 @@ export function getSmartInputTokenRange(text: string, caret: number, tokenPatter
     end,
     token: text.slice(start, end)
   };
+}
+
+// 解析单行输入高亮片段：不追求完整 SQL 语法树，只覆盖查询栏最常见的字段/关键字/值语义。
+export function resolveSmartInputHighlightSegments({
+  value,
+  keywords,
+  valueLiterals = []
+}: ResolveSmartInputHighlightSegmentsOptions): SmartInputHighlightSegment[] {
+  if (!value) return [];
+
+  const keywordSet = new Set(keywords.map((item) => item.trim().toUpperCase()).filter(Boolean));
+  const valueLiteralSet = new Set(valueLiterals.map((item) => item.trim().toUpperCase()).filter(Boolean));
+  const segments: SmartInputHighlightSegment[] = [];
+  let index = 0;
+
+  while (index < value.length) {
+    const currentChar = value[index];
+
+    if (/\s/.test(currentChar)) {
+      const nextIndex = readWhile(value, index, (char) => /\s/.test(char));
+      segments.push({ text: value.slice(index, nextIndex), kind: "plain" });
+      index = nextIndex;
+      continue;
+    }
+
+    if (currentChar === "'" || currentChar === '"') {
+      const nextIndex = readQuotedText(value, index, currentChar);
+      segments.push({ text: value.slice(index, nextIndex), kind: "value" });
+      index = nextIndex;
+      continue;
+    }
+
+    if (currentChar === "`") {
+      const nextIndex = readWrappedText(value, index, "`");
+      segments.push({ text: value.slice(index, nextIndex), kind: "field" });
+      index = nextIndex;
+      continue;
+    }
+
+    if (/[0-9]/.test(currentChar) || (currentChar === "." && /[0-9]/.test(value[index + 1] || ""))) {
+      const nextIndex = readWhile(value, index, (char) => HIGHLIGHT_NUMBER_PATTERN.test(char));
+      segments.push({ text: value.slice(index, nextIndex), kind: "value" });
+      index = nextIndex;
+      continue;
+    }
+
+    if (/[A-Za-z_$]/.test(currentChar)) {
+      const nextIndex = readWhile(value, index, (char) => HIGHLIGHT_IDENTIFIER_PATTERN.test(char));
+      const tokenText = value.slice(index, nextIndex);
+      segments.push({
+        text: tokenText,
+        kind: resolveWordHighlightKind(tokenText, keywordSet, valueLiteralSet)
+      });
+      index = nextIndex;
+      continue;
+    }
+
+    const nextIndex = readWhile(
+      value,
+      index,
+      (char) => !/\s/.test(char) && !/[A-Za-z0-9_$'"`]/.test(char) && !(char === "." && /[0-9]/.test(value[index + 1] || ""))
+    );
+    segments.push({ text: value.slice(index, nextIndex), kind: "plain" });
+    index = nextIndex;
+  }
+
+  return segments;
+}
+
+// 按条件持续读取文本：供空白、标识符、数字等多类片段共用。
+function readWhile(value: string, startIndex: number, predicate: (char: string) => boolean): number {
+  let index = startIndex;
+  while (index < value.length && predicate(value[index])) {
+    index += 1;
+  }
+  return index;
+}
+
+// 读取成对包裹文本：支持 SQL 字符串与反引号字段名。
+function readWrappedText(value: string, startIndex: number, wrapper: string): number {
+  let index = startIndex + 1;
+  while (index < value.length) {
+    if (value[index] === wrapper) return index + 1;
+    index += 1;
+  }
+  return value.length;
+}
+
+// 读取字符串字面量：兼容反斜杠转义与成对引号转义。
+function readQuotedText(value: string, startIndex: number, quote: string): number {
+  let index = startIndex + 1;
+  while (index < value.length) {
+    if (value[index] === "\\" && index + 1 < value.length) {
+      index += 2; // 行内注释：跳过转义后的字符，避免把中途引号误判为结束。
+      continue;
+    }
+    if (value[index] === quote && value[index + 1] === quote) {
+      index += 2; // 行内注释：兼容 SQL 中两个连续引号表示字面引号。
+      continue;
+    }
+    if (value[index] === quote) return index + 1;
+    index += 1;
+  }
+  return value.length;
+}
+
+// 识别单词高亮类型：关键字优先蓝色，值字面量绿色，其余裸标识符按字段处理。
+function resolveWordHighlightKind(
+  tokenText: string,
+  keywordSet: Set<string>,
+  valueLiteralSet: Set<string>
+): SmartInputHighlightKind {
+  const normalizedToken = tokenText.trim().toUpperCase();
+  if (!normalizedToken) return "plain";
+  if (valueLiteralSet.has(normalizedToken) || /^[A-Z_]+:\d+$/.test(normalizedToken)) {
+    return "value";
+  }
+  if (keywordSet.has(normalizedToken)) {
+    return "keyword";
+  }
+  return "field";
 }

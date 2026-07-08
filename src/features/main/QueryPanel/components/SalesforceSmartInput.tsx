@@ -3,8 +3,10 @@ import { X } from "lucide-react";
 import {
   filterSmartInputSuggestions,
   getSmartInputTokenRange,
+  resolveSmartInputHighlightSegments,
   resolveSmartInputEnterAction,
   resolveSmartInputWidth,
+  SMART_INPUT_TYPOGRAPHY_STYLE,
   shouldOpenSmartInputSuggestions
 } from "../logic/smartInput";
 
@@ -45,6 +47,42 @@ type SalesforceSmartInputProps = {
 
 // Token 识别规则：支持字段名、关系字段、SOQL 日期字面量（含冒号）。
 const TOKEN_PATTERN = /[A-Za-z0-9_$.:]/;
+// SOQL 输入高亮关键字：覆盖筛选、排序与 NULLS 修饰等常见录入词。
+const SOQL_HIGHLIGHT_KEYWORDS = [
+  "AND",
+  "OR",
+  "NOT",
+  "IN",
+  "INCLUDES",
+  "EXCLUDES",
+  "LIKE",
+  "ASC",
+  "DESC",
+  "NULLS",
+  "FIRST",
+  "LAST"
+];
+// SOQL 输入高亮值字面量：覆盖布尔/空值以及常见日期字面量。
+const SOQL_HIGHLIGHT_VALUE_LITERALS = [
+  "NULL",
+  "TRUE",
+  "FALSE",
+  "TODAY",
+  "YESTERDAY",
+  "TOMORROW",
+  "THIS_WEEK",
+  "LAST_WEEK",
+  "NEXT_WEEK",
+  "THIS_MONTH",
+  "LAST_MONTH",
+  "NEXT_MONTH",
+  "THIS_QUARTER",
+  "LAST_QUARTER",
+  "NEXT_QUARTER",
+  "THIS_YEAR",
+  "LAST_YEAR",
+  "NEXT_YEAR"
+];
 
 // Salesforce 智能输入：支持内容自适应宽度与自动补全。
 export function SalesforceSmartInput({
@@ -69,6 +107,8 @@ export function SalesforceSmartInput({
   const inputRef = useRef<HTMLInputElement | null>(null);
   // 测量节点引用：用于计算输入内容的真实像素宽度。
   const measureRef = useRef<HTMLSpanElement | null>(null);
+  // 高亮层滚动容器：用于同步长文本横向滚动位置。
+  const highlightViewportRef = useRef<HTMLDivElement | null>(null);
   // 根容器引用：用于点击外部关闭补全。
   const rootRef = useRef<HTMLDivElement | null>(null);
   // 是否显示候选弹层。
@@ -94,6 +134,15 @@ export function SalesforceSmartInput({
       token: tokenRange.token
     });
   }, [suggestions, tokenRange.token]);
+
+  // 解析输入高亮片段：把字段、关键字和值切成可独立着色的最小单元。
+  const highlightSegments = useMemo(() => {
+    return resolveSmartInputHighlightSegments({
+      value,
+      keywords: SOQL_HIGHLIGHT_KEYWORDS,
+      valueLiterals: SOQL_HIGHLIGHT_VALUE_LITERALS
+    });
+  }, [value]);
 
   // 候选变化或面板关闭时重置激活项，避免误把旧高亮带到下一轮交互。
   useEffect(() => {
@@ -141,6 +190,11 @@ export function SalesforceSmartInput({
     onResolvedWidthChange?.(nextWidth); // 行内注释：把测得的期望宽度回传给父容器，供分栏布局做自适应扩张。
   }, [allowClear, defaultWidth, maxWidth, minWidth, onResolvedWidthChange, placeholder, value]);
 
+  // 同步高亮层横向滚动：保证长文本时彩色镜像与真实光标始终对齐。
+  useEffect(() => {
+    syncHighlightScroll();
+  }, [value, width]);
+
   // 插入候选词：替换当前 token，并恢复光标位置。
   function applySuggestion(item: string) {
     const nextValue = `${value.slice(0, tokenRange.start)}${item}${value.slice(tokenRange.end)}`;
@@ -161,6 +215,22 @@ export function SalesforceSmartInput({
   // 统一同步光标位置，保证补全范围准确。
   function syncCaretFromTarget(target: HTMLInputElement) {
     setCaret(target.selectionStart || 0);
+  }
+
+  // 同步高亮层滚动偏移：复用原生 input 的 scrollLeft，避免两层文本错位。
+  function syncHighlightScroll() {
+    const input = inputRef.current;
+    const highlightViewport = highlightViewportRef.current;
+    if (!input || !highlightViewport) return;
+    highlightViewport.scrollLeft = input.scrollLeft;
+  }
+
+  // 解析片段颜色类名：字段紫色、关键字蓝色、值绿色，其余保持中性色。
+  function resolveHighlightSegmentClassName(kind: "field" | "keyword" | "value" | "plain") {
+    if (kind === "field") return "text-violet-600";
+    if (kind === "keyword") return "text-blue-600";
+    if (kind === "value") return "text-green-600";
+    return "text-neutral/75";
   }
 
   // 键盘交互：支持上下选择、回车/Tab 确认、Esc 关闭。
@@ -230,15 +300,33 @@ export function SalesforceSmartInput({
       {!hideLabel ? <label className="mb-1 block text-[12px]">{label}</label> : null}
       {/* 输入框主体。 */}
       <div className={`relative ${surfaceClassName}`.trim()}>
+        {/* 高亮镜像层：用与 input 完全一致的排版绘制彩色文本，同时保持鼠标穿透。 */}
+        {value ? (
+          <div ref={highlightViewportRef} className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
+            {/* 高亮内容层：保留空白与标点，保证字段/关键字/值的着色位置与真实输入逐字符对齐。 */}
+            <div className="flex h-full min-w-full items-center whitespace-pre pr-8 leading-[20px]" style={SMART_INPUT_TYPOGRAPHY_STYLE}>
+              {highlightSegments.map((item, index) => (
+                <span key={`${item.text}-${index}`} className={resolveHighlightSegmentClassName(item.kind)}>
+                  {item.text}
+                </span>
+              ))}
+            </div>
+          </div>
+        ) : null}
         {/* 单行输入框：保留自动补全与光标 token 替换，placeholder 垂直居中。 */}
         <input
           ref={inputRef}
-          className={`input input-bordered input-sm h-[38px] min-h-[38px] w-full pr-8 leading-[20px] ${inputClassName}`.trim()}
+          className={`input input-bordered input-sm h-[38px] min-h-[38px] w-full pr-8 leading-[20px] placeholder:text-neutral/45 ${inputClassName}`.trim()}
           value={value}
           placeholder={placeholder}
           autoCorrect="off"
           autoCapitalize="off"
           spellCheck={false}
+          style={{
+            ...SMART_INPUT_TYPOGRAPHY_STYLE,
+            color: value ? "transparent" : undefined,
+            caretColor: "#16325c"
+          }}
           onFocus={(event) => {
             syncCaretFromTarget(event.currentTarget); // 聚焦时同步光标，避免替换范围错误。
           }}
@@ -247,6 +335,9 @@ export function SalesforceSmartInput({
           }}
           onKeyUp={(event) => {
             syncCaretFromTarget(event.currentTarget); // 键盘移动光标后同步位置。
+          }}
+          onScroll={() => {
+            syncHighlightScroll(); // 行内注释：原生 input 横向滚动时，同步推动高亮镜像层。
           }}
           onKeyDown={onKeyDown}
           onChange={(event) => {

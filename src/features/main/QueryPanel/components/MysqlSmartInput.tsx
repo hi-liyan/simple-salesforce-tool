@@ -3,8 +3,10 @@ import { X } from "lucide-react";
 import {
   filterSmartInputSuggestions,
   getSmartInputTokenRange,
+  resolveSmartInputHighlightSegments,
   resolveSmartInputEnterAction,
   resolveSmartInputWidth,
+  SMART_INPUT_TYPOGRAPHY_STYLE,
   shouldOpenSmartInputSuggestions
 } from "../logic/smartInput";
 
@@ -44,6 +46,22 @@ type MysqlSmartInputProps = {
 };
 
 const TOKEN_PATTERN = /[A-Za-z0-9_$.]/;
+// MySQL 输入高亮关键字：覆盖 WHERE / ORDER BY 中最常见的操作词。
+const MYSQL_HIGHLIGHT_KEYWORDS = [
+  "AND",
+  "OR",
+  "NOT",
+  "IN",
+  "LIKE",
+  "BETWEEN",
+  "IS",
+  "EXISTS",
+  "ASC",
+  "DESC",
+  "REGEXP"
+];
+// MySQL 输入高亮值字面量：用于把常见空值/布尔值染成绿色。
+const MYSQL_HIGHLIGHT_VALUE_LITERALS = ["NULL", "TRUE", "FALSE"];
 
 // MySQL 智能输入：支持内容自适应宽度与自动补全。
 export function MysqlSmartInput({
@@ -68,6 +86,8 @@ export function MysqlSmartInput({
   const inputRef = useRef<HTMLInputElement | null>(null);
   // 测量节点引用：用于计算输入内容的真实像素宽度。
   const measureRef = useRef<HTMLSpanElement | null>(null);
+  // 高亮层滚动容器：用于同步长文本横向滚动位置。
+  const highlightViewportRef = useRef<HTMLDivElement | null>(null);
   // 根容器引用：用于点击外部关闭补全。
   const rootRef = useRef<HTMLDivElement | null>(null);
   // 是否显示候选弹层。
@@ -93,6 +113,15 @@ export function MysqlSmartInput({
       token: tokenRange.token
     });
   }, [suggestions, tokenRange.token]);
+
+  // 解析输入高亮片段：把字段、关键字和值切成可独立着色的最小单元。
+  const highlightSegments = useMemo(() => {
+    return resolveSmartInputHighlightSegments({
+      value,
+      keywords: MYSQL_HIGHLIGHT_KEYWORDS,
+      valueLiterals: MYSQL_HIGHLIGHT_VALUE_LITERALS
+    });
+  }, [value]);
 
   // 候选变化或面板关闭时重置激活项，避免误把旧高亮带到下一轮交互。
   useEffect(() => {
@@ -140,6 +169,11 @@ export function MysqlSmartInput({
     onResolvedWidthChange?.(nextWidth); // 行内注释：把测得的期望宽度回传给父容器，供分栏布局做自适应扩张。
   }, [allowClear, defaultWidth, maxWidth, minWidth, onResolvedWidthChange, placeholder, value]);
 
+  // 同步高亮层横向滚动：保证长文本时彩色镜像与真实光标始终对齐。
+  useEffect(() => {
+    syncHighlightScroll();
+  }, [value, width]);
+
   // 插入候选词：替换当前 token，并恢复光标位置。
   function applySuggestion(item: string) {
     const nextValue = `${value.slice(0, tokenRange.start)}${item}${value.slice(tokenRange.end)}`;
@@ -160,6 +194,22 @@ export function MysqlSmartInput({
   // 统一同步光标位置，保证补全范围准确。
   function syncCaretFromTarget(target: HTMLInputElement) {
     setCaret(target.selectionStart || 0);
+  }
+
+  // 同步高亮层滚动偏移：复用原生 input 的 scrollLeft，避免两层文本错位。
+  function syncHighlightScroll() {
+    const input = inputRef.current;
+    const highlightViewport = highlightViewportRef.current;
+    if (!input || !highlightViewport) return;
+    highlightViewport.scrollLeft = input.scrollLeft;
+  }
+
+  // 解析片段颜色类名：字段紫色、关键字蓝色、值绿色，其余保持中性色。
+  function resolveHighlightSegmentClassName(kind: "field" | "keyword" | "value" | "plain") {
+    if (kind === "field") return "text-violet-600";
+    if (kind === "keyword") return "text-blue-600";
+    if (kind === "value") return "text-green-600";
+    return "text-neutral/75";
   }
 
   // 键盘交互：支持上下选择、回车/Tab 确认、Esc 关闭。
@@ -229,15 +279,33 @@ export function MysqlSmartInput({
       {!hideLabel ? <label className="mb-1 block text-[12px]">{label}</label> : null}
       {/* 输入框主体。 */}
       <div className={`relative ${surfaceClassName}`.trim()}>
+        {/* 高亮镜像层：用与 input 完全一致的排版绘制彩色文本，同时保持鼠标穿透。 */}
+        {value ? (
+          <div ref={highlightViewportRef} className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
+            {/* 高亮内容层：保留空白与标点，保证字段/关键字/值的着色位置与真实输入逐字符对齐。 */}
+            <div className="flex h-full min-w-full items-center whitespace-pre pr-8 leading-[20px]" style={SMART_INPUT_TYPOGRAPHY_STYLE}>
+              {highlightSegments.map((item, index) => (
+                <span key={`${item.text}-${index}`} className={resolveHighlightSegmentClassName(item.kind)}>
+                  {item.text}
+                </span>
+              ))}
+            </div>
+          </div>
+        ) : null}
         {/* 单行输入框：保留自动补全与光标 token 替换，placeholder 垂直居中。 */}
         <input
           ref={inputRef}
-          className={`input input-bordered input-sm h-[38px] min-h-[38px] w-full pr-8 leading-[20px] ${inputClassName}`.trim()}
+          className={`input input-bordered input-sm h-[38px] min-h-[38px] w-full pr-8 leading-[20px] placeholder:text-neutral/45 ${inputClassName}`.trim()}
           value={value}
           placeholder={placeholder}
           autoCorrect="off"
           autoCapitalize="off"
           spellCheck={false}
+          style={{
+            ...SMART_INPUT_TYPOGRAPHY_STYLE,
+            color: value ? "transparent" : undefined,
+            caretColor: "#16325c"
+          }}
           onFocus={(event) => {
             syncCaretFromTarget(event.currentTarget);
           }}
@@ -246,6 +314,9 @@ export function MysqlSmartInput({
           }}
           onKeyUp={(event) => {
             syncCaretFromTarget(event.currentTarget);
+          }}
+          onScroll={() => {
+            syncHighlightScroll(); // 行内注释：原生 input 横向滚动时，同步推动高亮镜像层。
           }}
           onKeyDown={onKeyDown}
           onChange={(event) => {

@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   filterSmartInputSuggestions,
+  resolveSmartInputHighlightSegments,
   resolveQueryBarSplitRatio,
   resolveSmartInputEnterAction,
   resolveSmartInputWidth,
@@ -151,4 +152,55 @@ test("resolveQueryBarSplitRatio: 输入框内容虽未超过半栏，但连同�
   });
 
   assert.equal(ratio, 0.6222222222222222);
+});
+
+test("resolveSmartInputHighlightSegments: SQL 条件中的字段、关键字和值应分配到不同高亮类型", () => {
+  const segments = resolveSmartInputHighlightSegments({
+    value: "CAR_ID = '123' AND amount >= 20",
+    keywords: ["AND", "OR", "ASC", "DESC"],
+    valueLiterals: ["NULL", "TRUE", "FALSE"]
+  });
+
+  assert.deepEqual(
+    segments.map((item) => ({ text: item.text, kind: item.kind })),
+    [
+      { text: "CAR_ID", kind: "field" },
+      { text: " ", kind: "plain" },
+      { text: "=", kind: "plain" },
+      { text: " ", kind: "plain" },
+      { text: "'123'", kind: "value" },
+      { text: " ", kind: "plain" },
+      { text: "AND", kind: "keyword" },
+      { text: " ", kind: "plain" },
+      { text: "amount", kind: "field" },
+      { text: " ", kind: "plain" },
+      { text: ">=", kind: "plain" },
+      { text: " ", kind: "plain" },
+      { text: "20", kind: "value" }
+    ]
+  );
+});
+
+test("resolveSmartInputHighlightSegments: SOQL 日期字面量与排序关键字应保留高亮语义", () => {
+  const segments = resolveSmartInputHighlightSegments({
+    value: "CreatedDate DESC, LastModifiedDate = LAST_N_DAYS:7",
+    keywords: ["ASC", "DESC", "AND", "OR"],
+    valueLiterals: ["TODAY", "YESTERDAY", "LAST_N_DAYS:7"]
+  });
+
+  assert.deepEqual(
+    segments.map((item) => ({ text: item.text, kind: item.kind })),
+    [
+      { text: "CreatedDate", kind: "field" },
+      { text: " ", kind: "plain" },
+      { text: "DESC", kind: "keyword" },
+      { text: ",", kind: "plain" },
+      { text: " ", kind: "plain" },
+      { text: "LastModifiedDate", kind: "field" },
+      { text: " ", kind: "plain" },
+      { text: "=", kind: "plain" },
+      { text: " ", kind: "plain" },
+      { text: "LAST_N_DAYS:7", kind: "value" }
+    ]
+  );
 });
