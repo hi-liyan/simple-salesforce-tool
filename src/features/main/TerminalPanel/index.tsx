@@ -47,7 +47,12 @@ import { NoticeAlert } from "../../../components/NoticeAlert";
 import { sortTabsByOrder } from "../../../components/tabs/tabOrder";
 import { TerminalTab, useTerminalStore } from "../../../store/useTerminalStore";
 import { buildTerminalInlineNotice, buildTerminalTabTooltip, TerminalProcessMeta } from "./uiState.ts";
-import { fitTerminalViewportToContainer } from "./viewport.ts";
+import {
+  fitTerminalViewportToContainer,
+  shouldOpenTerminalSessionForViewport,
+  shouldResizeTerminalSessionForViewport,
+  TerminalViewportSize
+} from "./viewport.ts";
 
 type TerminalPanelProps = {
   // 当前 Terminal 面板是否可见：用于控制激活时的 fit/focus。
@@ -60,6 +65,16 @@ type TerminalRuntime = {
   terminal: Terminal;
   // fit 插件：用于根据容器尺寸自适应列宽行高。
   fitAddon: FitAddon;
+};
+
+// 终端事件桥状态：用于确保前端事件监听就绪后再启动后端 PTY。
+type TerminalEventBridgeState = {
+  // 监听是否已准备完成。
+  ready: boolean;
+  // 监听就绪 Promise：供建连流程等待。
+  readyPromise: Promise<void>;
+  // 标记监听就绪。
+  markReady: () => void;
 };
 
 // 左侧编辑器模式。
@@ -342,6 +357,30 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
   const commandCardElementByIdRef = useRef<Record<string, HTMLDivElement | null>>({});
   // xterm 视口同步调度帧：用于合并连续 fit，减少窗口缩放和切页时的抖动。
   const terminalFitFrameRef = useRef<number | null>(null);
+  // 每个 Tab 最近一次已同步的 cols/rows：用于去重 resize，避免交互终端重复重绘。
+  const terminalViewportSizeByTabIdRef = useRef<Record<string, TerminalViewportSize>>({});
+  // 终端事件桥状态：确保前端已开始监听输出事件后再建立 PTY 会话。
+  const terminalEventBridgeRef = useRef<TerminalEventBridgeState | null>(null);
+
+  if (!terminalEventBridgeRef.current) {
+    let resolveReadyPromise = () => {
+      // 默认空实现：首次 render 时会被 Promise 执行器替换。
+    };
+    const readyPromise = new Promise<void>((resolve) => {
+      resolveReadyPromise = resolve;
+    });
+    terminalEventBridgeRef.current = {
+      ready: false,
+      readyPromise,
+      markReady: () => {
+        if (terminalEventBridgeRef.current?.ready) return;
+        if (terminalEventBridgeRef.current) {
+          terminalEventBridgeRef.current.ready = true;
+        }
+        resolveReadyPromise(); // 监听注册完成后释放所有等待中的建连流程。
+      }
+    };
+  }
 
   // 激活终端 Tab 派生值。
   const orderedTabs = useMemo(() => sortTabsByOrder(tabOrder, tabs), [tabOrder, tabs]);
@@ -574,7 +613,20 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
         if (options?.focus) {
           runtime.terminal.focus(); // 仅在激活切换时恢复焦点，避免 resize 抢焦点。
         }
-        if (!openedSessionTabIdRef.current.has(tab.id)) return;
+        const shouldResize = shouldResizeTerminalSessionForViewport({
+          fitted: nextViewport.fitted,
+          opened: openedSessionTabIdRef.current.has(tab.id),
+          previous: terminalViewportSizeByTabIdRef.current[tab.id] || null,
+          next: {
+            cols: nextViewport.cols || 120,
+            rows: nextViewport.rows || 36
+          }
+        });
+        if (!shouldResize) return;
+        terminalViewportSizeByTabIdRef.current[tab.id] = {
+          cols: nextViewport.cols || 120,
+          rows: nextViewport.rows || 36
+        };
         void api.resizeTerminalSession(tab.id, nextViewport.cols || 120, nextViewport.rows || 36);
       });
     },
@@ -589,8 +641,24 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
       if (openingSessionPromise) return openingSessionPromise;
 
       const nextOpeningPromise = (async () => {
+        const eventBridge = terminalEventBridgeRef.current;
+        if (eventBridge && !eventBridge.ready) {
+          await eventBridge.readyPromise; // 先等输出监听挂好，避免首屏 prompt 丢事件。
+        }
+
         const runtime = ensureTerminalRuntime(tab);
         const container = terminalContainerByTabIdRef.current[tab.id];
+        const shouldOpen = shouldOpenTerminalSessionForViewport({
+          visible,
+          active: activeTabId === tab.id,
+          hasContainer: Boolean(container),
+          listenersReady: terminalEventBridgeRef.current?.ready ?? false,
+          opened: openedSessionTabIdRef.current.has(tab.id),
+          opening: Boolean(openingSessionPromise)
+        });
+        if (!shouldOpen) {
+          return;
+        }
         // 对可见终端先执行一次 fit，再按 fit 后列宽打开 PTY，避免交互型 CLI 因初始 cols 错误出现光标错位。
         const nextViewport = fitTerminalViewportToContainer(container, runtime);
         const cols = nextViewport.cols || 120;
@@ -611,6 +679,10 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
         try {
           const sessionInfo = await api.openTerminalSession(tab.id, cols, rows);
           openedSessionTabIdRef.current.add(tab.id);
+          terminalViewportSizeByTabIdRef.current[tab.id] = {
+            cols,
+            rows
+          };
           setTerminalSessionNotice("");
           setProcessMetaByTabId((state) => ({
             ...state,
@@ -653,10 +725,10 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
       openingSessionPromiseByTabIdRef.current[tab.id] = nextOpeningPromise;
       return nextOpeningPromise;
     },
-    [ensureTerminalRuntime]
+    [ensureTerminalRuntime, visible, activeTabId]
   );
 
-  // 初始化和回收终端资源：确保 Tab 与 PTY 生命周期一致。
+  // 回收已关闭 Tab 的终端资源：确保 Tab 与 PTY 生命周期一致。
   useEffect(() => {
     const currentTabIds = orderedTabs.map((item) => item.id);
     const previousTabIds = previousTabIdsRef.current;
@@ -673,6 +745,7 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
       delete openingSessionPromiseByTabIdRef.current[tabId];
       delete terminalContainerByTabIdRef.current[tabId];
       delete pendingPasteCommandByTabIdRef.current[tabId];
+      delete terminalViewportSizeByTabIdRef.current[tabId];
       setProcessMetaByTabId((state) => {
         const next = { ...state };
         delete next[tabId];
@@ -681,14 +754,8 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
       void api.closeTerminalSession(tabId); // 冗余回收后端进程，保证无残留。
     });
 
-    // 为每个 Tab 挂载 xterm 并打开后端会话。
-    orderedTabs.forEach((tab) => {
-      mountRuntimeToContainer(tab);
-      void ensureBackendSession(tab);
-    });
-
     previousTabIdsRef.current = currentTabIds;
-  }, [orderedTabs, ensureBackendSession, mountRuntimeToContainer]);
+  }, [orderedTabs]);
 
   // 监听后端 PTY 输出与关闭事件，实时刷新 xterm。
   useEffect(() => {
@@ -717,6 +784,7 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
           }
         }));
       });
+      terminalEventBridgeRef.current?.markReady(); // 两类监听都已注册完成，允许后续建连。
 
       if (!mounted) {
         unlistenOutput();
@@ -741,9 +809,15 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
     if (!visible) return;
     if (!activeTab) return;
 
+    const targetTabId = activeTab.id;
     mountRuntimeToContainer(activeTab);
-    scheduleTerminalViewportSync(activeTab, { focus: true });
-  }, [visible, activeTab, mountRuntimeToContainer, scheduleTerminalViewportSync]);
+    const openSessionTask = ensureBackendSession(activeTab);
+    if (!openSessionTask) return;
+    void openSessionTask.then(() => {
+      if (useTerminalStore.getState().activeTabId !== targetTabId) return;
+      scheduleTerminalViewportSync(activeTab, { focus: true }); // 会话建立后再做一次去重 resize/focus 收敛。
+    });
+  }, [visible, activeTab, mountRuntimeToContainer, ensureBackendSession, scheduleTerminalViewportSync]);
 
   // 监听激活终端容器尺寸变化：统一处理窗口缩放和布局变化，减少重复 fit 带来的抖动。
   useEffect(() => {
@@ -1065,14 +1139,15 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
 
     setTerminalSessionNotice("");
     openedSessionTabIdRef.current.delete(tabId);
-    delete openingSessionPromiseByTabIdRef.current[tabId];
-    await api.closeTerminalSession(tabId).catch(() => {
-      // 会话可能早已退出，此时忽略关闭失败，继续尝试重连。
-    });
-    await ensureBackendSession(targetTab);
-    if (activeTab?.id === tabId) {
-      scheduleTerminalViewportSync(targetTab, { focus: true });
-    }
+      delete openingSessionPromiseByTabIdRef.current[tabId];
+      await api.closeTerminalSession(tabId).catch(() => {
+        // 会话可能早已退出，此时忽略关闭失败，继续尝试重连。
+      });
+      delete terminalViewportSizeByTabIdRef.current[tabId];
+      await ensureBackendSession(targetTab);
+      if (activeTab?.id === tabId) {
+        scheduleTerminalViewportSync(targetTab, { focus: true });
+      }
   }
 
   // 关闭终端 Tab（同时关闭后端进程）。
@@ -1080,6 +1155,7 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
     await api.closeTerminalSession(tabId).catch(() => {
       // 关闭失败不阻断 UI 收敛，仍然移除前端 Tab。
     });
+    delete terminalViewportSizeByTabIdRef.current[tabId];
     closeTerminalTab(tabId);
   }
 
@@ -1093,6 +1169,9 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
         })
       )
     );
+    tabIds.forEach((tabId) => {
+      delete terminalViewportSizeByTabIdRef.current[tabId];
+    });
     useTerminalStore.getState().closeTerminalTabsByIds(tabIds);
   }
 
@@ -1470,8 +1549,6 @@ export function TerminalPanel({ visible = true }: TerminalPanelProps) {
                 className="h-full w-full"
                 ref={(element) => {
                   terminalContainerByTabIdRef.current[tab.id] = element;
-                  if (!element) return;
-                  mountRuntimeToContainer(tab); // 容器挂载后立即初始化 xterm。
                 }}
               />
             </div>
