@@ -63,6 +63,7 @@ export function AiAssistantPanel({
 
   const [inputDraft, setInputDraft] = useState("");
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [inlineWarning, setInlineWarning] = useState("");
 
   // 帧合批缓冲：避免高频 text_delta / reasoning_delta 每字节触发 React 重渲染。
   const pendingTextDeltaRef = useRef("");
@@ -117,9 +118,10 @@ export function AiAssistantPanel({
     }) => {
       const bridge = bridgeRef.current;
       if (!bridge.sourceId) {
-        setStatusText("请先在工作区选择或打开一个数据源。");
-        return;
+        setInlineWarning("请先在左侧数据源树选择一个数据源，或新建数据源后再发送。");
+        return false;
       }
+      setInlineWarning("");
 
       const epoch = bumpGenerationEpoch();
       activeEpochRef.current = epoch;
@@ -335,6 +337,11 @@ export function AiAssistantPanel({
   function handleSend() {
     const trimmed = inputDraft.trim();
     if (!trimmed || streaming) return;
+    if (!bridgeRef.current.sourceId) {
+      setInlineWarning("请先在左侧数据源树选择一个数据源，或新建数据源后再发送。");
+      return;
+    }
+    setInlineWarning("");
     setInputDraft("");
     void dispatchAgentTurn({ promptText: trimmed });
   }
@@ -432,6 +439,20 @@ export function AiAssistantPanel({
             className="font-semibold text-primary hover:underline"
           >
             去配置
+          </button>
+        </div>
+      )}
+
+      {/* 发送前校验提示条（如未绑定数据源时不清空输入并显式提示）。 */}
+      {inlineWarning && (
+        <div className="flex items-center justify-between border-b border-warning/30 bg-warning/10 px-3 py-1.5 text-[11px] text-warning-content">
+          <span>{inlineWarning}</span>
+          <button
+            type="button"
+            onClick={() => setInlineWarning("")}
+            className="ml-2 shrink-0 text-neutral/60 hover:text-neutral"
+          >
+            关闭
           </button>
         </div>
       )}

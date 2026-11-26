@@ -463,24 +463,35 @@ export function MainPage() {
   const registeredPlugins = useMemo(() => listPlugins(), [pluginCenterOpen, pluginRegistryTick]);
   const registeredDrivers = useMemo(() => listDataSourceDrivers(), []);
 
-  // 构建 AI 助手工作区上下文桥接：实时同步当前控制台数据源、草稿、选区与写回/执行动作。
+  // 构建 AI 助手工作区上下文桥接：实时同步当前激活 Tab（Data / Console）的数据源、草稿、选区与写回/执行动作。
   const aiWorkspaceBridge = useMemo<AiWorkspaceContextBridge>(() => {
     const activeConsoleTab =
       consoleTabs.find((tab) => tab.id === activeConsoleTabId) || consoleTabs[0] || null;
-    const boundSourceId = activeConsoleTab?.sourceId || queryPanelViewState.selectedSourceId || "";
+    const activeDataTab = queryPanelViewState.activeTab;
+    const isConsoleActive = queryPanelViewState.activeWorkspaceTabKind === "console";
+    const boundSourceId =
+      (isConsoleActive ? activeConsoleTab?.sourceId : activeDataTab?.sourceId) ||
+      activeConsoleTab?.sourceId ||
+      activeDataTab?.sourceId ||
+      queryPanelViewState.selectedSourceId ||
+      queryPanelViewState.sources[0]?.id ||
+      "";
     const boundSource =
       queryPanelViewState.sources.find((s) => s.id === boundSourceId) || null;
     const boundSourceType = String(
-      boundSource?.sourceType || activeConsoleTab?.sourceType || queryPanelViewState.selectedSourceType || "salesforce"
+      boundSource?.sourceType ||
+        (isConsoleActive ? activeConsoleTab?.sourceType : activeDataTab?.sourceType) ||
+        queryPanelViewState.selectedSourceType ||
+        "salesforce"
     );
     const driver = getDataSourceDriver(boundSourceType);
 
     return {
       sourceId: boundSourceId,
-      sourceName: boundSource?.name || activeConsoleTab?.sourceName || "",
+      sourceName: boundSource?.name || activeDataTab?.sourceName || activeConsoleTab?.sourceName || "",
       sourceType: boundSourceType,
       queryLanguage: driver.capabilities.queryLanguage,
-      currentEditorSql: activeConsoleTab?.soqlDraft || "",
+      currentEditorSql: activeConsoleTab?.soqlDraft || activeDataTab?.currentSoql || "",
       selectedEditorSql: activeConsoleTab?.selectedSoqlText || "",
       availableObjects: queryPanelViewState.objects.map((obj) => obj.name),
       onReplaceEditorSql: (sql) => {
@@ -506,6 +517,8 @@ export function MainPage() {
     consoleTabs,
     patchConsoleTab,
     queryPanelActions,
+    queryPanelViewState.activeTab,
+    queryPanelViewState.activeWorkspaceTabKind,
     queryPanelViewState.objects,
     queryPanelViewState.selectedSourceId,
     queryPanelViewState.selectedSourceType,

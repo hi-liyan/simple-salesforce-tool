@@ -160,10 +160,10 @@ export function AiPromptInput({
       </div>
 
       {/* 输入框与发送/停止按钮。 */}
-      <div className="flex items-end gap-2 rounded-xl border border-base-300 bg-base-200/25 px-2.5 py-2 focus-within:border-primary/60">
+      <div className="flex items-end gap-2 rounded-xl border border-base-300 bg-base-200/25 px-3 py-2.5 focus-within:border-primary/60">
         <textarea
           ref={textareaRef}
-          rows={2}
+          rows={4}
           value={value}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={(e) => {
@@ -173,7 +173,7 @@ export function AiPromptInput({
             }
           }}
           placeholder="输入需求（Enter 发送，Shift+Enter 换行，@ 引用表/对象）..."
-          className="max-h-32 min-h-[42px] flex-1 resize-none bg-transparent text-[12px] leading-relaxed outline-none"
+          className="max-h-52 min-h-[88px] flex-1 resize-y bg-transparent text-[12px] leading-relaxed outline-none"
         />
         {streaming ? (
           <button
