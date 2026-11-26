@@ -10,46 +10,95 @@
         height: 100%;
         margin: 0;
         font-family: "Noto Sans SC", system-ui, -apple-system, sans-serif;
-        color: #1e293b;
-        background: #f1f5f9;
+        color: #1f2937;
+        background: #f4f6f9;
         font-size: 12px;
       }
       .app {
         display: flex;
         flex-direction: column;
         height: 100%;
+        min-height: 0;
         overflow: hidden;
+      }
+      .notice-toast {
+        position: fixed;
+        right: 16px;
+        top: 16px;
+        z-index: 60;
+        max-width: 380px;
+        display: none;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 14px;
+        border-radius: 12px;
+        border: 1px solid #cbd5e1;
+        background: #ffffff;
+        box-shadow: 0 10px 25px rgba(15, 23, 42, 0.12);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+      .notice-toast.show { display: flex; }
+      .notice-toast.success { border-color: #bbf7d0; background: #f0fdf4; color: #166534; }
+      .notice-toast.warning { border-color: #fde68a; background: #fffbeb; color: #92400e; }
+      .notice-toast.error { border-color: #fecaca; background: #fef2f2; color: #991b1b; }
+      .notice-close {
+        border: none;
+        background: transparent;
+        color: inherit;
+        opacity: 0.65;
+        cursor: pointer;
+        font-size: 14px;
+        padding: 0 2px;
+        line-height: 1;
+      }
+      .notice-close:hover { opacity: 1; }
+      .hydrate-mask {
+        display: flex;
+        height: 100%;
+        width: 100%;
+        align-items: center;
+        justify-content: center;
+      }
+      .hydrate-card {
+        border-radius: 16px;
+        border: 1px solid #e2e8f0;
+        background: #ffffff;
+        padding: 16px 20px;
+        box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
       }
       .topbar {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding: 10px 18px;
+        gap: 16px;
+        padding: 12px 20px;
         background: #ffffff;
         border-bottom: 1px solid #e2e8f0;
         flex-shrink: 0;
       }
-      .topbar-title { font-size: 13px; font-weight: 600; color: #0f172a; }
-      .topbar-desc { font-size: 12px; color: #64748b; }
+      .topbar-title { font-size: 13px; font-weight: 600; color: #1f2937; }
+      .topbar-desc { font-size: 12px; color: rgba(31, 41, 55, 0.6); }
       .grid {
         flex: 1;
         min-height: 0;
         display: grid;
-        grid-template-columns: minmax(260px, 0.85fr) minmax(340px, 1.05fr) minmax(300px, 0.9fr);
-        gap: 14px;
-        padding: 14px;
+        grid-template-columns: minmax(280px, 0.82fr) minmax(360px, 1fr) minmax(340px, 0.92fr);
+        gap: 16px;
+        padding: 16px;
         overflow: auto;
       }
-      @media (max-width: 1080px) {
+      @media (max-width: 1120px) {
         .grid { grid-template-columns: 1fr; }
       }
       .card {
         display: flex;
         flex-direction: column;
         min-height: 360px;
+        min-width: 0;
         background: #ffffff;
         border: 1px solid #e2e8f0;
-        border-radius: 14px;
+        border-radius: 16px;
         overflow: hidden;
         box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
       }
@@ -57,20 +106,21 @@
         display: flex;
         align-items: flex-start;
         justify-content: space-between;
-        gap: 10px;
-        padding: 12px 14px;
+        gap: 12px;
+        padding: 12px 16px;
         border-bottom: 1px solid #e2e8f0;
         flex-shrink: 0;
       }
-      .card-hd h3 { margin: 0; font-size: 13px; font-weight: 600; color: #0f172a; }
-      .card-hd p { margin: 4px 0 0; font-size: 11px; color: #64748b; line-height: 1.45; }
-      .actions { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; flex-shrink: 0; }
+      .card-hd h3 { margin: 0; font-size: 14px; font-weight: 600; color: #1f2937; }
+      .card-hd p { margin: 4px 0 0; font-size: 12px; color: rgba(31, 41, 55, 0.6); line-height: 1.45; }
+      .actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; flex-shrink: 0; }
       .btn {
         display: inline-flex;
         align-items: center;
-        gap: 4px;
-        height: 30px;
-        padding: 0 10px;
+        justify-content: center;
+        gap: 6px;
+        height: 32px;
+        padding: 0 12px;
         border-radius: 8px;
         border: 1px solid #cbd5e1;
         background: #ffffff;
@@ -83,117 +133,229 @@
       .btn:disabled { opacity: 0.45; cursor: not-allowed; }
       .btn-ghost { border-color: transparent; background: transparent; }
       .btn-ghost:hover:not(:disabled) { background: #f1f5f9; border-color: transparent; }
-      .btn-primary { background: #0176d3; border-color: #0176d3; color: #ffffff; font-weight: 500; }
+      .btn-primary {
+        height: 36px;
+        padding: 0 16px;
+        background: #0176d3;
+        border-color: #0176d3;
+        color: #ffffff;
+        font-weight: 500;
+      }
       .btn-primary:hover:not(:disabled) { background: #0263b0; border-color: #0263b0; }
+      .btn-outline { height: 40px; width: 100%; border-radius: 12px; }
+      .btn-xs { height: 28px; padding: 0 8px; font-size: 11px; }
       .btn-danger { color: #dc2626; }
-      .card-bd { flex: 1; min-height: 0; padding: 14px; display: flex; flex-direction: column; }
+      .card-bd { flex: 1; min-height: 0; padding: 16px; display: flex; flex-direction: column; }
       textarea {
         flex: 1;
         width: 100%;
-        min-height: 240px;
+        min-height: 280px;
         resize: none;
         border: 1px solid #cbd5e1;
-        border-radius: 12px;
-        padding: 12px;
+        border-radius: 16px;
+        padding: 12px 14px;
         font-size: 13px;
-        line-height: 1.6;
+        line-height: 1.5;
         outline: none;
         font-family: inherit;
+        background: #ffffff;
       }
       textarea:focus { border-color: #0176d3; }
-      .params-grid {
+      .params-block {
+        padding: 12px 16px;
+        border-bottom: 1px solid #e2e8f0;
+        flex-shrink: 0;
+      }
+      .params-top {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .params-top h3 { margin: 0; font-size: 14px; font-weight: 600; color: #1f2937; }
+      .params-top p { margin: 4px 0 0; font-size: 12px; color: rgba(31, 41, 55, 0.6); line-height: 1.45; }
+      .params-grid-3 {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 10px;
-        margin-top: 10px;
+        gap: 12px;
+        margin-top: 16px;
       }
-      .color-grid {
+      .params-grid-colors {
         display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 10px;
-        margin-top: 10px;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 140px;
+        gap: 12px;
+        margin-top: 12px;
       }
-      .field-label { display: block; margin-bottom: 4px; font-size: 11px; color: #64748b; }
+      @media (max-width: 720px) {
+        .params-grid-3, .params-grid-colors { grid-template-columns: 1fr; }
+      }
+      .field-label { display: block; margin-bottom: 4px; font-size: 12px; color: rgba(31, 41, 55, 0.6); }
       .input, .select {
         width: 100%;
-        height: 34px;
+        height: 40px;
         border: 1px solid #cbd5e1;
-        border-radius: 10px;
-        padding: 0 10px;
+        border-radius: 12px;
+        padding: 0 12px;
         font-size: 12px;
         background: #ffffff;
         outline: none;
       }
       .input:focus, .select:focus { border-color: #0176d3; }
-      .color-row { display: flex; align-items: center; gap: 8px; }
+      .color-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
       .swatch-btn {
-        width: 34px;
-        height: 34px;
-        border-radius: 10px;
+        width: 40px;
+        height: 40px;
+        border-radius: 12px;
         border: 1px solid #cbd5e1;
         background: #ffffff;
-        padding: 4px;
-        cursor: pointer;
-        flex-shrink: 0;
-      }
-      .swatch-inner { display: block; width: 100%; height: 100%; border-radius: 6px; border: 1px solid rgba(15,23,42,0.12); }
-      .preview-box {
-        flex: 1;
-        min-height: 220px;
-        margin-top: 12px;
-        border: 1px dashed #cbd5e1;
-        border-radius: 12px;
-        background: #f8fafc;
-        display: flex;
-        flex-direction: column;
+        display: inline-flex;
         align-items: center;
         justify-content: center;
-        padding: 16px;
-        gap: 10px;
+        cursor: pointer;
+        flex-shrink: 0;
+        box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
       }
-      .preview-img {
-        max-width: 240px;
-        max-height: 240px;
-        border-radius: 10px;
+      .swatch-btn:hover { border-color: rgba(1, 118, 211, 0.4); }
+      .swatch-inner {
+        display: block;
+        width: 24px;
+        height: 24px;
+        border-radius: 6px;
+        border: 1px solid rgba(15, 23, 42, 0.16);
+      }
+      .preview-wrap {
+        flex: 1;
+        min-height: 0;
+        background: linear-gradient(180deg, #fbfdff 0%, #f3f8ff 100%);
+        padding: 16px;
+        display: flex;
+      }
+      .preview-card {
+        flex: 1;
+        min-height: 240px;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        border-radius: 16px;
+        border: 1px solid #e2e8f0;
+        background: rgba(255, 255, 255, 0.85);
+        box-shadow: inset 0 1px 3px rgba(15, 23, 42, 0.04);
+      }
+      .preview-box {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: auto;
+        padding: 20px;
+      }
+      .preview-frame {
+        border-radius: 28px;
         border: 1px solid #e2e8f0;
         background: #ffffff;
-        padding: 8px;
-        box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
+        padding: 18px;
+        box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
       }
-      .history-list { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+      .preview-img {
+        display: block;
+        max-width: 240px;
+        max-height: 240px;
+        object-fit: contain;
+      }
+      .preview-empty { max-width: 260px; text-align: center; }
+      .preview-empty-icon {
+        width: 48px;
+        height: 48px;
+        margin: 0 auto;
+        border-radius: 16px;
+        background: rgba(1, 118, 211, 0.1);
+        color: #0176d3;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 600;
+        font-size: 16px;
+      }
+      .history-icon {
+        width: 36px;
+        height: 36px;
+        border-radius: 14px;
+        background: rgba(1, 118, 211, 0.1);
+        color: #0176d3;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        font-size: 14px;
+      }
+      .history-list {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+        padding: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
       .history-item {
         display: flex;
-        align-items: flex-start;
-        justify-content: space-between;
-        gap: 8px;
-        padding: 10px;
-        border-radius: 10px;
+        flex-direction: column;
+        padding: 12px 16px;
+        border-radius: 16px;
         border: 1px solid #e2e8f0;
-        background: #f8fafc;
-        cursor: pointer;
+        background: #ffffff;
         transition: border-color 120ms, background 120ms;
       }
-      .history-item:hover { border-color: #93c5fd; background: #eff6ff; }
-      .history-item.active { border-color: #0176d3; background: #eff6ff; }
-      .history-text {
-        font-size: 12px;
-        font-weight: 500;
-        color: #0f172a;
-        word-break: break-all;
-        display: -webkit-box;
-        -webkit-line-clamp: 2;
-        -webkit-box-orient: vertical;
-        overflow: hidden;
+      .history-item:hover { border-color: rgba(1, 118, 211, 0.3); background: #f8fafc; }
+      .history-item.active {
+        border-color: rgba(1, 118, 211, 0.45);
+        background: rgba(1, 118, 211, 0.08);
+        box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
       }
-      .history-meta { margin-top: 4px; font-size: 10px; color: #64748b; }
+      .history-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+      .history-text {
+        font-size: 13px;
+        font-weight: 500;
+        color: #1f2937;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .history-time { margin-top: 4px; font-size: 11px; color: rgba(31, 41, 55, 0.55); }
+      .history-chips {
+        margin-top: 12px;
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+        font-size: 11px;
+        color: rgba(31, 41, 55, 0.65);
+      }
+      .history-chip {
+        border-radius: 12px;
+        background: #f1f5f9;
+        padding: 4px 8px;
+      }
       .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
     </style>
   </head>
   <body>
-    <div class="app">
+    <div id="noticeToast" class="notice-toast" role="status" aria-live="polite">
+      <span id="noticeText"></span>
+      <button type="button" id="btnCloseNotice" class="notice-close" aria-label="关闭提示">×</button>
+    </div>
+
+    <div id="hydrateMask" class="hydrate-mask">
+      <div class="hydrate-card">
+        <div style="font-size:13px;font-weight:500;color:#1f2937">正在恢复二维码工具状态</div>
+        <div style="margin-top:4px;font-size:12px;color:rgba(31,41,55,0.65)">这里只会在进入二维码工具后按需恢复，不影响应用启动速度。</div>
+      </div>
+    </div>
+
+    <div id="appRoot" class="app" style="display:none">
       <div class="topbar">
         <span class="topbar-title">二维码生成</span>
-        <span class="topbar-desc">支持自定义纠错等级、边距、缩放与配色，历史记录自动持久化到插件存储。</span>
+        <span class="topbar-desc">支持二维码生成、历史记录持久化与下次进入后的自动恢复。</span>
       </div>
 
       <div class="grid">
@@ -202,7 +364,7 @@
           <div class="card-hd">
             <div>
               <h3>URL 或其他文本</h3>
-              <p>支持粘贴链接、命令或任意文本，生成后自动写入右侧历史记录。</p>
+              <p>支持粘贴链接、命令、凭据占位文本或任意短文，生成后会写入右侧历史记录。</p>
             </div>
             <div class="actions">
               <button type="button" class="btn btn-ghost" id="btnSample">示例</button>
@@ -217,18 +379,16 @@
 
         <!-- 中间：参数与预览 -->
         <section class="card">
-          <div class="card-hd">
-            <div>
-              <h3>生成参数</h3>
-              <p>参数会随历史记录一起保存，下次打开自动恢复。</p>
-            </div>
-            <div class="actions">
-              <button type="button" class="btn btn-ghost" id="btnResetOpts">重置参数</button>
+          <div class="params-block">
+            <div class="params-top">
+              <div>
+                <h3>生成参数</h3>
+                <p>参数会和历史记录一起保存，下次进入工具时沿用最近一次设置。</p>
+              </div>
               <button type="button" class="btn btn-primary" id="btnGenerate">生成二维码</button>
             </div>
-          </div>
-          <div class="card-bd">
-            <div class="params-grid">
+
+            <div class="params-grid-3">
               <div>
                 <span class="field-label">纠错级别</span>
                 <select id="optLevel" class="select">
@@ -239,45 +399,62 @@
                 </select>
               </div>
               <div>
-                <span class="field-label">边距留白 (0-8)</span>
-                <input id="optMargin" type="number" min="0" max="8" value="0" class="input" />
+                <span class="field-label">边缘留白</span>
+                <input id="optMargin" type="number" min="0" max="8" step="1" value="0" class="input" />
               </div>
               <div>
-                <span class="field-label">缩放倍率 (4-12)</span>
-                <input id="optScale" type="number" min="4" max="12" value="12" class="input" />
+                <span class="field-label">原胞大小</span>
+                <input id="optScale" type="number" min="4" max="12" step="1" value="12" class="input" />
               </div>
             </div>
 
-            <div class="color-grid">
+            <div class="params-grid-colors">
               <div>
-                <span class="field-label">前景色</span>
+                <span class="field-label">深色</span>
                 <div class="color-row">
-                  <button type="button" class="swatch-btn" id="btnDarkSwatch" title="选择前景色">
+                  <button type="button" class="swatch-btn" id="btnDarkSwatch" aria-label="选择深色颜色">
                     <span class="swatch-inner" id="darkSwatch" style="background:#111827"></span>
                   </button>
-                  <input id="optDarkHex" type="text" value="#111827" class="input" style="font-family:monospace" />
-                  <input id="optDarkNative" type="color" value="#111827" class="sr-only" />
+                  <input id="optDarkHex" type="text" value="#111827" placeholder="#FFFFFF" class="input" style="font-family:monospace;text-transform:uppercase" />
+                  <input id="optDarkNative" type="color" value="#111827" class="sr-only" tabindex="-1" aria-hidden="true" />
                 </div>
               </div>
               <div>
-                <span class="field-label">背景色</span>
+                <span class="field-label">浅色</span>
                 <div class="color-row">
-                  <button type="button" class="swatch-btn" id="btnLightSwatch" title="选择背景色">
+                  <button type="button" class="swatch-btn" id="btnLightSwatch" aria-label="选择浅色颜色">
                     <span class="swatch-inner" id="lightSwatch" style="background:#FFFFFF"></span>
                   </button>
-                  <input id="optLightHex" type="text" value="#FFFFFF" class="input" style="font-family:monospace" />
-                  <input id="optLightNative" type="color" value="#FFFFFF" class="sr-only" />
+                  <input id="optLightHex" type="text" value="#FFFFFF" placeholder="#FFFFFF" class="input" style="font-family:monospace;text-transform:uppercase" />
+                  <input id="optLightNative" type="color" value="#FFFFFF" class="sr-only" tabindex="-1" aria-hidden="true" />
                 </div>
               </div>
+              <div>
+                <span class="field-label">参数操作</span>
+                <button type="button" class="btn btn-outline" id="btnResetOpts">重置参数</button>
+              </div>
             </div>
+          </div>
 
-            <div class="preview-box" id="previewBox">
-              <span style="color:#64748b">输入文本后点击“生成二维码”查看预览</span>
-            </div>
-
-            <div class="actions" style="margin-top:10px">
-              <button type="button" class="btn" id="btnCopyImg" disabled>复制图片</button>
-              <button type="button" class="btn btn-primary" id="btnDownload" disabled>下载 PNG</button>
+          <div class="preview-wrap">
+            <div class="preview-card">
+              <div class="card-hd">
+                <div>
+                  <h3>二维码预览</h3>
+                  <p>生成后可直接复制图片或下载 PNG。</p>
+                </div>
+                <div class="actions">
+                  <button type="button" class="btn btn-ghost" id="btnCopyImg">复制图片</button>
+                  <button type="button" class="btn btn-ghost" id="btnDownload">下载 PNG</button>
+                </div>
+              </div>
+              <div class="preview-box" id="previewBox">
+                <div class="preview-empty">
+                  <div class="preview-empty-icon">QR</div>
+                  <p style="margin:16px 0 0;font-size:14px;font-weight:500;color:#1f2937">等待生成二维码</p>
+                  <p style="margin:8px 0 0;font-size:12px;line-height:1.6;color:rgba(31,41,55,0.6)">输入文本并点击“生成二维码”后，这里会展示可复制、可下载的预览图片。</p>
+                </div>
+              </div>
             </div>
           </div>
         </section>
@@ -285,17 +462,21 @@
         <!-- 右侧：历史记录 -->
         <section class="card">
           <div class="card-hd">
-            <div>
-              <h3>生成历史 (<span id="historyCount">0</span>)</h3>
-              <p>点击任意历史条目可立即回填参数并重新生成。</p>
+            <div style="display:flex;align-items:center;gap:8px;min-width:0;flex:1">
+              <div class="history-icon">⏱</div>
+              <div style="min-width:0">
+                <h3>历史记录</h3>
+                <p>最近生成的结果会固定保存在这里，下次进入工具仍可继续使用。</p>
+              </div>
             </div>
-            <div class="actions">
-              <button type="button" class="btn btn-ghost btn-danger" id="btnClearHistory">清空历史</button>
-            </div>
+            <button type="button" class="btn btn-ghost btn-danger" id="btnClearHistory" disabled>全部删除</button>
           </div>
-          <div class="card-bd">
-            <div class="history-list" id="historyList">
-              <div style="text-align:center;color:#94a3b8;padding:36px 0">暂无生成历史</div>
+          <div class="history-list" id="historyList">
+            <div style="display:flex;flex:1;min-height:240px;align-items:center;justify-content:center;padding:16px;text-align:center">
+              <div style="max-width:220px">
+                <p style="margin:0;font-size:13px;font-weight:500;color:#1f2937">还没有历史记录</p>
+                <p style="margin:8px 0 0;font-size:12px;line-height:1.6;color:rgba(31,41,55,0.6)">首次生成二维码后，这里会保存最近记录，并在下次进入工具时继续展示。</p>
+              </div>
             </div>
           </div>
         </section>
@@ -304,7 +485,7 @@
 
     <script>
       const DEFAULT_SAMPLE_TEXT = "https://example.com/simple-salesforce-tool";
-      const DEFAULT_OPTIONS = {
+      const DEFAULT_QR_CODE_OPTIONS = {
         errorCorrectionLevel: "M",
         margin: 0,
         scale: 12,
@@ -312,9 +493,10 @@
         lightColor: "#FFFFFF"
       };
       const STORAGE_KEY = "qrCodeState";
-      const HISTORY_LIMIT = 20;
+      const QR_CODE_HISTORY_LIMIT = 20;
 
       let seq = 0;
+      // 通过 postMessage RPC 调用宿主插件 API。
       function callHost(method, args = {}) {
         return new Promise((resolve, reject) => {
           const requestId = "rpc-" + ++seq;
@@ -329,10 +511,37 @@
         });
       }
 
-      function notify(message, tone = "success") {
+      const noticeToast = document.getElementById("noticeToast");
+      const noticeText = document.getElementById("noticeText");
+      let noticeTimer = null;
+
+      // 展示右上角轻量提示（2600ms 自动关闭），并同步通知宿主。
+      function showNotice(tone, message) {
+        if (noticeTimer) {
+          window.clearTimeout(noticeTimer);
+          noticeTimer = null;
+        }
+        noticeToast.className = "notice-toast show " + tone;
+        noticeText.textContent = message;
+        noticeTimer = window.setTimeout(() => {
+          noticeToast.className = "notice-toast";
+          noticeTimer = null;
+        }, 2600);
         void callHost("ui.notify", { message, tone }).catch(() => {});
       }
 
+      function clearNotice() {
+        if (noticeTimer) {
+          window.clearTimeout(noticeTimer);
+          noticeTimer = null;
+        }
+        noticeToast.className = "notice-toast";
+      }
+
+      document.getElementById("btnCloseNotice").onclick = clearNotice;
+
+      const hydrateMask = document.getElementById("hydrateMask");
+      const appRoot = document.getElementById("appRoot");
       const inputEl = document.getElementById("inputText");
       const optLevel = document.getElementById("optLevel");
       const optMargin = document.getElementById("optMargin");
@@ -344,28 +553,103 @@
       const optLightNative = document.getElementById("optLightNative");
       const lightSwatch = document.getElementById("lightSwatch");
       const previewBox = document.getElementById("previewBox");
+      const btnGenerate = document.getElementById("btnGenerate");
       const btnCopyImg = document.getElementById("btnCopyImg");
       const btnDownload = document.getElementById("btnDownload");
+      const btnClearHistory = document.getElementById("btnClearHistory");
       const historyListEl = document.getElementById("historyList");
-      const historyCountEl = document.getElementById("historyCount");
 
-      let currentOptions = { ...DEFAULT_OPTIONS };
+      let currentOptions = { ...DEFAULT_QR_CODE_OPTIONS };
       let historyEntries = [];
       let activeHistoryId = "";
       let currentDataUrl = "";
+      let generating = false;
 
-      function normalizeHex(raw, fallback) {
-        const s = String(raw || "").trim().toUpperCase();
-        const withHash = s.startsWith("#") ? s : "#" + s;
-        return /^#[0-9A-F]{6}$/.test(withHash) ? withHash : fallback;
+      // 归一化可编辑十六进制颜色：去空格、补 #、统一大写。
+      function normalizeEditableHexColor(value) {
+        const trimmed = String(value || "").trim().toUpperCase();
+        if (!trimmed) return "";
+        return trimmed.startsWith("#") ? trimmed : "#" + trimmed;
       }
 
-      function clampInt(raw, fallback, min, max) {
-        const n = Number(raw);
-        if (!Number.isFinite(n)) return fallback;
-        return Math.min(max, Math.max(min, Math.round(n)));
+      // 判断是否为完整合法的 #RRGGBB 颜色。
+      function isCompleteHexColor(value) {
+        return /^#[0-9A-F]{6}$/u.test(value);
       }
 
+      // 归一化整数范围。
+      function clampInteger(value, fallback, min, max) {
+        if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+        return Math.min(max, Math.max(min, Math.round(value)));
+      }
+
+      // 归一化十六进制颜色，非法值回退默认色。
+      function normalizeHexColor(value, fallback) {
+        if (typeof value !== "string") return fallback;
+        const normalized = value.trim().toUpperCase();
+        return /^#[0-9A-F]{6}$/u.test(normalized) ? normalized : fallback;
+      }
+
+      // 归一化容错等级。
+      function normalizeErrorCorrectionLevel(value) {
+        return value === "L" || value === "M" || value === "Q" || value === "H"
+          ? value
+          : DEFAULT_QR_CODE_OPTIONS.errorCorrectionLevel;
+      }
+
+      // 归一化二维码参数（与主应用 qrCode.ts 保持一致）。
+      function normalizeQrCodeOptions(raw) {
+        const source = raw && typeof raw === "object" ? raw : {};
+        return {
+          errorCorrectionLevel: normalizeErrorCorrectionLevel(source.errorCorrectionLevel),
+          margin: clampInteger(source.margin, DEFAULT_QR_CODE_OPTIONS.margin, 0, 8),
+          scale: clampInteger(source.scale, DEFAULT_QR_CODE_OPTIONS.scale, 4, 12),
+          darkColor: normalizeHexColor(source.darkColor, DEFAULT_QR_CODE_OPTIONS.darkColor),
+          lightColor: normalizeHexColor(source.lightColor, DEFAULT_QR_CODE_OPTIONS.lightColor)
+        };
+      }
+
+      // 归一化单条历史记录。
+      function normalizeQrCodeHistoryEntry(raw) {
+        const item = raw && typeof raw === "object" ? raw : {};
+        const id = typeof item.id === "string" ? item.id.trim() : "";
+        const inputText = typeof item.inputText === "string" ? item.inputText.trim() : "";
+        const createdAt = typeof item.createdAt === "string" ? item.createdAt : "";
+        if (!id || !inputText || !createdAt) return null;
+        return {
+          id,
+          inputText,
+          createdAt,
+          options: normalizeQrCodeOptions(item.options)
+        };
+      }
+
+      // 归一化持久化状态。
+      function normalizePersistedState(raw) {
+        const state = raw && typeof raw === "object" ? raw : {};
+        const history = Array.isArray(state.history)
+          ? state.history.map(normalizeQrCodeHistoryEntry).filter(Boolean)
+          : [];
+        return {
+          inputText: typeof state.inputText === "string" ? state.inputText : "",
+          options: normalizeQrCodeOptions(state.options),
+          history
+        };
+      }
+
+      // 生成历史主键。
+      function makeQrCodeHistoryId() {
+        return "qr-history-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+      }
+
+      // 按输入文本去重、按时间倒序并裁剪最大条数。
+      function dedupeAndCapHistory(current, nextEntry) {
+        return [nextEntry, ...current.filter((item) => item.inputText !== nextEntry.inputText)]
+          .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+          .slice(0, QR_CODE_HISTORY_LIMIT);
+      }
+
+      // 同步参数到控件 DOM。
       function syncOptionsToDom() {
         optLevel.value = currentOptions.errorCorrectionLevel;
         optMargin.value = String(currentOptions.margin);
@@ -378,6 +662,7 @@
         lightSwatch.style.backgroundColor = currentOptions.lightColor;
       }
 
+      // 持久化到插件隔离存储。
       function persistState() {
         void callHost("storage.set", {
           key: STORAGE_KEY,
@@ -389,16 +674,40 @@
         }).catch(() => {});
       }
 
-      function renderHistory() {
-        historyCountEl.textContent = String(historyEntries.length);
-        if (historyEntries.length === 0) {
-          historyListEl.innerHTML = '<div style="text-align:center;color:#94a3b8;padding:36px 0">暂无生成历史</div>';
+      // 渲染预览区（空态或二维码图片）。
+      function renderPreview() {
+        if (!currentDataUrl) {
+          previewBox.innerHTML =
+            '<div class="preview-empty">' +
+            '<div class="preview-empty-icon">QR</div>' +
+            '<p style="margin:16px 0 0;font-size:14px;font-weight:500;color:#1f2937">等待生成二维码</p>' +
+            '<p style="margin:8px 0 0;font-size:12px;line-height:1.6;color:rgba(31,41,55,0.6)">输入文本并点击“生成二维码”后，这里会展示可复制、可下载的预览图片。</p>' +
+            "</div>";
           return;
         }
+        previewBox.innerHTML = `<div class="preview-frame"><img src="${currentDataUrl}" alt="生成的二维码预览" class="preview-img" /></div>`;
+      }
+
+      // 渲染右侧历史列表。
+      function renderHistory() {
+        btnClearHistory.disabled = historyEntries.length === 0;
+        if (historyEntries.length === 0) {
+          historyListEl.innerHTML =
+            '<div style="display:flex;flex:1;min-height:240px;align-items:center;justify-content:center;padding:16px;text-align:center">' +
+            '<div style="max-width:220px">' +
+            '<p style="margin:0;font-size:13px;font-weight:500;color:#1f2937">还没有历史记录</p>' +
+            '<p style="margin:8px 0 0;font-size:12px;line-height:1.6;color:rgba(31,41,55,0.6)">首次生成二维码后，这里会保存最近记录，并在下次进入工具时继续展示。</p>' +
+            "</div></div>";
+          return;
+        }
+
         historyListEl.innerHTML = "";
         for (const item of historyEntries) {
           const row = document.createElement("div");
           row.className = "history-item" + (item.id === activeHistoryId ? " active" : "");
+
+          const top = document.createElement("div");
+          top.className = "history-top";
 
           const left = document.createElement("div");
           left.style.minWidth = "0";
@@ -406,198 +715,270 @@
           const txt = document.createElement("div");
           txt.className = "history-text";
           txt.textContent = item.inputText;
-          const meta = document.createElement("div");
-          meta.className = "history-meta";
-          meta.textContent = `${item.options.errorCorrectionLevel} · margin ${item.options.margin} · scale ${item.options.scale}`;
+          const time = document.createElement("div");
+          time.className = "history-time";
+          time.textContent = new Date(item.createdAt).toLocaleString("zh-CN", { hour12: false });
           left.appendChild(txt);
-          left.appendChild(meta);
+          left.appendChild(time);
+
+          const btns = document.createElement("div");
+          btns.style.display = "flex";
+          btns.style.gap = "4px";
+          btns.style.flexShrink = "0";
+
+          const useBtn = document.createElement("button");
+          useBtn.type = "button";
+          useBtn.className = "btn btn-ghost btn-xs";
+          useBtn.textContent = "使用";
+          useBtn.onclick = async () => {
+            inputEl.value = item.inputText;
+            currentOptions = normalizeQrCodeOptions(item.options);
+            activeHistoryId = item.id;
+            syncOptionsToDom();
+            clearNotice();
+            await generateQr(item.inputText, currentOptions, false);
+          };
 
           const delBtn = document.createElement("button");
           delBtn.type = "button";
-          delBtn.className = "btn btn-ghost btn-danger";
-          delBtn.style.height = "24px";
-          delBtn.style.padding = "0 6px";
+          delBtn.className = "btn btn-ghost btn-xs btn-danger";
           delBtn.textContent = "删除";
-          delBtn.onclick = (ev) => {
-            ev.stopPropagation();
+          delBtn.onclick = () => {
             historyEntries = historyEntries.filter((h) => h.id !== item.id);
             if (activeHistoryId === item.id) activeHistoryId = "";
+            clearNotice();
             renderHistory();
             persistState();
           };
 
-          row.onclick = async () => {
-            inputEl.value = item.inputText;
-            currentOptions = { ...DEFAULT_OPTIONS, ...item.options };
-            activeHistoryId = item.id;
-            syncOptionsToDom();
-            renderHistory();
-            await generateQr(false);
-          };
+          btns.appendChild(useBtn);
+          btns.appendChild(delBtn);
+          top.appendChild(left);
+          top.appendChild(btns);
 
-          row.appendChild(left);
-          row.appendChild(delBtn);
+          const chips = document.createElement("div");
+          chips.className = "history-chips";
+          chips.innerHTML =
+            `<span class="history-chip">纠错 ${item.options.errorCorrectionLevel}</span>` +
+            `<span class="history-chip">缩放 ${item.options.scale}</span>` +
+            `<span class="history-chip">留白 ${item.options.margin}</span>` +
+            `<span class="history-chip">颜色已保存</span>`;
+
+          row.appendChild(top);
+          row.appendChild(chips);
           historyListEl.appendChild(row);
         }
       }
 
-      async function generateQr(saveToHistory = true) {
-        const text = inputEl.value.trim();
-        if (!text) {
+      // 统一生成二维码：支持手动生成、历史恢复和启动后自动恢复三种入口。
+      async function generateQr(nextInputText = inputEl.value, nextOptions = currentOptions, persistHistory = true) {
+        const trimmedInputText = String(nextInputText || "").trim();
+        if (!trimmedInputText) {
           currentDataUrl = "";
-          btnCopyImg.disabled = true;
-          btnDownload.disabled = true;
-          previewBox.innerHTML = '<span style="color:#64748b">请先输入 URL 或任意文本</span>';
-          notify("请先输入 URL 或任意文本。", "warning");
+          renderPreview();
+          showNotice("warning", "请先输入 URL 或任意文本。");
           return;
         }
+
+        generating = true;
+        btnGenerate.disabled = true;
+        btnGenerate.textContent = "生成中...";
         try {
-          const dataUrl = await window.QRCode.toDataURL(text, {
-            errorCorrectionLevel: currentOptions.errorCorrectionLevel,
-            margin: currentOptions.margin,
-            scale: currentOptions.scale,
+          const dataUrl = await window.QRCode.toDataURL(trimmedInputText, {
+            errorCorrectionLevel: nextOptions.errorCorrectionLevel,
+            margin: nextOptions.margin,
+            scale: nextOptions.scale,
             color: {
-              dark: currentOptions.darkColor,
-              light: currentOptions.lightColor
+              dark: nextOptions.darkColor,
+              light: nextOptions.lightColor
             }
           });
           currentDataUrl = dataUrl;
-          btnCopyImg.disabled = false;
-          btnDownload.disabled = false;
-          previewBox.innerHTML = `<img src="${dataUrl}" alt="QR Code" class="preview-img" /><span style="font-size:11px;color:#64748b">纠错 ${currentOptions.errorCorrectionLevel} · 倍率 ${currentOptions.scale}</span>`;
+          renderPreview();
 
-          if (saveToHistory) {
+          if (persistHistory) {
+            inputEl.value = trimmedInputText;
             const entry = {
-              id: "qr-" + Date.now(),
-              inputText: text,
+              id: makeQrCodeHistoryId(),
+              inputText: trimmedInputText,
               createdAt: new Date().toISOString(),
-              options: { ...currentOptions }
+              options: normalizeQrCodeOptions(nextOptions)
             };
-            historyEntries = [entry, ...historyEntries.filter((h) => h.inputText !== text)].slice(0, HISTORY_LIMIT);
+            historyEntries = dedupeAndCapHistory(historyEntries, entry);
             activeHistoryId = entry.id;
             renderHistory();
-            notify("二维码已生成。", "success");
+          } else {
+            const matched = historyEntries.find((item) => item.inputText === trimmedInputText);
+            activeHistoryId = matched ? matched.id : activeHistoryId;
+            renderHistory();
           }
+
+          showNotice("success", "二维码已生成。");
           persistState();
         } catch (err) {
-          notify("生成失败：" + (err?.message || String(err)), "error");
+          currentDataUrl = "";
+          renderPreview();
+          showNotice("error", "生成失败：" + (err?.message || String(err)));
+        } finally {
+          generating = false;
+          btnGenerate.disabled = false;
+          btnGenerate.textContent = "生成二维码";
         }
       }
 
       // 绑定参数事件。
       optLevel.onchange = () => {
-        currentOptions.errorCorrectionLevel = optLevel.value;
+        currentOptions = normalizeQrCodeOptions({ ...currentOptions, errorCorrectionLevel: optLevel.value });
         persistState();
       };
       optMargin.onchange = () => {
-        currentOptions.margin = clampInt(optMargin.value, 0, 0, 8);
+        currentOptions = normalizeQrCodeOptions({ ...currentOptions, margin: Number(optMargin.value) });
         optMargin.value = String(currentOptions.margin);
         persistState();
       };
       optScale.onchange = () => {
-        currentOptions.scale = clampInt(optScale.value, 12, 4, 12);
+        currentOptions = normalizeQrCodeOptions({ ...currentOptions, scale: Number(optScale.value) });
         optScale.value = String(currentOptions.scale);
         persistState();
       };
-      document.getElementById("btnDarkSwatch").onclick = () => optDarkNative.click();
-      document.getElementById("btnLightSwatch").onclick = () => optLightNative.click();
-      optDarkNative.oninput = () => {
-        currentOptions.darkColor = normalizeHex(optDarkNative.value, currentOptions.darkColor);
-        syncOptionsToDom();
-        persistState();
-      };
-      optLightNative.oninput = () => {
-        currentOptions.lightColor = normalizeHex(optLightNative.value, currentOptions.lightColor);
-        syncOptionsToDom();
-        persistState();
-      };
-      optDarkHex.onblur = () => {
-        currentOptions.darkColor = normalizeHex(optDarkHex.value, currentOptions.darkColor);
-        syncOptionsToDom();
-        persistState();
-      };
-      optLightHex.onblur = () => {
-        currentOptions.lightColor = normalizeHex(optLightHex.value, currentOptions.lightColor);
-        syncOptionsToDom();
-        persistState();
-      };
-      inputEl.oninput = () => persistState();
 
-      document.getElementById("btnGenerate").onclick = () => void generateQr(true);
+      // 绑定颜色选择器（支持色块取色与十六进制文本框实时双向同步）。
+      function bindColorPicker(swatchBtn, hexInput, nativeInput, optionKey, swatchEl) {
+        swatchBtn.onclick = () => nativeInput.click();
+        nativeInput.oninput = () => {
+          currentOptions = normalizeQrCodeOptions({ ...currentOptions, [optionKey]: nativeInput.value });
+          syncOptionsToDom();
+          persistState();
+        };
+        hexInput.oninput = () => {
+          const draft = normalizeEditableHexColor(hexInput.value);
+          hexInput.value = draft;
+          if (isCompleteHexColor(draft)) {
+            currentOptions = normalizeQrCodeOptions({ ...currentOptions, [optionKey]: draft });
+            nativeInput.value = currentOptions[optionKey];
+            swatchEl.style.backgroundColor = currentOptions[optionKey];
+            persistState();
+          }
+        };
+        const commitHex = () => {
+          const draft = normalizeEditableHexColor(hexInput.value);
+          if (isCompleteHexColor(draft)) {
+            currentOptions = normalizeQrCodeOptions({ ...currentOptions, [optionKey]: draft });
+          }
+          syncOptionsToDom();
+          persistState();
+        };
+        hexInput.onblur = commitHex;
+        hexInput.onkeydown = (ev) => {
+          if (ev.key !== "Enter") return;
+          ev.preventDefault();
+          commitHex();
+        };
+      }
+
+      bindColorPicker(document.getElementById("btnDarkSwatch"), optDarkHex, optDarkNative, "darkColor", darkSwatch);
+      bindColorPicker(document.getElementById("btnLightSwatch"), optLightHex, optLightNative, "lightColor", lightSwatch);
+
+      inputEl.oninput = () => persistState();
+      btnGenerate.onclick = () => {
+        if (!generating) void generateQr(inputEl.value, currentOptions, true);
+      };
+
       document.getElementById("btnSample").onclick = () => {
         inputEl.value = DEFAULT_SAMPLE_TEXT;
-        currentOptions = { ...DEFAULT_OPTIONS };
+        currentOptions = { ...DEFAULT_QR_CODE_OPTIONS };
         syncOptionsToDom();
+        clearNotice();
         persistState();
       };
+
       document.getElementById("btnClear").onclick = () => {
         inputEl.value = "";
+        currentOptions = { ...DEFAULT_QR_CODE_OPTIONS };
         currentDataUrl = "";
         activeHistoryId = "";
-        btnCopyImg.disabled = true;
-        btnDownload.disabled = true;
-        previewBox.innerHTML = '<span style="color:#64748b">输入文本后点击“生成二维码”查看预览</span>';
+        syncOptionsToDom();
+        renderPreview();
         renderHistory();
+        clearNotice();
         persistState();
       };
+
       document.getElementById("btnResetOpts").onclick = () => {
-        currentOptions = { ...DEFAULT_OPTIONS };
+        currentOptions = { ...DEFAULT_QR_CODE_OPTIONS };
         syncOptionsToDom();
         persistState();
-        notify("二维码参数已重置为默认值。", "success");
+        showNotice("success", "二维码参数已重置为默认值。");
       };
+
       document.getElementById("btnCopyText").onclick = async () => {
         if (!inputEl.value.trim()) {
-          notify("当前没有可复制的输入内容。", "warning");
+          showNotice("warning", "当前没有可复制的输入内容。");
           return;
         }
-        await callHost("clipboard.writeText", { text: inputEl.value });
-        notify("输入内容已复制。", "success");
+        try {
+          await callHost("clipboard.writeText", { text: inputEl.value });
+          showNotice("success", "输入内容已复制。");
+        } catch (err) {
+          showNotice("error", "复制失败：" + (err?.message || String(err)));
+        }
       };
+
       btnCopyImg.onclick = async () => {
-        if (!currentDataUrl) return;
-        await callHost("clipboard.writeImage", { dataUrl: currentDataUrl });
-        notify("二维码图片已复制。", "success");
+        if (!currentDataUrl) {
+          showNotice("warning", "请先生成二维码，再复制图片。");
+          return;
+        }
+        try {
+          await callHost("clipboard.writeImage", { dataUrl: currentDataUrl });
+          showNotice("success", "二维码图片已复制。");
+        } catch (err) {
+          showNotice("error", "复制图片失败：" + (err?.message || String(err)));
+        }
       };
+
       btnDownload.onclick = () => {
-        if (!currentDataUrl) return;
+        if (!currentDataUrl) {
+          showNotice("warning", "请先生成二维码，再下载图片。");
+          return;
+        }
         const a = document.createElement("a");
         a.href = currentDataUrl;
         a.download = `qr-code-${Date.now()}.png`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
-        notify("二维码图片已开始下载。", "success");
+        showNotice("success", "二维码图片已开始下载。");
       };
-      document.getElementById("btnClearHistory").onclick = () => {
+
+      btnClearHistory.onclick = () => {
         historyEntries = [];
         activeHistoryId = "";
+        clearNotice();
         renderHistory();
         persistState();
       };
 
-      // 启动时从 SQLite plugin_kv_store 恢复历史与草稿。
+      // 启动时从 SQLite plugin_kv_store 恢复状态；若已有输入则自动生成一次预览。
       (async () => {
         try {
           await callHost("init");
           const saved = await callHost("storage.get", { key: STORAGE_KEY });
-          if (saved && typeof saved === "object") {
-            if (typeof saved.inputText === "string") inputEl.value = saved.inputText;
-            if (saved.options && typeof saved.options === "object") {
-              currentOptions = { ...DEFAULT_OPTIONS, ...saved.options };
-            }
-            if (Array.isArray(saved.history)) {
-              historyEntries = saved.history;
-            }
-          }
+          const restored = normalizePersistedState(saved);
+          inputEl.value = restored.inputText;
+          currentOptions = restored.options;
+          historyEntries = restored.history;
+        } catch {
+          // 忽略恢复异常，回退到默认空态。
+        } finally {
+          hydrateMask.style.display = "none";
+          appRoot.style.display = "flex";
           syncOptionsToDom();
+          renderPreview();
           renderHistory();
           if (inputEl.value.trim()) {
-            await generateQr(false);
+            await generateQr(inputEl.value, currentOptions, false);
           }
-        } catch {
-          syncOptionsToDom();
-          renderHistory();
         }
       })();
     </script>
