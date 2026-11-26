@@ -1,0 +1,11 @@
+{
+  "id": "com.example.hello-sql",
+  "name": "SQL 片段助手",
+  "version": "1.0.0",
+  "apiVersion": "^1.0.0",
+  "description": "标准 .sstplugin 外部插件示例：读取当前数据源与编辑器选区，一键插入常用 SQL 模板。",
+  "category": "database",
+  "mountTargets": ["workspace-tab", "dock-right"],
+  "permissions": ["storage", "workspace:read", "workspace:write"],
+  "entry": "dist/index.html"
+}

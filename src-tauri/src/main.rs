@@ -36,6 +36,46 @@ fn main() {
                 .open_js_links_on_click(false)
                 .build(),
         )
+        // 注册 `plugin://` 自定义协议：安全映射 `{app_data_dir}/plugins/<plugin-id>/` 下的静态资源供 iframe 沙箱加载。
+        .register_uri_scheme_protocol("plugin", |ctx, request| {
+            let app = ctx.app_handle();
+            let uri = request.uri();
+            let host = uri.host().unwrap_or_default();
+            let raw_path = uri.path().trim_start_matches('/');
+            let (plugin_id, asset_path) = if host.eq_ignore_ascii_case("plugin.localhost") || host.is_empty() {
+                let mut parts = raw_path.splitn(2, '/');
+                (parts.next().unwrap_or_default(), parts.next().unwrap_or("dist/index.html"))
+            } else {
+                (host, if raw_path.is_empty() { "dist/index.html" } else { raw_path })
+            };
+
+            let result = (|| -> Result<(Vec<u8>, String), String> {
+                let state = app
+                    .try_state::<AppState>()
+                    .ok_or_else(|| "应用状态尚未初始化".to_string())?;
+                let data_dir = ensure_data_dir(app)?;
+                let service = services::plugin_package_service::PluginPackageService::new(
+                    &state.storage,
+                    data_dir.join("plugins"),
+                );
+                service
+                    .read_plugin_asset(plugin_id, asset_path)
+                    .map_err(|e| e.to_string())
+            })();
+
+            match result {
+                Ok((bytes, mime)) => tauri::http::Response::builder()
+                    .status(200)
+                    .header("Content-Type", mime)
+                    .body(bytes)
+                    .unwrap_or_else(|_| tauri::http::Response::new(Vec::new())),
+                Err(err) => tauri::http::Response::builder()
+                    .status(404)
+                    .header("Content-Type", "text/plain; charset=utf-8")
+                    .body(err.into_bytes())
+                    .unwrap_or_else(|_| tauri::http::Response::new(Vec::new())),
+            }
+        })
         .setup(|app| {
             // 启动阶段初始化 SQLite v2 存储和共享客户端，避免运行时重复构建。
             let data_dir = ensure_data_dir(&app.handle())
@@ -137,6 +177,12 @@ fn main() {
             commands::get_plugin_kv,
             commands::set_plugin_kv,
             commands::delete_plugin_kv,
+            commands::inspect_plugin_package_bytes,
+            commands::install_plugin_package_bytes,
+            commands::install_plugin_package,
+            commands::list_installed_plugins,
+            commands::set_installed_plugin_enabled,
+            commands::uninstall_plugin,
             commands::list_driver_capabilities,
             commands::check_sql_safety,
             commands::list_sql_execution_audits,

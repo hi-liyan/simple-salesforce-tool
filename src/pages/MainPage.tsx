@@ -1,13 +1,21 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { Blocks, Cpu, X } from "lucide-react";
+import { api } from "../api";
+import { Blocks, Cpu, Trash2, Upload, X } from "lucide-react";
 import { NoticeAlert } from "../components/NoticeAlert";
 import { listDataSourceDrivers } from "../drivers/registry";
 import { useMainPageQueryPanel } from "../features/main/QueryPanel/hooks/useMainPageQueryPanel";
 import { AppShellLayout } from "../layouts/AppShellLayout";
 import { CustomTitleBar } from "../layouts/CustomTitleBar";
 import { registerBuiltinPlugins } from "../plugins/builtin";
-import { createPluginContext, getPlugin, listPlugins, PluginHost } from "../plugins/core";
+import {
+  createPluginContext,
+  getPlugin,
+  listPlugins,
+  PluginHost,
+  registerExternalPluginRecord,
+  unregisterPlugin
+} from "../plugins/core";
 import { useAppStore } from "../store/useAppStore";
 import { useSoqlExecutorStore } from "../store/useSoqlExecutorStore";
 import { useTerminalStore } from "../store/useTerminalStore";
@@ -136,6 +144,16 @@ export function MainPage() {
   const [rightDockPluginId, setRightDockPluginId] = useState<string | null>(null);
   // 插件中心弹窗开关。
   const [pluginCenterOpen, setPluginCenterOpen] = useState(false);
+  // 插件列表刷新版本号：安装/启停/卸载外部插件后触发重渲染。
+  const [pluginRegistryTick, setPluginRegistryTick] = useState(0);
+  // 待审批安装的 `.sstplugin` 预览包信息。
+  const [pendingPluginInstall, setPendingPluginInstall] = useState<{
+    bytes: number[];
+    inspection: Awaited<ReturnType<typeof api.inspectPluginPackageBytes>>;
+  } | null>(null);
+  // 外部插件包操作中的错误或状态提示。
+  const [pluginInstallError, setPluginInstallError] = useState("");
+  const pluginFileInputRef = useRef<HTMLInputElement | null>(null);
   // 驱动管理弹窗开关。
   const [driverManagerOpen, setDriverManagerOpen] = useState(false);
   // 当前打开的工作区插件 ID（当 viewMode === "tools" 且通过插件中心打开指定插件时使用）。
@@ -204,6 +222,17 @@ export function MainPage() {
       const finalSelectedSourceId = useAppStore.getState().selectedSourceId;
       // 将恢复任务句柄保留下来，供后续版本检查避开启动重任务窗口。
       const restoredTabsPromise = reloadRestoredTabs(finalSelectedSourceId);
+
+      // 启动后后台加载已安装的外部 `.sstplugin` 插件并注册到前端沙箱注册表。
+      void api
+        .listInstalledPlugins()
+        .then((records) => {
+          records.forEach((record) => registerExternalPluginRecord(record));
+          setPluginRegistryTick((n) => n + 1);
+        })
+        .catch(() => {
+          // 非 Tauri 环境或首次无外部插件时静默忽略。
+        });
 
       // 启动后在后台静默同步 CLI 数据源，不再影响首屏可交互时间。
       // 这里继续沿用持久化的数据源 ID，避免“首屏本地列表未命中 -> 选中被清空”后无法恢复 CLI 数据源。
@@ -394,7 +423,7 @@ export function MainPage() {
     });
   }, [activeWorkspacePluginId, queryPanelViewState.selectedSourceId, queryPanelViewState.selectedSourceType, queryPanelViewState.sources]);
 
-  const registeredPlugins = useMemo(() => listPlugins(), []);
+  const registeredPlugins = useMemo(() => listPlugins(), [pluginCenterOpen, pluginRegistryTick]);
   const registeredDrivers = useMemo(() => listDataSourceDrivers(), []);
 
   return (
@@ -466,46 +495,169 @@ export function MainPage() {
             />
           )}
 
-          {/* 插件中心弹窗：展示全部已注册内置/扩展插件，支持一键启动。 */}
+          {/* 插件中心弹窗：展示全部已注册内置/外部插件，支持 `.sstplugin` 安装、权限审批、启停与卸载。 */}
           {pluginCenterOpen && (
             <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/25 backdrop-blur-[2px]">
-              <div className="w-[620px] max-w-[92vw] rounded-2xl border border-base-300 bg-base-100 p-4 shadow-2xl">
+              <div className="w-[660px] max-w-[92vw] rounded-2xl border border-base-300 bg-base-100 p-4 shadow-2xl">
                 <div className="mb-3 flex items-center justify-between">
                   <div className="flex items-center gap-2 text-[14px] font-semibold">
                     <Blocks size={16} className="text-primary" />
                     <span>插件中心</span>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setPluginCenterOpen(false)}
-                    className="flex h-7 w-7 items-center justify-center rounded-lg text-neutral/70 hover:bg-base-200"
-                  >
-                    <X size={15} />
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <input
+                      ref={pluginFileInputRef}
+                      type="file"
+                      accept=".sstplugin,.zip"
+                      className="hidden"
+                      onChange={async (event) => {
+                        const file = event.target.files?.[0];
+                        event.target.value = "";
+                        if (!file) return;
+                        setPluginInstallError("");
+                        try {
+                          const buffer = await file.arrayBuffer();
+                          const bytes = Array.from(new Uint8Array(buffer));
+                          const inspection = await api.inspectPluginPackageBytes(bytes);
+                          setPendingPluginInstall({ bytes, inspection });
+                        } catch (error) {
+                          setPluginInstallError(String(error));
+                        }
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => pluginFileInputRef.current?.click()}
+                      className="btn btn-primary btn-xs gap-1"
+                    >
+                      <Upload size={12} />
+                      安装 .sstplugin
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPendingPluginInstall(null);
+                        setPluginInstallError("");
+                        setPluginCenterOpen(false);
+                      }}
+                      className="flex h-7 w-7 items-center justify-center rounded-lg text-neutral/70 hover:bg-base-200"
+                    >
+                      <X size={15} />
+                    </button>
+                  </div>
                 </div>
+
+                {pluginInstallError && (
+                  <div className="mb-3 rounded-lg border border-error/40 bg-error/10 px-3 py-2 text-[12px] text-error">
+                    {pluginInstallError}
+                  </div>
+                )}
+
+                {pendingPluginInstall && (
+                  <div className="mb-3 rounded-xl border border-primary/40 bg-primary/5 p-3 text-[12px]">
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold">
+                        确认{pendingPluginInstall.inspection.isUpgrade ? "升级" : "安装"}插件：
+                        {pendingPluginInstall.inspection.manifest.name} (v
+                        {pendingPluginInstall.inspection.manifest.version})
+                      </span>
+                      <span className="font-mono text-[11px] text-neutral/70">
+                        {pendingPluginInstall.inspection.manifest.id}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-neutral/75">
+                      申请权限：
+                      {pendingPluginInstall.inspection.manifest.permissions.length > 0
+                        ? pendingPluginInstall.inspection.manifest.permissions.join(", ")
+                        : "无特殊权限"}
+                    </p>
+                    <div className="mt-2.5 flex justify-end gap-2">
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-xs"
+                        onClick={() => setPendingPluginInstall(null)}
+                      >
+                        取消
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-xs"
+                        onClick={async () => {
+                          try {
+                            const installed = await api.installPluginPackageBytes(pendingPluginInstall.bytes);
+                            registerExternalPluginRecord(installed);
+                            setPendingPluginInstall(null);
+                            setPluginRegistryTick((n) => n + 1);
+                          } catch (error) {
+                            setPluginInstallError(String(error));
+                          }
+                        }}
+                      >
+                        授权并安装
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 <div className="grid max-h-[60vh] grid-cols-2 gap-2.5 overflow-auto pr-0.5">
                   {registeredPlugins.map((plugin) => {
                     const Icon = plugin.icon;
+                    const isDisabled = plugin.isExternal && plugin.enabled === false;
                     return (
-                      <button
+                      <div
                         key={plugin.id}
-                        type="button"
-                        onClick={() => handleLaunchPlugin(plugin.id)}
-                        className="flex items-start gap-2.5 rounded-xl border border-base-300/80 bg-base-200/35 p-3 text-left transition-colors hover:border-primary/40 hover:bg-primary/5"
+                        className={`flex items-start gap-2.5 rounded-xl border border-base-300/80 bg-base-200/35 p-3 transition-colors ${isDisabled ? "opacity-60" : "hover:border-primary/40 hover:bg-primary/5"}`}
                       >
-                        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
-                          <Icon size={16} />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="truncate text-[13px] font-semibold">{plugin.name}</span>
-                            <span className="rounded bg-base-300/60 px-1.5 py-0.5 text-[10px] text-neutral/70">
-                              v{plugin.version}
-                            </span>
+                        <button
+                          type="button"
+                          disabled={isDisabled}
+                          onClick={() => handleLaunchPlugin(plugin.id)}
+                          className="flex min-w-0 flex-1 items-start gap-2.5 text-left"
+                        >
+                          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                            <Icon size={16} />
                           </div>
-                          <p className="mt-1 line-clamp-2 text-[11px] text-neutral/70">{plugin.description}</p>
-                        </div>
-                      </button>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="truncate text-[13px] font-semibold">{plugin.name}</span>
+                              <span className="rounded bg-base-300/60 px-1.5 py-0.5 text-[10px] text-neutral/70">
+                                v{plugin.version}
+                              </span>
+                            </div>
+                            <p className="mt-1 line-clamp-2 text-[11px] text-neutral/70">{plugin.description}</p>
+                          </div>
+                        </button>
+                        {plugin.isExternal && (
+                          <div className="flex shrink-0 flex-col items-end gap-1">
+                            <input
+                              type="checkbox"
+                              className="toggle toggle-xs toggle-primary"
+                              checked={!isDisabled}
+                              title={isDisabled ? "启用插件" : "禁用插件"}
+                              onChange={async () => {
+                                const nextEnabled = Boolean(isDisabled);
+                                await api.setInstalledPluginEnabled(plugin.id, nextEnabled);
+                                const records = await api.listInstalledPlugins();
+                                const target = records.find((r) => r.pluginId === plugin.id);
+                                if (target) registerExternalPluginRecord(target);
+                                setPluginRegistryTick((n) => n + 1);
+                              }}
+                            />
+                            <button
+                              type="button"
+                              title="卸载插件"
+                              className="btn btn-ghost btn-xs px-1 text-error"
+                              onClick={async () => {
+                                await api.uninstallPlugin(plugin.id);
+                                unregisterPlugin(plugin.id);
+                                setPluginRegistryTick((n) => n + 1);
+                              }}
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
+                        )}
+                      </div>
                     );
                   })}
                 </div>

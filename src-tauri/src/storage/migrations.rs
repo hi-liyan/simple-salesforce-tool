@@ -26,6 +26,11 @@ const MIGRATIONS: &[Migration] = &[
         id: "2026-11-26-v2-indexes-fk-plugins-audit",
         up: migrate_v2_indexes_fk_plugins_audit,
     },
+    Migration {
+        version: 3,
+        id: "2026-11-26-v3-installed-plugins",
+        up: migrate_v3_installed_plugins,
+    },
 ];
 
 /// 执行版本化增量迁移：基于 `PRAGMA user_version` 在事务内幂等推进。
@@ -113,6 +118,30 @@ fn migrate_v2_indexes_fk_plugins_audit(tx: &Transaction<'_>) -> Result<(), AppEr
     rebuild_object_indexes_with_fk(tx)?;
     rebuild_object_constraints_with_fk(tx)?;
 
+    Ok(())
+}
+
+/// V3 增量迁移：新增外部插件包安装记录表 `installed_plugins`。
+fn migrate_v3_installed_plugins(tx: &Transaction<'_>) -> Result<(), AppError> {
+    tx.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS installed_plugins (
+            plugin_id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            version TEXT NOT NULL,
+            api_version TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            category TEXT NOT NULL DEFAULT 'dev-tool',
+            manifest_json TEXT NOT NULL,
+            install_dir TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            granted_permissions TEXT NOT NULL DEFAULT '[]',
+            package_sha256 TEXT NOT NULL DEFAULT '',
+            installed_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        "#,
+    )?;
     Ok(())
 }
 
@@ -288,7 +317,7 @@ mod tests {
         let user_version: i64 = storage
             .read(|conn| Ok(conn.query_row("PRAGMA user_version", [], |row| row.get(0))?))
             .unwrap();
-        assert_eq!(user_version, 2, "迁移完成后应推进到最新版本 2");
+        assert_eq!(user_version, 3, "迁移完成后应推进到最新版本 3");
 
         // 验证 V2 新建表与索引已就位，且未产生 stale backup。
         let has_stale_backup = fs::read_dir(&root)

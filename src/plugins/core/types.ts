@@ -107,6 +107,10 @@ export interface PluginManifest {
   allowMultipleTabs?: boolean;
   // 所需宿主权限声明。
   permissions?: PluginPermission[];
+  // 是否为外部 `.sstplugin` 安装包插件。
+  isExternal?: boolean;
+  // 外部插件启用状态（默认 true）。
+  enabled?: boolean;
   // 懒加载入口组件。
   component: () => Promise<{ default: ComponentType<PluginComponentProps> }>;
   // 插件激活生命周期钩子（可选）。

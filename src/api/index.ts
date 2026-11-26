@@ -232,5 +232,66 @@ export const api = {
   // 按 key 增量写入应用外壳设置。
   setAppSetting: (key: string, value: string) => invokeApi<void>("set_app_setting", { key, value }),
   // 按 key 删除应用外壳设置。
-  deleteAppSetting: (key: string) => invokeApi<void>("delete_app_setting", { key })
+  deleteAppSetting: (key: string) => invokeApi<void>("delete_app_setting", { key }),
+  // 预览解析本地 `.sstplugin` 插件包（不落盘，返回清单供审批权限）。
+  inspectPluginPackageBytes: (bytes: number[]) =>
+    invokeApi<{
+      manifest: {
+        id: string;
+        name: string;
+        version: string;
+        apiVersion: string;
+        description: string;
+        category: string;
+        mountTargets: string[];
+        permissions: string[];
+        entry: string;
+        icon?: string | null;
+      };
+      packageSha256: string;
+      packageSizeBytes: number;
+      isUpgrade: boolean;
+      previousVersion?: string | null;
+    }>("inspect_plugin_package_bytes", { bytes }),
+  // 安装或升级 `.sstplugin` 插件包。
+  installPluginPackageBytes: (bytes: number[]) =>
+    invokeApi<{
+      pluginId: string;
+      name: string;
+      version: string;
+      apiVersion: string;
+      description: string;
+      category: string;
+      manifestJson: string;
+      installDir: string;
+      enabled: boolean;
+      grantedPermissions: string;
+      packageSha256: string;
+      installedAt: string;
+      updatedAt: string;
+    }>("install_plugin_package_bytes", { bytes }),
+  // 列出全部已安装的外部插件。
+  listInstalledPlugins: () =>
+    invokeApi<
+      {
+        pluginId: string;
+        name: string;
+        version: string;
+        apiVersion: string;
+        description: string;
+        category: string;
+        manifestJson: string;
+        installDir: string;
+        enabled: boolean;
+        grantedPermissions: string;
+        packageSha256: string;
+        installedAt: string;
+        updatedAt: string;
+      }[]
+    >("list_installed_plugins"),
+  // 切换已安装外部插件启用状态。
+  setInstalledPluginEnabled: (pluginId: string, enabled: boolean) =>
+    invokeApi<void>("set_installed_plugin_enabled", { pluginId, enabled }),
+  // 卸载外部插件。
+  uninstallPlugin: (pluginId: string) => invokeApi<void>("uninstall_plugin", { pluginId })
 };
