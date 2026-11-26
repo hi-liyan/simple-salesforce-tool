@@ -689,15 +689,19 @@ export function SoqlExecutorWorkspace({
     <div className="relative flex h-full w-full flex-col overflow-hidden bg-base-100">
       {/* 独立模式下显示控制台内置 Tab 栏。 */}
       {!hideTabBar && (
-        <div className="flex items-center border-b border-base-300 bg-base-200/70 pr-2">
-          <div className="flex min-w-0 flex-1 items-center overflow-x-auto">
+        <div className="flex items-center border-b border-base-300/70 bg-base-100 px-1.5 py-1">
+          <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
             {tabs.map((tab) => {
               const active = tab.id === activeTabId;
               const tabIndex = tabs.findIndex((item) => item.id === tab.id);
               return (
                 <div
                   key={tab.id}
-                  className={`flex items-center border-r border-base-300 ${active ? "bg-base-100" : ""}`}
+                  className={`group flex h-[28px] shrink-0 items-center gap-1 rounded-md border px-2 transition-colors ${
+                    active
+                      ? "border-primary/40 bg-primary/10 font-medium text-primary"
+                      : "border-transparent bg-transparent text-neutral/75 hover:bg-base-200/80 hover:text-neutral"
+                  }`}
                   onContextMenu={(event) => {
                     event.preventDefault();
                     setActiveTabId(tab.id);
@@ -705,17 +709,19 @@ export function SoqlExecutorWorkspace({
                   }}
                 >
                   <button
-                    className={`min-w-0 px-3 py-2 text-[12px] ${active ? "text-primary" : "text-neutral/70"}`}
+                    className={`min-w-0 max-w-[240px] truncate py-0.5 text-[12px] ${active ? "text-primary" : "text-inherit"}`}
                     onClick={() => setActiveTabId(tab.id)}
                   >
                     {tab.name}
                   </button>
                   <button
-                    className="btn btn-circle btn-ghost btn-xs mr-1"
+                    className={`flex h-4 w-4 shrink-0 items-center justify-center rounded text-neutral/55 transition-opacity hover:bg-base-300/60 hover:text-neutral ${
+                      active ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+                    }`}
                     onClick={() => storeCloseTab(tab.id)}
                     aria-label={`关闭 ${tab.name}`}
                   >
-                    <X size={13} />
+                    <X size={12} />
                   </button>
                   {tabContextMenu?.tabId === tab.id && (
                     <ContextMenu

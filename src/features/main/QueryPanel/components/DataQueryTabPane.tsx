@@ -1313,8 +1313,8 @@ export function DataQueryTabPane({
       {!hideTabBar && (
         <>
           {/* Tab 栏。 */}
-          <div className="flex overflow-x-auto border-b border-base-300">
-            {tabs.length === 0 && <span className="px-2 py-1.5 text-[12px] text-neutral/70">请选择左侧 Object 打开标签页</span>}
+          <div className="flex items-center gap-1 overflow-x-auto border-b border-base-300/70 bg-base-100 px-1.5 py-1">
+            {tabs.length === 0 && <span className="px-2 py-1 text-[12px] text-neutral/70">请选择左侧 Object 打开标签页</span>}
             {tabs.map((tab) => {
               const tabIdentity = tab.bindingKey || buildObjectTabBindingKey(tab.sourceId || "", tab.objectName);
               const active = tabIdentity === activeTabObjectName || tab.objectName === activeTabObjectName;
@@ -1328,7 +1328,11 @@ export function DataQueryTabPane({
               return (
                 <div
                   key={tabIdentity}
-                  className={`flex items-center border-r border-base-300 ${active ? "bg-base-100" : ""}`}
+                  className={`group flex h-[28px] shrink-0 items-center gap-1 rounded-md border px-2 transition-colors ${
+                    active
+                      ? "border-primary/40 bg-primary/10 font-medium text-primary"
+                      : "border-transparent bg-transparent text-neutral/75 hover:bg-base-200/80 hover:text-neutral"
+                  }`}
                   onContextMenu={(event) => {
                     event.preventDefault(); // 阻止浏览器默认右键菜单。
                     onActivateTab(tabIdentity); // 右键时先切换到目标 Tab，避免操作目标不一致。
@@ -1336,13 +1340,18 @@ export function DataQueryTabPane({
                   }}
                 >
                   <button
-                    className={`min-w-0 px-3 py-2 text-[12px] ${active ? "text-primary" : "text-neutral/70"}`}
+                    className={`min-w-0 max-w-[240px] truncate py-0.5 text-[12px] ${active ? "text-primary" : "text-inherit"}`}
                     onClick={() => onActivateTab(tabIdentity)}
                   >
                     {tab.objectName}
                   </button>
-                  <button className="btn btn-circle btn-ghost btn-xs mr-1" onClick={() => onCloseTab(tabIdentity)}>
-                    <X size={13} />
+                  <button
+                    className={`flex h-4 w-4 shrink-0 items-center justify-center rounded text-neutral/55 transition-opacity hover:bg-base-300/60 hover:text-neutral ${
+                      active ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+                    }`}
+                    onClick={() => onCloseTab(tabIdentity)}
+                  >
+                    <X size={12} />
                   </button>
                   {/* Tab 右键菜单：提供常见批量关闭操作。 */}
                   {tabContextMenu?.objectName === tabIdentity && (

@@ -264,6 +264,7 @@ export function BottomConsoleDrawer({ open, onClose, onOpen }: BottomConsoleDraw
               onRenameTab={renameTerminalTab}
               onCloseTab={(tabId) => void handleCloseTab(tabId)}
               onCloseTabs={(tabIds) => void handleCloseTabs(tabIds)}
+              embedded
             />
           </div>
         </div>

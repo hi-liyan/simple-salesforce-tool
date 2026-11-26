@@ -8,6 +8,8 @@ export type ReusableTabStatusTone = "success" | "warning" | "error" | "idle";
 export type ReusableTabItem = OrderableTabItem & {
   // 标签标题。
   title: string;
+  // 标题左侧可选紧凑图标。
+  icon?: ReactNode;
   // 是否允许关闭。
   closable?: boolean;
   // 是否允许重命名。
@@ -48,4 +50,6 @@ export type ReusableTabsProps = {
   renderTabSuffix?: (tab: ReusableTabItem) => ReactNode;
   // 标签栏尾部追加内容（如新建下拉触发按钮）。
   trailingContent?: ReactNode;
+  // 是否嵌入外层容器中（启用后省略外层底线与背景，避免双重边框）。
+  embedded?: boolean;
 };

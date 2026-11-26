@@ -1,4 +1,4 @@
-import { ChevronRight, Plus, Puzzle, TerminalSquare } from "lucide-react";
+import { ChevronRight, Plus, Puzzle, Table2, TerminalSquare } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ReusableTabs } from "../../../../components/tabs/ReusableTabs";
@@ -116,7 +116,7 @@ export function QueryWorkspaceTabs({
     <button
       ref={addButtonRef}
       type="button"
-      className="mx-1.5 flex h-6 w-6 shrink-0 items-center justify-center rounded text-neutral/70 transition-colors hover:bg-base-200 hover:text-neutral"
+      className="mx-0.5 flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-md text-neutral/70 transition-colors hover:bg-base-200/80 hover:text-neutral"
       title="新建标签或打开插件"
       aria-label="新建标签或打开插件"
       onClick={handleToggleMenu}
@@ -131,9 +131,19 @@ export function QueryWorkspaceTabs({
       <ReusableTabs
         tabs={tabs.map((tab) => {
           const surfaceStyles = buildWorkspaceTabSurfaceStyles(tab.sourceColor || "");
+          // 根据工作区 Tab 类型渲染对应的紧凑左侧图标。
+          const tabIcon =
+            tab.kind === "console" ? (
+              <TerminalSquare size={13} />
+            ) : tab.kind === "plugin" ? (
+              <Puzzle size={13} />
+            ) : (
+              <Table2 size={13} />
+            );
           return {
             id: tab.id,
             title: tab.title,
+            icon: tabIcon,
             closable: true,
             renameable: false,
             surfaceStyle: surfaceStyles.surfaceStyle,

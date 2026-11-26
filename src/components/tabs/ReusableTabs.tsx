@@ -111,9 +111,11 @@ function TabView({
     <div
       ref={setNodeRef}
       style={mergedStyle}
-      className={`flex select-none items-center border-r border-base-300 bg-base-100 ${active ? "ring-1 ring-inset ring-primary/25" : ""} ${
-        isPlaceholder ? "pointer-events-none opacity-0" : ""
-      } ${isOverlay ? "" : "cursor-default"}`}
+      className={`group flex h-[28px] shrink-0 select-none items-center gap-1 rounded-md border px-2 transition-colors ${
+        active
+          ? "border-primary/40 bg-primary/10 font-medium text-primary"
+          : "border-transparent bg-transparent text-neutral/75 hover:bg-base-200/80 hover:text-neutral"
+      } ${isPlaceholder ? "pointer-events-none opacity-0" : ""} ${isOverlay ? "shadow-md" : "cursor-default"}`}
       {...(!isOverlay ? dragHandleProps : undefined)}
       onMouseDown={(event) => {
         if (event.button !== 0) return;
@@ -129,11 +131,16 @@ function TabView({
         onOpenContextMenu(event, tab.id);
       }}
     >
+      {tab.icon ? (
+        <span className={`flex shrink-0 items-center ${active ? "text-primary" : "text-neutral/60 group-hover:text-neutral/85"}`}>
+          {tab.icon}
+        </span>
+      ) : null}
       {renaming ? (
         <input
           ref={renameInputRef}
           type="text"
-          className={`h-[32px] min-w-0 max-w-[240px] bg-transparent px-3 py-2 text-[12px] ${active ? "text-primary" : "text-neutral"} outline-none`}
+          className={`h-[22px] min-w-0 max-w-[240px] bg-transparent px-0.5 text-[12px] ${active ? "text-primary" : "text-neutral"} outline-none`}
           value={renamingDraft}
           onChange={(event) => onRenameDraftChange(event.target.value)}
           onBlur={() => onCommitRename(tab.id)}
@@ -156,7 +163,7 @@ function TabView({
       ) : (
         <button
           type="button"
-          className={`flex min-w-0 max-w-[260px] items-center gap-2 px-3 py-2 text-[12px] ${active ? "text-primary" : "text-neutral/70"}`}
+          className={`flex min-w-0 max-w-[240px] items-center gap-1.5 py-0.5 text-[12px] ${active ? "text-primary" : "text-inherit"}`}
           onClick={() => onActivateTab(tab.id)}
           onDoubleClick={() => {
             if (!tab.renameable) return;
@@ -172,14 +179,16 @@ function TabView({
       {tab.closable !== false && !isOverlay && onCloseTab ? (
         <button
           type="button"
-          className={`btn btn-circle btn-ghost btn-xs mr-1 ${isActiveDrag ? "pointer-events-none" : "cursor-pointer"}`}
+          className={`flex h-4 w-4 shrink-0 items-center justify-center rounded text-neutral/55 transition-opacity hover:bg-base-300/60 hover:text-neutral ${
+            active ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+          } ${isActiveDrag ? "pointer-events-none" : "cursor-pointer"}`}
           onClick={(event) => {
             event.stopPropagation();
             onCloseTab(tab.id);
           }}
           aria-label={`关闭 ${tab.title}`}
         >
-          <X size={13} />
+          <X size={12} />
         </button>
       ) : null}
     </div>
@@ -233,7 +242,8 @@ export function ReusableTabs({
   onCloseTab,
   onCloseTabs,
   renderTabSuffix,
-  trailingContent
+  trailingContent,
+  embedded = false
 }: ReusableTabsProps) {
   const {
     contextMenu,
@@ -273,8 +283,12 @@ export function ReusableTabs({
 
   const enableSort = Boolean(onReorderTabs);
   const content = (
-    <div className="flex items-center overflow-x-auto border-b border-base-300 bg-base-100">
-      {tabs.length === 0 && emptyText ? <span className="px-2 py-1.5 text-[12px] text-neutral/70">{emptyText}</span> : null}
+    <div
+      className={`flex items-center gap-1 overflow-x-auto ${
+        embedded ? "bg-transparent px-0.5 py-0.5" : "border-b border-base-300/70 bg-base-100 px-1.5 py-1"
+      }`}
+    >
+      {tabs.length === 0 && emptyText ? <span className="px-2 py-1 text-[12px] text-neutral/70">{emptyText}</span> : null}
       {tabs.map((tab) => {
         const active = tab.id === activeTabId;
         const renaming = renamingTabId === tab.id;
@@ -331,7 +345,12 @@ export function ReusableTabs({
         );
       })}
       {onCreateTab ? (
-        <button type="button" className="btn btn-ghost btn-sm mx-2 shrink-0" onClick={onCreateTab} title={createButtonTitle || "新建标签"}>
+        <button
+          type="button"
+          className="mx-0.5 flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-md text-neutral/70 transition-colors hover:bg-base-200/80 hover:text-neutral"
+          onClick={onCreateTab}
+          title={createButtonTitle || "新建标签"}
+        >
           <Plus size={14} />
         </button>
       ) : null}
