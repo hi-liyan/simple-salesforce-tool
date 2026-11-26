@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { api } from "../../../../api";
 import { usePluginTabsStore } from "../../../../store/usePluginTabsStore";
 import type { QueryPanelActions } from "../types";
 import { buildObjectTabBindingKey } from "../../../../types";
@@ -207,6 +208,7 @@ export function useQueryPanelActions({
           return;
         }
         closeSoqlTab(parsed.targetId); // 关闭控制台 Tab。
+        void api.closeConsoleSession(parsed.targetId).catch(() => {}); // 释放关联的后端会话事务连接。
       },
       onCloseWorkspaceTabs: (workspaceTabIds) => {
         if (workspaceTabIds.length === 0) return;
@@ -231,6 +233,9 @@ export function useQueryPanelActions({
         }
         if (consoleTabIds.length > 0) {
           closeSoqlTabsByIds(consoleTabIds);
+          consoleTabIds.forEach((id) => {
+            void api.closeConsoleSession(id).catch(() => {}); // 批量释放关联的后端会话事务连接。
+          });
         }
         if (pluginIds.length > 0) {
           usePluginTabsStore.getState().closePluginTabsByIds(pluginIds);

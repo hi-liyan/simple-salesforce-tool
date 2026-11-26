@@ -240,7 +240,7 @@ impl MySqlProvider {
     }
 
     /// 获取或复用 MySQL 连接池（仅对已持久化且拥有 source_id 的数据源启用缓存）。
-    async fn acquire_pool(
+    pub(crate) async fn acquire_pool(
         &self,
         source: &SalesforceSource,
         config: &MySqlSourceConfig,
@@ -1242,7 +1242,7 @@ fn collect_sorted_entries(
 }
 
 /// 转义 SQL 字符串字面量，仅用于日志 SQL 展示。
-fn escape_sql_literal(value: &str) -> String {
+pub(crate) fn escape_sql_literal(value: &str) -> String {
     value.replace('\\', "\\\\").replace('\'', "\\'")
 }
 
@@ -1546,7 +1546,7 @@ fn build_column_type_map_from_describe(
 }
 
 /// 读取列值并做类型映射（按 MySQL 列类型优先解码，避免日期/时间被误读为空）。
-fn row_try_get_json_value(row: &MySqlRow, column_name: &str, mysql_type: &str) -> Value {
+pub(crate) fn row_try_get_json_value(row: &MySqlRow, column_name: &str, mysql_type: &str) -> Value {
     let normalized = normalize_mysql_type_name(mysql_type);
 
     if is_mysql_date_type(&normalized) {
@@ -1987,7 +1987,7 @@ fn bool_to_json_number(value: bool) -> Value {
 }
 
 /// 识别字符串是否为安全标识符，仅允许字母/数字/下划线。
-fn ensure_safe_identifier(raw: &str, label: &str) -> Result<String, AppError> {
+pub(crate) fn ensure_safe_identifier(raw: &str, label: &str) -> Result<String, AppError> {
     let normalized = raw.trim().to_string();
     if normalized.is_empty() {
         return Err(AppError::Biz(format!("{label} 不能为空")));
@@ -2015,7 +2015,7 @@ fn value_to_string(value: &Value) -> String {
 }
 
 /// 读取指定列并统一解码为字符串：兼容 VARCHAR/VARBINARY 等差异返回类型。
-fn decode_row_string(row: &MySqlRow, index: usize, label: &str) -> Result<String, AppError> {
+pub(crate) fn decode_row_string(row: &MySqlRow, index: usize, label: &str) -> Result<String, AppError> {
     if let Ok(value) = row.try_get::<String, _>(index) {
         return Ok(value);
     }
@@ -2026,7 +2026,7 @@ fn decode_row_string(row: &MySqlRow, index: usize, label: &str) -> Result<String
 }
 
 /// 读取可空字符串列：兼容数据库返回 VARCHAR/VARBINARY 与 NULL。
-fn decode_optional_row_string(row: &MySqlRow, index: usize) -> Option<String> {
+pub(crate) fn decode_optional_row_string(row: &MySqlRow, index: usize) -> Option<String> {
     if let Ok(value) = row.try_get::<Option<String>, _>(index) {
         return value;
     }
@@ -2034,6 +2034,201 @@ fn decode_optional_row_string(row: &MySqlRow, index: usize) -> Option<String> {
         return value.map(|bytes| String::from_utf8_lossy(&bytes).to_string());
     }
     None
+}
+
+/// 控制台 SQL 事务语义分类。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConsoleSqlAction {
+    /// 显式开启事务（BEGIN / START TRANSACTION）。
+    Begin,
+    /// 显式提交事务（COMMIT）。
+    Commit,
+    /// 显式回滚事务（ROLLBACK）。
+    Rollback,
+    /// 会触发 MySQL 隐式提交的 DDL 语句（CREATE / ALTER / DROP / TRUNCATE / RENAME）。
+    Ddl,
+    /// 只读查询语句（SELECT / SHOW / EXPLAIN / DESCRIBE / WITH，不含锁表子句）。
+    ReadOnly,
+    /// 写操作或其他需进入事务的语句（INSERT / UPDATE / DELETE / REPLACE 等）。
+    Write,
+}
+
+/// 剥离前导空白与 SQL 注释后，识别控制台语句的事务语义类型。
+fn classify_console_sql(sql: &str) -> ConsoleSqlAction {
+    let mut rest = sql.trim_start();
+    loop {
+        if rest.starts_with("--") || rest.starts_with('#') {
+            if let Some(pos) = rest.find('\n') {
+                rest = rest[pos + 1..].trim_start();
+                continue;
+            }
+            return ConsoleSqlAction::ReadOnly;
+        }
+        if rest.starts_with("/*") {
+            if let Some(pos) = rest.find("*/") {
+                rest = rest[pos + 2..].trim_start();
+                continue;
+            }
+            return ConsoleSqlAction::ReadOnly;
+        }
+        break;
+    }
+
+    let upper = rest.to_ascii_uppercase();
+    let first_word = upper
+        .split(|ch: char| ch.is_whitespace() || ch == ';' || ch == '(')
+        .next()
+        .unwrap_or("");
+
+    match first_word {
+        "BEGIN" => ConsoleSqlAction::Begin,
+        "START" if upper.starts_with("START TRANSACTION") => ConsoleSqlAction::Begin,
+        "COMMIT" => ConsoleSqlAction::Commit,
+        "ROLLBACK" => {
+            if upper.contains("TO SAVEPOINT") || upper.starts_with("ROLLBACK TO ") {
+                ConsoleSqlAction::Write
+            } else {
+                ConsoleSqlAction::Rollback
+            }
+        }
+        "CREATE" | "ALTER" | "DROP" | "TRUNCATE" | "RENAME" => ConsoleSqlAction::Ddl,
+        "SHOW" | "EXPLAIN" | "DESCRIBE" | "DESC" => ConsoleSqlAction::ReadOnly,
+        "SELECT" | "WITH" => {
+            if upper.contains("FOR UPDATE") || upper.contains("LOCK IN SHARE MODE") {
+                ConsoleSqlAction::Write
+            } else {
+                ConsoleSqlAction::ReadOnly
+            }
+        }
+        _ => ConsoleSqlAction::Write,
+    }
+}
+
+/// 构造仅包含受影响行数的空结果集（用于 BEGIN / COMMIT / ROLLBACK）。
+fn empty_affected_result(rows_affected: u64) -> QueryResult {
+    let mut summary = HashMap::new();
+    summary.insert("affectedRows".to_string(), Value::from(rows_affected));
+    QueryResult {
+        total_size: usize::try_from(rows_affected).unwrap_or(0),
+        records: vec![summary],
+    }
+}
+
+/// 记录未提交语句摘要（截断超长文本并限制最大保留 100 条）。
+fn push_uncommitted_sql_summary(list: &mut Vec<String>, sql: &str) {
+    let compact = sql.split_whitespace().collect::<Vec<_>>().join(" ");
+    let summary: String = compact.chars().take(160).collect();
+    if list.len() >= 100 {
+        list.remove(0);
+    }
+    list.push(summary);
+}
+
+/// 确保控制台会话已绑定物理连接并开启事务。
+async fn ensure_session_transaction_started(
+    pool: &MySqlPool,
+    session: &mut crate::drivers::connection_manager::ConsoleTxSession,
+) -> Result<(), AppError> {
+    if session.conn.is_none() {
+        let conn = pool
+            .acquire()
+            .await
+            .map_err(|error| AppError::Db(format!("获取 MySQL 会话连接失败: {error}")))?;
+        session.conn = Some(conn);
+    }
+    if !session.in_transaction {
+        if let Some(conn) = session.conn.as_mut() {
+            sqlx::query("SET autocommit = 0")
+                .execute(&mut **conn)
+                .await
+                .map_err(|error| AppError::Db(format!("关闭 MySQL 自动提交失败: {error}")))?;
+            sqlx::query("START TRANSACTION")
+                .execute(&mut **conn)
+                .await
+                .map_err(|error| AppError::Db(format!("开启 MySQL 事务失败: {error}")))?;
+            session.in_transaction = true;
+        }
+    }
+    Ok(())
+}
+
+/// 在任意 sqlx 执行器（连接池或独占会话连接）上执行 SQL 并映射为统一 `QueryResult`。
+async fn execute_query_on_executor<'e, E>(
+    executor: E,
+    pool: &MySqlPool,
+    config: &MySqlSourceConfig,
+    trimmed_query: &str,
+    describe: Option<&ObjectDescribe>,
+) -> Result<QueryResult, AppError>
+where
+    E: sqlx::Executor<'e, Database = MySql>,
+{
+    if !is_result_set_query(trimmed_query) {
+        let done = sqlx::query(trimmed_query)
+            .execute(executor)
+            .await
+            .map_err(|error| AppError::Db(format!("执行 MySQL 语句失败: {error}")))?;
+        let rows_affected = done.rows_affected();
+        let last_insert_id = done.last_insert_id();
+        let mut summary = HashMap::new();
+        summary.insert("affectedRows".to_string(), Value::from(rows_affected));
+        if last_insert_id > 0 {
+            summary.insert("lastInsertId".to_string(), Value::from(last_insert_id));
+        }
+        return Ok(QueryResult {
+            total_size: usize::try_from(rows_affected).unwrap_or(0),
+            records: vec![summary],
+        });
+    }
+
+    let inferred_table = infer_table_name_from_query(trimmed_query);
+    let inferred_primary_key = if let Some(table_name) = inferred_table.as_deref() {
+        resolve_primary_key_column(pool, config, table_name)
+            .await
+            .ok()
+    } else {
+        None
+    };
+    let inferred_column_types = build_column_type_map_from_describe(describe);
+    let has_paginated_clause =
+        supports_total_count_rewrite(trimmed_query) && has_top_level_limit_or_offset(trimmed_query);
+    let total_size = if has_paginated_clause {
+        let count_query = build_total_count_query(trimmed_query);
+        let total_count: i64 = sqlx::query_scalar(&count_query)
+            .fetch_one(pool)
+            .await
+            .map_err(|error| AppError::Db(format!("执行 MySQL 总数统计失败: {error}")))?;
+        usize::try_from(total_count.max(0)).unwrap_or(0)
+    } else {
+        0
+    };
+
+    let rows = sqlx::query(trimmed_query)
+        .fetch_all(executor)
+        .await
+        .map_err(|error| AppError::Db(format!("执行 MySQL 查询失败: {error}")))?;
+
+    let mut records = Vec::with_capacity(rows.len());
+    for row in rows {
+        let mut item = row_to_json_record(&row, inferred_column_types.as_ref());
+        if !item.contains_key("Id") {
+            if let Some(pk) = inferred_primary_key.as_ref() {
+                if let Some(value) = item.get(pk).cloned() {
+                    item.insert("Id".to_string(), value);
+                }
+            }
+        }
+        records.push(item);
+    }
+
+    Ok(QueryResult {
+        total_size: if has_paginated_clause {
+            total_size
+        } else {
+            records.len()
+        },
+        records,
+    })
 }
 
 #[cfg(test)]
@@ -2257,5 +2452,37 @@ mod tests {
         assert_eq!(capability.updateable, false);
         assert_eq!(capability.defaulted_on_create, true);
         assert_eq!(capability.is_generated, true);
+    }
+
+    #[test]
+    fn classify_console_sql_distinguishes_tx_ddl_readonly_and_write() {
+        assert_eq!(
+            super::classify_console_sql("-- comment\nSELECT * FROM users"),
+            super::ConsoleSqlAction::ReadOnly
+        );
+        assert_eq!(
+            super::classify_console_sql("SELECT * FROM users FOR UPDATE"),
+            super::ConsoleSqlAction::Write
+        );
+        assert_eq!(
+            super::classify_console_sql("UPDATE users SET name = 'a' WHERE id = 1"),
+            super::ConsoleSqlAction::Write
+        );
+        assert_eq!(
+            super::classify_console_sql("START TRANSACTION"),
+            super::ConsoleSqlAction::Begin
+        );
+        assert_eq!(
+            super::classify_console_sql("COMMIT"),
+            super::ConsoleSqlAction::Commit
+        );
+        assert_eq!(
+            super::classify_console_sql("ROLLBACK"),
+            super::ConsoleSqlAction::Rollback
+        );
+        assert_eq!(
+            super::classify_console_sql("ALTER TABLE users ADD COLUMN age INT"),
+            super::ConsoleSqlAction::Ddl
+        );
     }
 }

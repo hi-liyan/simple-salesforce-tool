@@ -4,10 +4,14 @@ import type {
   AiCapabilities,
   AiChatTurnV2Request,
   AiChatTurnV2Response,
+  BackupRequest,
+  BackupResult,
   CliPathProbe,
   CliPathSettings,
   CliPathStatus,
   CurrentUserContext,
+  ExportDataRequest,
+  ExportResult,
   LlmSettings,
   LlmSettingsSavePayload,
   LanFileReceiverItem,
@@ -28,6 +32,7 @@ import type {
   SystemLogPage,
   TerminalCommandGroup,
   TerminalCommandGroupUpsertPayload,
+  TableStructureSpec,
   TerminalCommandItem,
   TerminalCommandReorderPayload,
   TerminalShellSettings,
@@ -193,13 +198,14 @@ export const api = {
   // 两阶段提交 Phase 2：按 planId + planHash 原样执行已预览计划。
   commitMutationPlan: (planId: string, planHash: string) =>
     invokeApi<MutationExecutionResult>("commit_mutation_plan", { planId, planHash }),
-  // 受安全网关保护的查询执行入口（支持 queryId 取消慢查询）。
+  // 受安全网关保护的查询执行入口（支持 queryId 取消慢查询与 sessionId 会话事务绑定）。
   executeGuardedQuery: (
     sourceId: string,
     queryText: string,
     objectName?: string,
     confirmed?: boolean,
-    queryId?: string
+    queryId?: string,
+    sessionId?: string
   ) =>
     invokeApi<{
       status: "executed" | "confirmation_required";
@@ -207,11 +213,53 @@ export const api = {
       executedSql: string;
       durationMs: number;
       result?: QueryResult | null;
-    }>("execute_guarded_query", { sourceId, queryText, objectName, confirmed, queryId }),
+    }>("execute_guarded_query", { sourceId, queryText, objectName, confirmed, queryId, sessionId }),
   // 取消正在执行中的慢查询。
   cancelQuery: (queryId: string) => invokeApi<boolean>("cancel_query", { queryId }),
+  // 读取指定控制台会话的交互式事务状态。
+  getConsoleTransactionStatus: (sourceId: string, sessionId: string) =>
+    invokeApi<{
+      sessionId: string;
+      sourceId: string;
+      mode: "auto" | "manual" | "smart";
+      inTransaction: boolean;
+      uncommittedSqls: string[];
+      supported: boolean;
+    }>("get_console_transaction_status", { sourceId, sessionId }),
+  // 切换指定控制台会话的事务模式。
+  setConsoleTransactionMode: (sourceId: string, sessionId: string, mode: "auto" | "manual" | "smart") =>
+    invokeApi<{
+      sessionId: string;
+      sourceId: string;
+      mode: "auto" | "manual" | "smart";
+      inTransaction: boolean;
+      uncommittedSqls: string[];
+      supported: boolean;
+    }>("set_console_transaction_mode", { sourceId, sessionId, mode }),
+  // 提交指定控制台会话的挂起事务。
+  commitConsoleTransaction: (sourceId: string, sessionId: string) =>
+    invokeApi<{
+      sessionId: string;
+      sourceId: string;
+      mode: "auto" | "manual" | "smart";
+      inTransaction: boolean;
+      uncommittedSqls: string[];
+      supported: boolean;
+    }>("commit_console_transaction", { sourceId, sessionId }),
+  // 回滚指定控制台会话的挂起事务。
+  rollbackConsoleTransaction: (sourceId: string, sessionId: string) =>
+    invokeApi<{
+      sessionId: string;
+      sourceId: string;
+      mode: "auto" | "manual" | "smart";
+      inTransaction: boolean;
+      uncommittedSqls: string[];
+      supported: boolean;
+    }>("rollback_console_transaction", { sourceId, sessionId }),
+  // 关闭并清理指定控制台会话（存在未提交事务时自动回滚）。
+  closeConsoleSession: (sessionId: string) => invokeApi<void>("close_console_session", { sessionId }),
   // 多语句拆解与顺序执行（返回多结果集与摘要）。
-  executeMultiStatementQuery: (sourceId: string, sqlBatch: string, confirmed?: boolean) =>
+  executeMultiStatementQuery: (sourceId: string, sqlBatch: string, confirmed?: boolean, sessionId?: string) =>
     invokeApi<
       {
         index: number;
@@ -225,7 +273,7 @@ export const api = {
         } | null;
         error?: string | null;
       }[]
-    >("execute_multi_statement_query", { sourceId, sqlBatch, confirmed }),
+    >("execute_multi_statement_query", { sourceId, sqlBatch, confirmed, sessionId }),
   // 基于 Rust sqlparser AST 执行 SQL 实时语法诊断。
   diagnoseSql: (sql: string, dialect: string) =>
     invokeApi<{ line: number; column: number; severity: string; message: string }[]>("diagnose_sql", {
@@ -301,5 +349,24 @@ export const api = {
   setInstalledPluginEnabled: (pluginId: string, enabled: boolean) =>
     invokeApi<void>("set_installed_plugin_enabled", { pluginId, enabled }),
   // 卸载外部插件。
-  uninstallPlugin: (pluginId: string) => invokeApi<void>("uninstall_plugin", { pluginId })
+  uninstallPlugin: (pluginId: string) => invokeApi<void>("uninstall_plugin", { pluginId }),
+  // 读取表结构完整定义（用于表结构设计器）。
+  getTableStructureSpec: (sourceId: string, tableName: string) =>
+    invokeApi<TableStructureSpec>("get_table_structure_spec", { sourceId, tableName }),
+  // 预览 CREATE TABLE SQL。
+  previewCreateTableSql: (spec: TableStructureSpec) =>
+    invokeApi<string[]>("preview_create_table_sql", { spec }),
+  // 预览 ALTER TABLE SQL 列表。
+  previewAlterTableSql: (original: TableStructureSpec, updated: TableStructureSpec) =>
+    invokeApi<string[]>("preview_alter_table_sql", { original, updated }),
+  // 异步流式导出全表或查询结果到文件。
+  exportDataToFile: (request: ExportDataRequest) =>
+    invokeApi<ExportResult>("export_data_to_file", { request }),
+  // 取消后台导出任务。
+  cancelDataExport: (taskId: string) => invokeApi<boolean>("cancel_data_export", { taskId }),
+  // 纯 Rust 逻辑 SQL 备份整库或单表。
+  backupDatabaseToFile: (request: BackupRequest) =>
+    invokeApi<BackupResult>("backup_database_to_file", { request }),
+  // 取消后台备份任务。
+  cancelDatabaseBackup: (taskId: string) => invokeApi<boolean>("cancel_database_backup", { taskId })
 };

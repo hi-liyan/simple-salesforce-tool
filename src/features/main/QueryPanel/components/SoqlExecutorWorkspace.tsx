@@ -24,7 +24,7 @@ import {
   normalizeQueryResult,
   resolveFieldMetadataForExecutor
 } from "../logic/consoleQueryUtils.ts";
-import { ConsoleToolbar } from "./ConsoleToolbar";
+import { ConsoleToolbar, type ConsoleTransactionMode } from "./ConsoleToolbar";
 
 type SoqlExecutorWorkspaceProps = {
   // 全部可用数据源列表：供控制台右侧数据源选择器绑定与切换。
@@ -113,6 +113,14 @@ export function SoqlExecutorWorkspace({
   const [objectFieldsMap, setObjectFieldsMap] = useState<Record<string, string[]>>({});
   // 对象 describe 缓存：用于结果表字段 label/type 映射。
   const [objectDescribeMap, setObjectDescribeMap] = useState<Record<string, ObjectDescribe>>({});
+  // 当前控制台会话事务状态（仅支持交互式事务的驱动生效）。
+  const [txStatus, setTxStatus] = useState<{
+    mode: ConsoleTransactionMode;
+    inTransaction: boolean;
+    uncommittedSqls: string[];
+  }>({ mode: "auto", inTransaction: false, uncommittedSqls: [] });
+  // 事务提交/回滚/模式切换进行中。
+  const [txBusy, setTxBusy] = useState(false);
 
   // 当前激活标签数据。
   const activeTab = useMemo(
@@ -143,6 +151,28 @@ export function SoqlExecutorWorkspace({
     () => Array.from(new Set(Object.values(objectFieldsMap).flatMap((fields) => fields))),
     [objectFieldsMap]
   );
+
+  // 切换控制台 Tab 或数据源时同步拉取会话事务状态。
+  async function refreshTransactionStatus(targetSourceId = effectiveSourceId, targetTabId = activeTab?.id || "") {
+    if (!driver.capabilities.supportsInteractiveTransaction || !targetSourceId || !targetTabId) {
+      setTxStatus({ mode: "auto", inTransaction: false, uncommittedSqls: [] });
+      return;
+    }
+    try {
+      const status = await api.getConsoleTransactionStatus(targetSourceId, targetTabId);
+      setTxStatus({
+        mode: status.mode,
+        inTransaction: status.inTransaction,
+        uncommittedSqls: status.uncommittedSqls || []
+      });
+    } catch {
+      // 忽略状态读取异常，保持当前 UI 可用。
+    }
+  }
+
+  useEffect(() => {
+    void refreshTransactionStatus(effectiveSourceId, activeTab?.id || "");
+  }, [activeTab?.id, driver.capabilities.supportsInteractiveTransaction, effectiveSourceId]);
 
   // 自动关闭当前标签提示。
   useEffect(() => {
@@ -305,7 +335,12 @@ export function SoqlExecutorWorkspace({
 
   // 切换当前控制台 Tab 绑定的数据源。
   function handleChangeTabSource(nextSourceId: string) {
-    if (!activeTab || !nextSourceId) return;
+    if (!activeTab || !nextSourceId || nextSourceId === effectiveSourceId) return;
+    if (txStatus.inTransaction) {
+      const confirmed = window.confirm("当前控制台存在未提交事务，切换数据源将自动回滚未提交变更。是否继续？");
+      if (!confirmed) return;
+      void api.closeConsoleSession(activeTab.id).catch(() => {});
+    }
     const nextSource = sources.find((item) => item.id === nextSourceId);
     if (!nextSource) return;
     patchActiveTab((tab) => ({
@@ -315,6 +350,85 @@ export function SoqlExecutorWorkspace({
       sourceName: nextSource.name,
       sourceColor: getSourceColor(nextSource)
     }));
+  }
+
+  // 切换当前控制台会话的事务模式。
+  async function handleChangeTransactionMode(nextMode: ConsoleTransactionMode) {
+    if (!activeTab || !effectiveSourceId) return;
+    setTxBusy(true);
+    try {
+      const status = await api.setConsoleTransactionMode(effectiveSourceId, activeTab.id, nextMode);
+      setTxStatus({
+        mode: status.mode,
+        inTransaction: status.inTransaction,
+        uncommittedSqls: status.uncommittedSqls || []
+      });
+    } catch (error) {
+      patchActiveTab((tab) => ({
+        ...tab,
+        notice: { type: "error", message: String(error) }
+      }));
+    } finally {
+      setTxBusy(false);
+    }
+  }
+
+  // 提交当前控制台会话挂起事务。
+  async function handleCommitTransaction() {
+    if (!activeTab || !effectiveSourceId) return;
+    setTxBusy(true);
+    try {
+      const status = await api.commitConsoleTransaction(effectiveSourceId, activeTab.id);
+      setTxStatus({
+        mode: status.mode,
+        inTransaction: status.inTransaction,
+        uncommittedSqls: status.uncommittedSqls || []
+      });
+      patchActiveTab((tab) => ({
+        ...tab,
+        showBottomPanel: true,
+        notice: { type: "success", message: "事务已提交 (COMMIT)。" },
+        logs: [buildSoqlLog(true, "COMMIT;", "手动事务已提交。"), ...tab.logs].slice(0, 200)
+      }));
+    } catch (error) {
+      patchActiveTab((tab) => ({
+        ...tab,
+        showBottomPanel: true,
+        notice: { type: "error", message: `提交事务失败：${String(error)}` },
+        logs: [buildSoqlLog(false, "COMMIT;", "提交事务失败。", String(error)), ...tab.logs].slice(0, 200)
+      }));
+    } finally {
+      setTxBusy(false);
+    }
+  }
+
+  // 回滚当前控制台会话挂起事务。
+  async function handleRollbackTransaction() {
+    if (!activeTab || !effectiveSourceId) return;
+    setTxBusy(true);
+    try {
+      const status = await api.rollbackConsoleTransaction(effectiveSourceId, activeTab.id);
+      setTxStatus({
+        mode: status.mode,
+        inTransaction: status.inTransaction,
+        uncommittedSqls: status.uncommittedSqls || []
+      });
+      patchActiveTab((tab) => ({
+        ...tab,
+        showBottomPanel: true,
+        notice: { type: "success", message: "事务已回滚 (ROLLBACK)。" },
+        logs: [buildSoqlLog(true, "ROLLBACK;", "手动事务已回滚。"), ...tab.logs].slice(0, 200)
+      }));
+    } catch (error) {
+      patchActiveTab((tab) => ({
+        ...tab,
+        showBottomPanel: true,
+        notice: { type: "error", message: `回滚事务失败：${String(error)}` },
+        logs: [buildSoqlLog(false, "ROLLBACK;", "回滚事务失败。", String(error)), ...tab.logs].slice(0, 200)
+      }));
+    } finally {
+      setTxBusy(false);
+    }
   }
 
   // 中断当前正在执行的慢查询。
@@ -335,6 +449,7 @@ export function SoqlExecutorWorkspace({
       }));
     } finally {
       activeQueryIdRef.current = null;
+      void refreshTransactionStatus();
     }
   }
 
@@ -373,7 +488,8 @@ export function SoqlExecutorWorkspace({
         executeSoql,
         primaryObjectName || undefined,
         false,
-        queryId
+        queryId,
+        activeTab.id
       );
       if (guarded.status === "confirmation_required") {
         const reason = String(guarded.guardDecision?.reason || "检测到高危 SQL 操作，是否继续执行？");
@@ -391,7 +507,8 @@ export function SoqlExecutorWorkspace({
           executeSoql,
           primaryObjectName || undefined,
           true,
-          queryId
+          queryId,
+          activeTab.id
         );
       }
 
@@ -430,6 +547,7 @@ export function SoqlExecutorWorkspace({
       setBottomView("logs");
     } finally {
       activeQueryIdRef.current = null;
+      void refreshTransactionStatus();
     }
   }
 
@@ -488,7 +606,7 @@ export function SoqlExecutorWorkspace({
     patchActiveTab((tab) => ({ ...tab, loading: true, notice: null }));
 
     try {
-      const rawItems = await api.executeMultiStatementQuery(effectiveSourceId, sqlBatch, false);
+      const rawItems = await api.executeMultiStatementQuery(effectiveSourceId, sqlBatch, false, activeTab.id);
       const items = rawItems.map((entry) => ({
         statementIndex: entry.index,
         sql: entry.sql,
@@ -534,6 +652,7 @@ export function SoqlExecutorWorkspace({
       setBottomView("logs");
     } finally {
       activeQueryIdRef.current = null;
+      void refreshTransactionStatus();
     }
   }
 
@@ -682,6 +801,11 @@ export function SoqlExecutorWorkspace({
         hasContent={Boolean(activeTab.soqlDraft.trim())}
         supportsMultiStatement={driver.capabilities.supportsMultiStatement}
         supportsExplain={driver.capabilities.supportsExplain}
+        supportsInteractiveTransaction={driver.capabilities.supportsInteractiveTransaction}
+        transactionMode={txStatus.mode}
+        inTransaction={txStatus.inTransaction}
+        uncommittedSqls={txStatus.uncommittedSqls}
+        transactionBusy={txBusy}
         queryLanguageLabel={queryLanguageLabel}
         wordWrapEnabled={wordWrapEnabled}
         sources={sources}
@@ -701,6 +825,9 @@ export function SoqlExecutorWorkspace({
           patchActiveTab((tab) => ({ ...tab, soqlDraft: "", selectedSoqlText: "" }));
         }}
         onChangeSource={handleChangeTabSource}
+        onChangeTransactionMode={(mode) => void handleChangeTransactionMode(mode)}
+        onCommitTransaction={() => void handleCommitTransaction()}
+        onRollbackTransaction={() => void handleRollbackTransaction()}
       />
 
       {/* 主内容区：SQL/SOQL 编辑器（含左侧 Gutter 按条执行按钮）+ 底部结果/日志区。 */}

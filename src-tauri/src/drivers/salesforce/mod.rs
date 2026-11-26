@@ -33,6 +33,8 @@ impl DataSourceDriver for SalesforceDriver {
         ProviderCapabilities {
             query_language: "soql".to_string(),
             supports_ddl: false,
+            supports_table_designer: false,
+            supports_backup: false,
             supports_transactional_batch: false,
             supports_create: true,
             supports_update: true,
@@ -40,6 +42,7 @@ impl DataSourceDriver for SalesforceDriver {
             supports_mutation_preview: false,
             supports_child_relationships: true,
             supports_auth_window: true,
+            supports_interactive_transaction: false,
             null_display_text: "None".to_string(),
         }
     }

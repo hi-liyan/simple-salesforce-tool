@@ -77,6 +77,8 @@ export interface FrontendDriverCapabilities {
   // 是否支持单事务批量提交（含删除）。
   supportsTransactionalBatch: boolean;
   // 是否支持独立 OAuth 授权窗口。
+  // 是否支持控制台交互式会话事务（Auto / Manual / Smart）。
+  supportsInteractiveTransaction: boolean;
   supportsAuthWindow: boolean;
   // 默认右侧抽屉视图。
   defaultDrawerView: QueryDrawerView;

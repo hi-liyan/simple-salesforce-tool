@@ -20,11 +20,14 @@ export const mysqlDriver: DataSourceDriver = {
   capabilities: {
     queryLanguage: "mysql",
     supportsDdl: true,
+    supportsTableDesigner: true,
+    supportsBackup: true,
     supportsExplain: true,
     supportsMultiStatement: true,
     supportsMutationPreview: true,
     supportsTransactionalBatch: true,
     supportsAuthWindow: false,
+    supportsInteractiveTransaction: true,
     defaultDrawerView: "mysql-fields"
   },
   treeConfig: {
@@ -144,17 +147,35 @@ export const mysqlDriver: DataSourceDriver = {
         required: false,
         group: "advanced",
         colSpan: 2
+      },
+      {
+        key: "transactionMode",
+        label: "默认事务模式（控制台）",
+        type: "select",
+        defaultValue: "auto",
+        required: false,
+        group: "advanced",
+        colSpan: 2,
+        helpText: "自动提交：每条立即生效；手动提交：需显式 Commit / Rollback；智能提交：只读不锁表，写操作自动开启事务。",
+        options: [
+          { label: "自动提交 (Auto-commit)", value: "auto" },
+          { label: "手动提交 (Manual commit)", value: "manual" },
+          { label: "智能提交 (Smart commit)", value: "smart" }
+        ]
       }
     ],
     extractFormValues: (source, secretView) => {
       const cfg = (source.configJson || {}) as Record<string, unknown>;
+      const rawTxMode = String(cfg.transactionMode || "auto").toLowerCase();
+      const transactionMode = rawTxMode === "manual" || rawTxMode === "smart" ? rawTxMode : "auto";
       return {
         host: String(cfg.host || ""),
         port: String(cfg.port || 3306),
         database: String(cfg.database || ""),
         username: String(cfg.username || ""),
         password: secretView?.password ?? String(cfg.password || ""),
-        primaryKey: String(cfg.primaryKey || "")
+        primaryKey: String(cfg.primaryKey || ""),
+        transactionMode
       };
     },
     buildPayload: (values, meta) => {
@@ -164,6 +185,8 @@ export const mysqlDriver: DataSourceDriver = {
       const username = (values.username || "").trim();
       const password = values.password || "";
       const primaryKey = (values.primaryKey || "").trim();
+      const rawTxMode = (values.transactionMode || "auto").trim().toLowerCase();
+      const transactionMode = rawTxMode === "manual" || rawTxMode === "smart" ? rawTxMode : "auto";
       return {
         name: meta.name.trim(),
         sourceType: "mysql",
@@ -173,6 +196,7 @@ export const mysqlDriver: DataSourceDriver = {
           database,
           username,
           password,
+          transactionMode,
           ...(primaryKey ? { primaryKey } : {}),
           ...(meta.color ? { color: meta.color } : {}),
           environment: meta.environment,

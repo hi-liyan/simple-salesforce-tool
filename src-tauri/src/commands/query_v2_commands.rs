@@ -1,6 +1,7 @@
 use tauri::State;
 
 use crate::app_state::AppState;
+use crate::drivers::{ConsoleTransactionStatus, TransactionMode};
 use crate::error::AppError;
 use crate::models::{MutationExecutionResult, RecordSaveWithDeletePayload};
 use crate::modules::sql_lsp::{diagnose_sql_ast, split_sql_statements, SqlDiagnostic};
@@ -29,6 +30,7 @@ pub async fn execute_guarded_query(
     object_name: Option<String>,
     confirmed: Option<bool>,
     query_id: Option<String>,
+    session_id: Option<String>,
 ) -> Result<GuardedQueryResponse, String> {
     let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
     if let Some(qid) = query_id.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
@@ -38,11 +40,12 @@ pub async fn execute_guarded_query(
     }
 
     let svc = QueryService::new(&state.storage, &state.driver_registry);
-    let fut = svc.execute_guarded_query(
+    let fut = svc.execute_guarded_query_with_session(
         &source_id,
         &query_text,
         object_name.as_deref(),
         confirmed.unwrap_or(false),
+        session_id.as_deref(),
     );
 
     let outcome = tokio::select! {
@@ -85,6 +88,7 @@ pub async fn execute_multi_statement_query(
     source_id: String,
     sql_batch: String,
     confirmed: Option<bool>,
+    session_id: Option<String>,
 ) -> Result<Vec<MultiStatementItemResult>, String> {
     let statements = split_sql_statements(&sql_batch);
     let svc = QueryService::new(&state.storage, &state.driver_registry);
@@ -92,7 +96,13 @@ pub async fn execute_multi_statement_query(
 
     for (index, stmt) in statements.into_iter().enumerate() {
         match svc
-            .execute_guarded_query(&source_id, &stmt, None, confirmed.unwrap_or(false))
+            .execute_guarded_query_with_session(
+                &source_id,
+                &stmt,
+                None,
+                confirmed.unwrap_or(false),
+                session_id.as_deref(),
+            )
             .await
         {
             Ok(resp) => results.push(MultiStatementItemResult {
@@ -170,4 +180,95 @@ pub async fn read_cell_full_value(
         )
         .await
         .map_err(AppError::to_string_error)
+}
+
+/// 读取指定控制台会话的交互式事务状态。
+#[tauri::command]
+pub async fn get_console_transaction_status(
+    state: State<'_, AppState>,
+    source_id: String,
+    session_id: String,
+) -> Result<ConsoleTransactionStatus, String> {
+    let source = crate::services::source_service::SourceService::new(&state.storage)
+        .get_runtime_source(&source_id)
+        .map_err(AppError::to_string_error)?;
+    let driver = state
+        .driver_registry
+        .get(&source.source_type)
+        .map_err(AppError::to_string_error)?;
+    driver
+        .get_console_transaction_status(&source, &session_id)
+        .await
+        .map_err(AppError::to_string_error)
+}
+
+/// 切换指定控制台会话的事务模式（auto / manual / smart）。
+#[tauri::command]
+pub async fn set_console_transaction_mode(
+    state: State<'_, AppState>,
+    source_id: String,
+    session_id: String,
+    mode: TransactionMode,
+) -> Result<ConsoleTransactionStatus, String> {
+    let source = crate::services::source_service::SourceService::new(&state.storage)
+        .get_runtime_source(&source_id)
+        .map_err(AppError::to_string_error)?;
+    let driver = state
+        .driver_registry
+        .get(&source.source_type)
+        .map_err(AppError::to_string_error)?;
+    driver
+        .set_console_transaction_mode(&source, &session_id, mode)
+        .await
+        .map_err(AppError::to_string_error)
+}
+
+/// 提交指定控制台会话中挂起的事务。
+#[tauri::command]
+pub async fn commit_console_transaction(
+    state: State<'_, AppState>,
+    source_id: String,
+    session_id: String,
+) -> Result<ConsoleTransactionStatus, String> {
+    let source = crate::services::source_service::SourceService::new(&state.storage)
+        .get_runtime_source(&source_id)
+        .map_err(AppError::to_string_error)?;
+    let driver = state
+        .driver_registry
+        .get(&source.source_type)
+        .map_err(AppError::to_string_error)?;
+    driver
+        .commit_console_transaction(&source, &session_id)
+        .await
+        .map_err(AppError::to_string_error)
+}
+
+/// 回滚指定控制台会话中挂起的事务。
+#[tauri::command]
+pub async fn rollback_console_transaction(
+    state: State<'_, AppState>,
+    source_id: String,
+    session_id: String,
+) -> Result<ConsoleTransactionStatus, String> {
+    let source = crate::services::source_service::SourceService::new(&state.storage)
+        .get_runtime_source(&source_id)
+        .map_err(AppError::to_string_error)?;
+    let driver = state
+        .driver_registry
+        .get(&source.source_type)
+        .map_err(AppError::to_string_error)?;
+    driver
+        .rollback_console_transaction(&source, &session_id)
+        .await
+        .map_err(AppError::to_string_error)
+}
+
+/// 关闭或重置指定控制台会话（存在未提交事务时自动回滚）。
+#[tauri::command]
+pub async fn close_console_session(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<(), String> {
+    state.connection_manager.close_console_session(&session_id).await;
+    Ok(())
 }

@@ -44,6 +44,7 @@ impl DataSourceDriver for MySqlDriver {
             supports_delete: true,
             supports_mutation_preview: true,
             supports_child_relationships: false,
+            supports_interactive_transaction: true,
             supports_auth_window: false,
             null_display_text: "Null".to_string(),
         }
@@ -152,6 +153,73 @@ impl DataSourceDriver for MySqlDriver {
                 .await
         })
     }
+    fn execute_console_query<'a>(
+        &'a self,
+        source: &'a SalesforceSource,
+        session_id: &'a str,
+        query_text: &'a str,
+        describe: Option<&'a ObjectDescribe>,
+    ) -> BoxFuture<'a, Result<QueryResult, AppError>> {
+        Box::pin(async move {
+            self.inner
+                .execute_console_query(source, session_id, query_text, describe)
+                .await
+        })
+    }
+
+    fn get_console_transaction_status<'a>(
+        &'a self,
+        source: &'a SalesforceSource,
+        session_id: &'a str,
+    ) -> BoxFuture<'a, Result<ConsoleTransactionStatus, AppError>> {
+        Box::pin(async move {
+            self.inner
+                .get_console_transaction_status(source, session_id)
+                .await
+        })
+    }
+
+    fn set_console_transaction_mode<'a>(
+        &'a self,
+        source: &'a SalesforceSource,
+        session_id: &'a str,
+        mode: TransactionMode,
+    ) -> BoxFuture<'a, Result<ConsoleTransactionStatus, AppError>> {
+        Box::pin(async move {
+            self.inner
+                .set_console_transaction_mode(source, session_id, mode)
+                .await
+        })
+    }
+
+    fn commit_console_transaction<'a>(
+        &'a self,
+        source: &'a SalesforceSource,
+        session_id: &'a str,
+    ) -> BoxFuture<'a, Result<ConsoleTransactionStatus, AppError>> {
+        Box::pin(async move {
+            self.inner
+                .commit_console_transaction(source, session_id)
+                .await
+        })
+    }
+
+    fn rollback_console_transaction<'a>(
+        &'a self,
+        source: &'a SalesforceSource,
+        session_id: &'a str,
+    ) -> BoxFuture<'a, Result<ConsoleTransactionStatus, AppError>> {
+        Box::pin(async move {
+            self.inner
+                .rollback_console_transaction(source, session_id)
+                .await
+        })
+    }
+
+    fn close_console_session<'a>(&'a self, session_id: &'a str) -> BoxFuture<'a, Result<(), AppError>> {
+        Box::pin(async move { self.inner.close_console_session(session_id).await })
+    }
+
 
     fn create_record<'a>(
         &'a self,

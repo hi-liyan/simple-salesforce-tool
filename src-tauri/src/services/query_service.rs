@@ -67,6 +67,19 @@ impl<'a> QueryService<'a> {
         object_name: Option<&str>,
         confirmed: bool,
     ) -> Result<GuardedQueryResponse, AppError> {
+        self.execute_guarded_query_with_session(source_id, query_text, object_name, confirmed, None)
+            .await
+    }
+
+    /// 执行受安全网关保护的查询（支持绑定控制台事务会话 ID），并强制记录 `sql_execution_audit`。
+    pub async fn execute_guarded_query_with_session(
+        &self,
+        source_id: &str,
+        query_text: &str,
+        object_name: Option<&str>,
+        confirmed: bool,
+        session_id: Option<&str>,
+    ) -> Result<GuardedQueryResponse, AppError> {
         let source = SourceService::new(self.storage).get_runtime_source(source_id)?;
         let driver = self.driver_registry.get(&source.source_type)?;
         let environment = source
@@ -139,9 +152,17 @@ impl<'a> QueryService<'a> {
                     });
 
                 let started = Instant::now();
-                let exec_res = driver
-                    .query_records(&source, query_text, describe.as_ref())
-                    .await;
+                let exec_res = if let Some(sid) =
+                    session_id.map(str::trim).filter(|value| !value.is_empty())
+                {
+                    driver
+                        .execute_console_query(&source, sid, query_text, describe.as_ref())
+                        .await
+                } else {
+                    driver
+                        .query_records(&source, query_text, describe.as_ref())
+                        .await
+                };
                 let duration_ms = started.elapsed().as_millis() as i64;
                 let risk_text = match risk_level {
                     SqlRiskLevel::Low => "low",

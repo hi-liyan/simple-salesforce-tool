@@ -16,11 +16,14 @@ export const salesforceDriver: DataSourceDriver = {
   capabilities: {
     queryLanguage: "soql",
     supportsDdl: false,
+    supportsTableDesigner: false,
+    supportsBackup: false,
     supportsExplain: false,
     supportsMultiStatement: false,
     supportsMutationPreview: false,
     supportsTransactionalBatch: false,
     supportsAuthWindow: true,
+    supportsInteractiveTransaction: false,
     defaultDrawerView: "salesforce"
   },
   treeConfig: {

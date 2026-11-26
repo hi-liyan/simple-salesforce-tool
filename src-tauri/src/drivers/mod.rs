@@ -27,6 +27,10 @@ pub struct ProviderCapabilities {
     pub query_language: String,
     /// 是否支持读取对象 DDL。
     pub supports_ddl: bool,
+    /// 是否支持图形化表结构设计（新建表 / 编辑表）。
+    pub supports_table_designer: bool,
+    /// 是否支持逻辑数据库备份导出。
+    pub supports_backup: bool,
     /// 是否支持单事务批量提交（含删除）。
     pub supports_transactional_batch: bool,
     /// 是否支持新增记录。
@@ -41,8 +45,52 @@ pub struct ProviderCapabilities {
     pub supports_child_relationships: bool,
     /// 是否支持独立认证窗口与 CLI 同步。
     pub supports_auth_window: bool,
+    /// 是否支持控制台交互式会话事务（Auto / Manual / Smart）。
+    pub supports_interactive_transaction: bool,
     /// 空值展示占位文本（如 "Null" / "None"）。
     pub null_display_text: String,
+}
+
+/// 控制台交互式事务模式（对齐 DBX：Auto / Manual / Smart）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum TransactionMode {
+    /// 自动提交：每条语句立即提交。
+    #[default]
+    Auto,
+    /// 手动提交：开启会话事务，需显式 Commit 或 Rollback。
+    Manual,
+    /// 智能提交：只读查询不锁表，写操作自动开启挂起事务。
+    Smart,
+}
+
+impl TransactionMode {
+    /// 从配置字符串解析事务模式，非法值回退为 Auto。
+    pub fn from_str_lossy(raw: &str) -> Self {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "manual" => Self::Manual,
+            "smart" => Self::Smart,
+            _ => Self::Auto,
+        }
+    }
+}
+
+/// 控制台会话事务状态快照：供前端工具栏展示模式、挂起状态与未提交语句列表。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsoleTransactionStatus {
+    /// 控制台会话 ID（通常对应前端 consoleTabId）。
+    pub session_id: String,
+    /// 绑定的数据源 ID。
+    pub source_id: String,
+    /// 当前事务模式。
+    pub mode: TransactionMode,
+    /// 当前是否处于未提交事务中。
+    pub in_transaction: bool,
+    /// 未提交的语句摘要列表。
+    pub uncommitted_sqls: Vec<String>,
+    /// 当前数据源是否支持交互式事务。
+    pub supported: bool,
 }
 
 /// 统一数据源驱动抽象：所有数据源必须实现该 Trait 并注册到 `DriverRegistry`。
@@ -120,6 +168,86 @@ pub trait DataSourceDriver: Send + Sync {
         query_text: &'a str,
         describe: Option<&'a ObjectDescribe>,
     ) -> BoxFuture<'a, Result<QueryResult, AppError>>;
+
+    /// 在指定控制台会话上下文中执行语句（支持事务会话绑定，默认委托给 `query_records`）。
+    fn execute_console_query<'a>(
+        &'a self,
+        source: &'a SalesforceSource,
+        _session_id: &'a str,
+        query_text: &'a str,
+        describe: Option<&'a ObjectDescribe>,
+    ) -> BoxFuture<'a, Result<QueryResult, AppError>> {
+        self.query_records(source, query_text, describe)
+    }
+
+    /// 读取指定控制台会话的事务状态（不支持事务的数据源返回默认只读状态）。
+    fn get_console_transaction_status<'a>(
+        &'a self,
+        source: &'a SalesforceSource,
+        session_id: &'a str,
+    ) -> BoxFuture<'a, Result<ConsoleTransactionStatus, AppError>> {
+        let session_id = session_id.to_string();
+        let source_id = source.id.clone();
+        let supported = self.capabilities().supports_interactive_transaction;
+        Box::pin(async move {
+            Ok(ConsoleTransactionStatus {
+                session_id,
+                source_id,
+                mode: TransactionMode::Auto,
+                in_transaction: false,
+                uncommitted_sqls: Vec::new(),
+                supported,
+            })
+        })
+    }
+
+    /// 切换指定控制台会话的事务模式。
+    fn set_console_transaction_mode<'a>(
+        &'a self,
+        _source: &'a SalesforceSource,
+        _session_id: &'a str,
+        _mode: TransactionMode,
+    ) -> BoxFuture<'a, Result<ConsoleTransactionStatus, AppError>> {
+        let kind = self.kind();
+        Box::pin(async move {
+            Err(AppError::Biz(format!(
+                "数据源类型 {kind} 不支持控制台交互式事务"
+            )))
+        })
+    }
+
+    /// 提交指定控制台会话中挂起的事务。
+    fn commit_console_transaction<'a>(
+        &'a self,
+        _source: &'a SalesforceSource,
+        _session_id: &'a str,
+    ) -> BoxFuture<'a, Result<ConsoleTransactionStatus, AppError>> {
+        let kind = self.kind();
+        Box::pin(async move {
+            Err(AppError::Biz(format!(
+                "数据源类型 {kind} 不支持提交控制台事务"
+            )))
+        })
+    }
+
+    /// 回滚指定控制台会话中挂起的事务。
+    fn rollback_console_transaction<'a>(
+        &'a self,
+        _source: &'a SalesforceSource,
+        _session_id: &'a str,
+    ) -> BoxFuture<'a, Result<ConsoleTransactionStatus, AppError>> {
+        let kind = self.kind();
+        Box::pin(async move {
+            Err(AppError::Biz(format!(
+                "数据源类型 {kind} 不支持回滚控制台事务"
+            )))
+        })
+    }
+
+    /// 关闭或重置指定控制台会话（存在未提交事务时自动回滚并释放连接）。
+    fn close_console_session<'a>(&'a self, _session_id: &'a str) -> BoxFuture<'a, Result<(), AppError>> {
+        Box::pin(async { Ok(()) })
+    }
 
     /// 获取当前登录用户上下文（默认返回空上下文）。
     fn get_current_user_context<'a>(
