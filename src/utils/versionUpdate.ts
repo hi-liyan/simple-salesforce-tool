@@ -1,4 +1,6 @@
 import { getVersion } from "@tauri-apps/api/app";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { check, type DownloadEvent, type Update } from "@tauri-apps/plugin-updater";
 
 // GitHub Releases 固定地址：用于更新提示中的展示与跳转。
 export const GITHUB_RELEASE_PAGE_URL = "https://github.com/hi-liyan/simple-salesforce-tool/releases";
@@ -34,6 +36,80 @@ export async function waitForUiIdleFrame(): Promise<void> {
   await new Promise<void>((resolve) => {
     window.requestAnimationFrame(() => resolve());
   });
+}
+
+// 更新下载进度回调：percent 为 0-100（未知总大小时为 null）。
+export type AppUpdateProgressHandler = (state: {
+  phase: "downloading" | "installing";
+  percent: number | null;
+}) => void;
+
+// 统一应用更新检查结果：支持原生热更新（签名安装并重启）与 GitHub Release 页面兜底。
+export type UnifiedAppUpdateResult = {
+  currentVersion: string;
+  latestVersion: string;
+  hasUpdate: boolean;
+  releaseNotes?: string;
+  releasePageUrl: string;
+  // 原生更新器实例（存在时支持应用内直接下载安装并重启）。
+  nativeUpdate: Update | null;
+};
+
+// 检测应用更新：优先走 Tauri 官方 Updater（latest.json），不可用时自动回退 GitHub Releases API。
+export async function checkAppUpdateWithFallback(): Promise<UnifiedAppUpdateResult | null> {
+  const currentVersion = (await getVersion()).trim();
+  if (!currentVersion) return null;
+
+  try {
+    const update = await check();
+    if (update) {
+      return {
+        currentVersion,
+        latestVersion: update.version,
+        hasUpdate: true,
+        releaseNotes: update.body || "",
+        releasePageUrl: GITHUB_RELEASE_PAGE_URL,
+        nativeUpdate: update
+      };
+    }
+  } catch {
+    // 若远端尚未生成 latest.json 或处于开发环境，回退到 GitHub Releases API 仅做版本提示。
+  }
+
+  const fallback = await checkGithubLatestVersion();
+  if (!fallback) return null;
+  return {
+    currentVersion: fallback.currentVersion,
+    latestVersion: fallback.latestVersion,
+    hasUpdate: fallback.hasUpdate,
+    releasePageUrl: fallback.releasePageUrl,
+    nativeUpdate: null
+  };
+}
+
+// 下载、校验签名、安装更新并重启应用。
+export async function installNativeAppUpdate(
+  update: Update,
+  onProgress?: AppUpdateProgressHandler
+): Promise<void> {
+  let contentLength = 0;
+  let downloaded = 0;
+
+  await update.downloadAndInstall((event: DownloadEvent) => {
+    if (event.event === "Started") {
+      contentLength = event.data.contentLength ?? 0;
+      downloaded = 0;
+      onProgress?.({ phase: "downloading", percent: contentLength > 0 ? 0 : null });
+    } else if (event.event === "Progress") {
+      downloaded += event.data.chunkLength;
+      const percent = contentLength > 0 ? Math.min(100, Math.round((downloaded / contentLength) * 100)) : null;
+      onProgress?.({ phase: "downloading", percent });
+    } else if (event.event === "Finished") {
+      onProgress?.({ phase: "installing", percent: 100 });
+    }
+  });
+
+  await relaunch();
 }
 
 // 检查 GitHub 最新发布版本，并返回是否存在可用更新。

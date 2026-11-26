@@ -98,6 +98,8 @@ export function SoqlExecutorWorkspace({
   const splitContainerRef = useRef<HTMLDivElement | null>(null);
   // 当前激活编辑器的最新选中文本（同步引用）。
   const selectedSoqlTextRef = useRef("");
+  // 选中文本同步到 Store 的节流定时器：避免拖拽选区时每像素触发 React 重渲染。
+  const selectionSyncTimerRef = useRef<number | null>(null);
   // 当前进行中查询 ID（用于慢查询中断）。
   const activeQueryIdRef = useRef<string | null>(null);
   // 多语句执行结果集列表。
@@ -310,8 +312,7 @@ export function SoqlExecutorWorkspace({
       sourceId: nextSource.id,
       sourceType: String(nextSource.sourceType || "salesforce"),
       sourceName: nextSource.name,
-      sourceColor: getSourceColor(nextSource),
-      notice: { type: "success", message: `已绑定数据源：${nextSource.name}` }
+      sourceColor: getSourceColor(nextSource)
     }));
   }
 
@@ -402,7 +403,7 @@ export function SoqlExecutorWorkspace({
         loading: false,
         selectedRecordIds: [],
         showBottomPanel: true,
-        notice: { type: "success", message: `执行成功（${guarded.durationMs}ms），返回 ${normalizedResult.totalSize} 条。` },
+        notice: null,
         logs: [
           buildSoqlLog(true, actualExecutedSql, `执行成功（${guarded.durationMs}ms），返回 ${normalizedResult.totalSize} 条。`),
           ...tab.logs
@@ -418,7 +419,8 @@ export function SoqlExecutorWorkspace({
       patchActiveTab((tab) => ({
         ...tab,
         loading: false,
-        notice: { type: "error", message: `执行失败：${String(error)}` },
+        showBottomPanel: true,
+        notice: null,
         logs: [
           buildSoqlLog(false, executeSoql, `执行 ${queryLanguageLabel} 失败。`, String(error)),
           ...tab.logs
@@ -506,16 +508,13 @@ export function SoqlExecutorWorkspace({
         loading: false,
         selectedRecordIds: [],
         showBottomPanel: true,
-        notice: {
-          type: errorCount > 0 ? "error" : "success",
-          message: `多语句执行完成（共 ${items.length} 条，失败 ${errorCount} 条，耗时 ${totalDuration}ms）。`
-        },
+        notice: null,
         logs: [
           buildSoqlLog(errorCount === 0, sqlBatch, `多语句执行 ${items.length} 条，耗时 ${totalDuration}ms。`),
           ...tab.logs
         ].slice(0, 200)
       }));
-      setBottomView("result");
+      setBottomView(errorCount > 0 ? "logs" : "result");
 
       if (items.some((item) => !item.error && isSchemaChangingDdl(item.sql))) {
         onDdlExecuted?.(effectiveSourceId);
@@ -524,7 +523,8 @@ export function SoqlExecutorWorkspace({
       patchActiveTab((tab) => ({
         ...tab,
         loading: false,
-        notice: { type: "error", message: `批量执行失败：${String(error)}` },
+        showBottomPanel: true,
+        notice: null,
         logs: [
           buildSoqlLog(false, sqlBatch, `批量执行 ${queryLanguageLabel} 失败。`, String(error)),
           ...tab.logs
@@ -567,16 +567,6 @@ export function SoqlExecutorWorkspace({
 
   return (
     <div className="relative flex h-full w-full flex-col overflow-hidden bg-base-100">
-      {/* 工作区全局提示：用于显示数据源切换/刷新通知。 */}
-      {workspaceNotice && (
-        <NoticeAlert
-          tone={workspaceNotice.type === "error" ? "error" : "success"}
-          message={workspaceNotice.message}
-          onClose={onCloseWorkspaceNotice}
-          className="fixed bottom-4 right-4 z-50 max-w-[420px] shadow-lg"
-        />
-      )}
-
       {/* 独立模式下显示控制台内置 Tab 栏。 */}
       {!hideTabBar && (
         <div className="flex items-center border-b border-base-300 bg-base-200/70 pr-2">
@@ -685,16 +675,6 @@ export function SoqlExecutorWorkspace({
         </div>
       )}
 
-      {/* 当前标签提示。 */}
-      {activeTab.notice && (
-        <NoticeAlert
-          tone={activeTab.notice.type === "error" ? "error" : "success"}
-          message={activeTab.notice.message}
-          onClose={() => patchActiveTab((tab) => ({ ...tab, notice: null }))}
-          className="absolute right-3 top-11 z-30 max-w-[420px] shadow"
-        />
-      )}
-
       {/* 顶部紧凑操作 Bar（DBX 风格：小 Icon 按钮组 + 右侧数据源选择器）。 */}
       <ConsoleToolbar
         loading={activeTab.loading}
@@ -733,7 +713,15 @@ export function SoqlExecutorWorkspace({
             }}
             onSelectionTextChange={(selectionText) => {
               selectedSoqlTextRef.current = selectionText;
-              patchActiveTab((tab) => ({ ...tab, selectedSoqlText: selectionText }));
+              if (selectionSyncTimerRef.current !== null) {
+                window.clearTimeout(selectionSyncTimerRef.current);
+              }
+              selectionSyncTimerRef.current = window.setTimeout(() => {
+                selectionSyncTimerRef.current = null;
+                patchActiveTab((tab) =>
+                  tab.selectedSoqlText === selectionText ? tab : { ...tab, selectedSoqlText: selectionText }
+                );
+              }, 80);
             }}
             onExecuteStatement={(sql) => {
               void executeSingleStatement(sql);

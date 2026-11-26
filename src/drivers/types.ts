@@ -1,4 +1,13 @@
-import type { ObjectDescribe, ObjectField, QueryDrawerView, QueryResult, SalesforceObject, SalesforceSource, SourceSecretView } from "../types/index.ts";
+import type {
+  ObjectDescribe,
+  ObjectField,
+  QueryDrawerView,
+  QueryResult,
+  SalesforceObject,
+  SalesforceSource,
+  SourceSecretView,
+  SourceUpsertPayload
+} from "../types/index.ts";
 import type { QueryLanguage } from "../components/codemirror/sqlCompletion.ts";
 
 // DataGrid 字段策略类型。
@@ -79,6 +88,60 @@ export interface DriverTreeConfig {
   groups: { groupType: string; label: string }[];
   // 对象节点是否支持向下展开字段（Columns）子节点。
   supportsColumnExpansion: boolean;
+  // 对象节点展开后的子目录结构（如 MySQL 的 columns / keys / indexes）；为空时直接平铺字段。
+  objectSubFolders?: ("columns" | "keys" | "indexes")[];
+}
+
+// 连接表单字段定义：由各数据源驱动声明，供统一连接向导动态渲染。
+export interface DriverConnectionField {
+  // 字段键名。
+  key: string;
+  // 显示标签。
+  label: string;
+  // 输入类型。
+  type: "text" | "password" | "number" | "select";
+  // 占位提示。
+  placeholder?: string;
+  // 默认值。
+  defaultValue?: string;
+  // 是否必填。
+  required?: boolean;
+  // 所属分组：auth 为主连接区，advanced 为高级折叠区。
+  group: "auth" | "advanced";
+  // 栅格跨度（1 或 2 列）。
+  colSpan?: 1 | 2;
+  // 字段说明。
+  helpText?: string;
+  // 下拉选项（仅 type === "select" 时使用）。
+  options?: { label: string; value: string }[];
+}
+
+// 统一连接表单的通用元信息。
+export interface ConnectionCommonMeta {
+  // 数据源显示名称。
+  name: string;
+  // 标签颜色（十六进制或空）。
+  color: string;
+  // 环境标识（用于安全网关生产环境识别）。
+  environment: "default" | "staging" | "prod";
+  // 是否只读锁定（禁止写操作）。
+  readOnly: boolean;
+}
+
+// 数据源连接配置 Schema：消除组件层硬编码表单分支。
+export interface DriverConnectionSchema {
+  // 驱动简介（用于新建向导左侧列表）。
+  description: string;
+  // 驱动专属字段列表。
+  fields: DriverConnectionField[];
+  // 是否支持浏览器 OAuth 授权登录。
+  supportsOAuthLogin?: boolean;
+  // 判断数据源是否由外部 CLI 托管凭证（如 Salesforce CLI 同步源）。
+  isCliManagedSource?: (source: SalesforceSource) => boolean;
+  // 将现有数据源与密钥视图回填为表单键值对。
+  extractFormValues: (source: SalesforceSource, secretView?: SourceSecretView | null) => Record<string, string>;
+  // 将表单键值对与通用元信息构造成后端 SourceUpsertPayload。
+  buildPayload: (values: Record<string, string>, meta: ConnectionCommonMeta) => SourceUpsertPayload;
 }
 
 // 前端数据源驱动标准契约。
@@ -99,6 +162,8 @@ export interface DataSourceDriver {
   treeConfig: DriverTreeConfig;
   // 表格适配器。
   gridAdapter: GridAdapter;
+  // 连接表单 Schema（驱动自描述新建与编辑表单）。
+  connectionSchema: DriverConnectionSchema;
   // 为设置页按需水合敏感凭证视图。
   hydrateSourceSecrets: (source: SalesforceSource, secretView: SourceSecretView) => SalesforceSource;
   // 数据源树默认分组（兼容旧字段，优先读取 treeConfig.groups）。

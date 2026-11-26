@@ -10,6 +10,7 @@ pub struct MetadataService<'a> {
     storage: &'a Storage,
 }
 
+#[allow(dead_code)]
 impl<'a> MetadataService<'a> {
     /// 创建元数据服务。
     pub fn new(storage: &'a Storage) -> Self {

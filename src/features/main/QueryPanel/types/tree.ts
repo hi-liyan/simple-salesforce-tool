@@ -1,4 +1,7 @@
-import type { ObjectField, SalesforceObject, SalesforceSource } from "../../../../types/index.ts";
+import type { ObjectDdl, ObjectField, SalesforceObject, SalesforceSource } from "../../../../types/index.ts";
+
+// 表/对象下子目录类型（如 MySQL 的 columns / keys / indexes）。
+export type QueryObjectFolderType = "columns" | "keys" | "indexes";
 
 // Query 统一树节点：供左侧多数据源树与不同 provider 共享。
 export type QueryTreeNode =
@@ -34,6 +37,17 @@ export type QueryTreeNode =
     }
   | {
       id: string;
+      kind: "object-folder";
+      sourceId: string;
+      sourceType: string;
+      objectName: string;
+      folderType: QueryObjectFolderType;
+      label: string;
+      count: number;
+      expandable: boolean;
+    }
+  | {
+      id: string;
       kind: "column";
       sourceId: string;
       sourceType: string;
@@ -42,6 +56,30 @@ export type QueryTreeNode =
       dataType: string;
       isPrimaryKey: boolean;
       nullable: boolean;
+      label: string;
+      expandable: false;
+    }
+  | {
+      id: string;
+      kind: "key";
+      sourceId: string;
+      sourceType: string;
+      objectName: string;
+      keyName: string;
+      keyKind: "PK" | "UK" | "FK";
+      detail: string;
+      label: string;
+      expandable: false;
+    }
+  | {
+      id: string;
+      kind: "index";
+      sourceId: string;
+      sourceType: string;
+      objectName: string;
+      indexName: string;
+      indexKind: "PK" | "UX" | "IX";
+      detail: string;
       label: string;
       expandable: false;
     };
@@ -70,6 +108,8 @@ export type SourceTreeState = {
   sourceTreeChildrenById: Record<string, QueryTreeNode[]>;
   // 各表/对象已展开的字段列表缓存（key 为 `${sourceId}:${objectName}`）。
   objectFieldsByKey: Record<string, ObjectField[]>;
+  // 各表/对象已展开的 DDL 缓存（key 为 `${sourceId}:${objectName}`）。
+  objectDdlByKey: Record<string, ObjectDdl>;
   // 各表/对象字段列表加载态（key 为 `${sourceId}:${objectName}`）。
   objectFieldsLoadingByKey: Record<string, boolean>;
   // 各数据源加载态。

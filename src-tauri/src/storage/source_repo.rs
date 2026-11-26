@@ -7,6 +7,7 @@ use crate::models::{SalesforceSource, SourceUpsertPayload};
 
 /// 数据源持久化记录。
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct SourceRecord {
     /// 数据源 ID。
     pub id: String,

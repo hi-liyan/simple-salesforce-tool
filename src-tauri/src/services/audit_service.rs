@@ -14,10 +14,10 @@ impl<'a> AuditService<'a> {
         Self { storage }
     }
 
-    /// 记录一次 SQL 执行或拦截审计；写库失败时向调用方显式返回错误。
+    /// 记录一次 SQL 执行或拦截审计；使用退避重试写事务，写库失败时向调用方显式返回错误。
     pub fn record_sql_execution(&self, record: &SqlExecutionAuditRecord) -> Result<i64, AppError> {
         self.storage
-            .write_tx(|tx| audit_repo::insert_sql_execution_audit(tx, record))
+            .write_tx_retry(|tx| audit_repo::insert_sql_execution_audit(tx, record))
     }
 
     /// 查询最近执行的 SQL 审计日志。

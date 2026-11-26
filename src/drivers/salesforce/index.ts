@@ -26,7 +26,8 @@ export const salesforceDriver: DataSourceDriver = {
   treeConfig: {
     useGroupNodes: false,
     groups: [],
-    supportsColumnExpansion: true
+    supportsColumnExpansion: true,
+    objectSubFolders: []
   },
   gridAdapter: {
     nullPlaceholder: "None",
@@ -59,6 +60,59 @@ export const salesforceDriver: DataSourceDriver = {
       return "text";
     },
     supportsOpenRecordPage: true
+  },
+  connectionSchema: {
+    description: "支持 OAuth 浏览器授权与手动 Token 接入 Salesforce Production / Sandbox 组织。",
+    supportsOAuthLogin: true,
+    isCliManagedSource: (source) => source.id.startsWith("cli-"),
+    fields: [
+      {
+        key: "instanceUrl",
+        label: "Instance URL",
+        type: "text",
+        placeholder: "https://login.salesforce.com 或 https://your-domain.my.salesforce.com",
+        defaultValue: "https://login.salesforce.com",
+        required: true,
+        group: "auth",
+        colSpan: 2
+      },
+      {
+        key: "accessToken",
+        label: "Access Token",
+        type: "password",
+        placeholder: "输入 Salesforce Access Token（CLI 同步源可留空）",
+        required: false,
+        group: "auth",
+        colSpan: 2
+      },
+      {
+        key: "apiVersion",
+        label: "API Version",
+        type: "text",
+        placeholder: "v61.0",
+        defaultValue: "v61.0",
+        required: true,
+        group: "advanced",
+        colSpan: 1
+      }
+    ],
+    extractFormValues: (source, secretView) => ({
+      instanceUrl: source.instanceUrl || "",
+      accessToken: secretView?.accessToken ?? source.accessToken ?? "",
+      apiVersion: source.apiVersion || "v61.0"
+    }),
+    buildPayload: (values, meta) => ({
+      name: meta.name.trim(),
+      sourceType: "salesforce",
+      configJson: {
+        ...(meta.color ? { color: meta.color } : {}),
+        environment: meta.environment,
+        readOnly: meta.readOnly
+      },
+      instanceUrl: (values.instanceUrl || "").trim(),
+      accessToken: (values.accessToken || "").trim(),
+      apiVersion: (values.apiVersion || "v61.0").trim() || "v61.0"
+    })
   },
   hydrateSourceSecrets: (source, secretView) => ({
     ...source,

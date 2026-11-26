@@ -126,7 +126,9 @@ function QuerySourceTreeNodeComponent({
   const sourceId = data.sourceId;
   const isSourceNode = data.kind === "source";
   const isObjectNode = data.kind === "object";
+  const isObjectFolderNode = data.kind === "object-folder";
   const isColumnNode = data.kind === "column";
+  const isMetaLeafNode = isColumnNode || data.kind === "key" || data.kind === "index";
   const objectBindingKey = isObjectNode ? buildObjectTabBindingKey(data.sourceId, data.objectName) : "";
   const isFocusedSource = isSourceNode && treeState.focusedSourceId === sourceId;
   const isActiveObject = isObjectNode && (activeTabObjectName === objectBindingKey || activeTabObjectName === data.objectName);
@@ -139,7 +141,7 @@ function QuerySourceTreeNodeComponent({
   const sourceHasVisibleError = isSourceNode && !sourceLoading && Boolean(sourceError);
   const visualKind = resolveQueryTreeVisualKind(data);
   const badgeMeta = resolveQueryTreeBadgeMeta(visualKind);
-  const showFolderIcon = data.kind === "group";
+  const showFolderIcon = data.kind === "group" || isObjectFolderNode;
   const folderIconClassName = visualKind === "group-views" ? "text-violet-400" : "text-primary/75";
   // Object 节点 tooltip：恢复旧版“鼠标经过显示对象元数据”的能力。
   const objectTooltip = isObjectNode ? getObjectTooltip?.(data) || "" : "";
@@ -251,16 +253,22 @@ function QuerySourceTreeNodeComponent({
             </span>
           )}
 
-          {/* 名称主体：错误时切换为红色，字段节点使用更紧凑的等宽/辅助样式。 */}
+          {/* 名称主体：错误时切换为红色，字段/键/索引节点使用更紧凑的等宽/辅助样式。 */}
           <span
             className={`whitespace-nowrap leading-[1.35] ${isFocusedSource ? "font-semibold" : ""} ${
-              sourceHasVisibleError ? "text-error" : isColumnNode ? "text-[11px] text-neutral/85" : ""
+              sourceHasVisibleError ? "text-error" : isMetaLeafNode ? "text-[11px] text-neutral/85" : ""
             }`}
           >
             {isColumnNode ? data.columnName : data.label}
           </span>
+          {(data.kind === "group" || isObjectFolderNode) && typeof data.count === "number" && (
+            <span className="shrink-0 text-[11px] text-base-content/45">{data.count}</span>
+          )}
           {isColumnNode && data.dataType && (
             <span className="shrink-0 font-mono text-[10px] text-neutral/50">{data.dataType}</span>
+          )}
+          {(data.kind === "key" || data.kind === "index") && data.detail && (
+            <span className="shrink-0 font-mono text-[10px] text-neutral/50">{data.detail}</span>
           )}
           {objectFieldsLoading && (
             <span className="loading loading-spinner shrink-0 text-neutral/50" style={{ width: 11, height: 11 }} />

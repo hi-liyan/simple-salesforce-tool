@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
@@ -8,6 +9,7 @@ use sqlx::mysql::types::{MySqlTime, MySqlTimeSign};
 use sqlx::mysql::{MySqlPool, MySqlPoolOptions, MySqlRow};
 use sqlx::{types::Json, Column, MySql, QueryBuilder, Row, TypeInfo};
 
+use crate::drivers::connection_manager::ConnectionManager;
 use crate::error::AppError;
 use crate::models::{
     CurrentUserContext, MutationExecutionItem, MutationExecutionResult, MutationPreviewSqlItem,
@@ -118,8 +120,11 @@ fn infer_mysql_field_write_capability(
     }
 }
 
-/// MySQL Provider：提供表/字段/查询/CRUD/事务能力。
-pub struct MySqlProvider;
+/// MySQL Provider：提供表/字段/查询/CRUD/事务能力，并通过 ConnectionManager 复用连接池。
+pub struct MySqlProvider {
+    /// 可选连接池管理器：存在时按 source_id + 配置指纹复用 MySqlPool。
+    connection_manager: Option<Arc<ConnectionManager>>,
+}
 
 /// 构建 MySQL 新增日志 SQL：与真实执行共用主键解析和字段归一化逻辑。
 pub async fn preview_create_record_sql(
@@ -130,64 +135,6 @@ pub async fn preview_create_record_sql(
     let (safe_table, primary_key) = resolve_table_and_primary_key(source, object_name).await?;
     let normalized_values = normalize_create_values(values, &primary_key);
     build_insert_preview_sql(&safe_table, normalized_values)
-}
-
-/// 构建 MySQL 批量保存日志 SQL：逐条复用真实执行前的数据归一化逻辑。
-pub async fn preview_save_records_sql(
-    source: &SalesforceSource,
-    object_name: &str,
-    creates: Vec<HashMap<String, Value>>,
-    updates: Vec<RecordUpdatePayload>,
-) -> Result<String, AppError> {
-    let (safe_table, primary_key) = resolve_table_and_primary_key(source, object_name).await?;
-    let mut lines: Vec<String> = Vec::new();
-
-    // 新增记录逐条展开，保持与真实执行顺序一致。
-    for (index, item) in creates.into_iter().enumerate() {
-        let normalized_values = normalize_create_values(item, &primary_key);
-        let sql = build_insert_preview_sql(&safe_table, normalized_values)?;
-        lines.push(format!("[create#{index}] {sql}"));
-    }
-
-    // 更新记录逐条展开；没有可更新字段时显式标记为未执行 SQL。
-    for (index, item) in updates.into_iter().enumerate() {
-        let normalized_values = normalize_update_values(item.values, &primary_key);
-        if let Some(sql) = build_update_preview_sql(
-            &safe_table,
-            &primary_key,
-            &item.record_id,
-            normalized_values,
-        )? {
-            lines.push(format!("[update#{index}] {sql}"));
-        } else {
-            lines.push(format!("[update#{index}] -- SQL 未执行：没有可更新字段。"));
-        }
-    }
-
-    Ok(lines.join("\n"))
-}
-
-/// 构建 MySQL 批量保存+删除日志 SQL：逐条复用真实执行前的数据归一化逻辑。
-pub async fn preview_save_records_with_deletes_sql(
-    source: &SalesforceSource,
-    object_name: &str,
-    creates: Vec<HashMap<String, Value>>,
-    updates: Vec<RecordUpdatePayload>,
-    deletes: Vec<String>,
-) -> Result<String, AppError> {
-    Ok(
-        preview_save_records_with_deletes_items(source, object_name, creates, updates, deletes)
-            .await?
-            .into_iter()
-            .map(|item| {
-                format!(
-                    "[{}#{}] {}",
-                    item.op, item.operation_index, item.preview_sql
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n"),
-    )
 }
 
 /// 构建 MySQL 批量保存+删除结构化预览：供前端提交前预览与系统日志复用。
@@ -278,9 +225,42 @@ pub async fn preview_delete_record_sql(
 }
 
 impl MySqlProvider {
-    /// 创建 MySQL Provider 实例。
+    /// 创建无连接池缓存的独立 MySQL Provider 实例。
     pub fn new() -> Self {
-        Self
+        Self {
+            connection_manager: None,
+        }
+    }
+
+    /// 创建接入 ConnectionManager 连接池复用的 MySQL Provider 实例。
+    pub fn with_connection_manager(connection_manager: Arc<ConnectionManager>) -> Self {
+        Self {
+            connection_manager: Some(connection_manager),
+        }
+    }
+
+    /// 获取或复用 MySQL 连接池（仅对已持久化且拥有 source_id 的数据源启用缓存）。
+    async fn acquire_pool(
+        &self,
+        source: &SalesforceSource,
+        config: &MySqlSourceConfig,
+    ) -> Result<MySqlPool, AppError> {
+        let source_id = source.id.trim();
+        if !source_id.is_empty() {
+            if let Some(manager) = &self.connection_manager {
+                let config_hash =
+                    ConnectionManager::compute_config_hash(&config.to_connection_url());
+                if let Some(cached) = manager.get_mysql_pool(source_id, config_hash).await {
+                    return Ok(cached);
+                }
+                let pool = build_mysql_pool(config).await?;
+                manager
+                    .put_mysql_pool(source_id, config_hash, pool.clone())
+                    .await;
+                return Ok(pool);
+            }
+        }
+        build_mysql_pool(config).await
     }
 
     /// 测试数据源连接可用性。
@@ -300,7 +280,7 @@ impl MySqlProvider {
         source: &SalesforceSource,
     ) -> Result<Vec<SalesforceObject>, AppError> {
         let config = MySqlSourceConfig::from_source(source)?;
-        let pool = build_mysql_pool(&config).await?;
+        let pool = self.acquire_pool(source, &config).await?;
 
         let rows = sqlx::query(
             r#"
@@ -341,7 +321,7 @@ impl MySqlProvider {
     ) -> Result<ObjectDescribe, AppError> {
         let safe_table = ensure_safe_identifier(object_name, "表名")?;
         let config = MySqlSourceConfig::from_source(source)?;
-        let pool = build_mysql_pool(&config).await?;
+        let pool = self.acquire_pool(source, &config).await?;
 
         let rows = sqlx::query(
             r#"
@@ -468,18 +448,40 @@ impl MySqlProvider {
         Ok(None)
     }
 
-    /// 执行 SQL 查询并映射为记录列表。
+    /// 执行 SQL 查询或 DML/DDL 语句并映射为统一结果集（写操作安全拦截由上层 SqlGuard 负责）。
     pub async fn query_records(
         &self,
         source: &SalesforceSource,
         query_text: &str,
         describe: Option<&ObjectDescribe>,
     ) -> Result<QueryResult, AppError> {
-        ensure_readonly_query(query_text)?;
+        let trimmed_query = query_text.trim();
+        if trimmed_query.is_empty() {
+            return Err(AppError::Biz("查询语句不能为空".to_string()));
+        }
         let config = MySqlSourceConfig::from_source(source)?;
-        let pool = build_mysql_pool(&config).await?;
+        let pool = self.acquire_pool(source, &config).await?;
 
-        let inferred_table = infer_table_name_from_query(query_text);
+        // 非结果集语句（INSERT/UPDATE/DELETE/CREATE/ALTER/DROP 等）直接走 execute 并返回受影响行数。
+        if !is_result_set_query(trimmed_query) {
+            let done = sqlx::query(trimmed_query)
+                .execute(&pool)
+                .await
+                .map_err(|error| AppError::Db(format!("执行 MySQL 语句失败: {error}")))?;
+            let rows_affected = done.rows_affected();
+            let last_insert_id = done.last_insert_id();
+            let mut summary = HashMap::new();
+            summary.insert("affectedRows".to_string(), Value::from(rows_affected));
+            if last_insert_id > 0 {
+                summary.insert("lastInsertId".to_string(), Value::from(last_insert_id));
+            }
+            return Ok(QueryResult {
+                total_size: usize::try_from(rows_affected).unwrap_or(0),
+                records: vec![summary],
+            });
+        }
+
+        let inferred_table = infer_table_name_from_query(trimmed_query);
         let inferred_primary_key = if let Some(table_name) = inferred_table.as_deref() {
             resolve_primary_key_column(&pool, &config, table_name)
                 .await
@@ -488,10 +490,11 @@ impl MySqlProvider {
             None
         };
         let inferred_column_types = build_column_type_map_from_describe(describe);
-        // 根查询显式带 LIMIT/OFFSET 时额外统计真实总数，避免前端只能按当前页条数猜测分页状态。
-        let has_paginated_clause = has_top_level_limit_or_offset(query_text);
+        // 仅 SELECT / WITH 分页查询额外统计真实总数，避免 SHOW/EXPLAIN 等语句被子查询包装报错。
+        let has_paginated_clause =
+            supports_total_count_rewrite(trimmed_query) && has_top_level_limit_or_offset(trimmed_query);
         let total_size = if has_paginated_clause {
-            let count_query = build_total_count_query(query_text);
+            let count_query = build_total_count_query(trimmed_query);
             let total_count: i64 = sqlx::query_scalar(&count_query)
                 .fetch_one(&pool)
                 .await
@@ -501,7 +504,7 @@ impl MySqlProvider {
             0
         };
 
-        let rows = sqlx::query(query_text)
+        let rows = sqlx::query(trimmed_query)
             .fetch_all(&pool)
             .await
             .map_err(|error| AppError::Db(format!("执行 MySQL 查询失败: {error}")))?;
@@ -550,7 +553,7 @@ impl MySqlProvider {
     ) -> Result<String, AppError> {
         let safe_table = ensure_safe_identifier(object_name, "表名")?;
         let config = MySqlSourceConfig::from_source(source)?;
-        let pool = build_mysql_pool(&config).await?;
+        let pool = self.acquire_pool(source, &config).await?;
         let primary_key = resolve_primary_key_column(&pool, &config, &safe_table).await?;
 
         // 与前端现有约定兼容：若仅有 Id 字段，则映射到真实主键列。
@@ -579,7 +582,7 @@ impl MySqlProvider {
     ) -> Result<(), AppError> {
         let safe_table = ensure_safe_identifier(object_name, "表名")?;
         let config = MySqlSourceConfig::from_source(source)?;
-        let pool = build_mysql_pool(&config).await?;
+        let pool = self.acquire_pool(source, &config).await?;
         let primary_key = resolve_primary_key_column(&pool, &config, &safe_table).await?;
         let mut transaction = pool
             .begin()
@@ -624,7 +627,7 @@ impl MySqlProvider {
     ) -> Result<MutationExecutionResult, AppError> {
         let safe_table = ensure_safe_identifier(object_name, "表名")?;
         let config = MySqlSourceConfig::from_source(source)?;
-        let pool = build_mysql_pool(&config).await?;
+        let pool = self.acquire_pool(source, &config).await?;
         let primary_key = resolve_primary_key_column(&pool, &config, &safe_table).await?;
         let mut transaction = pool
             .begin()
@@ -743,7 +746,7 @@ impl MySqlProvider {
     ) -> Result<(), AppError> {
         let safe_table = ensure_safe_identifier(object_name, "表名")?;
         let config = MySqlSourceConfig::from_source(source)?;
-        let pool = build_mysql_pool(&config).await?;
+        let pool = self.acquire_pool(source, &config).await?;
         let primary_key = resolve_primary_key_column(&pool, &config, &safe_table).await?;
 
         let values = normalize_update_values(values, &primary_key);
@@ -765,7 +768,7 @@ impl MySqlProvider {
     ) -> Result<(), AppError> {
         let safe_table = ensure_safe_identifier(object_name, "表名")?;
         let config = MySqlSourceConfig::from_source(source)?;
-        let pool = build_mysql_pool(&config).await?;
+        let pool = self.acquire_pool(source, &config).await?;
         let primary_key = resolve_primary_key_column(&pool, &config, &safe_table).await?;
 
         execute_delete(&pool, &safe_table, &primary_key, record_id)
@@ -786,7 +789,7 @@ impl MySqlProvider {
     ) -> Result<ObjectDdl, AppError> {
         let safe_table = ensure_safe_identifier(object_name, "表名")?;
         let config = MySqlSourceConfig::from_source(source)?;
-        let pool = build_mysql_pool(&config).await?;
+        let pool = self.acquire_pool(source, &config).await?;
 
         // 1. 建表 DDL：直接读取 SHOW CREATE TABLE。
         let create_row = sqlx::query(&format!("SHOW CREATE TABLE `{safe_table}`"))
@@ -979,23 +982,21 @@ async fn build_mysql_pool(config: &MySqlSourceConfig) -> Result<MySqlPool, AppEr
         .map_err(|error| AppError::Db(format!("连接 MySQL 失败: {error}")))
 }
 
-/// 限制 query_records 为只读语句，避免把写操作误放到查询入口。
-fn ensure_readonly_query(query_text: &str) -> Result<(), AppError> {
-    let normalized = query_text.trim().to_lowercase();
-    if normalized.is_empty() {
-        return Err(AppError::Biz("查询语句不能为空".to_string()));
-    }
-    if normalized.starts_with("select")
+/// 判断语句是否会返回结果集（SELECT/SHOW/WITH/DESC/DESCRIBE/EXPLAIN）。
+fn is_result_set_query(query_text: &str) -> bool {
+    let normalized = query_text.trim_start().to_ascii_lowercase();
+    normalized.starts_with("select")
         || normalized.starts_with("show")
         || normalized.starts_with("with")
         || normalized.starts_with("desc")
         || normalized.starts_with("describe")
-    {
-        return Ok(());
-    }
-    Err(AppError::Biz(
-        "MySQL 查询仅允许只读语句（SELECT/SHOW/WITH/DESC）".to_string(),
-    ))
+        || normalized.starts_with("explain")
+}
+
+/// 判断语句是否支持包装为 `SELECT COUNT(*) FROM (...)` 统计总数。
+fn supports_total_count_rewrite(query_text: &str) -> bool {
+    let normalized = query_text.trim_start().to_ascii_lowercase();
+    normalized.starts_with("select") || normalized.starts_with("with")
 }
 
 /// 从 SQL 文本中尝试推断首个 FROM 表名（用于自动补齐 Id 字段）。

@@ -321,7 +321,6 @@ function main() {
 
   // 构建前将新版本号写入应用所有版本声明文件，确保打包产物与仓库状态完全一致
   updateJsonVersion(path.join(rootDir, "package.json"), nextVersion);
-  updateJsonVersion(path.join(rootDir, "package-lock.json"), nextVersion, true);
   updateJsonVersion(path.join(rootDir, "src-tauri", "tauri.conf.json"), nextVersion);
   updateCargoTomlVersion(path.join(rootDir, "src-tauri", "Cargo.toml"), nextVersion);
   updateCargoLockVersion(path.join(rootDir, "src-tauri", "Cargo.lock"), nextVersion);

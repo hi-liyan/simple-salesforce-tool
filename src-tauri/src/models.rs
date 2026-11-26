@@ -81,6 +81,7 @@ pub struct SourceSecretView {
 /// secret 访问审计记录。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct SecretAuditRecord {
     /// bundle ID。
     pub bundle_id: String,
@@ -105,6 +106,7 @@ pub struct SecretAuditRecord {
 /// secret 审计列表项。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct SecretAuditEntry {
     /// 审计主键。
     pub id: i64,
@@ -225,6 +227,7 @@ pub struct SourceObjectRecord {
 
 impl SourceObjectRecord {
     /// 便捷构造 Salesforce 对象记录。
+    #[allow(dead_code)]
     pub fn salesforce(name: &str, label: &str) -> Self {
         Self {
             source_id: String::new(),
@@ -271,6 +274,7 @@ pub struct SourceObjectFieldRecord {
 
 impl SourceObjectFieldRecord {
     /// 构造文本字段记录。
+    #[allow(dead_code)]
     pub fn text(object_name: &str, field_name: &str, sort_order: i64) -> Self {
         Self {
             source_id: String::new(),
@@ -333,6 +337,7 @@ pub struct SourceMetadataBlobRecord {
 
 impl SourceMetadataBlobRecord {
     /// 构造 describe blob。
+    #[allow(dead_code)]
     pub fn describe(object_name: &str, payload_json: &str) -> Self {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
@@ -436,6 +441,7 @@ pub struct WorkspaceTabDto {
 
 impl WorkspaceTabDto {
     /// 构造 query 标签。
+    #[allow(dead_code)]
     pub fn query(tab_id: &str, title: &str, source_id: &str) -> Self {
         Self {
             tab_id: tab_id.to_string(),
@@ -501,6 +507,7 @@ pub struct QueryTabStateDto {
 
 impl QueryTabStateDto {
     /// 构造最小 seed。
+    #[allow(dead_code)]
     pub fn seed(tab_id: &str, source_id: &str, object_name: &str) -> Self {
         Self {
             tab_id: tab_id.to_string(),
@@ -547,6 +554,7 @@ pub struct QueryResultSetDto {
 
 impl QueryResultSetDto {
     /// 构造 stale seed。
+    #[allow(dead_code)]
     pub fn stale_seed(
         result_set_id: &str,
         tab_id: &str,
@@ -844,6 +852,7 @@ pub struct TerminalShellSettings {
 
 /// 对象列表缓存行（SQLite 内部结构）。
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct CachedObjects {
     /// 缓存内容 JSON 字符串。
     pub payload: String,

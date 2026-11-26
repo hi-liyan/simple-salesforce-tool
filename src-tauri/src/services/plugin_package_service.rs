@@ -199,6 +199,7 @@ impl<'a> PluginPackageService<'a> {
     }
 
     /// 从本地文件路径预览 `.sstplugin` 插件包。
+    #[allow(dead_code)]
     pub fn inspect_package_file(
         &self,
         package_path: &str,

@@ -1,8 +1,11 @@
+import { Suspense, lazy } from "react";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { ErrorBoundary } from "./components/ErrorBoundary";
-import { AuthPage } from "./pages/AuthPage";
-import { FieldMetaPage } from "./pages/FieldMetaPage";
-import { MainPage } from "./pages/MainPage";
+
+// 按窗口 label 懒加载页面入口，避免主窗口与子窗口互相打包冗余代码。
+const LazyMainPage = lazy(() => import("./pages/MainPage").then((m) => ({ default: m.MainPage })));
+const LazyAuthPage = lazy(() => import("./pages/AuthPage").then((m) => ({ default: m.AuthPage })));
+const LazyFieldMetaPage = lazy(() => import("./pages/FieldMetaPage").then((m) => ({ default: m.FieldMetaPage })));
 
 type AppPage = "main" | "auth" | "field-meta";
 
@@ -13,7 +16,6 @@ function resolvePageByWindowLabel(): AppPage {
     if (label === "sf-field-meta") return "field-meta";
     return "main";
   } catch {
-    // Fallback for non-Tauri environments.
     if (window.location.pathname === "/auth") return "auth";
     if (window.location.pathname === "/field-meta") return "field-meta";
     return "main";
@@ -26,7 +28,9 @@ export default function App() {
   return (
     <div data-theme="salesforce" className="h-full w-full">
       <ErrorBoundary>
-        {page === "auth" ? <AuthPage /> : page === "field-meta" ? <FieldMetaPage /> : <MainPage />}
+        <Suspense fallback={<div className="h-full w-full bg-[#F2F4F7]" />}>
+          {page === "auth" ? <LazyAuthPage /> : page === "field-meta" ? <LazyFieldMetaPage /> : <LazyMainPage />}
+        </Suspense>
       </ErrorBoundary>
     </div>
   );

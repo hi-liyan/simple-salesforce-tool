@@ -1,6 +1,6 @@
 import { getDataSourceDriver } from "../../../../drivers/registry.ts";
-import type { ObjectField, SalesforceObject, SalesforceSource } from "../../../../types/index.ts";
-import type { QueryTreeNode, QueryTreeProviderContext } from "../types/tree.ts";
+import type { ObjectDdl, ObjectField, SalesforceObject, SalesforceSource } from "../../../../types/index.ts";
+import type { QueryObjectFolderType, QueryTreeNode, QueryTreeProviderContext } from "../types/tree.ts";
 
 // 构造 source 根节点：统一供左侧树第一层渲染使用。
 export function buildSourceRootNodes(sources: SalesforceSource[], context: QueryTreeProviderContext): QueryTreeNode[] {
@@ -78,6 +78,156 @@ export function buildObjectColumnChildren(
       nullable: field.nillable,
       label: dataType ? `${field.name} (${dataType})` : field.name,
       expandable: false
+    };
+  });
+}
+
+// 从字段元数据中提取主键列名列表，供 keys 与 indexes 节点复用。
+function extractPrimaryKeyColumnNames(fields: ObjectField[]): string[] {
+  return fields
+    .filter((field) => String(field.metadata?.columnKey || "").toUpperCase() === "PRI")
+    .map((field) => field.name);
+}
+
+// 构造表/对象下的键（Keys）子节点列表：包含主键与 UNIQUE / FOREIGN KEY 约束。
+export function buildObjectKeyChildren(
+  sourceId: string,
+  sourceType: string,
+  objectName: string,
+  fields: ObjectField[],
+  ddl?: ObjectDdl | null
+): QueryTreeNode[] {
+  const nodes: QueryTreeNode[] = [];
+  const primaryKeyColumns = extractPrimaryKeyColumnNames(fields);
+
+  if (primaryKeyColumns.length > 0) {
+    nodes.push({
+      id: `key:${sourceId}:${objectName}:PRIMARY`,
+      kind: "key",
+      sourceId,
+      sourceType,
+      objectName,
+      keyName: "PRIMARY",
+      keyKind: "PK",
+      detail: `(${primaryKeyColumns.join(", ")})`,
+      label: "PRIMARY",
+      expandable: false
+    });
+  }
+
+  for (const constraintDdl of ddl?.constraintDdls || []) {
+    const match = constraintDdl.match(
+      /ADD CONSTRAINT `([^`]+)`\s+(UNIQUE|FOREIGN KEY)\s*\(([^)]+)\)(?:\s+REFERENCES\s+`([^`]+)`\s*\(([^)]+)\))?/i
+    );
+    if (!match) continue;
+    const [, constraintName, constraintType, cols, refTable, refCols] = match;
+    const keyKind = constraintType.toUpperCase() === "FOREIGN KEY" ? "FK" : "UK";
+    const cleanedCols = cols.replace(/`/g, "").trim();
+    const cleanedRefCols = refCols ? refCols.replace(/`/g, "").trim() : "";
+    const detail = refTable ? `(${cleanedCols}) -> ${refTable}(${cleanedRefCols})` : `(${cleanedCols})`;
+
+    nodes.push({
+      id: `key:${sourceId}:${objectName}:${constraintName}`,
+      kind: "key",
+      sourceId,
+      sourceType,
+      objectName,
+      keyName: constraintName,
+      keyKind,
+      detail,
+      label: constraintName,
+      expandable: false
+    });
+  }
+
+  return nodes;
+}
+
+// 构造表/对象下的索引（Indexes）子节点列表：包含主键索引与普通/唯一二级索引。
+export function buildObjectIndexChildren(
+  sourceId: string,
+  sourceType: string,
+  objectName: string,
+  fields: ObjectField[],
+  ddl?: ObjectDdl | null
+): QueryTreeNode[] {
+  const nodes: QueryTreeNode[] = [];
+  const primaryKeyColumns = extractPrimaryKeyColumnNames(fields);
+
+  if (primaryKeyColumns.length > 0) {
+    nodes.push({
+      id: `index:${sourceId}:${objectName}:PRIMARY`,
+      kind: "index",
+      sourceId,
+      sourceType,
+      objectName,
+      indexName: "PRIMARY",
+      indexKind: "PK",
+      detail: `(${primaryKeyColumns.join(", ")})`,
+      label: "PRIMARY",
+      expandable: false
+    });
+  }
+
+  for (const indexDdl of ddl?.indexDdls || []) {
+    const match = indexDdl.match(
+      /^CREATE\s+(UNIQUE\s+)?INDEX\s+`([^`]+)`\s+ON\s+`[^`]+`\s*\(([^)]+)\)(?:\s+USING\s+([^\s;]+))?/i
+    );
+    if (!match) continue;
+    const [, uniqueFlag, indexName, cols, indexType] = match;
+    const indexKind = uniqueFlag ? "UX" : "IX";
+    const cleanedCols = cols.replace(/`/g, "").trim();
+    const detail = indexType ? `(${cleanedCols}) · ${indexType}` : `(${cleanedCols})`;
+
+    nodes.push({
+      id: `index:${sourceId}:${objectName}:${indexName}`,
+      kind: "index",
+      sourceId,
+      sourceType,
+      objectName,
+      indexName,
+      indexKind,
+      detail,
+      label: indexName,
+      expandable: false
+    });
+  }
+
+  return nodes;
+}
+
+// 按驱动声明的子目录结构构造表下目录节点（columns / keys / indexes）。
+export function buildObjectSubFolderChildren(
+  sourceId: string,
+  sourceType: string,
+  objectName: string,
+  subFolders: QueryObjectFolderType[],
+  fields: ObjectField[],
+  ddl?: ObjectDdl | null
+): { folderNode: QueryTreeNode; children: QueryTreeNode[] }[] {
+  return subFolders.map((folderType) => {
+    let children: QueryTreeNode[] = [];
+    if (folderType === "columns") {
+      children = buildObjectColumnChildren(sourceId, sourceType, objectName, fields);
+    } else if (folderType === "keys") {
+      children = buildObjectKeyChildren(sourceId, sourceType, objectName, fields, ddl);
+    } else if (folderType === "indexes") {
+      children = buildObjectIndexChildren(sourceId, sourceType, objectName, fields, ddl);
+    }
+
+    return {
+      folderNode: {
+        id: `object-folder:${sourceId}:${objectName}:${folderType}`,
+        kind: "object-folder",
+        sourceId,
+        sourceType,
+        objectName,
+        folderType,
+        label: folderType,
+        count: children.length,
+        expandable: children.length > 0
+      },
+      children
     };
   });
 }

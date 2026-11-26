@@ -111,6 +111,7 @@ impl Storage {
     }
 
     /// 返回当前数据库文件路径。
+    #[allow(dead_code)]
     pub fn db_path(&self) -> &Path {
         &self.db_path
     }

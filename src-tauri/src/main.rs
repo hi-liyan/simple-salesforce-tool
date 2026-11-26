@@ -36,18 +36,43 @@ fn main() {
                 .open_js_links_on_click(false)
                 .build(),
         )
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         // 注册 `plugin://` 自定义协议：安全映射 `{app_data_dir}/plugins/<plugin-id>/` 下的静态资源供 iframe 沙箱加载。
         .register_uri_scheme_protocol("plugin", |ctx, request| {
             let app = ctx.app_handle();
             let uri = request.uri();
             let host = uri.host().unwrap_or_default();
             let raw_path = uri.path().trim_start_matches('/');
-            let (plugin_id, asset_path) = if host.eq_ignore_ascii_case("plugin.localhost") || host.is_empty() {
+            // Windows WebView2 会将 http://plugin.localhost/<id>/<path> 映射为 host="localhost" 或 "plugin.localhost"。
+            let (raw_plugin_id, raw_asset_path) = if host.eq_ignore_ascii_case("plugin.localhost")
+                || host.eq_ignore_ascii_case("localhost")
+                || host.is_empty()
+            {
                 let mut parts = raw_path.splitn(2, '/');
-                (parts.next().unwrap_or_default(), parts.next().unwrap_or("dist/index.html"))
+                (
+                    parts.next().unwrap_or_default(),
+                    parts
+                        .next()
+                        .filter(|p| !p.is_empty())
+                        .unwrap_or("dist/index.html"),
+                )
             } else {
-                (host, if raw_path.is_empty() { "dist/index.html" } else { raw_path })
+                (
+                    host,
+                    if raw_path.is_empty() {
+                        "dist/index.html"
+                    } else {
+                        raw_path
+                    },
+                )
             };
+            let decoded_plugin_id = urlencoding::decode(raw_plugin_id)
+                .map(|value| value.into_owned())
+                .unwrap_or_else(|_| raw_plugin_id.to_string());
+            let decoded_asset_path = urlencoding::decode(raw_asset_path)
+                .map(|value| value.into_owned())
+                .unwrap_or_else(|_| raw_asset_path.to_string());
 
             let result = (|| -> Result<(Vec<u8>, String), String> {
                 let state = app
@@ -59,7 +84,7 @@ fn main() {
                     data_dir.join("plugins"),
                 );
                 service
-                    .read_plugin_asset(plugin_id, asset_path)
+                    .read_plugin_asset(&decoded_plugin_id, &decoded_asset_path)
                     .map_err(|e| e.to_string())
             })();
 

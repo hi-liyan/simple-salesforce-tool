@@ -45,6 +45,7 @@ pub fn provider_for_source<'a>(
 
 impl DataProvider<'_> {
     /// 测试数据源连接是否可用。
+    #[allow(dead_code)]
     pub async fn test_connection(&self, source: &SalesforceSource) -> Result<(), AppError> {
         match self {
             DataProvider::Salesforce(provider) => provider.test_connection(source).await,

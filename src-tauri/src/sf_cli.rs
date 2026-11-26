@@ -218,6 +218,7 @@ pub fn refresh_cli_source_by_id(
 
 /// 通过 Salesforce CLI 直接打开指定组织的页面路径（系统默认浏览器）。
 /// 说明：仅支持 `cli-<orgId>` 数据源。
+#[allow(dead_code)]
 pub fn open_org_path(
     source_id: &str,
     path: &str,
@@ -604,6 +605,7 @@ fn org_display_args_for(cli: &str, org_identifier: &str) -> Vec<String> {
     }
 }
 
+#[allow(dead_code)]
 fn org_open_args_for(cli: &str, org_identifier: &str, path: &str) -> Vec<String> {
     let filename = Path::new(cli)
         .file_name()

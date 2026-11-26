@@ -1,6 +1,6 @@
 import type { QueryTreeNode } from "../types/tree.ts";
 
-// 左侧树视觉类型：统一约束 source/group/object/column 的极简图标风格。
+// 左侧树视觉类型：统一约束 source/group/object/column/key/index 的极简图标风格。
 export type QueryTreeVisualKind =
   | "source-salesforce"
   | "source-mysql"
@@ -9,12 +9,21 @@ export type QueryTreeVisualKind =
   | "group-users"
   | "group-tables"
   | "group-views"
+  | "group-columns"
+  | "group-keys"
+  | "group-indexes"
   | "group-generic"
   | "object-mysql-table"
   | "object-queryable"
   | "object-readonly"
   | "column-pk"
-  | "column-field";
+  | "column-field"
+  | "key-pk"
+  | "key-uk"
+  | "key-fk"
+  | "index-pk"
+  | "index-unique"
+  | "index-normal";
 
 // 左侧树文字徽标定义：统一控制文案与色调，避免组件内散落判断。
 export type QueryTreeBadgeMeta = {
@@ -39,6 +48,25 @@ export function resolveQueryTreeVisualKind(node: QueryTreeNode): QueryTreeVisual
     if (node.groupType === "users") return "group-users";
     if (node.groupType === "virtual-views") return "group-views";
     return "group-generic";
+  }
+
+  if (node.kind === "object-folder") {
+    if (node.folderType === "columns") return "group-columns";
+    if (node.folderType === "keys") return "group-keys";
+    if (node.folderType === "indexes") return "group-indexes";
+    return "group-generic";
+  }
+
+  if (node.kind === "key") {
+    if (node.keyKind === "PK") return "key-pk";
+    if (node.keyKind === "FK") return "key-fk";
+    return "key-uk";
+  }
+
+  if (node.kind === "index") {
+    if (node.indexKind === "PK") return "index-pk";
+    if (node.indexKind === "UX") return "index-unique";
+    return "index-normal";
   }
 
   if (node.kind === "column") {
@@ -69,6 +97,12 @@ export function resolveQueryTreeBadgeMeta(kind: QueryTreeVisualKind): QueryTreeB
       return { text: "US", tone: "neutral" };
     case "group-views":
       return { text: "VW", tone: "orange" };
+    case "group-columns":
+      return { text: "CL", tone: "neutral" };
+    case "group-keys":
+      return { text: "KY", tone: "amber" };
+    case "group-indexes":
+      return { text: "IX", tone: "blue" };
     case "group-generic":
       return { text: "GR", tone: "neutral" };
     case "object-mysql-table":
@@ -76,7 +110,17 @@ export function resolveQueryTreeBadgeMeta(kind: QueryTreeVisualKind): QueryTreeB
     case "object-readonly":
       return { text: "NQ", tone: "muted" };
     case "column-pk":
+    case "key-pk":
+    case "index-pk":
       return { text: "PK", tone: "amber" };
+    case "key-uk":
+      return { text: "UK", tone: "blue" };
+    case "key-fk":
+      return { text: "FK", tone: "orange" };
+    case "index-unique":
+      return { text: "UX", tone: "blue" };
+    case "index-normal":
+      return { text: "IX", tone: "gray" };
     case "column-field":
       return { text: "C", tone: "gray" };
     case "object-queryable":

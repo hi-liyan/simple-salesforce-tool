@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use crate::error::AppError;
 use crate::models::{
-    ObjectDescribe, SalesforceObject, SalesforceSource, SourceSecretView, SourceUpsertPayload,
+    ObjectDescribe, SalesforceObject, SalesforceSource, SourceUpsertPayload,
     SystemLogPage, TerminalCommandGroup, TerminalCommandItem, TerminalCommandReorderPayload,
     TerminalCommandUpsertPayload, WorkspaceSnapshotDto,
 };
@@ -57,35 +57,6 @@ pub fn get_source(connection: &Connection, id: &str) -> Result<SalesforceSource,
     Ok(source)
 }
 
-/// 新建数据源。
-pub fn create_source(
-    connection: &Connection,
-    payload: SourceUpsertPayload,
-) -> Result<SalesforceSource, AppError> {
-    let tx = connection.unchecked_transaction()?;
-    let source_id = uuid::Uuid::new_v4().to_string();
-    let secret_bundle_id = persist_source_secrets(&tx, &source_id, None, &payload)?;
-    let record =
-        source_repo::insert_source(&tx, &source_id, &payload, secret_bundle_id.as_deref())?;
-    tx.commit()?;
-    Ok(source_repo::into_public_source(record, String::new()))
-}
-
-/// 更新数据源。
-pub fn update_source(
-    connection: &Connection,
-    id: &str,
-    payload: SourceUpsertPayload,
-) -> Result<SalesforceSource, AppError> {
-    let tx = connection.unchecked_transaction()?;
-    let current = source_repo::get_source(&tx, id)?;
-    let secret_bundle_id =
-        persist_source_secrets(&tx, id, current.secret_bundle_id.as_deref(), &payload)?;
-    let record = source_repo::update_source(&tx, id, &payload, secret_bundle_id.as_deref())?;
-    tx.commit()?;
-    Ok(source_repo::into_public_source(record, String::new()))
-}
-
 /// 指定 ID 执行 upsert：供 CLI 数据源同步使用。
 pub fn upsert_source_with_id(
     connection: &Connection,
@@ -108,55 +79,9 @@ pub fn upsert_source_with_id(
     Ok(source_repo::into_public_source(record, String::new()))
 }
 
-/// 调整数据源顺序。
-pub fn reorder_sources(
-    connection: &Connection,
-    ordered_ids: &[String],
-) -> Result<Vec<SalesforceSource>, AppError> {
-    source_repo::reorder_sources(connection, ordered_ids)?;
-    list_sources(connection)
-}
-
 /// 清理未保留的 CLI 数据源。
 pub fn prune_cli_sources(connection: &Connection, keep_ids: &[String]) -> Result<(), AppError> {
     source_repo::prune_cli_sources(connection, keep_ids)
-}
-
-/// 删除数据源。
-pub fn delete_source(connection: &Connection, id: &str) -> Result<(), AppError> {
-    let tx = connection.unchecked_transaction()?;
-    source_repo::delete_source(&tx, id)?;
-    tx.commit()?;
-    Ok(())
-}
-
-/// 读取显式 secret 明文视图。
-pub fn get_source_secret_view(
-    connection: &Connection,
-    source_id: &str,
-) -> Result<SourceSecretView, AppError> {
-    let tx = connection.unchecked_transaction()?;
-    let record = source_repo::get_source(&tx, source_id)?;
-    let view = SourceSecretView {
-        source_id: source_id.to_string(),
-        access_token: read_runtime_source_secret(&tx, &record, "accessToken")?.unwrap_or_default(),
-        password: read_runtime_source_secret(&tx, &record, "password")?.unwrap_or_default(),
-    };
-    if let Some(bundle_id) = &record.secret_bundle_id {
-        secret_repo::insert_secret_access_audit(
-            &tx,
-            bundle_id,
-            None,
-            "read_plaintext_for_edit",
-            "settings.edit-source",
-            true,
-            "允许设置页显式读取 secret 明文",
-            "",
-            "{}",
-        )?;
-    }
-    tx.commit()?;
-    Ok(view)
 }
 
 /// 读取列可见性。

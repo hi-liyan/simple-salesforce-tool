@@ -7,7 +7,6 @@ import { listDataSourceDrivers } from "../drivers/registry";
 import { useMainPageQueryPanel } from "../features/main/QueryPanel/hooks/useMainPageQueryPanel";
 import { AppShellLayout } from "../layouts/AppShellLayout";
 import { CustomTitleBar } from "../layouts/CustomTitleBar";
-import { registerBuiltinPlugins } from "../plugins/builtin";
 import {
   createPluginContext,
   getPlugin,
@@ -18,16 +17,20 @@ import {
 } from "../plugins/core";
 import { useAppStore } from "../store/useAppStore";
 import { useSoqlExecutorStore } from "../store/useSoqlExecutorStore";
-import { useTerminalStore } from "../store/useTerminalStore";
 import { useQueryWorkspaceTabsStore } from "../store/useQueryWorkspaceTabsStore";
 import { useQuerySourceTreeStore } from "../store/useQuerySourceTreeStore";
 import { enableStorageWrite } from "../store/tauriStorage";
-import { checkGithubLatestVersion, waitForUiIdleFrame } from "../utils/versionUpdate";
+import type { Update } from "@tauri-apps/plugin-updater";
+import { checkAppUpdateWithFallback, installNativeAppUpdate, waitForUiIdleFrame } from "../utils/versionUpdate";
 import { createStartupCoordinator, shouldKeepQueryPanelMounted, shouldMountQueryPanel } from "./mainPageStartup";
 import { QueryPanel } from "../features/main/QueryPanel";
+import { BottomConsoleDrawer } from "../features/terminal/BottomConsoleDrawer";
+import { SourceConnectionModal, type SourceConnectionModalMode } from "../features/source-manager/SourceConnectionModal";
+import { subscribeSourceActionEvent } from "../features/source-manager/sourceModalEvents";
+import { SettingsModal } from "../features/settings/SettingsModal";
+import { LogAuditModal } from "../features/logs/LogAuditModal";
+import type { SalesforceSource } from "../types";
 
-// 初始化注册全部内置插件（命令库、系统终端与工具箱）。
-registerBuiltinPlugins();
 // 启动版本检查标志：避免 React StrictMode 在开发环境重复触发新版本通知。
 let startupVersionCheckTriggered = false;
 
@@ -75,23 +78,6 @@ const STARTUP_STAGE_MAP = Object.fromEntries(STARTUP_STAGES.map((stage) => [stag
 // 启动协调器：跨 StrictMode 双挂载共享一次性启动任务与阶段进度。
 const mainPageStartupCoordinator = createStartupCoordinator<StartupStage>(STARTUP_STAGE_MAP.rehydrate);
 
-// 懒加载 Query 工作区：将 DataGrid / 控制台等较重 UI 拆出首包。
-// 懒加载 Terminal 工作区：将 xterm 与 Monaco 等重模块延后到首次进入时再加载。
-const LazyTerminalPanel = lazy(async () => {
-  const module = await import("../features/main/TerminalPanel");
-  return {
-    default: module.TerminalPanel
-  };
-});
-
-// 懒加载设置页：避免首屏加载非当前视图所需表单与管理逻辑。
-const LazySettingsPanel = lazy(async () => {
-  const module = await import("../features/main/SettingsPanel");
-  return {
-    default: module.SettingsPanel
-  };
-});
-
 // 懒加载工具页：避免首屏加载 JSON 工具相关编辑器与树组件。
 const LazyToolsPanel = lazy(async () => {
   const module = await import("../features/main/ToolsPanel");
@@ -130,16 +116,28 @@ export function MainPage() {
   const soqlSidebarWidth = useAppStore((state) => state.soqlSidebarWidth);
   const setSoqlSidebarWidth = useAppStore((state) => state.setSoqlSidebarWidth);
   const compactPersistedTabsSnapshot = useAppStore((state) => state.compactPersistedTabsSnapshot);
-  const resetTerminalWorkspace = useTerminalStore((state) => state.resetTerminalWorkspace);
 
   // 启动画面快照：由模块级协调器托管，避免 StrictMode 双挂载重复执行启动重任务。
   const [startupState, setStartupState] = useState(() => mainPageStartupCoordinator.getSnapshot());
   // 新版本提示通知状态：有值时在右上角显示升级通知。
   const [versionUpdateNotice, setVersionUpdateNotice] = useState<VersionUpdateNoticeState | null>(null);
-  // Query 工作区是否已初始化：首次进入 Query 后保持挂载，避免切页时重建 DataGrid 等重组件。
+  // Query 工作区是否已初始化：首次进入后保持挂载，避免切页时重建 DataGrid 等重组件。
   const [queryPanelMounted, setQueryPanelMounted] = useState(() => shouldMountQueryPanel(viewMode, mainPageStartupCoordinator.getSnapshot().complete));
-  // Terminal 面板是否已初始化：首次进入 Terminal 后保持挂载，避免切页时重建会话。
-  const [terminalPanelMounted, setTerminalPanelMounted] = useState(viewMode === "terminal");
+  // VSCode 风格底部集成终端抽屉开关（支持 Ctrl + ` 呼出/收起）。
+  const [bottomConsoleOpen, setBottomConsoleOpen] = useState(false);
+  // 统一新建/编辑/复制数据源弹窗状态。
+  const [sourceModalState, setSourceModalState] = useState<{
+    open: boolean;
+    mode: SourceConnectionModalMode;
+    source: SalesforceSource | null;
+  }>({ open: false, mode: "create", source: null });
+  // 待确认删除的数据源。
+  const [pendingDeleteSource, setPendingDeleteSource] = useState<SalesforceSource | null>(null);
+  const [deletingSource, setDeletingSource] = useState(false);
+  // 应用设置弹窗开关（支持 Ctrl + , 快捷键）。
+  const [settingsModalOpen, setSettingsModalOpen] = useState(false);
+  // 日志与 SQL 审计中心弹窗开关。
+  const [logAuditModalOpen, setLogAuditModalOpen] = useState(false);
   // 右侧停靠插件面板（如命令库 / 局域网接收）：默认收起，可从标题栏或插件中心开启。
   const [rightDockPluginId, setRightDockPluginId] = useState<string | null>(null);
   // 插件中心弹窗开关。
@@ -196,14 +194,6 @@ export function MainPage() {
       // rehydrate 完成后开启写入门控，并主动把旧版重快照压缩为轻量结构。
       enableStorageWrite();
       compactPersistedTabsSnapshot();
-      // 终端工作区不参与启动恢复：每次启动都从空白标签开始。
-      resetTerminalWorkspace();
-      // 同步移除历史终端快照，避免后续误触发恢复旧 Tab。
-      try {
-        await Promise.resolve(useTerminalStore.persist.clearStorage());
-      } catch {
-        // 清理失败不阻断主界面启动，其它面板仍应继续恢复。
-      }
 
       // 启动第三阶段：恢复本地数据源与上次选择结果。
       setStage(STARTUP_STAGE_MAP["restore-sources"]);
@@ -258,7 +248,46 @@ export function MainPage() {
     return () => {
       unsubscribe();
     };
-  }, [compactPersistedTabsSnapshot, refreshSources, reloadRestoredTabs, resetTerminalWorkspace]);
+  }, [compactPersistedTabsSnapshot, refreshSources, reloadRestoredTabs]);
+
+  // 全局快捷键：Ctrl + ` 切换底部终端抽屉；Ctrl + , 打开应用设置。
+  useEffect(() => {
+    const handleGlobalShortcuts = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return;
+      const isBackquote = event.code === "Backquote" || event.key === "`";
+      if (isBackquote) {
+        event.preventDefault();
+        event.stopPropagation();
+        setBottomConsoleOpen((prev) => !prev);
+        return;
+      }
+      if (event.key === "," || event.code === "Comma") {
+        event.preventDefault();
+        event.stopPropagation();
+        setSettingsModalOpen((prev) => !prev);
+      }
+    };
+
+    window.addEventListener("keydown", handleGlobalShortcuts, { capture: true });
+    return () => {
+      window.removeEventListener("keydown", handleGlobalShortcuts, { capture: true });
+    };
+  }, []);
+
+  // 订阅来自左侧树或工具栏的数据源弹窗/删除请求。
+  useEffect(() => {
+    return subscribeSourceActionEvent((detail) => {
+      if (detail.action === "modal") {
+        setSourceModalState({
+          open: true,
+          mode: detail.mode,
+          source: detail.source ?? null
+        });
+      } else if (detail.action === "delete") {
+        setPendingDeleteSource(detail.source);
+      }
+    });
+  }, []);
 
   // 监听 token 刷新事件：用于在 loading 遮罩中显示更明确文案。
   useEffect(() => {
@@ -294,12 +323,6 @@ export function MainPage() {
     if (!shouldKeepQueryPanelMounted(queryPanelMounted, viewMode, startupState.complete)) return;
     setQueryPanelMounted(true);
   }, [queryPanelMounted, startupState.complete, viewMode]);
-
-  // 记录 Terminal 是否访问过：一旦访问即常驻挂载，仅通过显示/隐藏切换。
-  useEffect(() => {
-    if (viewMode !== "terminal") return;
-    setTerminalPanelMounted(true);
-  }, [viewMode]);
 
   // 启动步骤列表：用于在遮罩中展示每个阶段的完成状态。
   const startupStageItems = STARTUP_STAGES.map((stage) => {
@@ -358,7 +381,7 @@ export function MainPage() {
     if (!manifest) return;
     setPluginCenterOpen(false);
     if (pluginId === "builtin.terminal-workspace") {
-      queryPanelActions.onSetViewMode("terminal");
+      setBottomConsoleOpen(true);
       return;
     }
     if (manifest.mountTargets.includes("dock-right")) {
@@ -430,22 +453,31 @@ export function MainPage() {
     <AppShellLayout
       titleBar={
         <CustomTitleBar
-          aiDockOpen={rightDockPluginId === "builtin.command-library"}
-          onToggleAiDock={() =>
-            setRightDockPluginId((current) =>
-              current === "builtin.command-library" ? null : "builtin.command-library"
-            )
-          }
-          onNewConnection={() => queryPanelActions.onSetViewMode("settings")}
+          aiDockOpen={Boolean(rightDockPluginId)}
+          onToggleAiDock={() => {
+            if (rightDockPluginId) {
+              setRightDockPluginId(null);
+              return;
+            }
+            const dockPlugin = registeredPlugins.find(
+              (plugin) => plugin.enabled !== false && plugin.mountTargets.includes("dock-right")
+            );
+            if (dockPlugin) {
+              setRightDockPluginId(dockPlugin.id);
+              return;
+            }
+            setPluginCenterOpen(true);
+          }}
+          onNewConnection={() => setSourceModalState({ open: true, mode: "create", source: null })}
           onNewQuery={() => {
             queryPanelActions.onSetViewMode("query");
             queryPanelActions.onOpenConsole();
           }}
           onOpenDriverManager={() => setDriverManagerOpen(true)}
           onOpenPluginCenter={() => setPluginCenterOpen(true)}
-          onOpenTerminal={() => queryPanelActions.onSetViewMode("terminal")}
-          onOpenSystemLogs={() => queryPanelActions.onSetViewMode("settings")}
-          onOpenSettings={() => queryPanelActions.onSetViewMode("settings")}
+          onOpenTerminal={() => setBottomConsoleOpen((prev) => !prev)}
+          onOpenSystemLogs={() => setLogAuditModalOpen(true)}
+          onOpenSettings={() => setSettingsModalOpen(true)}
         />
       }
       statusBar={
@@ -468,10 +500,11 @@ export function MainPage() {
             </button>
             <button
               type="button"
-              onClick={() => queryPanelActions.onSetViewMode("terminal")}
-              className={`hover:text-neutral ${viewMode === "terminal" ? "font-semibold text-primary" : ""}`}
+              onClick={() => setBottomConsoleOpen((prev) => !prev)}
+              className={`hover:text-neutral ${bottomConsoleOpen ? "font-semibold text-primary" : ""}`}
+              title="切换底部终端 (Ctrl + `)"
             >
-              系统终端
+              终端 (Ctrl+`)
             </button>
             <button
               type="button"
@@ -485,14 +518,77 @@ export function MainPage() {
       }
       overlay={
         <>
-          {versionUpdateNotice && (
+          {queryPanelViewState.workspaceNotice && (
             <NoticeAlert
-              // 启动更新通知：仅提示存在新版本，引导用户到设置页查看下载信息。
-              tone="success"
-              message={`发现新版本：当前 ${versionUpdateNotice.currentVersion}，最新 ${versionUpdateNotice.latestVersion}。可前往 设置 -> 关于与反馈 查看下载信息。`}
-              onClose={closeVersionUpdateNotice}
-              className="fixed right-4 top-12 z-[70] max-w-[380px] rounded-xl shadow-lg"
+              tone={
+                queryPanelViewState.workspaceNotice.type === "error"
+                  ? "error"
+                  : queryPanelViewState.workspaceNotice.type === "warning"
+                    ? "warning"
+                    : "success"
+              }
+              message={queryPanelViewState.workspaceNotice.message}
+              onClose={queryPanelActions.onCloseWorkspaceNotice}
+              className="fixed bottom-8 right-4 z-[70] max-w-[380px] rounded-xl shadow-lg"
             />
+          )}
+
+          {versionUpdateNotice && (
+            <div className="fixed right-4 top-12 z-[70] flex max-w-[400px] items-center gap-3 rounded-xl border border-success/40 bg-base-100 px-3.5 py-2.5 text-[12px] shadow-lg">
+              <div className="min-w-0 flex-1">
+                <p className="font-medium text-neutral">
+                  发现新版本 v{versionUpdateNotice.latestVersion.replace(/^[vV]/, "")}（当前 v{versionUpdateNotice.currentVersion}）
+                </p>
+                {versionUpdateNotice.progressText && (
+                  <p className="mt-0.5 text-[11px] text-primary">{versionUpdateNotice.progressText}</p>
+                )}
+              </div>
+              {versionUpdateNotice.nativeUpdate && (
+                <button
+                  type="button"
+                  disabled={Boolean(versionUpdateNotice.installing)}
+                  className="btn btn-primary btn-xs shrink-0"
+                  onClick={async () => {
+                    const targetUpdate = versionUpdateNotice.nativeUpdate;
+                    if (!targetUpdate) return;
+                    setVersionUpdateNotice((prev) =>
+                      prev ? { ...prev, installing: true, progressText: "正在下载更新包..." } : prev
+                    );
+                    try {
+                      await installNativeAppUpdate(targetUpdate, ({ phase, percent }) => {
+                        setVersionUpdateNotice((prev) =>
+                          prev
+                            ? {
+                                ...prev,
+                                progressText:
+                                  phase === "downloading"
+                                    ? percent !== null
+                                      ? `正在下载 ${percent}%...`
+                                      : "正在下载..."
+                                    : "正在安装并重启..."
+                              }
+                            : prev
+                        );
+                      });
+                    } catch (error) {
+                      setVersionUpdateNotice((prev) =>
+                        prev ? { ...prev, installing: false, progressText: `更新失败：${String(error)}` } : prev
+                      );
+                    }
+                  }}
+                >
+                  {versionUpdateNotice.installing ? "更新中" : "立即更新"}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={closeVersionUpdateNotice}
+                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-neutral/60 hover:bg-base-200"
+                aria-label="关闭更新提示"
+              >
+                <X size={13} />
+              </button>
+            </div>
           )}
 
           {/* 插件中心弹窗：展示全部已注册内置/外部插件，支持 `.sstplugin` 安装、权限审批、启停与卸载。 */}
@@ -600,6 +696,11 @@ export function MainPage() {
                 )}
 
                 <div className="grid max-h-[60vh] grid-cols-2 gap-2.5 overflow-auto pr-0.5">
+                  {registeredPlugins.length === 0 && (
+                    <div className="col-span-2 rounded-xl border border-dashed border-base-300 bg-base-200/30 px-4 py-8 text-center text-[12px] text-neutral/70">
+                      暂无已安装插件，可点击右上角「安装 .sstplugin」导入本地插件包。
+                    </div>
+                  )}
                   {registeredPlugins.map((plugin) => {
                     const Icon = plugin.icon;
                     const isDisabled = plugin.isExternal && plugin.enabled === false;
@@ -665,6 +766,80 @@ export function MainPage() {
             </div>
           )}
 
+          {/* 统一新建/编辑/复制数据源弹窗。 */}
+          <SourceConnectionModal
+            open={sourceModalState.open}
+            mode={sourceModalState.mode}
+            source={sourceModalState.source}
+            onClose={() => setSourceModalState((prev) => ({ ...prev, open: false }))}
+            onOpenOAuthWindow={() => void api.openAuthWindow()}
+            onSaved={async (savedId) => {
+              await refreshSources(false, savedId, undefined, { forceObjectRefresh: false });
+              showWorkspaceNotice({
+                type: "success",
+                message: sourceModalState.mode === "edit" ? "数据源连接已更新。" : "数据源连接已创建。"
+              });
+            }}
+          />
+
+          {/* 删除数据源确认弹窗。 */}
+          {pendingDeleteSource && (
+            <div
+              className="fixed inset-0 z-[115] flex items-center justify-center bg-black/30 backdrop-blur-[2px]"
+              onClick={() => !deletingSource && setPendingDeleteSource(null)}
+            >
+              <div
+                className="w-[400px] max-w-[92vw] rounded-2xl border border-base-300 bg-base-100 p-4 shadow-2xl"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <h3 className="text-[14px] font-semibold text-neutral">确认删除数据源</h3>
+                <p className="mt-2 text-[12px] text-neutral/75">
+                  确定删除数据源“{pendingDeleteSource.name}”吗？删除后将清理该连接及其本地元数据缓存。
+                </p>
+                <div className="mt-4 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm rounded-lg"
+                    disabled={deletingSource}
+                    onClick={() => setPendingDeleteSource(null)}
+                  >
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-error btn-sm rounded-lg"
+                    disabled={deletingSource}
+                    onClick={async () => {
+                      setDeletingSource(true);
+                      try {
+                        await api.deleteSource(pendingDeleteSource.id);
+                        setPendingDeleteSource(null);
+                        await refreshSources(false, undefined, undefined, { forceObjectRefresh: false });
+                        showWorkspaceNotice({ type: "success", message: "数据源已删除。" });
+                      } catch (err) {
+                        showWorkspaceNotice({ type: "error", message: `删除数据源失败：${String(err)}` });
+                      } finally {
+                        setDeletingSource(false);
+                      }
+                    }}
+                  >
+                    {deletingSource ? "删除中..." : "确认删除"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 应用设置中心弹窗（Ctrl + ,）。 */}
+          <SettingsModal open={settingsModalOpen} onClose={() => setSettingsModalOpen(false)} />
+
+          {/* 统一日志与 SQL 审计中心弹窗。 */}
+          <LogAuditModal
+            open={logAuditModalOpen}
+            onClose={() => setLogAuditModalOpen(false)}
+            sources={queryPanelViewState.sources}
+          />
+
           {/* 驱动管理弹窗：展示全部已接入数据源驱动及其能力声明。 */}
           {driverManagerOpen && (
             <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/25 backdrop-blur-[2px]">
@@ -722,60 +897,44 @@ export function MainPage() {
         </>
       }
     >
-      {/* 三栏 Islands 浮岛内容区：中央工作区浮岛 + 可选右侧停靠插件浮岛。 */}
+      {/* 三栏 Islands 浮岛内容区：中央工作区列（主面板 + VSCode 风格底部终端抽屉）+ 可选右侧停靠插件浮岛。 */}
       <div className="flex h-full min-h-0 w-full gap-1.5 overflow-hidden">
-        <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden rounded-xl border border-base-300/80 bg-base-100 shadow-2xs">
-          {/* Query 工作区：首帧直接挂载且常驻保活，后台水合数据源不阻塞用户交互。 */}
-          {queryPanelMounted && (
-            <div
-              className={
-                shouldMountQueryPanel(viewMode, startupState.complete)
-                  ? "absolute inset-0 z-10 h-full w-full"
-                  : "absolute inset-0 z-0 h-full w-full invisible pointer-events-none"
-              }
-              aria-hidden={!shouldMountQueryPanel(viewMode, startupState.complete)}
-            >
-              <QueryPanel viewState={queryPanelViewState} actions={queryPanelActions} />
-            </div>
-          )}
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-1.5 overflow-hidden">
+          <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden rounded-xl border border-base-300/80 bg-base-100 shadow-2xs">
+            {/* Query 工作区：首帧直接挂载且常驻保活，后台水合数据源不阻塞用户交互。 */}
+            {queryPanelMounted && (
+              <div
+                className={
+                  shouldMountQueryPanel(viewMode, startupState.complete)
+                    ? "absolute inset-0 z-10 h-full w-full"
+                    : "absolute inset-0 z-0 h-full w-full invisible pointer-events-none"
+                }
+                aria-hidden={!shouldMountQueryPanel(viewMode, startupState.complete)}
+              >
+                <QueryPanel viewState={queryPanelViewState} actions={queryPanelActions} />
+              </div>
+            )}
 
-          {/* Terminal 工作区：首次进入后常驻挂载，切换视图仅隐藏，避免终端进程重建。 */}
-          {terminalPanelMounted && (
-            <div
-              className={
-                viewMode === "terminal"
-                  ? "absolute inset-0 z-10 h-full w-full"
-                  : "absolute inset-0 z-0 h-full w-full invisible pointer-events-none"
-              }
-              aria-hidden={viewMode !== "terminal"}
-            >
-              <Suspense fallback={<WorkspaceLoadingFallback title="正在加载 Terminal 工作区" />}>
-                <LazyTerminalPanel visible={viewMode === "terminal"} />
-              </Suspense>
-            </div>
-          )}
+            {/* 工具/插件视图：优先渲染已选工作区插件，否则渲染传统工具面板。 */}
+            {viewMode === "tools" && (
+              <div className="absolute inset-0 z-10 h-full w-full">
+                {activeWorkspacePluginId && workspacePluginContext ? (
+                  <PluginHost pluginId={activeWorkspacePluginId} ctx={workspacePluginContext} />
+                ) : (
+                  <Suspense fallback={<WorkspaceLoadingFallback title="正在加载工具面板" />}>
+                    <LazyToolsPanel />
+                  </Suspense>
+                )}
+              </div>
+            )}
+          </div>
 
-          {/* 工具/插件视图：优先渲染已选工作区插件，否则渲染传统工具面板。 */}
-          {viewMode === "tools" && (
-            <div className="absolute inset-0 z-10 h-full w-full">
-              {activeWorkspacePluginId && workspacePluginContext ? (
-                <PluginHost pluginId={activeWorkspacePluginId} ctx={workspacePluginContext} />
-              ) : (
-                <Suspense fallback={<WorkspaceLoadingFallback title="正在加载工具面板" />}>
-                  <LazyToolsPanel />
-                </Suspense>
-              )}
-            </div>
-          )}
-
-          {/* 设置视图：首次进入时按需加载。 */}
-          {viewMode === "settings" && (
-            <div className="absolute inset-0 z-10 h-full w-full">
-              <Suspense fallback={<WorkspaceLoadingFallback title="正在加载设置页" />}>
-                <LazySettingsPanel />
-              </Suspense>
-            </div>
-          )}
+          {/* VSCode 风格底部集成终端抽屉：支持 Ctrl + ` 呼出/收起，隐藏时 PTY 进程持续保活。 */}
+          <BottomConsoleDrawer
+            open={bottomConsoleOpen}
+            onOpen={() => setBottomConsoleOpen(true)}
+            onClose={() => setBottomConsoleOpen(false)}
+          />
         </div>
 
         {/* 右侧停靠插件浮岛（如命令库 / 局域网文件接收）。 */}
@@ -801,22 +960,26 @@ export function MainPage() {
   );
 }
 
-// 新版本提示通知载荷：包含版本差异与发布页地址。
+// 新版本提示通知载荷：包含版本差异与原生热更新句柄。
 type VersionUpdateNoticeState = {
   currentVersion: string;
   latestVersion: string;
+  nativeUpdate: Update | null;
+  installing?: boolean;
+  progressText?: string;
 };
 
 // 启动时检查 GitHub 最新版本；若有更新则触发右上角升级通知。
 async function checkLatestVersionOnStartup(onFoundNewVersion: (payload: VersionUpdateNoticeState) => void): Promise<void> {
   try {
-    const result = await checkGithubLatestVersion();
+    const result = await checkAppUpdateWithFallback();
     if (!result?.hasUpdate) return;
     // 命中新版本后先让出 UI 一帧，减少通知出现瞬间与启动尾任务竞争主线程。
     await waitForUiIdleFrame();
     onFoundNewVersion({
       currentVersion: result.currentVersion,
-      latestVersion: result.latestVersion
+      latestVersion: result.latestVersion,
+      nativeUpdate: result.nativeUpdate
     });
   } catch (error) {
     // 版本检查失败不影响业务启动，只打印调试日志。

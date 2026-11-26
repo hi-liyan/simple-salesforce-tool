@@ -1,8 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildMySqlRootChildren, buildSalesforceRootChildren, buildSourceRootNodes } from "../../src/features/main/QueryPanel/logic/sourceTreeProviders.ts";
+import {
+  buildMySqlRootChildren,
+  buildObjectSubFolderChildren,
+  buildSalesforceRootChildren,
+  buildSourceRootNodes
+} from "../../src/features/main/QueryPanel/logic/sourceTreeProviders.ts";
 import type { QueryTreeProviderContext } from "../../src/features/main/QueryPanel/types/tree.ts";
-import type { SalesforceObject, SalesforceSource } from "../../src/types/index.ts";
+import type { ObjectDdl, ObjectField, SalesforceObject, SalesforceSource } from "../../src/types/index.ts";
 
 // 构造最小数据源对象：覆盖树节点映射所需字段。
 function createSource(partial: Partial<SalesforceSource>): SalesforceSource {
@@ -66,6 +71,70 @@ test("buildSalesforceRootChildren: 应将对象映射为 object 节点", async (
     [
       { id: "object:sf-1:Account", label: "客户", objectName: "Account" },
       { id: "object:sf-1:Contact", label: "联系人", objectName: "Contact" }
+    ]
+  );
+});
+
+test("buildObjectSubFolderChildren: 应生成 columns、keys、indexes 三类目录及对应计数", () => {
+  const fields: ObjectField[] = [
+    {
+      name: "ARTICLE_ID",
+      label: "ARTICLE_ID",
+      dataType: "varchar",
+      nillable: false,
+      createable: true,
+      updateable: true,
+      filterable: true,
+      metadata: { columnKey: "PRI", columnType: "varchar(32)" }
+    },
+    {
+      name: "ARTICLE_NAME",
+      label: "ARTICLE_NAME",
+      dataType: "varchar",
+      nillable: true,
+      createable: true,
+      updateable: true,
+      filterable: true,
+      metadata: { columnKey: "", columnType: "varchar(512)" }
+    }
+  ];
+  const ddl: ObjectDdl = {
+    createTableDdl: "CREATE TABLE `articles` (...)",
+    indexDdls: ["CREATE INDEX `idx_articles_name` ON `articles` (`ARTICLE_NAME`) USING BTREE;"],
+    constraintDdls: ["ALTER TABLE `articles` ADD CONSTRAINT `uk_articles_name` UNIQUE (`ARTICLE_NAME`);"]
+  };
+
+  const folders = buildObjectSubFolderChildren(
+    "mysql-1",
+    "mysql",
+    "articles",
+    ["columns", "keys", "indexes"],
+    fields,
+    ddl
+  );
+
+  assert.deepEqual(
+    folders.map((entry) => ({
+      label: entry.folderNode.kind === "object-folder" ? entry.folderNode.label : "",
+      count: entry.folderNode.kind === "object-folder" ? entry.folderNode.count : -1,
+      childLabels: entry.children.map((c) => c.label)
+    })),
+    [
+      {
+        label: "columns",
+        count: 2,
+        childLabels: ["ARTICLE_ID (varchar(32))", "ARTICLE_NAME (varchar(512))"]
+      },
+      {
+        label: "keys",
+        count: 2,
+        childLabels: ["PRIMARY", "uk_articles_name"]
+      },
+      {
+        label: "indexes",
+        count: 2,
+        childLabels: ["PRIMARY", "idx_articles_name"]
+      }
     ]
   );
 });

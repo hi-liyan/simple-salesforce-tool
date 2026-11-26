@@ -35,7 +35,8 @@ export const mysqlDriver: DataSourceDriver = {
       { groupType: "users", label: "users" },
       { groupType: "virtual-views", label: "virtual views" }
     ],
-    supportsColumnExpansion: true
+    supportsColumnExpansion: true,
+    objectSubFolders: ["columns", "keys", "indexes"]
   },
   gridAdapter: {
     nullPlaceholder: "Null",
@@ -83,6 +84,104 @@ export const mysqlDriver: DataSourceDriver = {
       return "text";
     },
     supportsOpenRecordPage: false
+  },
+  connectionSchema: {
+    description: "连接 MySQL 5.7+ / 8.0+ 关系型数据库，支持表结构探索、DDL 查看与事务级表格编辑。",
+    fields: [
+      {
+        key: "host",
+        label: "主机地址 (Host)",
+        type: "text",
+        placeholder: "127.0.0.1",
+        defaultValue: "127.0.0.1",
+        required: true,
+        group: "auth",
+        colSpan: 1
+      },
+      {
+        key: "port",
+        label: "端口 (Port)",
+        type: "number",
+        placeholder: "3306",
+        defaultValue: "3306",
+        required: true,
+        group: "auth",
+        colSpan: 1
+      },
+      {
+        key: "database",
+        label: "数据库名 (Database)",
+        type: "text",
+        placeholder: "例如：app_prod",
+        required: true,
+        group: "auth",
+        colSpan: 2
+      },
+      {
+        key: "username",
+        label: "用户名 (Username)",
+        type: "text",
+        placeholder: "root",
+        required: true,
+        group: "auth",
+        colSpan: 1
+      },
+      {
+        key: "password",
+        label: "密码 (Password)",
+        type: "password",
+        placeholder: "输入数据库密码",
+        required: false,
+        group: "auth",
+        colSpan: 1
+      },
+      {
+        key: "primaryKey",
+        label: "自定义主键覆盖（可选）",
+        type: "text",
+        placeholder: "默认自动识别表 PRI 主键，无主键表可手动指定列名",
+        required: false,
+        group: "advanced",
+        colSpan: 2
+      }
+    ],
+    extractFormValues: (source, secretView) => {
+      const cfg = (source.configJson || {}) as Record<string, unknown>;
+      return {
+        host: String(cfg.host || ""),
+        port: String(cfg.port || 3306),
+        database: String(cfg.database || ""),
+        username: String(cfg.username || ""),
+        password: secretView?.password ?? String(cfg.password || ""),
+        primaryKey: String(cfg.primaryKey || "")
+      };
+    },
+    buildPayload: (values, meta) => {
+      const host = (values.host || "").trim();
+      const port = Number(values.port) || 3306;
+      const database = (values.database || "").trim();
+      const username = (values.username || "").trim();
+      const password = values.password || "";
+      const primaryKey = (values.primaryKey || "").trim();
+      return {
+        name: meta.name.trim(),
+        sourceType: "mysql",
+        configJson: {
+          host,
+          port,
+          database,
+          username,
+          password,
+          ...(primaryKey ? { primaryKey } : {}),
+          ...(meta.color ? { color: meta.color } : {}),
+          environment: meta.environment,
+          readOnly: meta.readOnly
+        },
+        instanceUrl: `mysql://${host}:${port}/${database}`,
+        accessToken: "",
+        apiVersion: "mysql"
+      };
+    }
   },
   hydrateSourceSecrets: (source, secretView) => ({
     ...source,

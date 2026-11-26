@@ -22,6 +22,7 @@ impl<'a> SalesforceProvider<'a> {
     }
 
     /// 测试 Salesforce 数据源连接：通过 token 校验快速判断可用性。
+    #[allow(dead_code)]
     pub async fn test_connection(&self, source: &SalesforceSource) -> Result<(), AppError> {
         if self.client.validate_token(source).await {
             Ok(())

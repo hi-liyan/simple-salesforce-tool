@@ -68,4 +68,7 @@ test("resolveQueryTreeBadgeMeta: 应返回稳定的小徽标文案与色调", ()
   assert.deepEqual(resolveQueryTreeBadgeMeta("group-views"), { text: "VW", tone: "orange" });
   assert.deepEqual(resolveQueryTreeBadgeMeta("object-mysql-table"), { text: "T", tone: "amber" });
   assert.deepEqual(resolveQueryTreeBadgeMeta("object-readonly"), { text: "NQ", tone: "muted" });
+  assert.deepEqual(resolveQueryTreeBadgeMeta("key-pk"), { text: "PK", tone: "amber" });
+  assert.deepEqual(resolveQueryTreeBadgeMeta("key-uk"), { text: "UK", tone: "blue" });
+  assert.deepEqual(resolveQueryTreeBadgeMeta("index-normal"), { text: "IX", tone: "gray" });
 });

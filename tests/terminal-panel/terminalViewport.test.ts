@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import * as terminalViewportModule from "../../src/features/main/TerminalPanel/viewport.ts";
+import * as terminalViewportModule from "../../src/features/terminal/viewport.ts";
 
 const { fitTerminalViewportToContainer } = terminalViewportModule;
 

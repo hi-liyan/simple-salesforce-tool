@@ -2,11 +2,13 @@ use crate::error::AppError;
 use crate::storage::{secret_repo, Storage};
 
 /// Secret 领域服务：统一封装按 owner 读取 secret。
+#[allow(dead_code)]
 pub struct SecretService<'a> {
     /// 存储入口。
     storage: &'a Storage,
 }
 
+#[allow(dead_code)]
 impl<'a> SecretService<'a> {
     /// 创建 secret 服务。
     pub fn new(storage: &'a Storage) -> Self {
