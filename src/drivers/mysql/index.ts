@@ -54,14 +54,18 @@ export const mysqlDriver: DataSourceDriver = {
     formatDateDisplay: (value) => stringifyCellValue(value),
     formatDatetimeDisplay: (value) => stringifyCellValue(value),
     resolveFieldStrategy: (meta) => {
-      const t = String(meta.dataType || meta.type || "").toLowerCase();
-      if (t === "enum" || t === "set") return "picklist";
+      const t = String(meta.mysqlDataType || meta.dataType || meta.type || "").trim().toLowerCase();
+      if ((t === "enum" || t === "set") && Array.isArray(meta.picklistValues) && meta.picklistValues.length > 0) {
+        return "picklist";
+      }
       if (t === "date") return "date";
       if (t === "datetime" || t === "timestamp") return "datetime";
-      if (t === "boolean" || t === "tinyint(1)") return "boolean";
+      if (t === "boolean" || t === "bool") return "boolean";
       const columnType = String(meta.columnType || "").toLowerCase();
-      if (columnType.includes("bigint") && columnType.includes("unsigned")) return "text";
-      if (["int", "bigint", "smallint", "tinyint", "decimal", "float", "double"].some((k) => t.includes(k))) {
+      // DECIMAL / NUMERIC 与 BIGINT（含 signed/unsigned）可能超出 JS Number 安全整数或包含尾随零，统一按文本展示保真。
+      if (t === "decimal" || t === "numeric" || t === "newdecimal") return "text";
+      if (t === "bigint" || columnType.startsWith("bigint")) return "text";
+      if (["tinyint", "smallint", "mediumint", "int", "integer", "float", "double", "real", "year"].includes(t)) {
         return "number";
       }
       return "text";

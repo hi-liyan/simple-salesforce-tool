@@ -87,7 +87,7 @@ export function createGetCellContent({
     }
 
     const metadata = fieldMetadataMap[columnId] || {};
-    const strategy = resolveFieldTypeStrategy(metadata);
+    const strategy = gridAdapter.resolveFieldStrategy(metadata);
     const editable = isCellEditableByMeta(metadata, isNewRow);
     const requiredNewField = isRequiredOnCreate(metadata, isNewRow);
     const raw = record[columnId];

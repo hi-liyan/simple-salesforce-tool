@@ -1497,6 +1497,10 @@ fn row_try_get_json_value(row: &MySqlRow, column_name: &str, mysql_type: &str) -
                 .map(|item| Value::String(item.format("%Y-%m-%d").to_string()))
                 .unwrap_or(Value::Null);
         }
+        // 兜底：兼容 MySQL 零值日期（如 0000-00-00），避免被后续二进制分支误格式化。
+        if let Ok(value) = row.try_get::<Option<String>, _>(column_name) {
+            return value.map(Value::String).unwrap_or(Value::Null);
+        }
     }
 
     if is_mysql_datetime_type(&normalized) {
@@ -1504,6 +1508,10 @@ fn row_try_get_json_value(row: &MySqlRow, column_name: &str, mysql_type: &str) -
             return value
                 .map(|item| Value::String(item.format("%Y-%m-%d %H:%M:%S%.f").to_string()))
                 .unwrap_or(Value::Null);
+        }
+        // 兜底：兼容 MySQL 零值日期时间（如 0000-00-00 00:00:00）。
+        if let Ok(value) = row.try_get::<Option<String>, _>(column_name) {
+            return value.map(Value::String).unwrap_or(Value::Null);
         }
     }
 
@@ -1533,7 +1541,14 @@ fn row_try_get_json_value(row: &MySqlRow, column_name: &str, mysql_type: &str) -
     if is_mysql_signed_integer_type(&normalized) {
         if let Ok(value) = row.try_get::<Option<i64>, _>(column_name) {
             return value
-                .map(|item| Value::Number(item.into()))
+                .map(|item| {
+                    // 超过 JS Number 安全整数范围（2^53 - 1）的有符号 BIGINT 按字符串返回，避免前端雪花 ID 等大整数精度丢失。
+                    if item.abs() > 9_007_199_254_740_991 {
+                        Value::String(item.to_string())
+                    } else {
+                        Value::Number(item.into())
+                    }
+                })
                 .unwrap_or(Value::Null);
         }
     }
@@ -1617,13 +1632,24 @@ fn row_try_get_json_value(row: &MySqlRow, column_name: &str, mysql_type: &str) -
     // 兜底顺序：按最常见标量再尝试一次，防止驱动类型名与预期不一致导致丢值。
     if let Ok(value) = row.try_get::<Option<i64>, _>(column_name) {
         return value
-            .map(|item| Value::Number(item.into()))
+            .map(|item| {
+                if item.abs() > 9_007_199_254_740_991 {
+                    Value::String(item.to_string())
+                } else {
+                    Value::Number(item.into())
+                }
+            })
             .unwrap_or(Value::Null);
     }
     if let Ok(value) = row.try_get::<Option<u64>, _>(column_name) {
-        // 兜底分支无法准确获知 unsigned 具体位宽，保留数值语义避免影响普通整数字段。
         return value
-            .map(|item| Value::Number(serde_json::Number::from(item)))
+            .map(|item| {
+                if item > 9_007_199_254_740_991 {
+                    Value::String(item.to_string())
+                } else {
+                    Value::Number(serde_json::Number::from(item))
+                }
+            })
             .unwrap_or(Value::Null);
     }
     if let Ok(value) = row.try_get::<Option<f64>, _>(column_name) {

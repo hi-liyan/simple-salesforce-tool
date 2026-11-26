@@ -61,7 +61,7 @@ export function createCellEditedHandler({
     const record = records[row] || {};
     const isNewRow = Boolean(record.__isNew);
     const metadata = fieldMetadataMap[columnId] || {};
-    const strategy = resolveFieldTypeStrategy(metadata);
+    const strategy = gridAdapter.resolveFieldStrategy(metadata);
 
     if (!isCellEditableByMeta(metadata, isNewRow)) {
       // 只读提示优先解释“为什么不能改”，避免用户只看到静态禁用而不知道原因。

@@ -43,7 +43,7 @@ export const salesforceDriver: DataSourceDriver = {
     formatDateDisplay: (value) => normalizeDateDisplayValue(value),
     formatDatetimeDisplay: (value, timezone) => normalizeDatetimeDisplayValue(value, timezone ?? null),
     resolveFieldStrategy: (meta) => {
-      const t = String(meta.dataType || meta.type || "").toLowerCase();
+      const t = String(meta.type || meta.dataType || "").trim().toLowerCase();
       if (t === "picklist" || t === "multipicklist") return "picklist";
       if (t === "date") return "date";
       if (t === "datetime") return "datetime";
