@@ -83,12 +83,12 @@ export function createStartupCoordinator<TStage>(initialStage: TStage) {
   };
 }
 
-// 判断 QueryPanel 是否允许挂载：启动完成前仅显示遮罩，不预加载重型 Query 工作区。
-export function shouldMountQueryPanel(viewMode: MainViewMode, startupComplete: boolean): boolean {
-  return viewMode === "query" && startupComplete;
+// 判断 QueryPanel 是否允许挂载：首帧即允许挂载，不再等待后台数据源恢复完成，实现无阻塞秒开。
+export function shouldMountQueryPanel(viewMode: MainViewMode, _startupComplete?: boolean): boolean {
+  return viewMode === "query";
 }
 
 // 判断 QueryPanel 是否应继续保活：首次进入后即使切换到其他 Panel，也保持挂载以保留工作区内部状态。
-export function shouldKeepQueryPanelMounted(queryPanelMounted: boolean, viewMode: MainViewMode, startupComplete: boolean): boolean {
+export function shouldKeepQueryPanelMounted(queryPanelMounted: boolean, viewMode: MainViewMode, startupComplete?: boolean): boolean {
   return queryPanelMounted || shouldMountQueryPanel(viewMode, startupComplete);
 }

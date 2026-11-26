@@ -107,8 +107,8 @@ test("createStartupCoordinator: 重复启动时应只执行一次初始化任务
   });
 });
 
-test("shouldMountQueryPanel: 启动完成前不应挂载 Query 工作区", () => {
-  assert.equal(shouldMountQueryPanel("query", false), false);
+test("shouldMountQueryPanel: 首帧即允许直接挂载 Query 工作区（无阻塞秒开）", () => {
+  assert.equal(shouldMountQueryPanel("query", false), true);
   assert.equal(shouldMountQueryPanel("query", true), true);
   assert.equal(shouldMountQueryPanel("settings", true), false);
 });

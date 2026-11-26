@@ -16,6 +16,7 @@ import { useQuerySourceTreeStore } from "../store/useQuerySourceTreeStore";
 import { enableStorageWrite } from "../store/tauriStorage";
 import { checkGithubLatestVersion, waitForUiIdleFrame } from "../utils/versionUpdate";
 import { createStartupCoordinator, shouldKeepQueryPanelMounted, shouldMountQueryPanel } from "./mainPageStartup";
+import { QueryPanel } from "../features/main/QueryPanel";
 
 // 初始化注册全部内置插件（命令库、系统终端与工具箱）。
 registerBuiltinPlugins();
@@ -67,13 +68,6 @@ const STARTUP_STAGE_MAP = Object.fromEntries(STARTUP_STAGES.map((stage) => [stag
 const mainPageStartupCoordinator = createStartupCoordinator<StartupStage>(STARTUP_STAGE_MAP.rehydrate);
 
 // 懒加载 Query 工作区：将 DataGrid / 控制台等较重 UI 拆出首包。
-const LazyQueryPanel = lazy(async () => {
-  const module = await import("../features/main/QueryPanel");
-  return {
-    default: module.QueryPanel
-  };
-});
-
 // 懒加载 Terminal 工作区：将 xterm 与 Monaco 等重模块延后到首次进入时再加载。
 const LazyTerminalPanel = lazy(async () => {
   const module = await import("../features/main/TerminalPanel");
@@ -579,28 +573,7 @@ export function MainPage() {
       {/* 三栏 Islands 浮岛内容区：中央工作区浮岛 + 可选右侧停靠插件浮岛。 */}
       <div className="flex h-full min-h-0 w-full gap-1.5 overflow-hidden">
         <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden rounded-xl border border-base-300/80 bg-base-100 shadow-2xs">
-          {/* 无阻塞局部骨架屏：仅在 Query 首帧恢复期间展示在 Query 槽位内，不阻塞标题栏与其他面板操作。 */}
-          {viewMode === "query" && startupState.loading && (
-            <div className="absolute inset-0 z-20 flex items-center justify-center bg-base-100/95 p-6">
-              <div className="w-[380px] space-y-3 rounded-xl border border-base-300/80 bg-base-200/40 p-5">
-                <div className="flex items-center gap-3">
-                  <span className="loading loading-spinner text-primary" style={{ width: 20, height: 20 }} />
-                  <div className="min-w-0">
-                    <p className="text-[13px] font-semibold">{startupState.stage.label}</p>
-                    <p className="text-[11px] text-neutral/70">{startupState.stage.detail}</p>
-                  </div>
-                </div>
-                <div className="h-1.5 overflow-hidden rounded-full bg-base-300">
-                  <div
-                    className="h-full rounded-full bg-primary transition-all duration-300 ease-out"
-                    style={{ width: `${startupState.stage.progress}%` }}
-                  />
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Query 工作区：首次进入后常驻挂载，切换视图仅隐藏，避免表格滚动与局部 UI 状态丢失。 */}
+          {/* Query 工作区：首帧直接挂载且常驻保活，后台水合数据源不阻塞用户交互。 */}
           {queryPanelMounted && (
             <div
               className={
@@ -610,9 +583,7 @@ export function MainPage() {
               }
               aria-hidden={!shouldMountQueryPanel(viewMode, startupState.complete)}
             >
-              <Suspense fallback={<WorkspaceLoadingFallback title="正在加载 Query 工作区" />}>
-                <LazyQueryPanel viewState={queryPanelViewState} actions={queryPanelActions} />
-              </Suspense>
+              <QueryPanel viewState={queryPanelViewState} actions={queryPanelActions} />
             </div>
           )}
 
