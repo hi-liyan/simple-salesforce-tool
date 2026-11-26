@@ -163,8 +163,12 @@ type DataQueryTabPaneProps = {
   onCloseAllTabs: () => void;
   onCreateRecord: () => void;
   onDeleteCheckedRecords: () => void;
-  // 执行更新：MySQL 可把预览弹窗中已生成的 SQL 明细透传给运行时日志。
-  onApplyPendingChanges: (options?: { mysqlPreviewItems?: MutationPreviewItem[] }) => void;
+  // 执行更新：携带两阶段计划凭据（planId/planHash）或预览 SQL，确保所见即所执。
+  onApplyPendingChanges: (options?: {
+    mysqlPreviewItems?: MutationPreviewItem[];
+    planId?: string;
+    planHash?: string;
+  }) => void;
   onDiscardPendingChanges: () => void;
   onToggleDrawer: (drawerView?: "salesforce" | "mysql-ddl" | "mysql-fields") => void;
   // 刷新当前对象 DDL：仅 MySQL 抽屉使用。
@@ -220,6 +224,10 @@ type MysqlMutationPreviewState = {
   updateCount: number;
   // 删除操作数量。
   deleteCount: number;
+  // 两阶段提交计划 ID。
+  planId?: string;
+  // 两阶段提交计划哈希。
+  planHash?: string;
   // 结构化预览项列表。
   items: MutationPreviewItem[];
 };
@@ -1014,7 +1022,7 @@ export function DataQueryTabPane({
     });
 
     try {
-      const previewSqlItems = await api.previewSaveRecordsWithDeletes({
+      const prepared = await api.prepareMutationPlan({
         sourceId: resolvedSourceId,
         objectName: activeTab.objectName,
         creates: mutationPlan.creates,
@@ -1024,7 +1032,9 @@ export function DataQueryTabPane({
       setMysqlMutationPreviewState((state) => ({
         ...state,
         loading: false,
-        items: mergeMysqlPreviewSqlItems(mutationPlan.previewItems, previewSqlItems)
+        planId: prepared.planId,
+        planHash: prepared.planHash,
+        items: mergeMysqlPreviewSqlItems(mutationPlan.previewItems, prepared.previewItems)
       }));
     } catch (error) {
       setMysqlMutationPreviewState((state) => ({
@@ -1044,14 +1054,18 @@ export function DataQueryTabPane({
     await openMysqlMutationPreview(); // 行内注释：MySQL 先展示结构化预览，确认后再真正执行。
   }
 
-  // 确认执行当前预览：真正调用运行时提交逻辑，成功/失败提示仍由运行时统一写回 Tab notice。
+  // 确认执行当前预览：传入 planId + planHash 原样执行已预览计划，确保前后端一致性。
   async function handleConfirmMysqlMutationPreview() {
     setMysqlMutationPreviewState((state) => ({
       ...state,
       loading: true,
       error: ""
     }));
-    await onApplyPendingChanges({ mysqlPreviewItems: mysqlMutationPreviewState.items });
+    await onApplyPendingChanges({
+      mysqlPreviewItems: mysqlMutationPreviewState.items,
+      planId: mysqlMutationPreviewState.planId,
+      planHash: mysqlMutationPreviewState.planHash
+    });
     setMysqlMutationPreviewState({
       open: false,
       loading: false,
@@ -1059,6 +1073,8 @@ export function DataQueryTabPane({
       createCount: 0,
       updateCount: 0,
       deleteCount: 0,
+      planId: undefined,
+      planHash: undefined,
       items: []
     });
   }

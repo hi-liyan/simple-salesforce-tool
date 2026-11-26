@@ -9,6 +9,7 @@ use crate::services::plugin_service::PluginService;
 use crate::services::query_service::{GuardedQueryResponse, PreparedMutationPlanDto, QueryService};
 use crate::services::sql_guard::{evaluate_sql_safety, SqlGuardContext, SqlGuardDecision};
 use crate::storage::audit_repo::SqlExecutionAuditEntry;
+use crate::storage::config_repo;
 
 /// 读取插件隔离键值存储。
 #[tauri::command]
@@ -127,5 +128,36 @@ pub async fn commit_mutation_plan(
     QueryService::new(&state.storage, &state.driver_registry)
         .commit_mutation_plan(&state.mutation_plan_cache, &plan_id, &plan_hash)
         .await
+        .map_err(AppError::to_string_error)
+}
+
+/// 按 key 独立读取应用设置（外壳/布局偏好增量通道）。
+#[tauri::command]
+pub fn get_app_setting(state: State<'_, AppState>, key: String) -> Result<Option<String>, String> {
+    state
+        .storage
+        .read(|conn| config_repo::read_app_setting(conn, &key))
+        .map_err(AppError::to_string_error)
+}
+
+/// 按 key 独立写入应用设置（外壳/布局偏好增量通道）。
+#[tauri::command]
+pub fn set_app_setting(
+    state: State<'_, AppState>,
+    key: String,
+    value: String,
+) -> Result<(), String> {
+    state
+        .storage
+        .write(|conn| config_repo::write_app_setting(conn, &key, &value))
+        .map_err(AppError::to_string_error)
+}
+
+/// 按 key 删除应用设置。
+#[tauri::command]
+pub fn delete_app_setting(state: State<'_, AppState>, key: String) -> Result<(), String> {
+    state
+        .storage
+        .write(|conn| config_repo::delete_app_setting(conn, &key))
         .map_err(AppError::to_string_error)
 }

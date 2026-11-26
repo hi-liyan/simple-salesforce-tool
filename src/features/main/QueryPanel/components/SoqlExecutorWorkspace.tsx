@@ -459,9 +459,24 @@ export function SoqlExecutorWorkspace({
 
     try {
       const primaryObjectName = extractPrimaryObjectName(executeSoql);
-      // 调用后端统一查询命令，支持常规查询与复杂子查询。
-      const result = await api.queryRecords(effectiveSourceId, executeSoql, primaryObjectName || undefined);
-      const normalizedResult = normalizeQueryResult(result);
+      // 调用受后端 AST 安全网关保护的查询命令，并记录 sql_execution_audit 审计日志。
+      let guarded = await api.executeGuardedQuery(effectiveSourceId, executeSoql, primaryObjectName || undefined, false);
+      if (guarded.status === "confirmation_required") {
+        const reason = String(guarded.guardDecision?.reason || "检测到高危 SQL 操作，是否继续执行？");
+        const confirmed = window.confirm(`${reason}\n\n待执行语句：\n${executeSoql}`);
+        if (!confirmed) {
+          patchActiveTab((tab) => ({
+            ...tab,
+            loading: false,
+            notice: { type: "error", message: "已取消执行高危语句。" }
+          }));
+          return;
+        }
+        guarded = await api.executeGuardedQuery(effectiveSourceId, executeSoql, primaryObjectName || undefined, true);
+      }
+
+      const normalizedResult = normalizeQueryResult(guarded.result || { totalSize: 0, records: [] });
+      const actualExecutedSql = guarded.executedSql || executeSoql;
 
       patchActiveTab((tab) => ({
         ...tab,
@@ -469,9 +484,9 @@ export function SoqlExecutorWorkspace({
         loading: false,
         selectedRecordIds: [],
         showBottomPanel: true,
-        notice: { type: "success", message: `执行成功，返回 ${normalizedResult.totalSize} 条。` },
+        notice: { type: "success", message: `执行成功（${guarded.durationMs}ms），返回 ${normalizedResult.totalSize} 条。` },
         logs: [
-          buildSoqlLog(true, executeSoql, `执行成功，返回 ${normalizedResult.totalSize} 条。`),
+          buildSoqlLog(true, actualExecutedSql, `执行成功（${guarded.durationMs}ms），返回 ${normalizedResult.totalSize} 条。`),
           ...tab.logs
         ].slice(0, 200)
       }));

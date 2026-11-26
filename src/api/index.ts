@@ -196,5 +196,11 @@ export const api = {
     }>("execute_guarded_query", { sourceId, queryText, objectName, confirmed }),
   // 查询 SQL 执行审计记录。
   listSqlExecutionAudits: (sourceId?: string, limit?: number) =>
-    invokeApi<Record<string, unknown>[]>("list_sql_execution_audits", { sourceId, limit })
+    invokeApi<Record<string, unknown>[]>("list_sql_execution_audits", { sourceId, limit }),
+  // 按 key 增量读取应用外壳设置。
+  getAppSetting: (key: string) => invokeApi<string | null>("get_app_setting", { key }),
+  // 按 key 增量写入应用外壳设置。
+  setAppSetting: (key: string, value: string) => invokeApi<void>("set_app_setting", { key, value }),
+  // 按 key 删除应用外壳设置。
+  deleteAppSetting: (key: string) => invokeApi<void>("delete_app_setting", { key })
 };

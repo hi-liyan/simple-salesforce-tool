@@ -15,7 +15,7 @@ pub mod workspace_repo;
 
 use rusqlite::{Connection, OpenFlags};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::Mutex;
 
 use crate::error::AppError;
 
@@ -112,14 +112,6 @@ impl Storage {
     /// 返回当前数据库文件路径。
     pub fn db_path(&self) -> &Path {
         &self.db_path
-    }
-
-    /// 迁移期兼容入口：供尚未收口至 `services/` 的旧命令临时复用，新代码严禁调用。
-    #[deprecated(note = "禁止直接暴露裸连接锁，请使用 read()/write_tx() 与 repo 层")]
-    pub fn connection(&self) -> Result<MutexGuard<'_, Connection>, AppError> {
-        self.write_connection
-            .lock()
-            .map_err(|error| AppError::Biz(format!("获取数据库锁失败: {error}")))
     }
 
     /// 从只读连接池检出连接；池空时按只读标志新建连接。

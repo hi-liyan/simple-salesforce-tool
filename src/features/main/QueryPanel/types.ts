@@ -141,8 +141,12 @@ export type QueryPanelActions = {
   onCreateRecord: () => void;
   // 标记删除勾选记录。
   onDeleteCheckedRecords: () => void;
-  // 执行更新：MySQL 可携带预览弹窗中已生成的 SQL，供 Tab 操作日志复用。
-  onApplyPendingChanges: (options?: { mysqlPreviewItems?: MutationPreviewItem[] }) => void;
+  // 执行更新：携带两阶段计划凭据（planId/planHash）或预览 SQL，确保所见即所执。
+  onApplyPendingChanges: (options?: {
+    mysqlPreviewItems?: MutationPreviewItem[];
+    planId?: string;
+    planHash?: string;
+  }) => void;
   // 撤销未提交修改。
   onDiscardPendingChanges: () => void;
   // 打开/关闭抽屉（可指定目标视图：MySQL DDL / MySQL 字段 / Salesforce）。

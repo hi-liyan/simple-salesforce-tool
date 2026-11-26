@@ -141,7 +141,10 @@ fn main() {
             commands_ext::list_sql_execution_audits,
             commands_ext::execute_guarded_query,
             commands_ext::prepare_mutation_plan,
-            commands_ext::commit_mutation_plan
+            commands_ext::commit_mutation_plan,
+            commands_ext::get_app_setting,
+            commands_ext::set_app_setting,
+            commands_ext::delete_app_setting
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

@@ -630,7 +630,8 @@ export function useQueryPanelRuntime({
   }, [activeTab, patchTab, selectedSourceId, selectedSourceType]);
 
   // 执行新增/更新/删除提交。
-  const applyPendingChanges = useCallback(async (options?: { mysqlPreviewItems?: MutationPreviewItem[] }) => {
+  const applyPendingChanges = useCallback(
+    async (options?: { mysqlPreviewItems?: MutationPreviewItem[]; planId?: string; planHash?: string }) => {
     const resolvedSourceId = activeTab?.sourceId || selectedSourceId;
     const resolvedSourceType = activeTab?.sourceType || selectedSourceType || "salesforce";
     if (!resolvedSourceId || !activeTab || !activeTab.describe) return;
@@ -760,14 +761,17 @@ export function useQueryPanelRuntime({
       }
 
       if (isMysqlSource) {
-        // MySQL 下统一走单事务命令，确保新增/更新/删除原子提交。
-        const executionResult = await api.saveRecordsWithDeletes({
-          sourceId: resolvedSourceId,
-          objectName: activeTab.objectName,
-          creates,
-          updates,
-          deletes
-        });
+        // MySQL 下优先按两阶段 planId + planHash 原样执行已预览计划，保障所见即所执。
+        const executionResult =
+          options?.planId && options?.planHash
+            ? await api.commitMutationPlan(options.planId, options.planHash)
+            : await api.saveRecordsWithDeletes({
+                sourceId: resolvedSourceId,
+                objectName: activeTab.objectName,
+                creates,
+                updates,
+                deletes
+              });
         const executionLogRequest = buildMysqlMutationTabLogRequest(
           executionResult.items.map((item) => ({
             op: item.op,

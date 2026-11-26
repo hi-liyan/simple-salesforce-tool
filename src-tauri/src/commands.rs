@@ -28,6 +28,7 @@ use crate::providers::{
     preview_create_record_sql, preview_delete_record_sql, preview_save_records_with_deletes_items,
     preview_update_record_sql, provider_for_source,
 };
+use crate::services::source_service::SourceService;
 use crate::sf_cli;
 use crate::terminal::{self as terminal_runtime, TerminalSessionInfo, TerminalShellOption};
 
@@ -44,9 +45,9 @@ fn write_system_log(
     message: &str,
     detail: Option<&str>,
 ) {
-    if let Ok(connection) = state.storage.connection() {
-        let _ = db::insert_system_log(
-            &connection,
+    let _ = state.storage.write(|connection| {
+        db::insert_system_log(
+            connection,
             level,
             category,
             action,
@@ -55,8 +56,8 @@ fn write_system_log(
             success,
             message,
             detail,
-        );
-    }
+        )
+    });
 }
 
 /// MySQL 结构化日志 schema：供前端识别新版 mutation 日志详情。
@@ -375,8 +376,9 @@ const METADATA_TYPE_OBJECT_DDL: &str = "object_ddl";
 
 /// 读取已配置的自定义 Salesforce CLI 路径。
 fn read_configured_cli_path(state: &State<'_, AppState>) -> Option<String> {
-    let connection = state.storage.connection().ok()?;
-    db::read_app_setting(&connection, SF_CLI_PATH_SETTING_KEY)
+    state
+        .storage
+        .read(|connection| db::read_app_setting(connection, SF_CLI_PATH_SETTING_KEY))
         .ok()
         .flatten()
         .map(|item| item.trim().to_string())
@@ -599,13 +601,9 @@ async fn refresh_cli_source_token(
         .await
         .map_err(|error| AppError::Biz(format!("CLI 刷新线程失败: {error}")))??;
 
-        let refreshed_source = {
-            let connection = state
-                .storage
-                .connection()
-                .map_err(|error| AppError::Db(format!("Database lock failed: {error}")))?;
-            db::upsert_source_with_id(&connection, &refreshed_seed.id, refreshed_seed.payload)?
-        };
+        let refreshed_source = state.storage.write(|connection| {
+            db::upsert_source_with_id(connection, &refreshed_seed.id, refreshed_seed.payload)
+        })?;
 
         write_system_log(
             state,
@@ -650,11 +648,9 @@ async fn refresh_cli_source_token(
 /// 查询全部数据源列表。
 #[tauri::command]
 pub fn list_sources(state: State<'_, AppState>) -> Result<Vec<SalesforceSource>, String> {
-    let connection = state
-        .storage
-        .connection()
-        .map_err(|error| format!("Database lock failed: {error}"))?;
-    db::list_sources(&connection).map_err(AppError::to_string_error)
+    SourceService::new(&state.storage)
+        .list_sources()
+        .map_err(AppError::to_string_error)
 }
 
 /// 从 Salesforce CLI 同步认证账号到本地 SQLite。
@@ -681,21 +677,18 @@ pub fn sync_cli_sources(state: State<'_, AppState>) -> Result<Vec<SalesforceSour
     };
 
     let keep_ids: Vec<String> = seeds.iter().map(|item| item.id.clone()).collect();
-    let sources = {
-        let connection = state
-            .storage
-            .connection()
-            .map_err(|error| format!("Database lock failed: {error}"))?;
-
-        // 逐条 upsert,保证同一个 org 重复同步只更新不新增。
-        for seed in seeds {
-            db::upsert_source_with_id(&connection, &seed.id, seed.payload)
-                .map_err(AppError::to_string_error)?;
-        }
-        // 清理本次同步不存在的旧 cli-* 数据源及其缓存。
-        db::prune_cli_sources(&connection, &keep_ids).map_err(AppError::to_string_error)?;
-        db::list_sources(&connection).map_err(AppError::to_string_error)?
-    };
+    let sources = state
+        .storage
+        .write(|connection| {
+            // 逐条 upsert,保证同一个 org 重复同步只更新不新增。
+            for seed in seeds {
+                db::upsert_source_with_id(connection, &seed.id, seed.payload)?;
+            }
+            // 清理本次同步不存在的旧 cli-* 数据源及其缓存。
+            db::prune_cli_sources(connection, &keep_ids)?;
+            db::list_sources(connection)
+        })
+        .map_err(AppError::to_string_error)?;
 
     write_system_log(
         &state,
@@ -1000,11 +993,24 @@ pub fn list_system_logs(
     page: i64,
     page_size: i64,
 ) -> Result<SystemLogPage, String> {
-    let connection = state
+    state
         .storage
-        .connection()
-        .map_err(|error| format!("Database lock failed: {error}"))?;
-    db::list_system_logs(&connection, page, page_size).map_err(AppError::to_string_error)
+        .read(|connection| db::list_system_logs(connection, page, page_size))
+        .map_err(AppError::to_string_error)
+}
+
+/// 统一通过 DriverRegistry 校验数据源配置。
+fn validate_source_payload_with_registry(
+    state: &AppState,
+    payload: &SourceUpsertPayload,
+) -> Result<(), String> {
+    let driver = state
+        .driver_registry
+        .get(&payload.source_type)
+        .map_err(AppError::to_string_error)?;
+    driver
+        .validate_config(payload)
+        .map_err(AppError::to_string_error)
 }
 
 /// 新建数据源。
@@ -1013,12 +1019,10 @@ pub fn create_source(
     state: State<'_, AppState>,
     payload: SourceUpsertPayload,
 ) -> Result<SalesforceSource, String> {
-    validate_payload(&payload)?;
-    let connection = state
-        .storage
-        .connection()
-        .map_err(|error| format!("Database lock failed: {error}"))?;
-    db::create_source(&connection, payload).map_err(AppError::to_string_error)
+    validate_source_payload_with_registry(state.inner(), &payload)?;
+    SourceService::new(&state.storage)
+        .create_source(payload)
+        .map_err(AppError::to_string_error)
 }
 
 /// 读取单个数据源的公共信息。
@@ -1027,15 +1031,9 @@ pub fn get_source(
     state: State<'_, AppState>,
     source_id: String,
 ) -> Result<SalesforceSource, String> {
-    let connection = state
-        .storage
-        .connection()
-        .map_err(|error| format!("Database lock failed: {error}"))?;
-    let sources = db::list_sources(&connection).map_err(AppError::to_string_error)?;
-    sources
-        .into_iter()
-        .find(|item| item.id == source_id)
-        .ok_or_else(|| format!("未找到数据源: {source_id}"))
+    SourceService::new(&state.storage)
+        .get_source(&source_id)
+        .map_err(AppError::to_string_error)
 }
 
 /// 显式读取设置页编辑链路需要的 secret 明文。
@@ -1044,11 +1042,9 @@ pub fn get_source_secret_view(
     state: State<'_, AppState>,
     source_id: String,
 ) -> Result<SourceSecretView, String> {
-    let connection = state
-        .storage
-        .connection()
-        .map_err(|error| format!("Database lock failed: {error}"))?;
-    db::get_source_secret_view(&connection, &source_id).map_err(AppError::to_string_error)
+    SourceService::new(&state.storage)
+        .get_source_secret_view(&source_id)
+        .map_err(AppError::to_string_error)
 }
 
 /// 按前端传入顺序重排数据源序号。
@@ -1057,11 +1053,9 @@ pub fn reorder_sources(
     state: State<'_, AppState>,
     ordered_ids: Vec<String>,
 ) -> Result<Vec<SalesforceSource>, String> {
-    let connection = state
-        .storage
-        .connection()
-        .map_err(|error| format!("Database lock failed: {error}"))?;
-    db::reorder_sources(&connection, &ordered_ids).map_err(AppError::to_string_error)
+    SourceService::new(&state.storage)
+        .reorder_sources(&ordered_ids)
+        .map_err(AppError::to_string_error)
 }
 
 /// 测试数据源连接可用性（不写库）。
@@ -1070,7 +1064,7 @@ pub async fn test_source_connection(
     state: State<'_, AppState>,
     payload: SourceUpsertPayload,
 ) -> Result<(), String> {
-    validate_payload(&payload)?;
+    validate_source_payload_with_registry(state.inner(), &payload)?;
     let probe_source = SalesforceSource {
         id: "probe".to_string(),
         name: payload.name.clone(),
@@ -1083,9 +1077,11 @@ pub async fn test_source_connection(
         created_at: "".to_string(),
         updated_at: "".to_string(),
     };
-    let provider =
-        provider_for_source(state.inner(), &probe_source).map_err(AppError::to_string_error)?;
-    provider
+    let driver = state
+        .driver_registry
+        .get(&probe_source.source_type)
+        .map_err(AppError::to_string_error)?;
+    driver
         .test_connection(&probe_source)
         .await
         .map_err(AppError::to_string_error)
@@ -1093,37 +1089,36 @@ pub async fn test_source_connection(
 
 /// 更新数据源。
 #[tauri::command]
-pub fn update_source(
+pub async fn update_source(
     state: State<'_, AppState>,
     id: String,
     payload: SourceUpsertPayload,
 ) -> Result<SalesforceSource, String> {
-    validate_payload(&payload)?;
-    let connection = state
-        .storage
-        .connection()
-        .map_err(|error| format!("Database lock failed: {error}"))?;
-    db::update_source(&connection, &id, payload).map_err(AppError::to_string_error)
+    validate_source_payload_with_registry(state.inner(), &payload)?;
+    let updated = SourceService::new(&state.storage)
+        .update_source(&id, payload)
+        .map_err(AppError::to_string_error)?;
+    state.connection_manager.evict(&id).await;
+    Ok(updated)
 }
 
 /// 删除数据源。
 #[tauri::command]
-pub fn delete_source(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    let connection = state
-        .storage
-        .connection()
-        .map_err(|error| format!("Database lock failed: {error}"))?;
-    db::delete_source(&connection, &id).map_err(AppError::to_string_error)
+pub async fn delete_source(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    SourceService::new(&state.storage)
+        .delete_source(&id)
+        .map_err(AppError::to_string_error)?;
+    state.connection_manager.evict(&id).await;
+    Ok(())
 }
 
 /// 读取结构化工作区快照。
 #[tauri::command]
 pub fn load_workspace_snapshot(state: State<'_, AppState>) -> Result<WorkspaceSnapshotDto, String> {
-    let connection = state
+    state
         .storage
-        .connection()
-        .map_err(|error| format!("Database lock failed: {error}"))?;
-    db::load_workspace_snapshot(&connection).map_err(AppError::to_string_error)
+        .read(|connection| db::load_workspace_snapshot(connection))
+        .map_err(AppError::to_string_error)
 }
 
 /// 保存结构化工作区快照。
@@ -1132,11 +1127,10 @@ pub fn save_workspace_snapshot(
     state: State<'_, AppState>,
     payload: WorkspaceSnapshotDto,
 ) -> Result<(), String> {
-    let connection = state
+    state
         .storage
-        .connection()
-        .map_err(|error| format!("Database lock failed: {error}"))?;
-    db::save_workspace_snapshot(&connection, &payload).map_err(AppError::to_string_error)
+        .write(|connection| db::save_workspace_snapshot(connection, &payload))
+        .map_err(AppError::to_string_error)
 }
 
 /// 读取对象字段可见性配置。
@@ -1146,11 +1140,9 @@ pub fn get_column_visibility(
     source_id: String,
     object_name: String,
 ) -> Result<HashMap<String, bool>, String> {
-    let connection = state
+    let visibility = state
         .storage
-        .connection()
-        .map_err(|error| format!("Database lock failed: {error}"))?;
-    let visibility = db::read_column_visibility(&connection, &source_id, &object_name)
+        .read(|connection| db::read_column_visibility(connection, &source_id, &object_name))
         .map_err(AppError::to_string_error)?;
     Ok(visibility.unwrap_or_default())
 }
@@ -1163,11 +1155,9 @@ pub fn save_column_visibility(
     object_name: String,
     visibility: HashMap<String, bool>,
 ) -> Result<(), String> {
-    let connection = state
+    state
         .storage
-        .connection()
-        .map_err(|error| format!("Database lock failed: {error}"))?;
-    db::write_column_visibility(&connection, &source_id, &object_name, &visibility)
+        .write(|connection| db::write_column_visibility(connection, &source_id, &object_name, &visibility))
         .map_err(AppError::to_string_error)
 }
 
@@ -1178,20 +1168,14 @@ pub async fn list_objects(
     state: State<'_, AppState>,
     source_id: String,
 ) -> Result<Vec<SalesforceObject>, String> {
-    let source = {
-        let connection = state
-            .storage
-            .connection()
-            .map_err(|error| format!("Database lock failed: {error}"))?;
-        db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
-    };
-    let cached_objects = {
-        let connection = state
-            .storage
-            .connection()
-            .map_err(|error| format!("Database lock failed: {error}"))?;
-        db::read_object_cache(&connection, &source_id).map_err(AppError::to_string_error)?
-    };
+    let source = state
+        .storage
+        .read(|connection| db::get_source(connection, &source_id))
+        .map_err(AppError::to_string_error)?;
+    let cached_objects = state
+        .storage
+        .read(|connection| db::read_object_cache(connection, &source_id))
+        .map_err(AppError::to_string_error)?;
     let is_mysql_source = source.source_type.eq_ignore_ascii_case("mysql");
 
     if let Some(cached) = cached_objects {
@@ -1265,15 +1249,10 @@ pub async fn list_objects(
         }
     };
 
-    {
-        let connection = state
-            .storage
-            .connection()
-            .map_err(|error| format!("Database lock failed: {error}"))?;
-        // 请求成功后写入缓存,后续短时间内避免重复调用远端接口。
-        db::write_object_cache(&connection, &source_id, &objects)
-            .map_err(AppError::to_string_error)?;
-    }
+    state
+        .storage
+        .write(|connection| db::write_object_cache(connection, &source_id, &objects))
+        .map_err(AppError::to_string_error)?;
 
     write_system_log(
         &state,
@@ -1307,19 +1286,16 @@ pub fn save_cli_path_settings(
         .map(|item| item.trim().to_string())
         .filter(|item| !item.is_empty());
 
-    {
-        let connection = state
-            .storage
-            .connection()
-            .map_err(|error| format!("Database lock failed: {error}"))?;
-        if let Some(path) = normalized.as_ref() {
-            db::write_app_setting(&connection, SF_CLI_PATH_SETTING_KEY, path)
-                .map_err(AppError::to_string_error)?;
-        } else {
-            db::delete_app_setting(&connection, SF_CLI_PATH_SETTING_KEY)
-                .map_err(AppError::to_string_error)?;
-        }
-    }
+    state
+        .storage
+        .write(|connection| {
+            if let Some(path) = normalized.as_ref() {
+                db::write_app_setting(connection, SF_CLI_PATH_SETTING_KEY, path)
+            } else {
+                db::delete_app_setting(connection, SF_CLI_PATH_SETTING_KEY)
+            }
+        })
+        .map_err(AppError::to_string_error)?;
 
     Ok(sf_cli::read_cli_path_settings(normalized))
 }
@@ -1380,16 +1356,12 @@ pub fn save_llm_settings(
         }
     }
 
-    {
-        let connection = state
-            .storage
-            .connection()
-            .map_err(|error| format!("Database lock failed: {error}"))?;
-        let raw = serde_json::to_string(&current)
-            .map_err(|error| AppError::to_string_error(error.into()))?;
-        db::write_app_setting(&connection, LLM_SETTINGS_KEY, &raw)
-            .map_err(AppError::to_string_error)?;
-    }
+    let raw = serde_json::to_string(&current)
+        .map_err(|error| AppError::to_string_error(error.into()))?;
+    state
+        .storage
+        .write(|connection| db::write_app_setting(connection, LLM_SETTINGS_KEY, &raw))
+        .map_err(AppError::to_string_error)?;
 
     Ok(to_llm_settings_view(&current))
 }
@@ -1447,13 +1419,10 @@ pub async fn refresh_objects(
     state: State<'_, AppState>,
     source_id: String,
 ) -> Result<Vec<SalesforceObject>, String> {
-    let source = {
-        let connection = state
-            .storage
-            .connection()
-            .map_err(|error| format!("Database lock failed: {error}"))?;
-        db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
-    };
+    let source = state
+        .storage
+        .read(|connection| db::get_source(connection, &source_id))
+        .map_err(AppError::to_string_error)?;
     let provider =
         provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
 
@@ -1490,17 +1459,14 @@ pub async fn refresh_objects(
         }
     };
 
-    {
-        let connection = state
-            .storage
-            .connection()
-            .map_err(|error| format!("Database lock failed: {error}"))?;
-        // 强制刷新成功后覆盖对象列表缓存，并失效该数据源的对象级元数据缓存。
-        db::write_object_cache(&connection, &source_id, &objects)
-            .map_err(AppError::to_string_error)?;
-        db::clear_source_metadata_cache(&connection, &source_id)
-            .map_err(AppError::to_string_error)?;
-    }
+    state
+        .storage
+        .write(|connection| {
+            // 强制刷新成功后覆盖对象列表缓存，并失效该数据源的对象级元数据缓存。
+            db::write_object_cache(connection, &source_id, &objects)?;
+            db::clear_source_metadata_cache(connection, &source_id)
+        })
+        .map_err(AppError::to_string_error)?;
 
     write_system_log(
         &state,
@@ -1629,13 +1595,10 @@ pub async fn open_object_list_page(
     let object_segment = urlencoding::encode(&normalized_object_name);
     let list_path = format!("/lightning/o/{object_segment}/list");
 
-    let source = {
-        let connection = state
-            .storage
-            .connection()
-            .map_err(|error| format!("Database lock failed: {error}"))?;
-        db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
-    };
+    let source = state
+        .storage
+        .read(|connection| db::get_source(connection, &source_id))
+        .map_err(AppError::to_string_error)?;
 
     open_salesforce_page(
         &app,
@@ -1665,13 +1628,10 @@ pub async fn open_object_edit_page(
     let object_segment = urlencoding::encode(&normalized_object_name);
     let edit_path = format!("/lightning/setup/ObjectManager/{object_segment}/Details/view");
 
-    let source = {
-        let connection = state
-            .storage
-            .connection()
-            .map_err(|error| format!("Database lock failed: {error}"))?;
-        db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
-    };
+    let source = state
+        .storage
+        .read(|connection| db::get_source(connection, &source_id))
+        .map_err(AppError::to_string_error)?;
 
     open_salesforce_page(
         &app,
@@ -1707,13 +1667,10 @@ pub async fn open_record_page(
     let record_segment = urlencoding::encode(&normalized_record_id);
     let record_path = format!("/lightning/r/{object_segment}/{record_segment}/view");
 
-    let source = {
-        let connection = state
-            .storage
-            .connection()
-            .map_err(|error| format!("Database lock failed: {error}"))?;
-        db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
-    };
+    let source = state
+        .storage
+        .read(|connection| db::get_source(connection, &source_id))
+        .map_err(AppError::to_string_error)?;
 
     open_salesforce_page(
         &app,
@@ -1851,19 +1808,17 @@ pub async fn describe_object(
     object_name: String,
 ) -> Result<ObjectDescribe, String> {
     // 先读 SQLite 元数据缓存，命中时直接返回，避免重复请求远端。
-    let cached_describe = {
-        let connection = state
-            .storage
-            .connection()
-            .map_err(|error| format!("Database lock failed: {error}"))?;
-        db::read_source_metadata_cache(
-            &connection,
-            &source_id,
-            METADATA_TYPE_OBJECT_DESCRIBE,
-            Some(&object_name),
-        )
-        .map_err(AppError::to_string_error)?
-    };
+    let cached_describe = state
+        .storage
+        .read(|connection| {
+            db::read_source_metadata_cache(
+                connection,
+                &source_id,
+                METADATA_TYPE_OBJECT_DESCRIBE,
+                Some(&object_name),
+            )
+        })
+        .map_err(AppError::to_string_error)?;
     if let Some(payload) = cached_describe {
         match serde_json::from_str::<ObjectDescribe>(&payload) {
             Ok(describe) => {
@@ -1896,13 +1851,10 @@ pub async fn describe_object(
         }
     }
 
-    let mut source = {
-        let connection = state
-            .storage
-            .connection()
-            .map_err(|error| format!("Database lock failed: {error}"))?;
-        db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
-    };
+    let mut source = state
+        .storage
+        .read(|connection| db::get_source(connection, &source_id))
+        .map_err(AppError::to_string_error)?;
 
     let describe_result = load_object_describe_with_auto_refresh(
         &app,
@@ -1926,20 +1878,20 @@ pub async fn describe_object(
             .await
             {}
             {
-                let connection = state
-                    .storage
-                    .connection()
-                    .map_err(|error| format!("Database lock failed: {error}"))?;
                 let payload = serde_json::to_string(&describe)
                     .map_err(|error| AppError::Serde(error.to_string()).to_string_error())?;
-                db::write_source_metadata_cache(
-                    &connection,
-                    &source_id,
-                    METADATA_TYPE_OBJECT_DESCRIBE,
-                    Some(&object_name),
-                    &payload,
-                )
-                .map_err(AppError::to_string_error)?;
+                state
+                    .storage
+                    .write(|connection| {
+                        db::write_source_metadata_cache(
+                            connection,
+                            &source_id,
+                            METADATA_TYPE_OBJECT_DESCRIBE,
+                            Some(&object_name),
+                            &payload,
+                        )
+                    })
+                    .map_err(AppError::to_string_error)?;
             }
             write_system_log(
                 &state,
@@ -1980,32 +1932,27 @@ pub async fn get_object_ddl(
     object_name: String,
 ) -> Result<ObjectDdl, String> {
     // 先读 SQLite 元数据缓存，命中时直接返回，避免重复请求数据库/远端。
-    let cached_ddl = {
-        let connection = state
-            .storage
-            .connection()
-            .map_err(|error| format!("Database lock failed: {error}"))?;
-        db::read_source_metadata_cache(
-            &connection,
-            &source_id,
-            METADATA_TYPE_OBJECT_DDL,
-            Some(&object_name),
-        )
-        .map_err(AppError::to_string_error)?
-    };
+    let cached_ddl = state
+        .storage
+        .read(|connection| {
+            db::read_source_metadata_cache(
+                connection,
+                &source_id,
+                METADATA_TYPE_OBJECT_DDL,
+                Some(&object_name),
+            )
+        })
+        .map_err(AppError::to_string_error)?;
     if let Some(payload) = cached_ddl {
         if let Ok(ddl) = serde_json::from_str::<ObjectDdl>(&payload) {
             return Ok(ddl);
         }
     }
 
-    let source = {
-        let connection = state
-            .storage
-            .connection()
-            .map_err(|error| format!("Database lock failed: {error}"))?;
-        db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
-    };
+    let source = state
+        .storage
+        .read(|connection| db::get_source(connection, &source_id))
+        .map_err(AppError::to_string_error)?;
     let provider =
         provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
     let log_category = if source.is_salesforce() {
@@ -2017,20 +1964,20 @@ pub async fn get_object_ddl(
     match provider.get_object_ddl(&source, &object_name).await {
         Ok(ddl) => {
             {
-                let connection = state
-                    .storage
-                    .connection()
-                    .map_err(|error| format!("Database lock failed: {error}"))?;
                 let payload = serde_json::to_string(&ddl)
                     .map_err(|error| AppError::Serde(error.to_string()).to_string_error())?;
-                db::write_source_metadata_cache(
-                    &connection,
-                    &source_id,
-                    METADATA_TYPE_OBJECT_DDL,
-                    Some(&object_name),
-                    &payload,
-                )
-                .map_err(AppError::to_string_error)?;
+                state
+                    .storage
+                    .write(|connection| {
+                        db::write_source_metadata_cache(
+                            connection,
+                            &source_id,
+                            METADATA_TYPE_OBJECT_DDL,
+                            Some(&object_name),
+                            &payload,
+                        )
+                    })
+                    .map_err(AppError::to_string_error)?;
             }
             write_system_log(
                 &state,
@@ -2078,13 +2025,10 @@ pub async fn resolve_field_child_relationship_name(
         return Ok(None);
     }
 
-    let source = {
-        let connection = state
-            .storage
-            .connection()
-            .map_err(|error| format!("Database lock failed: {error}"))?;
-        db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
-    };
+    let source = state
+        .storage
+        .read(|connection| db::get_source(connection, &source_id))
+        .map_err(AppError::to_string_error)?;
     let provider =
         provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
 
@@ -2171,13 +2115,10 @@ pub async fn query_records(
     }
     let query_text = soql.trim().to_string();
 
-    let source = {
-        let connection = state
-            .storage
-            .connection()
-            .map_err(|error| format!("Database lock failed: {error}"))?;
-        db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
-    };
+    let source = state
+        .storage
+        .read(|connection| db::get_source(connection, &source_id))
+        .map_err(AppError::to_string_error)?;
     let provider =
         provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
     let log_category = resolve_log_category(&source);
@@ -2263,16 +2204,14 @@ fn read_cached_object_describe(
     source_id: &str,
     object_name: &str,
 ) -> Result<Option<ObjectDescribe>, AppError> {
-    let connection = state
-        .storage
-        .connection()
-        .map_err(|error| AppError::Biz(format!("Database lock failed: {error}")))?;
-    let payload = db::read_source_metadata_cache(
-        &connection,
-        source_id,
-        METADATA_TYPE_OBJECT_DESCRIBE,
-        Some(object_name),
-    )?;
+    let payload = state.storage.read(|connection| {
+        db::read_source_metadata_cache(
+            connection,
+            source_id,
+            METADATA_TYPE_OBJECT_DESCRIBE,
+            Some(object_name),
+        )
+    })?;
     let Some(payload) = payload else {
         return Ok(None);
     };
@@ -2301,17 +2240,15 @@ async fn load_mysql_describe_for_query(
 
     let payload =
         serde_json::to_string(&describe).map_err(|error| AppError::Serde(error.to_string()))?;
-    let connection = state
-        .storage
-        .connection()
-        .map_err(|error| AppError::Biz(format!("Database lock failed: {error}")))?;
-    db::write_source_metadata_cache(
-        &connection,
-        source_id,
-        METADATA_TYPE_OBJECT_DESCRIBE,
-        Some(object_name),
-        &payload,
-    )?;
+    state.storage.write(|connection| {
+        db::write_source_metadata_cache(
+            connection,
+            source_id,
+            METADATA_TYPE_OBJECT_DESCRIBE,
+            Some(object_name),
+            &payload,
+        )
+    })?;
 
     Ok(Some(describe))
 }
@@ -2323,13 +2260,10 @@ pub async fn get_current_user_context(
     state: State<'_, AppState>,
     source_id: String,
 ) -> Result<CurrentUserContext, String> {
-    let source = {
-        let connection = state
-            .storage
-            .connection()
-            .map_err(|error| format!("Database lock failed: {error}"))?;
-        db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
-    };
+    let source = state
+        .storage
+        .read(|connection| db::get_source(connection, &source_id))
+        .map_err(AppError::to_string_error)?;
     let provider =
         provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
 
@@ -2398,13 +2332,10 @@ pub async fn create_record(
     state: State<'_, AppState>,
     payload: RecordMutationPayload,
 ) -> Result<String, String> {
-    let source = {
-        let connection = state
-            .storage
-            .connection()
-            .map_err(|error| format!("Database lock failed: {error}"))?;
-        db::get_source(&connection, &payload.source_id).map_err(AppError::to_string_error)?
-    };
+    let source = state
+        .storage
+        .read(|connection| db::get_source(connection, &payload.source_id))
+        .map_err(AppError::to_string_error)?;
     let provider =
         provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
     let log_category = resolve_log_category(&source);
@@ -2511,13 +2442,10 @@ pub async fn save_records(
         return Ok(());
     }
 
-    let source = {
-        let connection = state
-            .storage
-            .connection()
-            .map_err(|error| format!("Database lock failed: {error}"))?;
-        db::get_source(&connection, &payload.source_id).map_err(AppError::to_string_error)?
-    };
+    let source = state
+        .storage
+        .read(|connection| db::get_source(connection, &payload.source_id))
+        .map_err(AppError::to_string_error)?;
     let provider =
         provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
     let log_category = resolve_log_category(&source);
@@ -2645,13 +2573,10 @@ pub async fn preview_save_records_with_deletes(
         return Ok(Vec::new());
     }
 
-    let source = {
-        let connection = state
-            .storage
-            .connection()
-            .map_err(|error| format!("Database lock failed: {error}"))?;
-        db::get_source(&connection, &payload.source_id).map_err(AppError::to_string_error)?
-    };
+    let source = state
+        .storage
+        .read(|connection| db::get_source(connection, &payload.source_id))
+        .map_err(AppError::to_string_error)?;
     if source.is_salesforce() {
         return Err("Salesforce 暂不支持单事务批量提交预览（含删除）。".to_string());
     }
@@ -2683,13 +2608,10 @@ pub async fn save_records_with_deletes(
         });
     }
 
-    let source = {
-        let connection = state
-            .storage
-            .connection()
-            .map_err(|error| format!("Database lock failed: {error}"))?;
-        db::get_source(&connection, &payload.source_id).map_err(AppError::to_string_error)?
-    };
+    let source = state
+        .storage
+        .read(|connection| db::get_source(connection, &payload.source_id))
+        .map_err(AppError::to_string_error)?;
     let provider =
         provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
     let log_category = resolve_log_category(&source);
@@ -2806,13 +2728,10 @@ pub async fn update_record(
     record_id: String,
     values: std::collections::HashMap<String, serde_json::Value>,
 ) -> Result<(), String> {
-    let source = {
-        let connection = state
-            .storage
-            .connection()
-            .map_err(|error| format!("Database lock failed: {error}"))?;
-        db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
-    };
+    let source = state
+        .storage
+        .read(|connection| db::get_source(connection, &source_id))
+        .map_err(AppError::to_string_error)?;
     let provider =
         provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
     let log_category = resolve_log_category(&source);
@@ -2915,13 +2834,10 @@ pub async fn delete_record(
     object_name: String,
     record_id: String,
 ) -> Result<(), String> {
-    let source = {
-        let connection = state
-            .storage
-            .connection()
-            .map_err(|error| format!("Database lock failed: {error}"))?;
-        db::get_source(&connection, &source_id).map_err(AppError::to_string_error)?
-    };
+    let source = state
+        .storage
+        .read(|connection| db::get_source(connection, &source_id))
+        .map_err(AppError::to_string_error)?;
     let provider =
         provider_for_source(state.inner(), &source).map_err(AppError::to_string_error)?;
     let log_category = resolve_log_category(&source);
@@ -3017,11 +2933,9 @@ pub async fn delete_record(
 
 /// 读取 LLM 设置,未配置时返回默认值。
 fn read_llm_settings(state: &State<'_, AppState>) -> Result<LlmSettings, String> {
-    let connection = state
+    let raw = state
         .storage
-        .connection()
-        .map_err(|error| format!("Database lock failed: {error}"))?;
-    let raw = db::read_app_setting(&connection, LLM_SETTINGS_KEY)
+        .read(|connection| db::read_app_setting(connection, LLM_SETTINGS_KEY))
         .map_err(AppError::to_string_error)?
         .unwrap_or_default();
     if raw.trim().is_empty() {
@@ -3093,11 +3007,10 @@ const TOOL_GET_OBJECT_RELATIONSHIP_GRAPH: &str = "get_salesforce_object_relation
 pub fn list_terminal_command_groups(
     state: State<'_, AppState>,
 ) -> Result<Vec<TerminalCommandGroup>, String> {
-    let connection = state
+    state
         .storage
-        .connection()
-        .map_err(|error| format!("Database lock failed: {error}"))?;
-    db::list_terminal_command_groups(&connection).map_err(AppError::to_string_error)
+        .read(|connection| db::list_terminal_command_groups(connection))
+        .map_err(AppError::to_string_error)
 }
 
 /// 创建终端命令组。
@@ -3111,11 +3024,9 @@ pub fn create_terminal_command_group(
         return Err("命令组名称不能为空".to_string());
     }
 
-    let connection = state
+    state
         .storage
-        .connection()
-        .map_err(|error| format!("Database lock failed: {error}"))?;
-    db::create_terminal_command_group(&connection, &normalized_name)
+        .write(|connection| db::create_terminal_command_group(connection, &normalized_name))
         .map_err(AppError::to_string_error)
 }
 
@@ -3131,11 +3042,11 @@ pub fn update_terminal_command_group(
         return Err("groupId 不能为空".to_string());
     }
 
-    let connection = state
+    state
         .storage
-        .connection()
-        .map_err(|error| format!("Database lock failed: {error}"))?;
-    db::update_terminal_command_group(&connection, &normalized_group_id, &payload.name)
+        .write(|connection| {
+            db::update_terminal_command_group(connection, &normalized_group_id, &payload.name)
+        })
         .map_err(AppError::to_string_error)
 }
 
@@ -3145,11 +3056,10 @@ pub fn create_terminal_command(
     state: State<'_, AppState>,
     payload: TerminalCommandUpsertPayload,
 ) -> Result<TerminalCommandItem, String> {
-    let connection = state
+    state
         .storage
-        .connection()
-        .map_err(|error| format!("Database lock failed: {error}"))?;
-    db::create_terminal_command(&connection, &payload).map_err(AppError::to_string_error)
+        .write(|connection| db::create_terminal_command(connection, &payload))
+        .map_err(AppError::to_string_error)
 }
 
 /// 更新终端命令。
@@ -3164,11 +3074,11 @@ pub fn update_terminal_command(
         return Err("commandId 不能为空".to_string());
     }
 
-    let connection = state
+    state
         .storage
-        .connection()
-        .map_err(|error| format!("Database lock failed: {error}"))?;
-    db::update_terminal_command(&connection, &normalized_command_id, &payload)
+        .write(|connection| {
+            db::update_terminal_command(connection, &normalized_command_id, &payload)
+        })
         .map_err(AppError::to_string_error)
 }
 
@@ -3188,11 +3098,11 @@ pub fn delete_terminal_command(
         return Err("commandId 不能为空".to_string());
     }
 
-    let connection = state
+    state
         .storage
-        .connection()
-        .map_err(|error| format!("Database lock failed: {error}"))?;
-    db::delete_terminal_command(&connection, &normalized_group_id, &normalized_command_id)
+        .write(|connection| {
+            db::delete_terminal_command(connection, &normalized_group_id, &normalized_command_id)
+        })
         .map_err(AppError::to_string_error)
 }
 
@@ -3207,11 +3117,9 @@ pub fn delete_terminal_command_group(
         return Err("groupId 不能为空".to_string());
     }
 
-    let connection = state
+    state
         .storage
-        .connection()
-        .map_err(|error| format!("Database lock failed: {error}"))?;
-    db::delete_terminal_command_group(&connection, &normalized_group_id)
+        .write(|connection| db::delete_terminal_command_group(connection, &normalized_group_id))
         .map_err(AppError::to_string_error)
 }
 
@@ -3230,11 +3138,10 @@ pub fn reorder_terminal_commands(
         return Err("commandIds 不能为空".to_string());
     }
 
-    let connection = state
+    state
         .storage
-        .connection()
-        .map_err(|error| format!("Database lock failed: {error}"))?;
-    db::reorder_terminal_commands(&connection, &payload).map_err(AppError::to_string_error)
+        .write(|connection| db::reorder_terminal_commands(connection, &payload))
+        .map_err(AppError::to_string_error)
 }
 
 /// 打开终端会话：每个前端 Tab 对应一个系统终端进程。
@@ -3276,16 +3183,18 @@ pub fn list_available_terminal_shells() -> Result<Vec<TerminalShellOption>, Stri
 pub fn get_terminal_shell_settings(
     state: State<'_, AppState>,
 ) -> Result<TerminalShellSettings, String> {
-    let connection = state
+    state
         .storage
-        .connection()
-        .map_err(|error| format!("Database lock failed: {error}"))?;
-    Ok(TerminalShellSettings {
-        command_value: db::read_app_setting(&connection, TERMINAL_SHELL_COMMAND_KEY)
-            .map_err(AppError::to_string_error)?,
-        legacy_preference: db::read_app_setting(&connection, LEGACY_TERMINAL_SHELL_PREFERENCE_KEY)
-            .map_err(AppError::to_string_error)?,
-    })
+        .read(|connection| {
+            Ok(TerminalShellSettings {
+                command_value: db::read_app_setting(connection, TERMINAL_SHELL_COMMAND_KEY)?,
+                legacy_preference: db::read_app_setting(
+                    connection,
+                    LEGACY_TERMINAL_SHELL_PREFERENCE_KEY,
+                )?,
+            })
+        })
+        .map_err(AppError::to_string_error)
 }
 
 /// 保存终端 Shell 命令路径。
@@ -3298,11 +3207,11 @@ pub fn save_terminal_shell_command(
     if normalized_command.is_empty() {
         return Err("终端 Shell 命令不能为空".to_string());
     }
-    let connection = state
+    state
         .storage
-        .connection()
-        .map_err(|error| format!("Database lock failed: {error}"))?;
-    db::write_app_setting(&connection, TERMINAL_SHELL_COMMAND_KEY, &normalized_command)
+        .write(|connection| {
+            db::write_app_setting(connection, TERMINAL_SHELL_COMMAND_KEY, &normalized_command)
+        })
         .map_err(AppError::to_string_error)
 }
 
@@ -3395,21 +3304,21 @@ pub fn open_elevated_terminal(_state: State<'_, AppState>) -> Result<(), String>
 
 /// 读取终端 shell 命令配置；兼容旧版 `terminal.shell.preference`（pwsh/powershell）。
 fn read_terminal_shell_command(state: &State<'_, AppState>) -> Option<String> {
-    let connection = state.storage.connection().ok()?;
-    // 优先读取新版完整命令配置。
-    let command = db::read_app_setting(&connection, TERMINAL_SHELL_COMMAND_KEY)
-        .ok()
-        .flatten()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
+    let (command, legacy_raw) = state
+        .storage
+        .read(|connection| {
+            let cmd = db::read_app_setting(connection, TERMINAL_SHELL_COMMAND_KEY)?
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty());
+            let leg = db::read_app_setting(connection, LEGACY_TERMINAL_SHELL_PREFERENCE_KEY)?;
+            Ok((cmd, leg))
+        })
+        .ok()?;
     if command.is_some() {
         return command;
     }
 
-    // 回退读取旧版偏好配置，避免历史用户升级后失效。
-    let legacy = db::read_app_setting(&connection, LEGACY_TERMINAL_SHELL_PREFERENCE_KEY)
-        .ok()
-        .flatten()
+    let legacy = legacy_raw
         .map(|value| value.trim().to_lowercase())
         .filter(|value| !value.is_empty())?;
     if legacy == "powershell" {
@@ -3479,49 +3388,4 @@ mod tests {
         assert!(detail.contains("/services/data/v61.0/sobjects/Account/001xx000003DHP0AAO"));
         assert!(!detail.contains("trace_soql"));
     }
-}
-
-/// 校验数据源写入参数,避免保存明显非法值。
-fn validate_payload(payload: &SourceUpsertPayload) -> Result<(), String> {
-    let source_type = payload.source_type.trim().to_lowercase();
-    if payload.name.trim().is_empty() {
-        return Err("Source name cannot be empty".to_string());
-    }
-    if source_type == "salesforce" {
-        if payload.instance_url.trim().is_empty() {
-            return Err("Instance URL cannot be empty".to_string());
-        }
-        if payload.access_token.trim().is_empty() {
-            return Err("Access token cannot be empty".to_string());
-        }
-        if !payload.api_version.starts_with('v') {
-            return Err("API version must start with v, e.g. v61.0".to_string());
-        }
-        return Ok(());
-    }
-    if source_type == "mysql" {
-        let host = payload
-            .config_json
-            .get("host")
-            .and_then(|item| item.as_str())
-            .unwrap_or("")
-            .trim();
-        let database = payload
-            .config_json
-            .get("database")
-            .and_then(|item| item.as_str())
-            .unwrap_or("")
-            .trim();
-        let username = payload
-            .config_json
-            .get("username")
-            .and_then(|item| item.as_str())
-            .unwrap_or("")
-            .trim();
-        if host.is_empty() || database.is_empty() || username.is_empty() {
-            return Err("MySQL config 缺少必填项：host/database/username".to_string());
-        }
-        return Ok(());
-    }
-    return Err(format!("当前版本不支持该数据源类型: {source_type}"));
 }
