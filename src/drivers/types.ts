@@ -88,6 +88,8 @@ export interface DriverTreeConfig {
   groups: { groupType: string; label: string }[];
   // 对象节点是否支持向下展开字段（Columns）子节点。
   supportsColumnExpansion: boolean;
+  // 对象节点展开后的子目录结构（如 MySQL 的 columns / keys / indexes）；为空时直接平铺字段。
+  objectSubFolders?: ("columns" | "keys" | "indexes")[];
 }
 
 // 连接表单字段定义：由各数据源驱动声明，供统一连接向导动态渲染。

@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { autocompletion, completionKeymap } from "@codemirror/autocomplete";
+import { acceptCompletion, autocompletion, completionKeymap } from "@codemirror/autocomplete";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { MySQL, StandardSQL, sql } from "@codemirror/lang-sql";
 import { bracketMatching, defaultHighlightStyle, syntaxHighlighting } from "@codemirror/language";
@@ -87,7 +87,7 @@ class StatementRunGutterMarker extends GutterMarker {
     btn.title = `执行第 ${this.statement.index + 1} 条语句`;
     btn.setAttribute("aria-label", `执行第 ${this.statement.index + 1} 条语句`);
     btn.innerHTML =
-      '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="6,4 20,12 6,20"></polygon></svg>';
+      '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="display:block" aria-hidden="true"><polygon points="6,3 20,12 6,21"></polygon></svg>';
 
     btn.addEventListener("mouseenter", () => {
       view.dispatch({
@@ -167,7 +167,9 @@ const dbxLightTheme = EditorView.theme({
     lineHeight: "1.6"
   },
   ".cm-content": {
-    padding: "8px 0"
+    padding: "8px 0",
+    userSelect: "text",
+    WebkitUserSelect: "text"
   },
   ".cm-gutters": {
     backgroundColor: "#f8fafc",
@@ -176,14 +178,17 @@ const dbxLightTheme = EditorView.theme({
     userSelect: "none"
   },
   ".cm-activeLine": {
-    backgroundColor: "#eaf4ff"
+    backgroundColor: "rgba(219, 234, 254, 0.5)"
+  },
+  "&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection": {
+    backgroundColor: "rgba(59, 130, 246, 0.28) !important"
   },
   ".cm-activeLineGutter": {
     backgroundColor: "#e0efff",
     color: "#334155"
   },
   ".cm-statement-run-gutter": {
-    width: "22px",
+    width: "24px",
     backgroundColor: "#f8fafc"
   },
   ".cm-statement-run-gutter .cm-gutterElement": {
@@ -193,11 +198,14 @@ const dbxLightTheme = EditorView.theme({
     padding: "0"
   },
   ".cm-statement-run-btn": {
-    display: "inline-flex",
+    display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    width: "18px",
-    height: "18px",
+    width: "20px",
+    height: "20px",
+    padding: "0",
+    margin: "0",
+    lineHeight: "0",
     borderRadius: "4px",
     border: "none",
     backgroundColor: "transparent",
@@ -421,7 +429,11 @@ export function CodeMirrorQueryEditor({
               return Boolean(onExecuteAllRef.current);
             }
           },
-          ...completionKeymap,
+          {
+            key: "Tab",
+            run: acceptCompletion
+          },
+          ...completionKeymap.filter((binding) => binding.key !== "Enter"),
           ...defaultKeymap,
           ...historyKeymap,
           indentWithTab

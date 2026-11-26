@@ -35,7 +35,8 @@ export const mysqlDriver: DataSourceDriver = {
       { groupType: "users", label: "users" },
       { groupType: "virtual-views", label: "virtual views" }
     ],
-    supportsColumnExpansion: true
+    supportsColumnExpansion: true,
+    objectSubFolders: ["columns", "keys", "indexes"]
   },
   gridAdapter: {
     nullPlaceholder: "Null",

@@ -14,7 +14,13 @@ import {
 } from "../logic/sourceTreePersistence.ts";
 import { resolveNodeDoubleClickAction } from "../logic/sourceTreeInteractions.ts";
 import { searchSourceObjects, type QuerySourceObjectSearchResult } from "../logic/sourceObjectSearch.ts";
-import { buildDriverSourceChildren, buildGroupObjectChildren, buildObjectColumnChildren, buildSourceRootNodes } from "../logic/sourceTreeProviders.ts";
+import {
+  buildDriverSourceChildren,
+  buildGroupObjectChildren,
+  buildObjectColumnChildren,
+  buildObjectSubFolderChildren,
+  buildSourceRootNodes
+} from "../logic/sourceTreeProviders.ts";
 import { beginRefreshingSource, finishRefreshingSource, focusSourceNode } from "../logic/sourceTreeState.ts";
 import type { QueryTreeNode, SourceTreeState } from "../types/tree.ts";
 
@@ -100,6 +106,7 @@ function createEmptyTreeState(focusedSourceId: string, selectedNodeId = ""): Sou
     sourceObjectsById: {},
     sourceTreeChildrenById: {},
     objectFieldsByKey: {},
+    objectDdlByKey: {},
     objectFieldsLoadingByKey: {},
     sourceLoadingById: {},
     sourceRefreshingById: {},
@@ -368,12 +375,18 @@ export function useSourceTreeState({
           if (!isLatestSourceRequest()) return objects;
 
           setTreeState((current) => {
-            // 强刷数据源时，清理该数据源下已缓存的表字段，保证结构变化后重新展开能拉到最新字段。
+            // 强刷数据源时，清理该数据源下已缓存的表字段与 DDL，保证结构变化后重新展开能拉到最新结构。
             const nextObjectFieldsByKey = { ...current.objectFieldsByKey };
+            const nextObjectDdlByKey = { ...current.objectDdlByKey };
             if (forceRefresh) {
               Object.keys(nextObjectFieldsByKey).forEach((key) => {
                 if (key.startsWith(`${sourceId}:`)) {
                   delete nextObjectFieldsByKey[key];
+                }
+              });
+              Object.keys(nextObjectDdlByKey).forEach((key) => {
+                if (key.startsWith(`${sourceId}:`)) {
+                  delete nextObjectDdlByKey[key];
                 }
               });
             }
@@ -391,7 +404,8 @@ export function useSourceTreeState({
                 ...current.sourceTreeChildrenById,
                 [sourceId]: children
               },
-              objectFieldsByKey: nextObjectFieldsByKey
+              objectFieldsByKey: nextObjectFieldsByKey,
+              objectDdlByKey: nextObjectDdlByKey
             };
           });
           return objects;
@@ -463,9 +477,18 @@ export function useSourceTreeState({
       }));
 
       try {
-        const describe = await runQuerySourceRequestWithRetry(source, () =>
-          api.describeObject(source.id, objectName)
-        );
+        const driver = getDataSourceDriver(source.sourceType);
+        const subFolders = driver.treeConfig.objectSubFolders || [];
+        const needsDdl =
+          driver.capabilities.supportsDdl
+          && (subFolders.includes("keys") || subFolders.includes("indexes"));
+
+        const [describe, ddl] = await Promise.all([
+          runQuerySourceRequestWithRetry(source, () => api.describeObject(source.id, objectName)),
+          needsDdl
+            ? api.getObjectDdl(source.id, objectName).catch(() => null)
+            : Promise.resolve(null)
+        ]);
         const fields = describe.fields || [];
         setTreeState((current) => ({
           ...current,
@@ -473,6 +496,12 @@ export function useSourceTreeState({
             ...current.objectFieldsByKey,
             [cacheKey]: fields
           },
+          objectDdlByKey: ddl
+            ? {
+                ...current.objectDdlByKey,
+                [cacheKey]: ddl
+              }
+            : current.objectDdlByKey,
           objectFieldsLoadingByKey: {
             ...current.objectFieldsLoadingByKey,
             [cacheKey]: false
@@ -496,7 +525,7 @@ export function useSourceTreeState({
   // 确保 source/group/object 节点展开：先写入展开态，再按需补拉子节点。
   const ensureNodeExpanded = useCallback(
     async (node: QueryTreeNode) => {
-      if (node.kind === "column") {
+      if (node.kind === "column" || node.kind === "key" || node.kind === "index") {
         return;
       }
 
@@ -514,9 +543,12 @@ export function useSourceTreeState({
         && node.groupType === "tables"
         && !treeState.sourceObjectsById[node.sourceId]
         && !treeState.sourceLoadingById[node.sourceId];
-      const objectCacheKey = node.kind === "object" ? `${node.sourceId}:${node.objectName}` : "";
+      const objectCacheKey =
+        node.kind === "object" || node.kind === "object-folder"
+          ? `${node.sourceId}:${node.objectName}`
+          : "";
       const shouldLoadObjectFields =
-        node.kind === "object"
+        (node.kind === "object" || node.kind === "object-folder")
         && node.expandable
         && !treeState.objectFieldsByKey[objectCacheKey]
         && !treeState.objectFieldsLoadingByKey[objectCacheKey];
@@ -529,7 +561,7 @@ export function useSourceTreeState({
 
         if (shouldLoadSourceChildren || shouldLoadGroupObjects) {
           await loadSourceChildren(source, false);
-        } else if (shouldLoadObjectFields && node.kind === "object") {
+        } else if (shouldLoadObjectFields && (node.kind === "object" || node.kind === "object-folder")) {
           await loadObjectFields(source, node.objectName, false);
         }
       }
@@ -737,7 +769,34 @@ export function useSourceTreeState({
 
     const attachObjectColumns = (node: QueryTreeNode): QueryTreeRenderNode => {
       if (node.kind !== "object") return node;
-      const fields = treeState.objectFieldsByKey[`${node.sourceId}:${node.objectName}`] || [];
+      const cacheKey = `${node.sourceId}:${node.objectName}`;
+      const hasLoadedFields = Object.prototype.hasOwnProperty.call(treeState.objectFieldsByKey, cacheKey);
+      if (!hasLoadedFields) {
+        return { ...node, children: [] };
+      }
+      const fields = treeState.objectFieldsByKey[cacheKey] || [];
+      const driver = getDataSourceDriver(node.sourceType);
+      const subFolders = driver.treeConfig.objectSubFolders || [];
+
+      if (subFolders.length > 0) {
+        const ddl = treeState.objectDdlByKey[cacheKey] || null;
+        const folderEntries = buildObjectSubFolderChildren(
+          node.sourceId,
+          node.sourceType,
+          node.objectName,
+          subFolders,
+          fields,
+          ddl
+        );
+        return {
+          ...node,
+          children: folderEntries.map((entry) => ({
+            ...entry.folderNode,
+            children: entry.children
+          }))
+        };
+      }
+
       return {
         ...node,
         children: fields.length > 0
@@ -765,7 +824,7 @@ export function useSourceTreeState({
         })
       };
     });
-  }, [sources, treeState.objectFieldsByKey, treeState.sourceObjectsById, treeState.sourceTreeChildrenById]);
+  }, [sources, treeState.objectDdlByKey, treeState.objectFieldsByKey, treeState.sourceObjectsById, treeState.sourceTreeChildrenById]);
 
   // 将本地树 UI 状态持久化到 store，供切换 panel 与重启后恢复。
   useEffect(() => {

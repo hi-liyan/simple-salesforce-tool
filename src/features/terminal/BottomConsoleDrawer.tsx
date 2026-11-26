@@ -61,10 +61,14 @@ export function BottomConsoleDrawer({ open, onClose, onOpen }: BottomConsoleDraw
   const [sessionNotice, setSessionNotice] = useState("");
   // 快速保存常用命令触发信号。
   const [quickSaveRequest, setQuickSaveRequest] = useState<{ text: string; nonce: number } | null>(null);
+  // 是否正在拖拽调整高度（用于高亮分隔条与禁用拖拽期过渡动画）。
+  const [resizing, setResizing] = useState(false);
 
+  const sectionRef = useRef<HTMLElement | null>(null);
   const viewportRef = useRef<TerminalViewportHandle | null>(null);
   const drawerHeightRef = useRef(drawerHeight);
   drawerHeightRef.current = drawerHeight;
+  const resizeFrameRef = useRef<number | null>(null);
 
   const isWindows = useMemo(() => /Win/i.test(navigator.platform || navigator.userAgent), []);
   const orderedTabs = useMemo(() => sortTabsByOrder(tabOrder, tabs), [tabOrder, tabs]);
@@ -122,28 +126,57 @@ export function BottomConsoleDrawer({ open, onClose, onOpen }: BottomConsoleDraw
     };
   }, [onOpen]);
 
-  // 顶部拖拽调整抽屉高度（仅在 pointerup 时持久化，遵循状态分级约束）。
-  const handleStartResize = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+  // 顶部拖拽调整抽屉高度：拖拽帧直接操作 DOM 高度（rAF 节流）避免 React 高频重渲染，松手时一次性提交状态与持久化。
+  const handleStartResize = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     event.preventDefault();
     const startY = event.clientY;
     const startHeight = drawerHeightRef.current;
     const maxAllowed = Math.max(MIN_CONSOLE_HEIGHT, Math.floor(window.innerHeight * 0.78));
+    let latestHeight = startHeight;
 
-    const onPointerMove = (moveEvent: MouseEvent) => {
+    const prevUserSelect = document.body.style.userSelect;
+    const prevCursor = document.body.style.cursor;
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "row-resize";
+    setResizing(true);
+
+    const applyHeightToDom = (height: number) => {
+      if (!sectionRef.current) return;
+      sectionRef.current.style.height = `${height}px`;
+    };
+
+    const onPointerMove = (moveEvent: PointerEvent) => {
       const delta = startY - moveEvent.clientY;
-      const nextHeight = Math.min(maxAllowed, Math.max(MIN_CONSOLE_HEIGHT, startHeight + delta));
-      setDrawerHeight(nextHeight);
+      latestHeight = Math.round(Math.min(maxAllowed, Math.max(MIN_CONSOLE_HEIGHT, startHeight + delta)));
+      drawerHeightRef.current = latestHeight;
+      if (resizeFrameRef.current !== null) return;
+      resizeFrameRef.current = window.requestAnimationFrame(() => {
+        resizeFrameRef.current = null;
+        applyHeightToDom(drawerHeightRef.current);
+      });
     };
 
     const onPointerUp = () => {
-      window.removeEventListener("mousemove", onPointerMove);
-      window.removeEventListener("mouseup", onPointerUp);
-      void api.setAppSetting(CONSOLE_HEIGHT_SETTING_KEY, String(drawerHeightRef.current)).catch(() => {});
+      if (resizeFrameRef.current !== null) {
+        window.cancelAnimationFrame(resizeFrameRef.current);
+        resizeFrameRef.current = null;
+      }
+      document.body.style.userSelect = prevUserSelect;
+      document.body.style.cursor = prevCursor;
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerUp);
+
+      applyHeightToDom(latestHeight);
+      setResizing(false);
+      setDrawerHeight(latestHeight);
+      void api.setAppSetting(CONSOLE_HEIGHT_SETTING_KEY, String(latestHeight)).catch(() => {});
       viewportRef.current?.fitActiveTerminal(false);
     };
 
-    window.addEventListener("mousemove", onPointerMove);
-    window.addEventListener("mouseup", onPointerUp);
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerUp);
   }, []);
 
   // 关闭单个终端 Tab 并回收后端 PTY。
@@ -174,23 +207,32 @@ export function BottomConsoleDrawer({ open, onClose, onOpen }: BottomConsoleDraw
   if (!hasEverOpened) return null;
 
   return (
-    <section
-      aria-hidden={!open}
-      className={`flex shrink-0 flex-col overflow-hidden rounded-xl border border-base-300/80 bg-base-100 shadow-2xs transition-[height] duration-150 ${
-        open ? "" : "hidden"
-      }`}
-      style={{
-        height: maximized ? "calc(100vh - 88px)" : `${drawerHeight}px`
-      }}
-    >
-      {/* 顶部拖拽调节手柄（非最大化时可用）。 */}
+    <div className={`relative flex shrink-0 flex-col ${open ? "" : "hidden"}`}>
+      {/* 顶部拖拽调节手柄：对齐 SplitPaneLayout（DBX 风格）间隙热区，悬停与拖拽时显示统一横向高亮条与 row-resize 光标。 */}
       {!maximized && (
         <div
-          onMouseDown={handleStartResize}
+          role="separator"
+          aria-orientation="vertical"
+          onPointerDown={handleStartResize}
           title="拖拽调整终端高度"
-          className="h-1.5 w-full shrink-0 cursor-ns-resize bg-transparent transition-colors hover:bg-primary/30"
-        />
+          className="group relative -mt-2 h-2 w-full shrink-0 cursor-row-resize select-none"
+        >
+          <div
+            className={`absolute inset-x-3 top-[3px] h-[2px] rounded-full transition-colors ${
+              resizing ? "bg-primary/60" : "bg-transparent group-hover:bg-primary/35"
+            }`}
+          />
+        </div>
       )}
+
+      <section
+        ref={sectionRef}
+        aria-hidden={!open}
+        className="flex shrink-0 flex-col overflow-hidden rounded-xl border border-base-300/80 bg-base-100 shadow-2xs"
+        style={{
+          height: maximized ? "calc(100vh - 88px)" : `${drawerHeight}px`
+        }}
+      >
 
       {/* 顶部 Tab 栏与 VSCode 风格操作按钮区。 */}
       <div className="flex h-9 shrink-0 items-center justify-between border-b border-base-300/80 bg-base-200/35 px-2">
@@ -317,5 +359,6 @@ export function BottomConsoleDrawer({ open, onClose, onOpen }: BottomConsoleDraw
         )}
       </div>
     </section>
+    </div>
   );
 }

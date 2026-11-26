@@ -26,7 +26,8 @@ export const salesforceDriver: DataSourceDriver = {
   treeConfig: {
     useGroupNodes: false,
     groups: [],
-    supportsColumnExpansion: true
+    supportsColumnExpansion: true,
+    objectSubFolders: []
   },
   gridAdapter: {
     nullPlaceholder: "None",

@@ -7,7 +7,6 @@ import { listDataSourceDrivers } from "../drivers/registry";
 import { useMainPageQueryPanel } from "../features/main/QueryPanel/hooks/useMainPageQueryPanel";
 import { AppShellLayout } from "../layouts/AppShellLayout";
 import { CustomTitleBar } from "../layouts/CustomTitleBar";
-import { registerBuiltinPlugins } from "../plugins/builtin";
 import {
   createPluginContext,
   getPlugin,
@@ -31,8 +30,6 @@ import { SettingsModal } from "../features/settings/SettingsModal";
 import { LogAuditModal } from "../features/logs/LogAuditModal";
 import type { SalesforceSource } from "../types";
 
-// 初始化注册全部内置插件（命令库、系统终端与工具箱）。
-registerBuiltinPlugins();
 // 启动版本检查标志：避免 React StrictMode 在开发环境重复触发新版本通知。
 let startupVersionCheckTriggered = false;
 
@@ -455,12 +452,21 @@ export function MainPage() {
     <AppShellLayout
       titleBar={
         <CustomTitleBar
-          aiDockOpen={rightDockPluginId === "builtin.command-library"}
-          onToggleAiDock={() =>
-            setRightDockPluginId((current) =>
-              current === "builtin.command-library" ? null : "builtin.command-library"
-            )
-          }
+          aiDockOpen={Boolean(rightDockPluginId)}
+          onToggleAiDock={() => {
+            if (rightDockPluginId) {
+              setRightDockPluginId(null);
+              return;
+            }
+            const dockPlugin = registeredPlugins.find(
+              (plugin) => plugin.enabled !== false && plugin.mountTargets.includes("dock-right")
+            );
+            if (dockPlugin) {
+              setRightDockPluginId(dockPlugin.id);
+              return;
+            }
+            setPluginCenterOpen(true);
+          }}
           onNewConnection={() => setSourceModalState({ open: true, mode: "create", source: null })}
           onNewQuery={() => {
             queryPanelActions.onSetViewMode("query");
@@ -511,6 +517,21 @@ export function MainPage() {
       }
       overlay={
         <>
+          {queryPanelViewState.workspaceNotice && (
+            <NoticeAlert
+              tone={
+                queryPanelViewState.workspaceNotice.type === "error"
+                  ? "error"
+                  : queryPanelViewState.workspaceNotice.type === "warning"
+                    ? "warning"
+                    : "success"
+              }
+              message={queryPanelViewState.workspaceNotice.message}
+              onClose={queryPanelActions.onCloseWorkspaceNotice}
+              className="fixed bottom-8 right-4 z-[70] max-w-[380px] rounded-xl shadow-lg"
+            />
+          )}
+
           {versionUpdateNotice && (
             <NoticeAlert
               // 启动更新通知：仅提示存在新版本，引导用户到设置页查看下载信息。
@@ -626,6 +647,11 @@ export function MainPage() {
                 )}
 
                 <div className="grid max-h-[60vh] grid-cols-2 gap-2.5 overflow-auto pr-0.5">
+                  {registeredPlugins.length === 0 && (
+                    <div className="col-span-2 rounded-xl border border-dashed border-base-300 bg-base-200/30 px-4 py-8 text-center text-[12px] text-neutral/70">
+                      暂无已安装插件，可点击右上角「安装 .sstplugin」导入本地插件包。
+                    </div>
+                  )}
                   {registeredPlugins.map((plugin) => {
                     const Icon = plugin.icon;
                     const isDisabled = plugin.isExternal && plugin.enabled === false;

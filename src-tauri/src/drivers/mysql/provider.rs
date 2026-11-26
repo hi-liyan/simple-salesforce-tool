@@ -448,18 +448,40 @@ impl MySqlProvider {
         Ok(None)
     }
 
-    /// 执行 SQL 查询并映射为记录列表。
+    /// 执行 SQL 查询或 DML/DDL 语句并映射为统一结果集（写操作安全拦截由上层 SqlGuard 负责）。
     pub async fn query_records(
         &self,
         source: &SalesforceSource,
         query_text: &str,
         describe: Option<&ObjectDescribe>,
     ) -> Result<QueryResult, AppError> {
-        ensure_readonly_query(query_text)?;
+        let trimmed_query = query_text.trim();
+        if trimmed_query.is_empty() {
+            return Err(AppError::Biz("查询语句不能为空".to_string()));
+        }
         let config = MySqlSourceConfig::from_source(source)?;
         let pool = self.acquire_pool(source, &config).await?;
 
-        let inferred_table = infer_table_name_from_query(query_text);
+        // 非结果集语句（INSERT/UPDATE/DELETE/CREATE/ALTER/DROP 等）直接走 execute 并返回受影响行数。
+        if !is_result_set_query(trimmed_query) {
+            let done = sqlx::query(trimmed_query)
+                .execute(&pool)
+                .await
+                .map_err(|error| AppError::Db(format!("执行 MySQL 语句失败: {error}")))?;
+            let rows_affected = done.rows_affected();
+            let last_insert_id = done.last_insert_id();
+            let mut summary = HashMap::new();
+            summary.insert("affectedRows".to_string(), Value::from(rows_affected));
+            if last_insert_id > 0 {
+                summary.insert("lastInsertId".to_string(), Value::from(last_insert_id));
+            }
+            return Ok(QueryResult {
+                total_size: usize::try_from(rows_affected).unwrap_or(0),
+                records: vec![summary],
+            });
+        }
+
+        let inferred_table = infer_table_name_from_query(trimmed_query);
         let inferred_primary_key = if let Some(table_name) = inferred_table.as_deref() {
             resolve_primary_key_column(&pool, &config, table_name)
                 .await
@@ -468,10 +490,11 @@ impl MySqlProvider {
             None
         };
         let inferred_column_types = build_column_type_map_from_describe(describe);
-        // 根查询显式带 LIMIT/OFFSET 时额外统计真实总数，避免前端只能按当前页条数猜测分页状态。
-        let has_paginated_clause = has_top_level_limit_or_offset(query_text);
+        // 仅 SELECT / WITH 分页查询额外统计真实总数，避免 SHOW/EXPLAIN 等语句被子查询包装报错。
+        let has_paginated_clause =
+            supports_total_count_rewrite(trimmed_query) && has_top_level_limit_or_offset(trimmed_query);
         let total_size = if has_paginated_clause {
-            let count_query = build_total_count_query(query_text);
+            let count_query = build_total_count_query(trimmed_query);
             let total_count: i64 = sqlx::query_scalar(&count_query)
                 .fetch_one(&pool)
                 .await
@@ -481,7 +504,7 @@ impl MySqlProvider {
             0
         };
 
-        let rows = sqlx::query(query_text)
+        let rows = sqlx::query(trimmed_query)
             .fetch_all(&pool)
             .await
             .map_err(|error| AppError::Db(format!("执行 MySQL 查询失败: {error}")))?;
@@ -959,23 +982,21 @@ async fn build_mysql_pool(config: &MySqlSourceConfig) -> Result<MySqlPool, AppEr
         .map_err(|error| AppError::Db(format!("连接 MySQL 失败: {error}")))
 }
 
-/// 限制 query_records 为只读语句，避免把写操作误放到查询入口。
-fn ensure_readonly_query(query_text: &str) -> Result<(), AppError> {
-    let normalized = query_text.trim().to_lowercase();
-    if normalized.is_empty() {
-        return Err(AppError::Biz("查询语句不能为空".to_string()));
-    }
-    if normalized.starts_with("select")
+/// 判断语句是否会返回结果集（SELECT/SHOW/WITH/DESC/DESCRIBE/EXPLAIN）。
+fn is_result_set_query(query_text: &str) -> bool {
+    let normalized = query_text.trim_start().to_ascii_lowercase();
+    normalized.starts_with("select")
         || normalized.starts_with("show")
         || normalized.starts_with("with")
         || normalized.starts_with("desc")
         || normalized.starts_with("describe")
-    {
-        return Ok(());
-    }
-    Err(AppError::Biz(
-        "MySQL 查询仅允许只读语句（SELECT/SHOW/WITH/DESC）".to_string(),
-    ))
+        || normalized.starts_with("explain")
+}
+
+/// 判断语句是否支持包装为 `SELECT COUNT(*) FROM (...)` 统计总数。
+fn supports_total_count_rewrite(query_text: &str) -> bool {
+    let normalized = query_text.trim_start().to_ascii_lowercase();
+    normalized.starts_with("select") || normalized.starts_with("with")
 }
 
 /// 从 SQL 文本中尝试推断首个 FROM 表名（用于自动补齐 Id 字段）。

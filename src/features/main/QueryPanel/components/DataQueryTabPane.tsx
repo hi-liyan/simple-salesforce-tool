@@ -1309,16 +1309,6 @@ export function DataQueryTabPane({
 
   return (
     <>
-      {/* 工作区全局提示。 */}
-      {workspaceNotice && (
-        <NoticeAlert
-          tone={workspaceNotice.type === "error" ? "error" : workspaceNotice.type === "warning" ? "warning" : "success"}
-          message={workspaceNotice.message}
-          onClose={onCloseWorkspaceNotice}
-          className="fixed right-4 top-4 z-[60] max-w-[380px] shadow-lg"
-        />
-      )}
-
       {!hideTabBar && (
         <>
           {/* Tab 栏。 */}

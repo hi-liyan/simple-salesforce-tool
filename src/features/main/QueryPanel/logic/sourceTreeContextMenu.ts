@@ -130,6 +130,41 @@ export function buildSourceTreeContextMenuEntries({
     ];
   }
 
+  if (node.kind === "object-folder") {
+    return [
+      {
+        id: "object-folder-refresh",
+        label: "刷新表结构",
+        onClick: () => handlers.onRefreshObject(source, node.objectName)
+      },
+      {
+        id: "object-folder-open-console",
+        label: "新建查询控制台",
+        onClick: () => handlers.onOpenConsole(source, `SELECT * FROM ${node.objectName} LIMIT 100;`)
+      }
+    ];
+  }
+
+  if (node.kind === "key") {
+    return [
+      {
+        id: "key-copy-name",
+        label: "复制键名",
+        onClick: () => handlers.onCopyText(node.keyName, `键 ${node.keyName}`)
+      }
+    ];
+  }
+
+  if (node.kind === "index") {
+    return [
+      {
+        id: "index-copy-name",
+        label: "复制索引名",
+        onClick: () => handlers.onCopyText(node.indexName, `索引 ${node.indexName}`)
+      }
+    ];
+  }
+
   if (node.kind === "column") {
     return [
       {

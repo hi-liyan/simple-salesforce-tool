@@ -40,7 +40,7 @@ export function resolveSourceIdFromTreeNodeId(nodeId: string): string {
 
   const segments = nodeId.split(":");
   if (segments.length < 3) return "";
-  if (segments[0] !== "group" && segments[0] !== "object") return "";
+  if (!["group", "object", "object-folder", "column", "key", "index"].includes(segments[0])) return "";
   return segments[1] || "";
 }
 
