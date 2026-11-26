@@ -68,7 +68,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build Windows Tauri bundles
-        run: pnpm tauri build -- --bundles msi,nsis
+        run: pnpm tauri build --bundles msi,nsis
 
       # 5. 构建成功后再提交版本回写、创建 Tag 并推送到当前分支，避免构建失败污染历史
       - name: Commit bumped version and push tag
