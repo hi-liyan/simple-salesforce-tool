@@ -6,7 +6,7 @@ import { DataGrid } from "../../../../components/DataGrid";
 import { NoticeAlert } from "../../../../components/NoticeAlert";
 import { SoqlMonacoEditor } from "../../../../components/SoqlMonacoEditor";
 import { SqlMonacoEditor } from "../../../../components/SqlMonacoEditor";
-import { formatBasicSql } from "../../../../components/monaco/languages/mysqlLanguage";
+import { formatBasicSql } from "../../../../components/codemirror/sqlCompletion";
 import { api } from "../../../../api";
 import { useObjectsQuery } from "../../../../queries/salesforce";
 import { useSoqlExecutorStore, createSoqlExecutorTab, type SoqlExecutorTab, type AiConversationItem } from "../../../../store/useSoqlExecutorStore";

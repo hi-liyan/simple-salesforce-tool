@@ -1,5 +1,5 @@
 import type { ObjectDescribe, ObjectField, QueryDrawerView, QueryResult, SalesforceObject, SalesforceSource, SourceSecretView } from "../types/index.ts";
-import type { QueryLanguage } from "../components/monaco/types.ts";
+import type { QueryLanguage } from "../components/codemirror/sqlCompletion.ts";
 
 // DataGrid 字段策略类型。
 export type GridFieldStrategy = "picklist" | "date" | "datetime" | "number" | "boolean" | "text";

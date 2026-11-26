@@ -1,5 +1,7 @@
 import type { Completion, CompletionContext, CompletionResult } from "@codemirror/autocomplete";
-import type { QueryLanguage } from "../monaco/types";
+
+// 查询编辑器支持的语言标识。
+export type QueryLanguage = "soql" | "mysql";
 
 export type SqlCompletionMetadata = {
   // 当前查询语言（mysql / soql）。
@@ -416,4 +418,78 @@ export function createSqlCompletionSource(getMetadata: () => SqlCompletionMetada
       getMetadata()
     );
   };
+}
+
+// 轻量 SQL 格式化：将核心子句关键字大写并按主子句换行缩进。
+export function formatBasicSql(sqlText: string): string {
+  const normalized = sqlText.trim();
+  if (!normalized) return "";
+  const clauseKeywords = [
+    "SELECT",
+    "FROM",
+    "LEFT JOIN",
+    "RIGHT JOIN",
+    "INNER JOIN",
+    "JOIN",
+    "WHERE",
+    "GROUP BY",
+    "HAVING",
+    "ORDER BY",
+    "LIMIT",
+    "OFFSET",
+    "UNION ALL",
+    "UNION"
+  ];
+  let result = normalized.replace(/\s+/g, " ");
+  for (const kw of clauseKeywords) {
+    const pattern = new RegExp(`\\b${kw.replace(/\s+/g, "\\s+")}\\b`, "gi");
+    result = result.replace(pattern, kw === "SELECT" ? "SELECT" : `\n${kw}`);
+  }
+  return result.trim();
+}
+
+// 提取顶层主查询的 FROM 对象名（忽略括号内子查询及字符串字面量）。
+export function extractMainFromObjectName(soql: string): string | null {
+  let depth = 0;
+  let inSingleQuote = false;
+  let escaped = false;
+  let topLevel = "";
+
+  for (let i = 0; i < soql.length; i += 1) {
+    const ch = soql[i];
+    if (inSingleQuote) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === "'") {
+        inSingleQuote = false;
+      }
+      topLevel += " ";
+      continue;
+    }
+
+    if (ch === "'") {
+      inSingleQuote = true;
+      topLevel += " ";
+      continue;
+    }
+
+    if (ch === "(") {
+      depth += 1;
+      topLevel += " ";
+      continue;
+    }
+
+    if (ch === ")") {
+      depth = Math.max(0, depth - 1);
+      topLevel += " ";
+      continue;
+    }
+
+    topLevel += depth === 0 ? ch : " ";
+  }
+
+  const match = topLevel.match(/\bfrom\s+([A-Za-z_][\w]*)\b/i);
+  return match?.[1] || null;
 }

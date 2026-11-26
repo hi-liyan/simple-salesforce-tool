@@ -16,12 +16,12 @@ import {
   placeholder as cmPlaceholder
 } from "@codemirror/view";
 import { api } from "../../api";
-import type { QueryLanguage } from "../monaco/types";
 import {
   createSqlCompletionSource,
   extractLocalCreateTables,
   extractStatementAliases,
   extractStatementAtCursor,
+  type QueryLanguage,
   type SqlCompletionMetadata
 } from "./sqlCompletion";
 
