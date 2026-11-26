@@ -28,9 +28,9 @@ export const BUILTIN_PLUGINS: PluginManifest[] = [
     mountTargets: ["workspace-tab"],
     permissions: ["ipc:terminal"],
     component: async () => {
-      const mod = await import("../../features/main/TerminalPanel/index.tsx");
+      const mod = await import("../../features/terminal/TerminalViewport.tsx");
       return {
-        default: () => createElement(mod.TerminalPanel, { visible: true })
+        default: () => createElement(mod.TerminalViewport, { visible: true })
       };
     }
   }),

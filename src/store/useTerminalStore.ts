@@ -1,7 +1,5 @@
 import { create } from "zustand";
-import { createJSONStorage, persist } from "zustand/middleware";
 import { moveTabOrder, normalizeTabOrder } from "../components/tabs/tabOrder.ts";
-import { tauriSqliteStorage } from "./tauriStorage.ts";
 
 // 终端输出行：用于模拟终端历史输出。
 export type TerminalOutputLine = {
@@ -86,10 +84,8 @@ function createDefaultTerminalTab(index = 1): TerminalTab {
   };
 }
 
-// 终端 Store：持久化 UI tabs 与草稿状态，不持久化后端会话运行态。
-export const useTerminalStore = create<TerminalState>()(
-  persist(
-    (set, get) => ({
+// 终端 Store：纯内存管理瞬态运行状态，禁止持久化（遵循五级状态边界约束）。
+export const useTerminalStore = create<TerminalState>()((set, get) => ({
       tabs: [],
       tabOrder: [],
       activeTabId: "",
@@ -207,33 +203,4 @@ export const useTerminalStore = create<TerminalState>()(
         if (!normalized) return "";
         return get().createTerminalTab(normalized, commandName ? `Terminal · ${commandName}` : undefined);
       }
-    }),
-    {
-      name: "ui.terminal-store",
-      storage: createJSONStorage(() => tauriSqliteStorage),
-      skipHydration: true,
-      partialize: (state) => ({
-        tabs: state.tabs,
-        tabOrder: state.tabOrder,
-        activeTabId: state.activeTabId
-      }),
-      merge: (persisted, current) => {
-        const state = persisted as Partial<TerminalState>;
-        const tabs = Array.isArray(state.tabs) ? state.tabs : current.tabs;
-        const tabOrder = Array.isArray(state.tabOrder) ? normalizeTabOrder(state.tabOrder, tabs) : normalizeTabOrder([], tabs);
-        const activeTabId =
-          typeof state.activeTabId === "string" && tabs.some((tab) => tab.id === state.activeTabId)
-            ? state.activeTabId
-            : tabOrder[0] || "";
-
-        return {
-          ...current,
-          ...state,
-          tabs,
-          tabOrder,
-          activeTabId
-        };
-      }
-    }
-  )
-);
+    }));

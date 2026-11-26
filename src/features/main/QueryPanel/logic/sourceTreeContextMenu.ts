@@ -14,6 +14,12 @@ export type SourceTreeContextMenuHandlers = {
   onTestSourceConnection: (source: SalesforceSource) => void;
   // 折叠指定数据源下的所有展开节点。
   onCollapseSource: (sourceId: string) => void;
+  // 编辑数据源连接配置。
+  onEditSource?: (source: SalesforceSource) => void;
+  // 复制数据源连接配置。
+  onDuplicateSource?: (source: SalesforceSource) => void;
+  // 删除数据源连接。
+  onDeleteSource?: (source: SalesforceSource) => void;
   // 打开 OAuth 授权窗口（仅支持驱动）。
   onOpenAuthWindow: () => void;
   // 刷新单表/单对象元数据与 DDL。
@@ -65,7 +71,35 @@ export function buildSourceTreeContextMenuEntries({
         id: "source-collapse",
         label: "折叠全部子节点",
         onClick: () => handlers.onCollapseSource(source.id)
-      }
+      },
+      { id: "source-manage-sep", type: "separator" },
+      ...(handlers.onEditSource
+        ? [
+            {
+              id: "source-edit",
+              label: "编辑连接",
+              onClick: () => handlers.onEditSource?.(source)
+            }
+          ]
+        : []),
+      ...(handlers.onDuplicateSource
+        ? [
+            {
+              id: "source-duplicate",
+              label: "复制连接",
+              onClick: () => handlers.onDuplicateSource?.(source)
+            }
+          ]
+        : []),
+      ...(handlers.onDeleteSource
+        ? [
+            {
+              id: "source-delete",
+              label: "删除连接",
+              onClick: () => handlers.onDeleteSource?.(source)
+            }
+          ]
+        : [])
     ];
 
     if (driver.capabilities.supportsAuthWindow) {

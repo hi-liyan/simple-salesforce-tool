@@ -8,6 +8,7 @@ import { useSourceTreeState, type QueryTreeRenderNode } from "../hooks/useSource
 import { buildSourceSurfacePalette, getSourceColor } from "../logic/sourceColor.ts";
 import type { QuerySourceObjectSearchResult } from "../logic/sourceObjectSearch.ts";
 import { buildSourceTreeContextMenuEntries } from "../logic/sourceTreeContextMenu.ts";
+import { emitDeleteSourceRequest, emitOpenSourceModal } from "../../../source-manager/sourceModalEvents.ts";
 import { QuerySourceTreeNode } from "./QuerySourceTreeNode";
 
 type QuerySourceTreeProps = {
@@ -365,6 +366,18 @@ export function QuerySourceTree({
         onCollapseSource: (sourceId) => {
           setNodeContextMenu(null);
           collapseSourceNodes(sourceId);
+        },
+        onEditSource: (source) => {
+          setNodeContextMenu(null);
+          emitOpenSourceModal("edit", source);
+        },
+        onDuplicateSource: (source) => {
+          setNodeContextMenu(null);
+          emitOpenSourceModal("duplicate", source);
+        },
+        onDeleteSource: (source) => {
+          setNodeContextMenu(null);
+          emitDeleteSourceRequest(source);
         },
         onOpenAuthWindow: () => {
           setNodeContextMenu(null);
