@@ -118,6 +118,117 @@ const KEYWORD_STOP_SET = new Set(
     .filter(Boolean)
 );
 
+// 单条 SQL/SOQL 语句及其在文档中的字符起止范围。
+export type SqlStatementRange = {
+  // 语句序号（0-based）。
+  index: number;
+  // 语句有效文本（已去除首尾空白）。
+  sql: string;
+  // 有效文本在文档中的起始字符偏移（含）。
+  from: number;
+  // 有效文本在文档中的结束字符偏移（不含）。
+  to: number;
+};
+
+// 判断片段是否包含有效可执行文本（排除纯空白与纯注释）。
+function hasExecutableSqlToken(segment: string): boolean {
+  let i = 0;
+  while (i < segment.length) {
+    const ch = segment[i];
+    const next = segment[i + 1] ?? "";
+    if (/\s/.test(ch)) {
+      i += 1;
+      continue;
+    }
+    if ((ch === "-" && next === "-") || ch === "#") {
+      while (i < segment.length && segment[i] !== "\n") i += 1;
+      continue;
+    }
+    if (ch === "/" && next === "*") {
+      i += 2;
+      while (i < segment.length && !(segment[i] === "*" && segment[i + 1] === "/")) i += 1;
+      i += 2;
+      continue;
+    }
+    return true;
+  }
+  return false;
+}
+
+// 扫描整个文档并切分出所有有效 SQL/SOQL 语句及其精确区间（忽略字符串与注释内的分号）。
+export function splitSqlStatementsWithRanges(doc: string): SqlStatementRange[] {
+  const ranges: SqlStatementRange[] = [];
+  let start = 0;
+  let quote: string | null = null;
+  let inLineComment = false;
+  let inBlockComment = false;
+
+  const pushSlice = (rawStart: number, rawEnd: number) => {
+    const raw = doc.slice(rawStart, rawEnd);
+    const leadingSpaces = raw.length - raw.trimStart().length;
+    const trailingSpaces = raw.length - raw.trimEnd().length;
+    const from = rawStart + leadingSpaces;
+    const to = rawEnd - trailingSpaces;
+    if (from >= to) return;
+    const sql = doc.slice(from, to);
+    if (!hasExecutableSqlToken(sql)) return;
+    ranges.push({
+      index: ranges.length,
+      sql,
+      from,
+      to
+    });
+  };
+
+  for (let i = 0; i < doc.length; i += 1) {
+    const ch = doc[i];
+    const next = doc[i + 1] ?? "";
+
+    if (inLineComment) {
+      if (ch === "\n") inLineComment = false;
+      continue;
+    }
+    if (inBlockComment) {
+      if (ch === "*" && next === "/") {
+        inBlockComment = false;
+        i += 1;
+      }
+      continue;
+    }
+    if (quote) {
+      if (ch === "\\") {
+        i += 1;
+        continue;
+      }
+      if (ch === quote) quote = null;
+      continue;
+    }
+
+    if ((ch === "-" && next === "-") || ch === "#") {
+      inLineComment = true;
+      if (ch === "-") i += 1;
+      continue;
+    }
+    if (ch === "/" && next === "*") {
+      inBlockComment = true;
+      i += 1;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === "`") {
+      quote = ch;
+      continue;
+    }
+
+    if (ch === ";") {
+      pushSlice(start, i);
+      start = i + 1;
+    }
+  }
+
+  pushSlice(start, doc.length);
+  return ranges;
+}
+
 // 语句边界切分（dbx 风格 statement-scoped scanning）：只提取光标所在的当前 SQL 语句，避免大文档扫描卡顿。
 export function extractStatementAtCursor(doc: string, cursorPos: number): {
   statement: string;

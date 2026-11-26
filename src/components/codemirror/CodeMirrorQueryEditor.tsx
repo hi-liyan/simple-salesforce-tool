@@ -4,10 +4,14 @@ import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirro
 import { MySQL, StandardSQL, sql } from "@codemirror/lang-sql";
 import { bracketMatching, defaultHighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { linter, lintGutter, type Diagnostic } from "@codemirror/lint";
-import { Compartment, EditorState } from "@codemirror/state";
+import { Compartment, EditorState, RangeSetBuilder, StateEffect, StateField } from "@codemirror/state";
 import {
+  Decoration,
+  type DecorationSet,
   EditorView,
+  GutterMarker,
   drawSelection,
+  gutter,
   highlightActiveLine,
   highlightActiveLineGutter,
   hoverTooltip,
@@ -21,9 +25,102 @@ import {
   extractLocalCreateTables,
   extractStatementAliases,
   extractStatementAtCursor,
+  splitSqlStatementsWithRanges,
   type QueryLanguage,
-  type SqlCompletionMetadata
+  type SqlCompletionMetadata,
+  type SqlStatementRange
 } from "./sqlCompletion";
+
+// 语句悬停高亮范围 StateEffect：鼠标悬停 Gutter ▶ 按钮时高亮对应语句范围。
+const setHoverStatementRangeEffect = StateEffect.define<{ from: number; to: number } | null>();
+
+// 语句悬停高亮 StateField：管理编辑器内当前悬停语句的 DecorationSet。
+const hoverStatementHighlightField = StateField.define<DecorationSet>({
+  create() {
+    return Decoration.none;
+  },
+  update(decorations, tr) {
+    for (const effect of tr.effects) {
+      if (effect.is(setHoverStatementRangeEffect)) {
+        if (!effect.value) return Decoration.none;
+        const { from, to } = effect.value;
+        const safeFrom = Math.max(0, Math.min(from, tr.state.doc.length));
+        const safeTo = Math.max(safeFrom, Math.min(to, tr.state.doc.length));
+        if (safeFrom >= safeTo) return Decoration.none;
+        return Decoration.set([
+          Decoration.mark({ class: "cm-statement-hover-highlight" }).range(safeFrom, safeTo)
+        ]);
+      }
+    }
+    if (tr.docChanged) {
+      return decorations.map(tr.changes);
+    }
+    return decorations;
+  },
+  provide: (field) => EditorView.decorations.from(field)
+});
+
+// 左侧按条执行按钮 Marker：在每条 SQL 语句起始行渲染小型 ▶ 按钮。
+class StatementRunGutterMarker extends GutterMarker {
+  private readonly statement: SqlStatementRange;
+  private readonly onExecute: (sql: string, statement: SqlStatementRange) => void;
+
+  constructor(statement: SqlStatementRange, onExecute: (sql: string, statement: SqlStatementRange) => void) {
+    super();
+    this.statement = statement;
+    this.onExecute = onExecute;
+  }
+
+  eq(other: StatementRunGutterMarker): boolean {
+    return (
+      other instanceof StatementRunGutterMarker &&
+      other.statement.from === this.statement.from &&
+      other.statement.to === this.statement.to &&
+      other.statement.sql === this.statement.sql
+    );
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "cm-statement-run-btn";
+    btn.title = `执行第 ${this.statement.index + 1} 条语句`;
+    btn.setAttribute("aria-label", `执行第 ${this.statement.index + 1} 条语句`);
+    btn.innerHTML =
+      '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="6,4 20,12 6,20"></polygon></svg>';
+
+    btn.addEventListener("mouseenter", () => {
+      view.dispatch({
+        effects: setHoverStatementRangeEffect.of({
+          from: this.statement.from,
+          to: this.statement.to
+        })
+      });
+    });
+
+    btn.addEventListener("mouseleave", () => {
+      view.dispatch({
+        effects: setHoverStatementRangeEffect.of(null)
+      });
+    });
+
+    btn.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    });
+
+    btn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      view.dispatch({
+        effects: setHoverStatementRangeEffect.of(null)
+      });
+      this.onExecute(this.statement.sql, this.statement);
+    });
+
+    return btn;
+  }
+}
 
 export type CodeMirrorQueryEditorProps = {
   // 编辑器语言类型（soql / mysql）。
@@ -34,6 +131,12 @@ export type CodeMirrorQueryEditorProps = {
   onChange: (value: string) => void;
   // 选区变更回调（无选区时返回空字符串）。
   onSelectionTextChange?: (selectionText: string) => void;
+  // 点击左侧 Gutter 单条语句执行按钮回调。
+  onExecuteStatement?: (sql: string, statement: SqlStatementRange) => void;
+  // 快捷键触发执行当前语句（Ctrl/Cmd + Enter）。
+  onExecuteCurrent?: () => void;
+  // 快捷键触发执行全部语句（Ctrl/Cmd + Shift + Enter）。
+  onExecuteAll?: () => void;
   // 占位提示文本。
   placeholder?: string;
   // 容器高度。
@@ -79,6 +182,37 @@ const dbxLightTheme = EditorView.theme({
     backgroundColor: "#e0efff",
     color: "#334155"
   },
+  ".cm-statement-run-gutter": {
+    width: "22px",
+    backgroundColor: "#f8fafc"
+  },
+  ".cm-statement-run-gutter .cm-gutterElement": {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: "0"
+  },
+  ".cm-statement-run-btn": {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: "18px",
+    height: "18px",
+    borderRadius: "4px",
+    border: "none",
+    backgroundColor: "transparent",
+    color: "#16a34a",
+    cursor: "pointer",
+    transition: "background-color 120ms ease, transform 120ms ease"
+  },
+  ".cm-statement-run-btn:hover": {
+    backgroundColor: "rgba(22, 163, 74, 0.14)",
+    transform: "scale(1.06)"
+  },
+  ".cm-statement-hover-highlight": {
+    backgroundColor: "rgba(22, 163, 74, 0.10)",
+    borderRadius: "2px"
+  },
   ".cm-tooltip-autocomplete": {
     border: "1px solid #cbd5e1",
     borderRadius: "8px",
@@ -97,6 +231,9 @@ export function CodeMirrorQueryEditor({
   value,
   onChange,
   onSelectionTextChange,
+  onExecuteStatement,
+  onExecuteCurrent,
+  onExecuteAll,
   placeholder = "",
   height = "220px",
   fieldNames = [],
@@ -112,6 +249,12 @@ export function CodeMirrorQueryEditor({
   onChangeRef.current = onChange;
   const onSelectionChangeRef = useRef(onSelectionTextChange);
   onSelectionChangeRef.current = onSelectionTextChange;
+  const onExecuteStatementRef = useRef(onExecuteStatement);
+  onExecuteStatementRef.current = onExecuteStatement;
+  const onExecuteCurrentRef = useRef(onExecuteCurrent);
+  onExecuteCurrentRef.current = onExecuteCurrent;
+  const onExecuteAllRef = useRef(onExecuteAll);
+  onExecuteAllRef.current = onExecuteAll;
 
   const metadataRef = useRef<SqlCompletionMetadata>({
     language,
@@ -212,9 +355,35 @@ export function CodeMirrorQueryEditor({
       };
     });
 
+    // 左侧按条执行 Gutter：扫描每条有效 SQL/SOQL 语句并在起始行渲染 ▶ 按钮。
+    const statementRunGutter = gutter({
+      class: "cm-statement-run-gutter",
+      markers(view) {
+        if (!onExecuteStatementRef.current) return new RangeSetBuilder<GutterMarker>().finish();
+        const builder = new RangeSetBuilder<GutterMarker>();
+        const doc = view.state.doc;
+        const statements = splitSqlStatementsWithRanges(doc.toString());
+        let lastLineFrom = -1;
+        for (const stmt of statements) {
+          const line = doc.lineAt(Math.min(stmt.from, doc.length));
+          if (line.from === lastLineFrom) continue; // 同一行多条语句仅在首条渲染一次执行按钮。
+          lastLineFrom = line.from;
+          builder.add(
+            line.from,
+            line.from,
+            new StatementRunGutterMarker(stmt, (sql, statement) => {
+              onExecuteStatementRef.current?.(sql, statement);
+            })
+          );
+        }
+        return builder.finish();
+      }
+    });
+
     const state = EditorState.create({
       doc: value,
       extensions: [
+        statementRunGutter,
         lineNumbers(),
         highlightActiveLineGutter(),
         highlightActiveLine(),
@@ -223,6 +392,7 @@ export function CodeMirrorQueryEditor({
         bracketMatching(),
         syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
         dbxLightTheme,
+        hoverStatementHighlightField,
         lintGutter(),
         astLinter,
         schemaHover,
@@ -237,6 +407,20 @@ export function CodeMirrorQueryEditor({
           maxRenderedOptions: 60
         }),
         keymap.of([
+          {
+            key: "Mod-Enter",
+            run: () => {
+              onExecuteCurrentRef.current?.();
+              return Boolean(onExecuteCurrentRef.current);
+            }
+          },
+          {
+            key: "Mod-Shift-Enter",
+            run: () => {
+              onExecuteAllRef.current?.();
+              return Boolean(onExecuteAllRef.current);
+            }
+          },
           ...completionKeymap,
           ...defaultKeymap,
           ...historyKeymap,

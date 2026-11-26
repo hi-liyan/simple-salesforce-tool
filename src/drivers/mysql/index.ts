@@ -20,10 +20,22 @@ export const mysqlDriver: DataSourceDriver = {
   capabilities: {
     queryLanguage: "mysql",
     supportsDdl: true,
+    supportsExplain: true,
+    supportsMultiStatement: true,
     supportsMutationPreview: true,
     supportsTransactionalBatch: true,
     supportsAuthWindow: false,
     defaultDrawerView: "mysql-fields"
+  },
+  treeConfig: {
+    useGroupNodes: true,
+    groups: [
+      { groupType: "tables", label: "tables" },
+      { groupType: "collations", label: "collations" },
+      { groupType: "users", label: "users" },
+      { groupType: "virtual-views", label: "virtual views" }
+    ],
+    supportsColumnExpansion: true
   },
   gridAdapter: {
     nullPlaceholder: "Null",

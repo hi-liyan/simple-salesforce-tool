@@ -32,6 +32,8 @@ type UseQueryPanelActionsInput = {
   selectedSourceName: string;
   // 当前选中数据源颜色：用于新建控制台 Tab 时绑定来源元信息。
   selectedSourceColor: string;
+  // 解析当前默认工作数据源：当未显式指定 source 时按统一优先级解析。
+  resolveDefaultConsoleSource?: () => SalesforceSource | null;
   // 切换页面模式。
   setViewMode: (viewMode: MainViewMode) => void;
   // 打开认证窗口。
@@ -121,6 +123,7 @@ export function useQueryPanelActions({
   selectedSourceType,
   selectedSourceName,
   selectedSourceColor,
+  resolveDefaultConsoleSource,
   setViewMode,
   openAuthWindow,
   createSoqlConsoleTab,
@@ -162,10 +165,11 @@ export function useQueryPanelActions({
       onSetViewMode: setViewMode,
       onOpenAuthWindow: openAuthWindow,
       onOpenConsole: (source) => {
-        const targetSourceId = source?.id || selectedSourceId;
-        const targetSourceType = String(source?.sourceType || selectedSourceType || "");
-        const targetSourceName = source?.name || selectedSourceName;
-        const targetSourceColor = source ? getSourceColor(source) : selectedSourceColor;
+        const resolvedSource = source || resolveDefaultConsoleSource?.() || null;
+        const targetSourceId = resolvedSource?.id || selectedSourceId;
+        const targetSourceType = String(resolvedSource?.sourceType || selectedSourceType || "");
+        const targetSourceName = resolvedSource?.name || selectedSourceName;
+        const targetSourceColor = resolvedSource ? getSourceColor(resolvedSource) : selectedSourceColor;
         const nextConsoleTabId = createSoqlConsoleTab({
           sourceId: targetSourceId,
           sourceType: targetSourceType,

@@ -1,0 +1,11 @@
+{
+  "id": "com.sst.qr-code",
+  "name": "二维码生成",
+  "version": "1.0.0",
+  "apiVersion": "^1.0.0",
+  "description": "将文本或链接实时生成二维码图片并保存历史记录。",
+  "category": "dev-tool",
+  "mountTargets": ["workspace-tab", "modal"],
+  "permissions": ["storage", "workspace:read"],
+  "entry": "index.html"
+}

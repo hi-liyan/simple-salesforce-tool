@@ -1,0 +1,11 @@
+{
+  "id": "com.sst.text-diff",
+  "name": "Text Diff",
+  "version": "1.0.0",
+  "apiVersion": "^1.0.0",
+  "description": "提供左右双栏纯文本行级差异高亮与交换对比。",
+  "category": "dev-tool",
+  "mountTargets": ["workspace-tab"],
+  "permissions": ["storage"],
+  "entry": "index.html"
+}

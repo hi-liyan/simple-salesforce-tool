@@ -16,10 +16,17 @@ export const salesforceDriver: DataSourceDriver = {
   capabilities: {
     queryLanguage: "soql",
     supportsDdl: false,
+    supportsExplain: false,
+    supportsMultiStatement: false,
     supportsMutationPreview: false,
     supportsTransactionalBatch: false,
     supportsAuthWindow: true,
     defaultDrawerView: "salesforce"
+  },
+  treeConfig: {
+    useGroupNodes: false,
+    groups: [],
+    supportsColumnExpansion: true
   },
   gridAdapter: {
     nullPlaceholder: "None",

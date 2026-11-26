@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Text Diff</title>
+    <style>
+      * { box-sizing: border-box; }
+      html, body { height: 100%; margin: 0; font-family: system-ui, -apple-system, sans-serif; color: #1e293b; background: #fff; }
+      .wrap { display: flex; flex-direction: column; height: 100%; padding: 12px; gap: 10px; }
+      .toolbar { display: flex; align-items: center; gap: 8px; }
+      button { border: 1px solid #cbd5e1; border-radius: 8px; padding: 6px 12px; background: #fff; cursor: pointer; font-size: 12px; }
+      button.primary { background: #0176d3; border-color: #0176d3; color: #fff; }
+      .editors { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; height: 44%; }
+      textarea { width: 100%; height: 100%; resize: none; border: 1px solid #cbd5e1; border-radius: 10px; padding: 10px; font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+      .diff { flex: 1; min-height: 0; overflow: auto; border: 1px solid #cbd5e1; border-radius: 10px; padding: 8px; font-family: ui-monospace, Consolas, monospace; font-size: 12px; background: #f8fafc; }
+      .line { padding: 1px 6px; white-space: pre-wrap; }
+      .add { background: #dcfce7; color: #166534; }
+      .del { background: #fee2e2; color: #991b1b; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="toolbar">
+        <button class="primary" id="btnCompare">对比文本</button>
+        <button id="btnSwap">交换左右</button>
+        <span id="summary" style="margin-left:auto;font-size:12px;color:#64748b">输入左右文本后对比</span>
+      </div>
+      <div class="editors">
+        <textarea id="left" placeholder="左侧文本..."></textarea>
+        <textarea id="right" placeholder="右侧文本..."></textarea>
+      </div>
+      <div class="diff" id="diff"></div>
+    </div>
+    <script>
+      let seq = 0;
+      function callHost(method, args = {}) {
+        return new Promise((resolve, reject) => {
+          const requestId = "rpc-" + ++seq;
+          function onMsg(ev) {
+            const d = ev.data || {};
+            if (d.channel !== "sst:plugin-rpc-response" || d.requestId !== requestId) return;
+            window.removeEventListener("message", onMsg);
+            d.ok ? resolve(d.result) : reject(new Error(d.error || "RPC failed"));
+          }
+          window.addEventListener("message", onMsg);
+          window.parent.postMessage({ channel: "sst:plugin-rpc", requestId, method, args }, "*");
+        });
+      }
+
+      const leftEl = document.getElementById("left");
+      const rightEl = document.getElementById("right");
+      const diffEl = document.getElementById("diff");
+      const summaryEl = document.getElementById("summary");
+
+      function compare() {
+        const a = leftEl.value.split("\n");
+        const b = rightEl.value.split("\n");
+        const maxLen = Math.max(a.length, b.length);
+        diffEl.innerHTML = "";
+        let diffCount = 0;
+        for (let i = 0; i < maxLen; i++) {
+          const la = a[i];
+          const lb = b[i];
+          if (la === lb) {
+            const div = document.createElement("div");
+            div.className = "line";
+            div.textContent = "  " + (la ?? "");
+            diffEl.appendChild(div);
+          } else {
+            diffCount++;
+            if (la !== undefined) {
+              const d1 = document.createElement("div");
+              d1.className = "line del";
+              d1.textContent = "- " + la;
+              diffEl.appendChild(d1);
+            }
+            if (lb !== undefined) {
+              const d2 = document.createElement("div");
+              d2.className = "line add";
+              d2.textContent = "+ " + lb;
+              diffEl.appendChild(d2);
+            }
+          }
+        }
+        summaryEl.textContent = diffCount === 0 ? "文本完全一致" : `共 ${diffCount} 行存在差异`;
+        void callHost("storage.set", { key: "pair", value: { left: leftEl.value, right: rightEl.value } });
+      }
+
+      document.getElementById("btnCompare").onclick = compare;
+      document.getElementById("btnSwap").onclick = () => {
+        const tmp = leftEl.value;
+        leftEl.value = rightEl.value;
+        rightEl.value = tmp;
+        compare();
+      };
+
+      callHost("init")
+        .then(() => callHost("storage.get", { key: "pair" }))
+        .then((pair) => {
+          if (pair && typeof pair === "object") {
+            leftEl.value = pair.left || "";
+            rightEl.value = pair.right || "";
+          }
+        })
+        .catch(() => {});
+    </script>
+  </body>
+</html>

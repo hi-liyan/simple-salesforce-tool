@@ -57,6 +57,10 @@ export interface FrontendDriverCapabilities {
   queryLanguage: QueryLanguage;
   // 是否支持 DDL 视图。
   supportsDdl: boolean;
+  // 是否支持 EXPLAIN 执行计划。
+  supportsExplain: boolean;
+  // 是否支持多语句顺序执行。
+  supportsMultiStatement: boolean;
   // 是否支持变更前 SQL 预览。
   supportsMutationPreview: boolean;
   // 是否支持单事务批量提交（含删除）。
@@ -65,6 +69,16 @@ export interface FrontendDriverCapabilities {
   supportsAuthWindow: boolean;
   // 默认右侧抽屉视图。
   defaultDrawerView: QueryDrawerView;
+}
+
+// 数据源左侧树配置契约。
+export interface DriverTreeConfig {
+  // 是否按分组（如 tables）组织对象列表；false 时直接平铺对象节点。
+  useGroupNodes: boolean;
+  // 分组定义列表。
+  groups: { groupType: string; label: string }[];
+  // 对象节点是否支持向下展开字段（Columns）子节点。
+  supportsColumnExpansion: boolean;
 }
 
 // 前端数据源驱动标准契约。
@@ -81,10 +95,12 @@ export interface DataSourceDriver {
   defaultConfig: Record<string, unknown>;
   // 能力声明矩阵。
   capabilities: FrontendDriverCapabilities;
+  // 左侧树展示与展开配置。
+  treeConfig: DriverTreeConfig;
   // 表格适配器。
   gridAdapter: GridAdapter;
   // 为设置页按需水合敏感凭证视图。
   hydrateSourceSecrets: (source: SalesforceSource, secretView: SourceSecretView) => SalesforceSource;
-  // 数据源树默认分组（如 MySQL 返回 tables/views 等，Salesforce 返回空表示直接平铺对象）。
+  // 数据源树默认分组（兼容旧字段，优先读取 treeConfig.groups）。
   defaultTreeGroups?: { groupType: string; label: string }[];
 }

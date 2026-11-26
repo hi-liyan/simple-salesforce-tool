@@ -1,0 +1,11 @@
+{
+  "id": "com.sst.unicode-converter",
+  "name": "Unicode 编码转换",
+  "version": "1.0.0",
+  "apiVersion": "^1.0.0",
+  "description": "支持 Unicode / 中文 / HTML 实体 / ASCII 双向转换与历史记录持久化。",
+  "category": "dev-tool",
+  "mountTargets": ["workspace-tab", "modal"],
+  "permissions": ["storage"],
+  "entry": "index.html"
+}
