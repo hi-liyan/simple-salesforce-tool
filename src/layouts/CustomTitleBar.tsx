@@ -91,22 +91,33 @@ export function CustomTitleBar({
     }
   };
 
+  const handleHeaderMouseDown = (event: React.MouseEvent<HTMLElement>) => {
+    // 仅在左键点击非交互控件区域时触发原生窗口拖拽/双击最大化。
+    if (event.button !== 0) return;
+    const target = event.target as HTMLElement | null;
+    if (target?.closest("button, input, select, a, [data-no-drag]")) return;
+    if (event.detail === 2) {
+      void handleToggleMaximize();
+      return;
+    }
+    if (event.detail === 1) {
+      void getCurrentWindow()
+        .startDragging()
+        .catch(() => {});
+    }
+  };
+
   return (
     <header
       data-tauri-drag-region
-      onDoubleClick={() => void handleToggleMaximize()}
+      onMouseDown={handleHeaderMouseDown}
       className="flex h-[42px] shrink-0 select-none items-center justify-between px-2 text-[12px]"
     >
       {/* 左侧：品牌标识与高频全局入口。 */}
-      <div data-tauri-drag-region className="flex items-center gap-1.5">
-        <div
-          data-tauri-drag-region
-          className="mr-1 flex h-7 items-center gap-1.5 rounded-lg bg-primary/10 px-2.5 font-semibold text-primary"
-        >
+      <div className="flex items-center gap-1.5">
+        <div className="mr-1 flex h-7 items-center gap-1.5 rounded-lg bg-primary/10 px-2.5 font-semibold text-primary">
           <Database size={14} />
-          <span data-tauri-drag-region className="tracking-tight">
-            DataStudio
-          </span>
+          <span className="tracking-tight">DataStudio</span>
         </div>
 
         <button
@@ -136,6 +147,9 @@ export function CustomTitleBar({
           <span>驱动管理</span>
         </button>
       </div>
+
+      {/* 中间弹性拖拽区：确保空白处稳定响应拖拽与双击全屏。 */}
+      <div data-tauri-drag-region className="h-full min-w-[40px] flex-1" />
 
       {/* 右侧：插件入口、AI 开关、日志设置与自绘窗口控制按钮。 */}
       <div className="flex items-center gap-1">

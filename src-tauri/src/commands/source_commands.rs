@@ -32,63 +32,73 @@ use crate::sf_cli;
 use crate::terminal::{self as terminal_runtime, TerminalSessionInfo, TerminalShellOption};
 use super::common::*;
 
-/// 查询全部数据源列表。
+/// 查询全部数据源列表（异步线程池执行，避免阻塞 Tauri 窗口主线程）。
 #[tauri::command]
-pub fn list_sources(state: State<'_, AppState>) -> Result<Vec<SalesforceSource>, String> {
-    SourceService::new(&state.storage)
-        .list_sources()
-        .map_err(AppError::to_string_error)
+pub async fn list_sources(app: tauri::AppHandle) -> Result<Vec<SalesforceSource>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        SourceService::new(&state.storage)
+            .list_sources()
+            .map_err(AppError::to_string_error)
+    })
+    .await
+    .map_err(|e| format!("读取数据源列表线程失败: {e}"))?
 }
 
-/// 从 Salesforce CLI 同步认证账号到本地 SQLite。
+/// 从 Salesforce CLI 同步认证账号到本地 SQLite（放入 blocking 线程池执行，严禁阻塞窗口消息循环）。
 #[tauri::command]
-pub fn sync_cli_sources(state: State<'_, AppState>) -> Result<Vec<SalesforceSource>, String> {
-    let preferred_cli_path = read_configured_cli_path(&state);
-    let seeds = match sf_cli::load_cli_sources(preferred_cli_path.as_deref()) {
-        Ok(items) => items,
-        Err(error) => {
-            let message = AppError::to_string_error(error);
-            write_system_log(
-                &state,
-                "ERROR",
-                "SALESFORCE_CLI",
-                "sync_cli_sources",
-                None,
-                None,
-                false,
-                "同步 Salesforce CLI 数据源失败。",
-                Some(&message),
-            );
-            return Err(message);
-        }
-    };
-
-    let keep_ids: Vec<String> = seeds.iter().map(|item| item.id.clone()).collect();
-    let sources = state
-        .storage
-        .write(|connection| {
-            // 逐条 upsert,保证同一个 org 重复同步只更新不新增。
-            for seed in seeds {
-                db::upsert_source_with_id(connection, &seed.id, seed.payload)?;
+pub async fn sync_cli_sources(app: tauri::AppHandle) -> Result<Vec<SalesforceSource>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let preferred_cli_path = read_configured_cli_path(&state);
+        let seeds = match sf_cli::load_cli_sources(preferred_cli_path.as_deref()) {
+            Ok(items) => items,
+            Err(error) => {
+                let message = AppError::to_string_error(error);
+                write_system_log(
+                    &state,
+                    "ERROR",
+                    "SALESFORCE_CLI",
+                    "sync_cli_sources",
+                    None,
+                    None,
+                    false,
+                    "同步 Salesforce CLI 数据源失败。",
+                    Some(&message),
+                );
+                return Err(message);
             }
-            // 清理本次同步不存在的旧 cli-* 数据源及其缓存。
-            db::prune_cli_sources(connection, &keep_ids)?;
-            db::list_sources(connection)
-        })
-        .map_err(AppError::to_string_error)?;
+        };
 
-    write_system_log(
-        &state,
-        "INFO",
-        "SALESFORCE_CLI",
-        "sync_cli_sources",
-        None,
-        None,
-        true,
-        &format!("同步 Salesforce CLI 数据源成功,共 {} 个。", sources.len()),
-        None,
-    );
-    Ok(sources)
+        let keep_ids: Vec<String> = seeds.iter().map(|item| item.id.clone()).collect();
+        let sources = state
+            .storage
+            .write(|connection| {
+                // 逐条 upsert,保证同一个 org 重复同步只更新不新增。
+                for seed in seeds {
+                    db::upsert_source_with_id(connection, &seed.id, seed.payload)?;
+                }
+                // 清理本次同步不存在的旧 cli-* 数据源及其缓存。
+                db::prune_cli_sources(connection, &keep_ids)?;
+                db::list_sources(connection)
+            })
+            .map_err(AppError::to_string_error)?;
+
+        write_system_log(
+            &state,
+            "INFO",
+            "SALESFORCE_CLI",
+            "sync_cli_sources",
+            None,
+            None,
+            true,
+            &format!("同步 Salesforce CLI 数据源成功,共 {} 个。", sources.len()),
+            None,
+        );
+        Ok(sources)
+    })
+    .await
+    .map_err(|e| format!("同步 CLI 数据源线程失败: {e}"))?
 }
 
 /// 调用 CLI 打开网页登录流程,登录成功后返回 orgId。

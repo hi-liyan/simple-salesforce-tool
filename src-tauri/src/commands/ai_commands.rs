@@ -63,25 +63,35 @@ pub fn save_cli_path_settings(
     Ok(sf_cli::read_cli_path_settings(normalized))
 }
 
-/// 检测指定 Salesforce CLI 路径是否可用,并返回版本与更新状态。
+/// 检测指定 Salesforce CLI 路径是否可用,并返回版本与更新状态（异步线程池执行，避免阻塞主线程）。
 #[tauri::command]
-pub fn check_cli_path_status(
-    state: State<'_, AppState>,
+pub async fn check_cli_path_status(
+    app: tauri::AppHandle,
     cli_path: Option<String>,
 ) -> Result<CliPathStatus, String> {
-    let input = cli_path
-        .map(|item| item.trim().to_string())
-        .filter(|item| !item.is_empty())
-        .or_else(|| read_configured_cli_path(&state))
-        .or_else(|| sf_cli::resolve_effective_cli_path(None));
-    Ok(sf_cli::check_cli_path_status(input))
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let input = cli_path
+            .map(|item| item.trim().to_string())
+            .filter(|item| !item.is_empty())
+            .or_else(|| read_configured_cli_path(&state))
+            .or_else(|| sf_cli::resolve_effective_cli_path(None));
+        Ok(sf_cli::check_cli_path_status(input))
+    })
+    .await
+    .map_err(|e| format!("检测 CLI 状态线程失败: {e}"))?
 }
 
-/// 自动探测本地可用 CLI 路径,并返回可用于下拉选择的候选项。
+/// 自动探测本地可用 CLI 路径,并返回可用于下拉选择的候选项（异步线程池执行，避免阻塞主线程）。
 #[tauri::command]
-pub fn detect_local_cli_paths(state: State<'_, AppState>) -> Result<Vec<CliPathProbe>, String> {
-    let custom = read_configured_cli_path(&state);
-    Ok(sf_cli::detect_available_cli_paths(custom))
+pub async fn detect_local_cli_paths(app: tauri::AppHandle) -> Result<Vec<CliPathProbe>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let custom = read_configured_cli_path(&state);
+        Ok(sf_cli::detect_available_cli_paths(custom))
+    })
+    .await
+    .map_err(|e| format!("探测本地 CLI 路径线程失败: {e}"))?
 }
 
 /// 读取 LLM 设置(apiKey 仅返回掩码与是否已配置；优先读取加密的默认 ai_config)。

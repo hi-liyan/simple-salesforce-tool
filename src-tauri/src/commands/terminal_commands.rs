@@ -174,38 +174,44 @@ pub fn reorder_terminal_commands(
         .map_err(AppError::to_string_error)
 }
 
-/// 打开终端会话：每个前端 Tab 对应一个系统终端进程。
+/// 打开终端会话：每个前端 Tab 对应一个系统终端进程（异步线程池执行，避免 PTY 创建阻塞窗口）。
 #[tauri::command]
-pub fn open_terminal_session(
+pub async fn open_terminal_session(
     app_handle: tauri::AppHandle,
-    state: State<'_, AppState>,
     tab_id: String,
     cols: Option<u16>,
     rows: Option<u16>,
     initial_command: Option<String>,
 ) -> Result<TerminalSessionInfo, String> {
-    let normalized_tab_id = tab_id.trim();
-    if normalized_tab_id.is_empty() {
-        return Err("Tab ID 不能为空".to_string());
-    }
-    // 读取终端首选 shell 命令配置（动态路径，不限制固定版本）。
-    let preferred_shell_command = read_terminal_shell_command(&state);
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle.state::<AppState>();
+        let normalized_tab_id = tab_id.trim();
+        if normalized_tab_id.is_empty() {
+            return Err("Tab ID 不能为空".to_string());
+        }
+        // 读取终端首选 shell 命令配置（动态路径，不限制固定版本）。
+        let preferred_shell_command = read_terminal_shell_command(&state);
 
-    terminal_runtime::open_terminal_session(
-        &app_handle,
-        &state.terminal_sessions,
-        normalized_tab_id,
-        cols.unwrap_or(120),
-        rows.unwrap_or(36),
-        preferred_shell_command.as_deref(),
-        initial_command.as_deref(),
-    )
+        terminal_runtime::open_terminal_session(
+            &app_handle,
+            &state.terminal_sessions,
+            normalized_tab_id,
+            cols.unwrap_or(120),
+            rows.unwrap_or(36),
+            preferred_shell_command.as_deref(),
+            initial_command.as_deref(),
+        )
+    })
+    .await
+    .map_err(|e| format!("打开终端会话线程失败: {e}"))?
 }
 
-/// 列出当前系统可用终端 Shell（用于设置页下拉选择）。
+/// 列出当前系统可用终端 Shell（异步线程池探测，避免阻塞窗口主线程）。
 #[tauri::command]
-pub fn list_available_terminal_shells() -> Result<Vec<TerminalShellOption>, String> {
-    Ok(terminal_runtime::list_available_terminal_shells())
+pub async fn list_available_terminal_shells() -> Result<Vec<TerminalShellOption>, String> {
+    tauri::async_runtime::spawn_blocking(terminal_runtime::list_available_terminal_shells)
+        .await
+        .map_err(|e| format!("探测终端 Shell 线程失败: {e}"))
 }
 
 /// 读取终端 Shell 设置：包含当前保存值与旧版兼容字段。
@@ -245,48 +251,63 @@ pub fn save_terminal_shell_command(
         .map_err(AppError::to_string_error)
 }
 
-/// 向终端会话写入输入（真实终端键盘输入透传）。
+/// 向终端会话写入输入（异步线程池执行，避免管道阻塞主线程）。
 #[tauri::command]
-pub fn write_terminal_input(
-    state: State<'_, AppState>,
+pub async fn write_terminal_input(
+    app: tauri::AppHandle,
     tab_id: String,
     input: String,
 ) -> Result<(), String> {
-    let normalized_tab_id = tab_id.trim();
-    if normalized_tab_id.is_empty() {
-        return Err("Tab ID 不能为空".to_string());
-    }
-    terminal_runtime::write_terminal_input(&state.terminal_sessions, normalized_tab_id, &input)
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let normalized_tab_id = tab_id.trim();
+        if normalized_tab_id.is_empty() {
+            return Err("Tab ID 不能为空".to_string());
+        }
+        terminal_runtime::write_terminal_input(&state.terminal_sessions, normalized_tab_id, &input)
+    })
+    .await
+    .map_err(|e| format!("写入终端输入线程失败: {e}"))?
 }
 
 /// 调整终端会话尺寸（与 xterm cols/rows 同步）。
 #[tauri::command]
-pub fn resize_terminal_session(
-    state: State<'_, AppState>,
+pub async fn resize_terminal_session(
+    app: tauri::AppHandle,
     tab_id: String,
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
-    let normalized_tab_id = tab_id.trim();
-    if normalized_tab_id.is_empty() {
-        return Err("Tab ID 不能为空".to_string());
-    }
-    terminal_runtime::resize_terminal_session(
-        &state.terminal_sessions,
-        normalized_tab_id,
-        cols,
-        rows,
-    )
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let normalized_tab_id = tab_id.trim();
+        if normalized_tab_id.is_empty() {
+            return Err("Tab ID 不能为空".to_string());
+        }
+        terminal_runtime::resize_terminal_session(
+            &state.terminal_sessions,
+            normalized_tab_id,
+            cols,
+            rows,
+        )
+    })
+    .await
+    .map_err(|e| format!("调整终端尺寸线程失败: {e}"))?
 }
 
 /// 关闭终端会话并终止对应进程。
 #[tauri::command]
-pub fn close_terminal_session(state: State<'_, AppState>, tab_id: String) -> Result<(), String> {
-    let normalized_tab_id = tab_id.trim();
-    if normalized_tab_id.is_empty() {
-        return Err("Tab ID 不能为空".to_string());
-    }
-    terminal_runtime::close_terminal_session(&state.terminal_sessions, normalized_tab_id)
+pub async fn close_terminal_session(app: tauri::AppHandle, tab_id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let normalized_tab_id = tab_id.trim();
+        if normalized_tab_id.is_empty() {
+            return Err("Tab ID 不能为空".to_string());
+        }
+        terminal_runtime::close_terminal_session(&state.terminal_sessions, normalized_tab_id)
+    })
+    .await
+    .map_err(|e| format!("关闭终端会话线程失败: {e}"))?
 }
 
 /// 以管理员身份打开系统终端（仅 Windows）。

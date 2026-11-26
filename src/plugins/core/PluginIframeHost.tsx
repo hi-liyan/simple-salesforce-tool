@@ -109,6 +109,20 @@ export function PluginIframeHost({
             ctx.workspace.insertTextToActiveEditor(String(args.text || ""));
             reply(true, true);
             return;
+          case "clipboard.writeText":
+            if (!permissionSet.has("clipboard")) throw new Error("缺少 clipboard 权限");
+            await navigator.clipboard.writeText(String(args.text || ""));
+            reply(true, true);
+            return;
+          case "clipboard.writeImage": {
+            if (!permissionSet.has("clipboard")) throw new Error("缺少 clipboard 权限");
+            const dataUrl = String(args.dataUrl || "");
+            const response = await fetch(dataUrl);
+            const blob = await response.blob();
+            await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
+            reply(true, true);
+            return;
+          }
           case "events.emit":
             ctx.events.emit(String(args.eventName || ""), args.payload);
             reply(true, true);
@@ -132,7 +146,7 @@ export function PluginIframeHost({
       ref={iframeRef}
       title={`plugin-${pluginId}`}
       src={srcUrl}
-      sandbox="allow-scripts allow-forms"
+      sandbox="allow-scripts allow-forms allow-downloads"
       className="h-full w-full border-0 bg-base-100"
     />
   );

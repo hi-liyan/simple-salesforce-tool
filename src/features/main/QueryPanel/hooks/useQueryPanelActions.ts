@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { usePluginTabsStore } from "../../../../store/usePluginTabsStore";
 import type { QueryPanelActions } from "../types";
 import { buildObjectTabBindingKey } from "../../../../types";
 import type { ObjectDescribe, SalesforceObject, SalesforceSource, SourceBindingMeta, TabState } from "../../../../types";
@@ -47,7 +48,7 @@ type UseQueryPanelActionsInput = {
   // 构建控制台工作区 Tab ID。
   buildConsoleWorkspaceTabId: (tabId: string) => string;
   // 解析工作区 Tab ID。
-  parseWorkspaceTabId: (workspaceTabId: string) => { kind: "data" | "console"; targetId: string } | null;
+  parseWorkspaceTabId: (workspaceTabId: string) => { kind: "data" | "console" | "plugin"; targetId: string } | null;
   // 激活对象 Tab。
   setActiveTabObjectName: (objectName: string) => void;
   // 激活控制台 Tab。
@@ -187,7 +188,9 @@ export function useQueryPanelActions({
           setActiveTabObjectName(parsed.targetId); // 同步对象 Tab 激活状态。
           return;
         }
-        setActiveSoqlTabId(parsed.targetId); // 同步控制台 Tab 激活状态。
+        if (parsed.kind === "console") {
+          setActiveSoqlTabId(parsed.targetId); // 同步控制台 Tab 激活状态。
+        }
       },
       onReorderWorkspaceTabs: (activeWorkspaceTabId, overWorkspaceTabId) => {
         reorderWorkspaceTabs(activeWorkspaceTabId, overWorkspaceTabId); // 仅调整展示顺序，保持业务状态不变。
@@ -199,17 +202,26 @@ export function useQueryPanelActions({
           closeTab(parsed.targetId); // 关闭对象 Tab。
           return;
         }
+        if (parsed.kind === "plugin") {
+          usePluginTabsStore.getState().closePluginTab(parsed.targetId); // 关闭插件 Tab。
+          return;
+        }
         closeSoqlTab(parsed.targetId); // 关闭控制台 Tab。
       },
       onCloseWorkspaceTabs: (workspaceTabIds) => {
         if (workspaceTabIds.length === 0) return;
         const dataObjectNames: string[] = [];
         const consoleTabIds: string[] = [];
+        const pluginIds: string[] = [];
         workspaceTabIds.forEach((workspaceTabId) => {
           const parsed = parseWorkspaceTabId(workspaceTabId);
           if (!parsed) return;
           if (parsed.kind === "data") {
             dataObjectNames.push(parsed.targetId); // 汇总 data tabs，走对象批量关闭。
+            return;
+          }
+          if (parsed.kind === "plugin") {
+            pluginIds.push(parsed.targetId); // 汇总 plugin tabs，走插件批量关闭。
             return;
           }
           consoleTabIds.push(parsed.targetId); // 汇总 console tabs，走控制台批量关闭。
@@ -219,6 +231,9 @@ export function useQueryPanelActions({
         }
         if (consoleTabIds.length > 0) {
           closeSoqlTabsByIds(consoleTabIds);
+        }
+        if (pluginIds.length > 0) {
+          usePluginTabsStore.getState().closePluginTabsByIds(pluginIds);
         }
       },
       onChangeSource: (sourceId) => void handleSourceChange(sourceId),

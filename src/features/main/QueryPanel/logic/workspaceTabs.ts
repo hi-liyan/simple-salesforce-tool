@@ -28,12 +28,20 @@ export type ConsoleWorkspaceTab = {
   sourceColor?: string;
 };
 
-// 统一工作区 Tab 项：用于 data/console 混合渲染。
+// 插件 Tab 的最小输入结构：用于与 data/console Tab 平级渲染。
+export type PluginWorkspaceTab = {
+  // 插件 ID。
+  pluginId: string;
+  // 插件展示名称。
+  title: string;
+};
+
+// 统一工作区 Tab 项：用于 data/console/plugin 混合渲染。
 export type WorkspaceTabItem = {
-  // 唯一 ID（例如 data:Account / console:soql-tab-1）。
+  // 唯一 ID（例如 data:Account / console:soql-tab-1 / plugin:com.sst.qr-code）。
   id: string;
-  // Tab 类型：data=对象查询，console=查询控制台。
-  kind: "data" | "console";
+  // Tab 类型：data=对象查询，console=查询控制台，plugin=独立插件。
+  kind: "data" | "console" | "plugin";
   // Tab 标题。
   title: string;
   // Tab 绑定的数据源 ID：供左侧树定位当前工作区来源。
@@ -46,9 +54,9 @@ export type WorkspaceTabItem = {
 
 // 统一工作区 Tab 解析结果。
 export type WorkspaceTabTarget = {
-  // Tab 类型：data=对象查询，console=查询控制台。
-  kind: "data" | "console";
-  // 目标 ID：data 为对象 Tab bindingKey，console 为 soqlTabId。
+  // Tab 类型：data=对象查询，console=查询控制台，plugin=独立插件。
+  kind: "data" | "console" | "plugin";
+  // 目标 ID：data 为对象 Tab bindingKey，console 为 soqlTabId，plugin 为 pluginId。
   targetId: string;
 };
 
@@ -62,6 +70,11 @@ export function buildConsoleWorkspaceTabId(tabId: string): string {
   return `console:${tabId}`;
 }
 
+// 生成 plugin 工作区 Tab ID。
+export function buildPluginWorkspaceTabId(pluginId: string): string {
+  return `plugin:${pluginId}`;
+}
+
 // 解析统一工作区 Tab ID。
 export function parseWorkspaceTabId(workspaceTabId: string): WorkspaceTabTarget | null {
   if (workspaceTabId.startsWith("data:")) {
@@ -70,11 +83,18 @@ export function parseWorkspaceTabId(workspaceTabId: string): WorkspaceTabTarget 
   if (workspaceTabId.startsWith("console:")) {
     return { kind: "console", targetId: workspaceTabId.slice("console:".length) };
   }
+  if (workspaceTabId.startsWith("plugin:")) {
+    return { kind: "plugin", targetId: workspaceTabId.slice("plugin:".length) };
+  }
   return null;
 }
 
-// 构建统一工作区 Tab 列表：提供 data/console 基础映射，最终展示顺序由 hook 层维护。
-export function buildWorkspaceTabs(dataTabs: DataWorkspaceTab[], consoleTabs: ConsoleWorkspaceTab[]): WorkspaceTabItem[] {
+// 构建统一工作区 Tab 列表：提供 data/console/plugin 基础映射，最终展示顺序由 hook 层维护。
+export function buildWorkspaceTabs(
+  dataTabs: DataWorkspaceTab[],
+  consoleTabs: ConsoleWorkspaceTab[],
+  pluginTabs: PluginWorkspaceTab[] = []
+): WorkspaceTabItem[] {
   const sourceNameSet = new Set(
     [...dataTabs, ...consoleTabs]
       .map((tab) => String(tab.sourceName || tab.sourceId || "").trim())
@@ -102,6 +122,11 @@ export function buildWorkspaceTabs(dataTabs: DataWorkspaceTab[], consoleTabs: Co
       title: buildWorkspaceTitle(tab.name, tab.sourceName, tab.sourceId),
       sourceId: tab.sourceId || "",
       sourceColor: tab.sourceColor || ""
+    })),
+    ...pluginTabs.map((tab) => ({
+      id: buildPluginWorkspaceTabId(tab.pluginId),
+      kind: "plugin" as const,
+      title: tab.title
     }))
   ];
 }

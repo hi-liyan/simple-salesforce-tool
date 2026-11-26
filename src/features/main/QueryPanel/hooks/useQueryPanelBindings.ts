@@ -48,11 +48,11 @@ type UseQueryPanelBindingsInput = {
   // MySQL DDL 映射：按对象名缓存抽屉数据，供 Tab 常驻挂载按需读取。
   mysqlDdlMap: Record<string, { loading: boolean; data: ObjectDdl | null; error: string }>;
   // 统一工作区 tab 列表。
-  workspaceTabs: { id: string; kind: "data" | "console"; title: string; sourceId?: string; objectName?: string; sourceColor?: string }[];
+  workspaceTabs: { id: string; kind: "data" | "console" | "plugin"; title: string; sourceId?: string; objectName?: string; sourceColor?: string }[];
   // 当前激活工作区 tab ID。
   activeWorkspaceTabId: string;
   // 当前激活工作区 tab 类型。
-  activeWorkspaceTabKind: "data" | "console";
+  activeWorkspaceTabKind: "data" | "console" | "plugin";
   // 可查询对象名集合（用于补全）。
   queryableObjectNames: string[];
   // 交互行为集合。

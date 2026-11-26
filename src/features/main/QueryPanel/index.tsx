@@ -8,6 +8,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { parseWorkspaceTabId } from "./logic/workspaceTabs";
 import { getVisibleColumns, hasPendingChanges } from "./logic/queryUtils";
 import { SoqlExecutorGlobalEffects } from "./components/SoqlExecutorWorkspace";
+import { createPluginContext, PluginHost } from "../../../plugins/core";
+import { usePluginTabsStore } from "../../../store/usePluginTabsStore";
 
 type QueryPanelProps = {
   // QueryPanel 视图状态。
@@ -118,7 +120,7 @@ export function QueryPanel({ viewState, actions }: QueryPanelProps) {
   // 当前激活工作区 tab 的树定位目标：data 指向对象节点，console 指向来源数据源节点。
   const activeWorkspaceTreeTarget = useMemo(() => {
     const activeWorkspaceTab = viewState.workspaceTabs.find((tab) => tab.id === viewState.activeWorkspaceTabId) || null;
-    if (!activeWorkspaceTab?.sourceId) return null;
+    if (!activeWorkspaceTab?.sourceId || activeWorkspaceTab.kind === "plugin") return null;
     return {
       kind: activeWorkspaceTab.kind,
       sourceId: activeWorkspaceTab.sourceId,
@@ -229,6 +231,27 @@ export function QueryPanel({ viewState, actions }: QueryPanelProps) {
               );
             }
 
+            if (parsed.kind === "plugin") {
+              return (
+                <div
+                  key={workspaceTab.id}
+                  className={
+                    active
+                      ? "absolute inset-0 z-10 h-full w-full"
+                      : "absolute inset-0 z-0 h-full w-full invisible pointer-events-none"
+                  }
+                  aria-hidden={!active}
+                >
+                  <PluginWorkspaceTabPane
+                    pluginId={parsed.targetId}
+                    selectedSourceId={viewState.selectedSourceId}
+                    selectedSourceType={viewState.selectedSourceType}
+                    sources={viewState.sources}
+                  />
+                </div>
+              );
+            }
+
             const tabIdentity = parsed.targetId;
             const tab = viewState.tabs.find((item) => item.bindingKey === tabIdentity || item.objectName === tabIdentity) || null;
             const objectName = tab?.objectName || tabIdentity;
@@ -300,6 +323,46 @@ export function QueryPanel({ viewState, actions }: QueryPanelProps) {
       </div>
     </div>
   );
+}
+
+// 工作区平级插件 Tab 面板：注入隔离的 PluginContext 并支持通过 closeSelf 关闭当前插件 Tab。
+function PluginWorkspaceTabPane({
+  pluginId,
+  selectedSourceId,
+  selectedSourceType,
+  sources
+}: {
+  pluginId: string;
+  selectedSourceId: string;
+  selectedSourceType: string;
+  sources: QueryPanelProps["viewState"]["sources"];
+}) {
+  const ctx = useMemo(
+    () =>
+      createPluginContext({
+        pluginId,
+        onNotify: () => {},
+        onOpenPlugin: (targetId) => {
+          usePluginTabsStore.getState().openPluginTab(targetId, targetId);
+        },
+        onCloseSelf: () => {
+          usePluginTabsStore.getState().closePluginTab(pluginId);
+        },
+        getActiveSourceSummary: () =>
+          selectedSourceId
+            ? {
+                id: selectedSourceId,
+                name: sources.find((s) => s.id === selectedSourceId)?.name || "",
+                sourceType: selectedSourceType
+              }
+            : null,
+        getActiveEditorSelection: () => "",
+        insertTextToActiveEditor: () => {}
+      }),
+    [pluginId, selectedSourceId, selectedSourceType, sources]
+  );
+
+  return <PluginHost pluginId={pluginId} ctx={ctx} />;
 }
 
 export type { QueryPanelActions, QueryPanelViewState } from "./types";

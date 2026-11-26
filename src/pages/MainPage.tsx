@@ -6,6 +6,7 @@ import { NoticeAlert } from "../components/NoticeAlert";
 import { listDataSourceDrivers, getDataSourceDriver } from "../drivers/registry";
 import { AiAssistantPanel } from "../features/ai/AiAssistantPanel";
 import { useAiStore } from "../store/useAiStore";
+import { usePluginTabsStore } from "../store/usePluginTabsStore";
 import type { AiWorkspaceContextBridge } from "../types/ai";
 import { useMainPageQueryPanel } from "../features/main/QueryPanel/hooks/useMainPageQueryPanel";
 import { AppShellLayout } from "../layouts/AppShellLayout";
@@ -225,28 +226,29 @@ export function MainPage() {
       // 将恢复任务句柄保留下来，供后续版本检查避开启动重任务窗口。
       const restoredTabsPromise = reloadRestoredTabs(finalSelectedSourceId);
 
-      // 启动后后台加载已安装的外部 `.sstplugin` 插件并注册到前端沙箱注册表。
-      void api
-        .listInstalledPlugins()
-        .then((records) => {
-          records.forEach((record) => registerExternalPluginRecord(record));
-          setPluginRegistryTick((n) => n + 1);
-        })
-        .catch(() => {
-          // 非 Tauri 环境或首次无外部插件时静默忽略。
-        });
+      // 启动后延迟进入后台空闲窗口再执行 CLI 同步与插件扫描，确保首帧拖拽、点击零阻塞。
+      window.setTimeout(() => {
+        void api
+          .listInstalledPlugins()
+          .then((records) => {
+            records.forEach((record) => registerExternalPluginRecord(record));
+            setPluginRegistryTick((n) => n + 1);
+          })
+          .catch(() => {
+            // 非 Tauri 环境或首次无外部插件时静默忽略。
+          });
 
-      // 启动后在后台静默同步 CLI 数据源，不再影响首屏可交互时间。
-      // 这里继续沿用持久化的数据源 ID，避免“首屏本地列表未命中 -> 选中被清空”后无法恢复 CLI 数据源。
-      void refreshSources(true, undefined, persistedSourceId, {
-        forceObjectRefresh: false,
-        showLoading: false
-      }).then(() => {
-        // 后台同步后若恢复出了不同于首屏的目标数据源，则补做一次恢复 Tab 数据。
-        const syncedSelectedSourceId = useAppStore.getState().selectedSourceId;
-        if (!syncedSelectedSourceId || syncedSelectedSourceId === finalSelectedSourceId) return;
-        void reloadRestoredTabs(syncedSelectedSourceId);
-      });
+        // 启动后在后台静默同步 CLI 数据源，不再影响首屏可交互时间。
+        void refreshSources(true, undefined, persistedSourceId, {
+          forceObjectRefresh: false,
+          showLoading: false
+        }).then(() => {
+          // 后台同步后若恢复出了不同于首屏的目标数据源，则补做一次恢复 Tab 数据。
+          const syncedSelectedSourceId = useAppStore.getState().selectedSourceId;
+          if (!syncedSelectedSourceId || syncedSelectedSourceId === finalSelectedSourceId) return;
+          void reloadRestoredTabs(syncedSelectedSourceId);
+        });
+      }, 600);
 
       if (!startupVersionCheckTriggered) {
         startupVersionCheckTriggered = true;
@@ -387,7 +389,7 @@ export function MainPage() {
     setVersionUpdateNotice(null);
   }
 
-  // 打开指定插件：根据挂载能力路由到工作区或右侧停靠浮岛。
+  // 打开指定插件：停靠类插件挂载到右侧浮岛，工作区插件以 Tab 形式与数据查询 Tab 平级打开。
   function handleLaunchPlugin(pluginId: string) {
     const manifest = getPlugin(pluginId);
     if (!manifest) return;
@@ -396,12 +398,12 @@ export function MainPage() {
       setBottomConsoleOpen(true);
       return;
     }
-    if (manifest.mountTargets.includes("dock-right")) {
+    if (manifest.mountTargets.includes("dock-right") && !manifest.mountTargets.includes("workspace-tab")) {
       setRightDockPluginId(pluginId);
       return;
     }
-    setActiveWorkspacePluginId(pluginId);
-    queryPanelActions.onSetViewMode("tools");
+    usePluginTabsStore.getState().openPluginTab(pluginId, manifest.name);
+    queryPanelActions.onSetViewMode("query");
   }
 
   // 为右侧停靠插件或工作区插件构建隔离上下文。
