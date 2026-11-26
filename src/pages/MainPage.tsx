@@ -25,7 +25,12 @@ import { useQueryWorkspaceTabsStore } from "../store/useQueryWorkspaceTabsStore"
 import { useQuerySourceTreeStore } from "../store/useQuerySourceTreeStore";
 import { enableStorageWrite } from "../store/tauriStorage";
 import type { Update } from "@tauri-apps/plugin-updater";
-import { checkAppUpdateWithFallback, installNativeAppUpdate, waitForUiIdleFrame } from "../utils/versionUpdate";
+import {
+  GITHUB_RELEASE_PAGE_URL,
+  checkAppUpdateWithFallback,
+  installNativeAppUpdate,
+  waitForUiIdleFrame
+} from "../utils/versionUpdate";
 import { createStartupCoordinator, shouldKeepQueryPanelMounted, shouldMountQueryPanel } from "./mainPageStartup";
 import { QueryPanel } from "../features/main/QueryPanel";
 import { BottomConsoleDrawer } from "../features/terminal/BottomConsoleDrawer";
@@ -389,6 +394,40 @@ export function MainPage() {
     setVersionUpdateNotice(null);
   }
 
+  // 触发应用内热更新（若远端暂不支持原生清单则回退打开 Release 页面）。
+  async function handleTriggerAppUpdate() {
+    if (!versionUpdateNotice || versionUpdateNotice.installing) return;
+    const targetUpdate = versionUpdateNotice.nativeUpdate;
+    if (!targetUpdate) {
+      await api.openExternalUrl(GITHUB_RELEASE_PAGE_URL);
+      return;
+    }
+    setVersionUpdateNotice((prev) =>
+      prev ? { ...prev, installing: true, progressText: "下载中..." } : prev
+    );
+    try {
+      await installNativeAppUpdate(targetUpdate, ({ phase, percent }) => {
+        setVersionUpdateNotice((prev) =>
+          prev
+            ? {
+                ...prev,
+                progressText:
+                  phase === "downloading"
+                    ? percent !== null
+                      ? `下载 ${percent}%`
+                      : "下载中..."
+                    : "安装重启中..."
+              }
+            : prev
+        );
+      });
+    } catch (error) {
+      setVersionUpdateNotice((prev) =>
+        prev ? { ...prev, installing: false, progressText: `失败：${String(error)}` } : prev
+      );
+    }
+  }
+
   // 打开指定插件：停靠类插件挂载到右侧浮岛，工作区插件以 Tab 形式与数据查询 Tab 平级打开。
   function handleLaunchPlugin(pluginId: string) {
     const manifest = getPlugin(pluginId);
@@ -530,6 +569,11 @@ export function MainPage() {
       titleBar={
         <CustomTitleBar
           aiDockOpen={aiDockOpen}
+          updateAvailable={Boolean(versionUpdateNotice)}
+          updateVersion={versionUpdateNotice?.latestVersion || ""}
+          updating={Boolean(versionUpdateNotice?.installing)}
+          updateProgressText={versionUpdateNotice?.progressText || ""}
+          onTriggerUpdate={() => void handleTriggerAppUpdate()}
           onToggleAiDock={() => {
             if (!aiDockOpen && rightDockPluginId) {
               setRightDockPluginId(null);

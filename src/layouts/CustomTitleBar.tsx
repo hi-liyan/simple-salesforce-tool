@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
+  ArrowUpCircle,
   Blocks,
   Cpu,
   Database,
@@ -19,6 +20,16 @@ type CustomTitleBarProps = {
   aiDockOpen: boolean;
   // 切换 AI 浮岛显隐。
   onToggleAiDock: () => void;
+  // 是否检测到可用新版本。
+  updateAvailable?: boolean;
+  // 可用新版本号。
+  updateVersion?: string;
+  // 是否正在下载/安装更新。
+  updating?: boolean;
+  // 更新进度文案。
+  updateProgressText?: string;
+  // 点击顶部更新按钮回调。
+  onTriggerUpdate?: () => void;
   // 打开新建连接弹窗/设置。
   onNewConnection: () => void;
   // 新建查询控制台 Tab。
@@ -39,6 +50,11 @@ type CustomTitleBarProps = {
 export function CustomTitleBar({
   aiDockOpen,
   onToggleAiDock,
+  updateAvailable = false,
+  updateVersion = "",
+  updating = false,
+  updateProgressText = "",
+  onTriggerUpdate,
   onNewConnection,
   onNewQuery,
   onOpenDriverManager,
@@ -151,8 +167,25 @@ export function CustomTitleBar({
       {/* 中间弹性拖拽区：确保空白处稳定响应拖拽与双击全屏。 */}
       <div data-tauri-drag-region className="h-full min-w-[40px] flex-1" />
 
-      {/* 右侧：插件入口、AI 开关、日志设置与自绘窗口控制按钮。 */}
+      {/* 右侧：更新入口、插件入口、AI 开关、日志设置与自绘窗口控制按钮。 */}
       <div className="flex items-center gap-1">
+        {updateAvailable && (
+          <button
+            type="button"
+            disabled={updating}
+            title={`发现新版本 v${updateVersion.replace(/^[vV]/, "")}，点击立即更新`}
+            onClick={onTriggerUpdate}
+            className="flex h-7 items-center gap-1 rounded-lg bg-primary/12 px-2.5 font-medium text-primary transition-colors hover:bg-primary/20 disabled:opacity-60"
+          >
+            <ArrowUpCircle size={14} className={updating ? "animate-pulse" : ""} />
+            <span>
+              {updating
+                ? updateProgressText || "更新中..."
+                : `更新${updateVersion ? ` v${updateVersion.replace(/^[vV]/, "")}` : ""}`}
+            </span>
+          </button>
+        )}
+
         <button
           type="button"
           title="打开系统终端插件"
