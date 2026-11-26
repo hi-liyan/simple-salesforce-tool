@@ -138,7 +138,10 @@ fn main() {
             commands_ext::delete_plugin_kv,
             commands_ext::list_driver_capabilities,
             commands_ext::check_sql_safety,
-            commands_ext::list_sql_execution_audits
+            commands_ext::list_sql_execution_audits,
+            commands_ext::execute_guarded_query,
+            commands_ext::prepare_mutation_plan,
+            commands_ext::commit_mutation_plan
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

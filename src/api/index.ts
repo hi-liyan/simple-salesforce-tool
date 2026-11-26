@@ -176,5 +176,25 @@ export const api = {
   // 删除单个已接收文件。
   deleteLanFileReceiverFile: (fileId: string) => invokeApi<void>("delete_lan_file_receiver_file", { fileId }),
   // 清空全部已接收文件。
-  clearLanFileReceiverFiles: () => invokeApi<void>("clear_lan_file_receiver_files")
+  clearLanFileReceiverFiles: () => invokeApi<void>("clear_lan_file_receiver_files"),
+  // 两阶段提交 Phase 1：编译并缓存变更计划。
+  prepareMutationPlan: (payload: RecordSaveWithDeletePayload) =>
+    invokeApi<{ planId: string; planHash: string; previewItems: MutationPreviewSqlItem[] }>("prepare_mutation_plan", {
+      payload
+    }),
+  // 两阶段提交 Phase 2：按 planId + planHash 原样执行已预览计划。
+  commitMutationPlan: (planId: string, planHash: string) =>
+    invokeApi<MutationExecutionResult>("commit_mutation_plan", { planId, planHash }),
+  // 受安全网关保护的查询执行入口。
+  executeGuardedQuery: (sourceId: string, queryText: string, objectName?: string, confirmed?: boolean) =>
+    invokeApi<{
+      status: "executed" | "confirmation_required";
+      guardDecision: Record<string, unknown>;
+      executedSql: string;
+      durationMs: number;
+      result?: QueryResult | null;
+    }>("execute_guarded_query", { sourceId, queryText, objectName, confirmed }),
+  // 查询 SQL 执行审计记录。
+  listSqlExecutionAudits: (sourceId?: string, limit?: number) =>
+    invokeApi<Record<string, unknown>[]>("list_sql_execution_audits", { sourceId, limit })
 };

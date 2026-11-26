@@ -71,10 +71,28 @@ function setGlobalDisposable(disposable: Monaco.IDisposable) {
   (globalThis as Record<string, unknown>)[MYSQL_COMPLETION_DISPOSABLE_KEY] = disposable;
 }
 
-// 提取主查询 FROM 表名。
-function extractMainTableName(query: string): string | null {
-  const match = query.match(/\bfrom\s+`?([A-Za-z_][\w$]*)`?/i);
-  return match?.[1] || null;
+// 提取主查询及 JOIN 中的表名与别名映射（支持 `FROM users u`、`JOIN orders AS o`）。
+function extractTableAliasMap(query: string): Record<string, string> {
+  const aliasMap: Record<string, string> = {};
+  const regex = /\b(?:from|join)\s+`?([A-Za-z_][\w$]*)`?(?:\s+(?:as\s+)?`?([A-Za-z_][\w$]*)`?)?/gi;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(query)) !== null) {
+    const tableName = match[1];
+    if (!tableName) continue;
+    const lowerTable = tableName.toLowerCase();
+    aliasMap[lowerTable] = lowerTable;
+    const maybeAlias = match[2];
+    if (maybeAlias && !MYSQL_SINGLE_TOKEN_KEYWORD_SET.has(maybeAlias.toUpperCase())) {
+      aliasMap[maybeAlias.toLowerCase()] = lowerTable;
+    }
+  }
+  return aliasMap;
+}
+
+// 解析光标前是否处于 `alias.` 或 `table.` 限定符上下文。
+function extractQualifierBeforeCursor(prefixQuery: string): string | null {
+  const match = prefixQuery.match(/`?([A-Za-z_][\w$]*)`?\.\w*$/);
+  return match?.[1]?.toLowerCase() || null;
 }
 
 // 判断是否正在输入表名（FROM/JOIN 后）。
@@ -187,14 +205,27 @@ function ensureMysqlLanguage(monaco: typeof Monaco) {
       };
 
       const completionContext = detectCompletionContext(prefixQuery);
-      const mainTableName = extractMainTableName(fullQuery);
-      const scopedFields = mainTableName ? runtimeCompletions.objectFields[mainTableName.toLowerCase()] || [] : [];
-      const fieldCandidates = mainTableName ? scopedFields : runtimeCompletions.fields;
+      const aliasMap = extractTableAliasMap(fullQuery);
+      const qualifier = extractQualifierBeforeCursor(prefixQuery);
+      const qualifiedTable = qualifier ? aliasMap[qualifier] || qualifier : null;
+
+      let fieldCandidates: string[];
+      if (qualifiedTable && runtimeCompletions.objectFields[qualifiedTable]) {
+        fieldCandidates = runtimeCompletions.objectFields[qualifiedTable];
+      } else {
+        const referencedTables = Array.from(new Set(Object.values(aliasMap)));
+        const scopedFields = referencedTables.flatMap((table) => runtimeCompletions.objectFields[table] || []);
+        fieldCandidates = scopedFields.length > 0 ? dedupeByLowerCase(scopedFields) : runtimeCompletions.fields;
+      }
 
       const keywordSuggestions = buildSuggestions(monaco, MYSQL_KEYWORDS, monaco.languages.CompletionItemKind.Keyword, range);
       const tableSuggestions = buildSuggestions(monaco, runtimeCompletions.objects, monaco.languages.CompletionItemKind.Class, range);
       const fieldSuggestions = buildSuggestions(monaco, fieldCandidates, monaco.languages.CompletionItemKind.Field, range);
       const orderModifierSuggestions = buildSuggestions(monaco, ORDER_MODIFIER_KEYWORDS, monaco.languages.CompletionItemKind.Keyword, range);
+
+      if (qualifiedTable) {
+        return { suggestions: dedupeSuggestionsByLabel(fieldSuggestions) };
+      }
 
       const suggestionsByContext: Record<MysqlCompletionContext, Monaco.languages.CompletionItem[]> = {
         // FROM/JOIN 场景保留关键字回退，避免表列表为空时无候选。
@@ -210,7 +241,32 @@ function ensureMysqlLanguage(monaco: typeof Monaco) {
     }
   });
 
-  setGlobalDisposable(completionDisposable);
+  const hoverDisposable = monaco.languages.registerHoverProvider(MYSQL_LANGUAGE_ID, {
+    provideHover: (model, position) => {
+      const word = model.getWordAtPosition(position);
+      if (!word) return null;
+      const lowerWord = word.word.toLowerCase();
+      const aliasMap = extractTableAliasMap(model.getValue());
+      const resolvedTable = aliasMap[lowerWord] || lowerWord;
+      const fields = runtimeCompletions.objectFields[resolvedTable];
+      if (!fields || fields.length === 0) return null;
+      const preview = fields.slice(0, 16).join(", ");
+      const suffix = fields.length > 16 ? ` ... (+${fields.length - 16})` : "";
+      return {
+        contents: [
+          { value: `**表 \`${resolvedTable}\`** (${fields.length} 个字段)` },
+          { value: `\`${preview}${suffix}\`` }
+        ]
+      };
+    }
+  });
+
+  setGlobalDisposable({
+    dispose: () => {
+      completionDisposable.dispose();
+      hoverDisposable.dispose();
+    }
+  });
   initialized = true;
 }
 
