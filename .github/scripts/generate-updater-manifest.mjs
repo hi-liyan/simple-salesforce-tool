@@ -64,6 +64,8 @@ function main() {
 
   const signature = fs.readFileSync(sigPath, "utf8").trim();
   const installerFileName = path.basename(installerPath);
+  // GitHub Releases 上传资产时会自动将文件名中的空格替换为英文句点 `.`，需同步转换以避免下载链接 404
+  const releaseAssetFileName = installerFileName.replace(/\s+/g, ".");
   const notes = fs.existsSync(args.notesFile) ? fs.readFileSync(args.notesFile, "utf8").trim() : "";
 
   const manifest = {
@@ -73,13 +75,13 @@ function main() {
     platforms: {
       "windows-x86_64": {
         signature,
-        url: `https://github.com/${args.repo}/releases/download/${args.tag}/${encodeURIComponent(installerFileName)}`
+        url: `https://github.com/${args.repo}/releases/download/${args.tag}/${encodeURIComponent(releaseAssetFileName)}`
       }
     }
   };
 
   fs.writeFileSync(path.resolve(rootDir, args.output), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
-  console.log(`已生成 Tauri 更新清单: ${args.output} -> ${installerFileName}`);
+  console.log(`已生成 Tauri 更新清单: ${args.output} -> ${releaseAssetFileName}`);
 }
 
 main();
