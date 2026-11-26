@@ -39,12 +39,17 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 安装 Node.js 并启用 npm 缓存
+      # 安装 pnpm、Node.js 并启用 pnpm 缓存
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
+          cache: pnpm
 
       # 安装 Rust 工具链
       - name: Setup Rust toolchain
@@ -58,11 +63,11 @@ jobs:
 
       # 安装前端依赖
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       # 构建 Tauri 安装包（根据矩阵平台产出不同 bundles）
       - name: Build Tauri bundles
-        run: npm run tauri build -- --bundles ${{ matrix.bundles }}
+        run: pnpm tauri build --bundles ${{ matrix.bundles }}
 
       # 上传当前平台产出的安装包，供后续发布任务统一上传到 Release
       - name: Upload build artifacts
