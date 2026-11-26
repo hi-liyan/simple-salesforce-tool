@@ -3,8 +3,12 @@ import Editor, { useMonaco } from "@monaco-editor/react";
 import type * as Monaco from "monaco-editor";
 import { api } from "../api";
 import { getMonacoLanguageModule } from "./monaco/languages";
+import { ensureMonacoConfigured } from "./monaco/setupMonaco";
 import type { QueryLanguage } from "./monaco/types";
 import { getPlaceholderPosition, type PlaceholderPosition } from "./monaco/utils";
+
+// 确保在 Editor 挂载前即绑定本地 monaco-editor 实例，避免走外部 CDN。
+ensureMonacoConfigured();
 
 type QueryMonacoEditorProps = {
   // 编辑器语言类型（soql/mysql）。
@@ -152,8 +156,23 @@ export function QueryMonacoEditor({
         language={languageModule.languageId}
         theme={languageModule.themeId}
         height={height}
-        onMount={(editor) => {
+        beforeMount={(monacoInstance) => {
+          // 在 Editor 创建 Model 前先注册自定义语言与主题，确保补全与高亮立即生效。
+          languageModule.ensureRegistered(monacoInstance);
+          languageModule.updateRuntimeCompletions({
+            fields: fieldNames,
+            objects: objectNames,
+            objectFields: objectFieldsMap
+          });
+        }}
+        onMount={(editor, monacoInstance) => {
           editorRef.current = editor;
+          languageModule.ensureRegistered(monacoInstance);
+          languageModule.updateRuntimeCompletions({
+            fields: fieldNames,
+            objects: objectNames,
+            objectFields: objectFieldsMap
+          });
           setPlaceholderPosition(getPlaceholderPosition(editor)); // 初次挂载后立即同步占位符位置。
           layoutDisposeRef.current?.dispose();
           layoutDisposeRef.current = editor.onDidLayoutChange(() => {
@@ -165,21 +184,6 @@ export function QueryMonacoEditor({
           });
           contentDisposeRef.current?.dispose();
           typeDisposeRef.current?.dispose();
-          typeDisposeRef.current = editor.onKeyUp((keyboardEvent) => {
-            // 按键输入字母/数字/下划线时，立即触发建议，保证关键字输入过程稳定提示。
-            const browserEvent = keyboardEvent.browserEvent;
-            const typedKey = browserEvent.key || "";
-            if (!/^[A-Za-z0-9_]$/.test(typedKey)) return;
-            editor.trigger("query-monaco-editor", "editor.action.triggerSuggest", {});
-          });
-          contentDisposeRef.current = editor.onDidChangeModelContent((event) => {
-            // 粘贴场景兜底：当变更包含字母/数字/下划线时同样触发建议。
-            const lastChange = event.changes[event.changes.length - 1];
-            const insertedText = lastChange?.text || "";
-            if (!insertedText) return;
-            if (!/[A-Za-z0-9_]/.test(insertedText)) return;
-            editor.trigger("query-monaco-editor", "editor.action.triggerSuggest", {});
-          });
           emitSelectionText(editor); // 初次挂载后立即同步一次选区状态。
         }}
         onChange={(nextValue) => {

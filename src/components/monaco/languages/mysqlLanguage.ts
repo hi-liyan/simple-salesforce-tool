@@ -236,7 +236,7 @@ function ensureMysqlLanguage(monaco: typeof Monaco) {
       const suggestionsByContext: Record<MysqlCompletionContext, Monaco.languages.CompletionItem[]> = {
         // FROM/JOIN 场景保留关键字回退，避免表列表为空时无候选。
         table: [...tableSuggestions, ...keywordSuggestions],
-        field: [...fieldSuggestions, ...keywordSuggestions],
+        field: [...fieldSuggestions, ...keywordSuggestions, ...(fieldSuggestions.length === 0 ? tableSuggestions : [])],
         orderModifier: [...orderModifierSuggestions, ...buildSuggestions(monaco, ["LIMIT", "OFFSET"], monaco.languages.CompletionItemKind.Keyword, range)],
         // 数值上下文允许继续补全关键字，便于快速衔接后续子句。
         number: [...buildSuggestions(monaco, ["OFFSET"], monaco.languages.CompletionItemKind.Keyword, range), ...keywordSuggestions],

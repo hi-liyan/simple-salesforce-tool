@@ -1,0 +1,321 @@
+import { useEffect, useRef } from "react";
+import { autocompletion, completionKeymap } from "@codemirror/autocomplete";
+import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
+import { MySQL, StandardSQL, sql } from "@codemirror/lang-sql";
+import { bracketMatching, defaultHighlightStyle, syntaxHighlighting } from "@codemirror/language";
+import { linter, lintGutter, type Diagnostic } from "@codemirror/lint";
+import { Compartment, EditorState } from "@codemirror/state";
+import {
+  EditorView,
+  drawSelection,
+  highlightActiveLine,
+  highlightActiveLineGutter,
+  hoverTooltip,
+  keymap,
+  lineNumbers,
+  placeholder as cmPlaceholder
+} from "@codemirror/view";
+import { api } from "../../api";
+import type { QueryLanguage } from "../monaco/types";
+import {
+  createSqlCompletionSource,
+  extractLocalCreateTables,
+  extractStatementAliases,
+  extractStatementAtCursor,
+  type SqlCompletionMetadata
+} from "./sqlCompletion";
+
+export type CodeMirrorQueryEditorProps = {
+  // 编辑器语言类型（soql / mysql）。
+  language: QueryLanguage;
+  // 编辑器当前文本值。
+  value: string;
+  // 文本变更回调。
+  onChange: (value: string) => void;
+  // 选区变更回调（无选区时返回空字符串）。
+  onSelectionTextChange?: (selectionText: string) => void;
+  // 占位提示文本。
+  placeholder?: string;
+  // 容器高度。
+  height?: string;
+  // 可参与补全的字段名。
+  fieldNames?: string[];
+  // 可参与补全的对象/表名。
+  objectNames?: string[];
+  // 对象/表到字段列表映射。
+  objectFieldsMap?: Record<string, string[]>;
+  // 自动换行模式。
+  wordWrapMode?: "off" | "on" | "wordWrapColumn" | "bounded";
+  // 额外样式类名。
+  className?: string;
+};
+
+// CodeMirror 6 浅色主题：对齐 Islands 大圆角工作台风格与原有浅蓝当前行高亮。
+const dbxLightTheme = EditorView.theme({
+  "&": {
+    height: "100%",
+    fontSize: "14px",
+    backgroundColor: "#ffffff",
+    color: "#1e293b"
+  },
+  ".cm-scroller": {
+    overflow: "auto",
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace",
+    lineHeight: "1.6"
+  },
+  ".cm-content": {
+    padding: "8px 0"
+  },
+  ".cm-gutters": {
+    backgroundColor: "#f8fafc",
+    color: "#94a3b8",
+    borderRight: "1px solid #e2e8f0",
+    userSelect: "none"
+  },
+  ".cm-activeLine": {
+    backgroundColor: "#eaf4ff"
+  },
+  ".cm-activeLineGutter": {
+    backgroundColor: "#e0efff",
+    color: "#334155"
+  },
+  ".cm-tooltip-autocomplete": {
+    border: "1px solid #cbd5e1",
+    borderRadius: "8px",
+    boxShadow: "0 10px 25px rgba(15, 23, 42, 0.12)",
+    overflow: "hidden"
+  },
+  ".cm-tooltip-autocomplete > ul > li[aria-selected]": {
+    backgroundColor: "#0176d3",
+    color: "#ffffff"
+  }
+});
+
+// 基于 CodeMirror 6 + 自研 statement-scoped 补全引擎的查询编辑器（对齐 dbx 实现）。
+export function CodeMirrorQueryEditor({
+  language,
+  value,
+  onChange,
+  onSelectionTextChange,
+  placeholder = "",
+  height = "220px",
+  fieldNames = [],
+  objectNames = [],
+  objectFieldsMap = {},
+  wordWrapMode = "on",
+  className = ""
+}: CodeMirrorQueryEditorProps) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const viewRef = useRef<EditorView | null>(null);
+
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  const onSelectionChangeRef = useRef(onSelectionTextChange);
+  onSelectionChangeRef.current = onSelectionTextChange;
+
+  const metadataRef = useRef<SqlCompletionMetadata>({
+    language,
+    fields: fieldNames,
+    objects: objectNames,
+    objectFields: objectFieldsMap
+  });
+  metadataRef.current = {
+    language,
+    fields: fieldNames,
+    objects: objectNames,
+    objectFields: objectFieldsMap
+  };
+
+  const languageCompartmentRef = useRef(new Compartment());
+  const wrapCompartmentRef = useRef(new Compartment());
+  const placeholderCompartmentRef = useRef(new Compartment());
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const completionSource = createSqlCompletionSource(() => metadataRef.current);
+
+    // AST 实时语法诊断扩展：在 MySQL 模式下通过后端 sqlparser 异步标红语法错误。
+    const astLinter = linter(
+      async (view): Promise<Diagnostic[]> => {
+        if (metadataRef.current.language !== "mysql") return [];
+        const text = view.state.doc.toString();
+        if (!text.trim()) return [];
+        try {
+          const diagnostics = await api.diagnoseSql(text, "mysql");
+          const doc = view.state.doc;
+          return diagnostics.map((item) => {
+            const lineNum = Math.min(Math.max(1, item.line), doc.lines);
+            const lineInfo = doc.line(lineNum);
+            const from = Math.min(lineInfo.from + Math.max(0, item.column - 1), lineInfo.to);
+            const to = Math.min(Math.max(from + 1, from + 6), lineInfo.to);
+            return {
+              from,
+              to: to > from ? to : lineInfo.to,
+              severity: item.severity === "warning" ? "warning" : "error",
+              message: item.message
+            };
+          });
+        } catch {
+          return [];
+        }
+      },
+      { delay: 320 }
+    );
+
+    // 表结构 Hover 提示扩展：悬停表名或别名时展示字段概览。
+    const schemaHover = hoverTooltip((view, pos) => {
+      const { doc } = view.state;
+      const line = doc.lineAt(pos);
+      const lineOffset = pos - line.from;
+      const before = line.text.slice(0, lineOffset).match(/[A-Za-z_][\w$]*$/)?.[0] || "";
+      const after = line.text.slice(lineOffset).match(/^[\w$]*/)?.[0] || "";
+      const word = `${before}${after}`;
+      if (!word) return null;
+
+      const fullDoc = doc.toString();
+      const { statement } = extractStatementAtCursor(fullDoc, pos);
+      const aliasMap = extractStatementAliases(statement);
+      const lowerWord = word.toLowerCase();
+      const resolvedTable = aliasMap[lowerWord] || lowerWord;
+
+      const localTables = extractLocalCreateTables(fullDoc);
+      const remoteCols =
+        metadataRef.current.objectFields[resolvedTable] ||
+        Object.entries(metadataRef.current.objectFields).find(
+          ([k]) => k.toLowerCase() === resolvedTable
+        )?.[1];
+      const cols = remoteCols || localTables[resolvedTable];
+      if (!cols || cols.length === 0) return null;
+
+      const preview = cols.slice(0, 16).join(", ");
+      const suffix = cols.length > 16 ? ` ... (+${cols.length - 16})` : "";
+
+      return {
+        pos: pos - before.length,
+        end: pos + after.length,
+        above: true,
+        create: () => {
+          const dom = document.createElement("div");
+          dom.className = "rounded-lg border border-base-300 bg-base-100 px-3 py-2 text-[12px] shadow-lg max-w-[360px]";
+          const title = document.createElement("div");
+          title.className = "font-semibold text-base-content mb-1";
+          title.textContent = `表 ${resolvedTable} (${cols.length} 个字段)`;
+          const body = document.createElement("div");
+          body.className = "font-mono text-[11px] text-neutral/80 break-words";
+          body.textContent = `${preview}${suffix}`;
+          dom.appendChild(title);
+          dom.appendChild(body);
+          return { dom };
+        }
+      };
+    });
+
+    const state = EditorState.create({
+      doc: value,
+      extensions: [
+        lineNumbers(),
+        highlightActiveLineGutter(),
+        highlightActiveLine(),
+        drawSelection(),
+        history(),
+        bracketMatching(),
+        syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+        dbxLightTheme,
+        lintGutter(),
+        astLinter,
+        schemaHover,
+        languageCompartmentRef.current.of(
+          sql({ dialect: language === "mysql" ? MySQL : StandardSQL })
+        ),
+        wrapCompartmentRef.current.of(wordWrapMode === "off" ? [] : EditorView.lineWrapping),
+        placeholderCompartmentRef.current.of(placeholder ? cmPlaceholder(placeholder) : []),
+        autocompletion({
+          override: [completionSource],
+          activateOnTyping: true,
+          maxRenderedOptions: 60
+        }),
+        keymap.of([
+          ...completionKeymap,
+          ...defaultKeymap,
+          ...historyKeymap,
+          indentWithTab
+        ]),
+        EditorView.updateListener.of((update) => {
+          if (update.docChanged) {
+            onChangeRef.current(update.state.doc.toString());
+          }
+          if (update.selectionSet || update.docChanged) {
+            const sel = update.state.selection.main;
+            const selectedText = sel.empty ? "" : update.state.sliceDoc(sel.from, sel.to);
+            onSelectionChangeRef.current?.(selectedText);
+          }
+        })
+      ]
+    });
+
+    const view = new EditorView({
+      state,
+      parent: container
+    });
+    viewRef.current = view;
+
+    return () => {
+      view.destroy();
+      viewRef.current = null;
+    };
+  }, []);
+
+  // 外部受控 value 同步（如点击格式化 SQL、切换 Tab 或 AI 插入 SQL）。
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    const currentText = view.state.doc.toString();
+    if (currentText === value) return;
+    view.dispatch({
+      changes: { from: 0, to: currentText.length, insert: value }
+    });
+  }, [value]);
+
+  // 动态切换语言方言（MySQL / SOQL）。
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({
+      effects: languageCompartmentRef.current.reconfigure(
+        sql({ dialect: language === "mysql" ? MySQL : StandardSQL })
+      )
+    });
+  }, [language]);
+
+  // 动态切换自动换行。
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({
+      effects: wrapCompartmentRef.current.reconfigure(
+        wordWrapMode === "off" ? [] : EditorView.lineWrapping
+      )
+    });
+  }, [wordWrapMode]);
+
+  // 动态更新占位文本。
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({
+      effects: placeholderCompartmentRef.current.reconfigure(
+        placeholder ? cmPlaceholder(placeholder) : []
+      )
+    });
+  }, [placeholder]);
+
+  return (
+    <div
+      ref={containerRef}
+      style={{ height }}
+      className={`codemirror-query-editor relative overflow-hidden rounded-lg border border-base-300 bg-base-100 ${className}`}
+    />
+  );
+}
