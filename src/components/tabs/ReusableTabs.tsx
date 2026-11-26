@@ -232,7 +232,8 @@ export function ReusableTabs({
   onRenameTab,
   onCloseTab,
   onCloseTabs,
-  renderTabSuffix
+  renderTabSuffix,
+  trailingContent
 }: ReusableTabsProps) {
   const {
     contextMenu,
@@ -272,7 +273,7 @@ export function ReusableTabs({
 
   const enableSort = Boolean(onReorderTabs);
   const content = (
-    <div className="flex overflow-x-auto border-b border-base-300 bg-base-100">
+    <div className="flex items-center overflow-x-auto border-b border-base-300 bg-base-100">
       {tabs.length === 0 && emptyText ? <span className="px-2 py-1.5 text-[12px] text-neutral/70">{emptyText}</span> : null}
       {tabs.map((tab) => {
         const active = tab.id === activeTabId;
@@ -334,6 +335,7 @@ export function ReusableTabs({
           <Plus size={14} />
         </button>
       ) : null}
+      {trailingContent}
     </div>
   );
 

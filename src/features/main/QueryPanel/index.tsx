@@ -6,6 +6,7 @@ import { ConsoleTabPane } from "./components/ConsoleTabPane";
 import { useQueryPanelState } from "./hooks/useQueryPanelState";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { parseWorkspaceTabId } from "./logic/workspaceTabs";
+import { resolveConsoleTargetSource } from "./logic/querySidebarConsoleSource.ts";
 import { getVisibleColumns, hasPendingChanges } from "./logic/queryUtils";
 import { SoqlExecutorGlobalEffects } from "./components/SoqlExecutorWorkspace";
 import { createPluginContext, PluginHost } from "../../../plugins/core";
@@ -22,6 +23,8 @@ type QueryPanelProps = {
 export function QueryPanel({ viewState, actions }: QueryPanelProps) {
   // QueryPanel 派生视图状态：集中管理对象补全集合。
   const { queryableObjectNames } = useQueryPanelState(viewState);
+  // 工作区 Tab 栏已打开的插件实例列表：用于解析多实例 Tab 对应的 pluginId。
+  const pluginTabs = usePluginTabsStore((state) => state.pluginTabs);
   // 已常驻挂载的工作区 Tab ID：首次访问时挂载，后续仅隐藏/显示，避免切换时销毁内部状态。
   const [mountedWorkspaceTabIds, setMountedWorkspaceTabIds] = useState<string[]>([]);
   // 左侧侧边栏拖拽中的本地宽度：拖拽期间只更新本地状态，避免每一帧都写持久化 store。
@@ -192,7 +195,7 @@ export function QueryPanel({ viewState, actions }: QueryPanelProps) {
       />
       {/* 右侧工作区：Tab 栏 + 内容区。 */}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        {/* 统一工作区 Tab 栏：data 与 console 混合显示。 */}
+        {/* 统一工作区 Tab 栏：data、console 与 plugin 混合显示。 */}
         <QueryWorkspaceTabs
           tabs={viewState.workspaceTabs}
           activeTabId={viewState.activeWorkspaceTabId}
@@ -200,6 +203,18 @@ export function QueryPanel({ viewState, actions }: QueryPanelProps) {
           onReorderTabs={actions.onReorderWorkspaceTabs}
           onCloseTab={actions.onCloseWorkspaceTab}
           onCloseTabs={actions.onCloseWorkspaceTabs}
+          onCreateConsole={() => {
+            const targetSource = resolveConsoleTargetSource({
+              sources: viewState.sources,
+              activeWorkspaceSourceId: activeWorkspaceTreeTarget?.sourceId,
+              focusedSourceId: "",
+              selectedSourceId: viewState.selectedSourceId
+            });
+            actions.onOpenConsole(targetSource || undefined); // 行内注释：按当前工作区上下文数据源新建查询控制台 Tab。
+          }}
+          onOpenPlugin={(pluginId, title) => {
+            usePluginTabsStore.getState().openPluginTab(pluginId, title); // 行内注释：支持同一插件多实例在工作区 Tab 中打开。
+          }}
         />
         {/* SoqlExecutor 全局副作用：只挂载一次，避免多实例常驻挂载导致重复监听/轮询。 */}
         <SoqlExecutorGlobalEffects />
@@ -232,6 +247,8 @@ export function QueryPanel({ viewState, actions }: QueryPanelProps) {
             }
 
             if (parsed.kind === "plugin") {
+              const matchedPluginTab = pluginTabs.find((item) => item.tabId === parsed.targetId);
+              const resolvedPluginId = matchedPluginTab?.pluginId || parsed.targetId;
               return (
                 <div
                   key={workspaceTab.id}
@@ -243,7 +260,8 @@ export function QueryPanel({ viewState, actions }: QueryPanelProps) {
                   aria-hidden={!active}
                 >
                   <PluginWorkspaceTabPane
-                    pluginId={parsed.targetId}
+                    tabId={parsed.targetId}
+                    pluginId={resolvedPluginId}
                     selectedSourceId={viewState.selectedSourceId}
                     selectedSourceType={viewState.selectedSourceType}
                     sources={viewState.sources}
@@ -325,13 +343,15 @@ export function QueryPanel({ viewState, actions }: QueryPanelProps) {
   );
 }
 
-// 工作区平级插件 Tab 面板：注入隔离的 PluginContext 并支持通过 closeSelf 关闭当前插件 Tab。
+// 工作区平级插件 Tab 面板：注入隔离的 PluginContext 并支持通过 closeSelf 关闭当前插件实例 Tab。
 function PluginWorkspaceTabPane({
+  tabId,
   pluginId,
   selectedSourceId,
   selectedSourceType,
   sources
 }: {
+  tabId: string;
   pluginId: string;
   selectedSourceId: string;
   selectedSourceType: string;
@@ -346,7 +366,7 @@ function PluginWorkspaceTabPane({
           usePluginTabsStore.getState().openPluginTab(targetId, targetId);
         },
         onCloseSelf: () => {
-          usePluginTabsStore.getState().closePluginTab(pluginId);
+          usePluginTabsStore.getState().closePluginTab(tabId);
         },
         getActiveSourceSummary: () =>
           selectedSourceId
@@ -359,7 +379,7 @@ function PluginWorkspaceTabPane({
         getActiveEditorSelection: () => "",
         insertTextToActiveEditor: () => {}
       }),
-    [pluginId, selectedSourceId, selectedSourceType, sources]
+    [pluginId, selectedSourceId, selectedSourceType, sources, tabId]
   );
 
   return <PluginHost pluginId={pluginId} ctx={ctx} />;

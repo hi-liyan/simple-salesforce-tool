@@ -8,6 +8,7 @@ import {
   resolveActiveWorkspaceTabId
 } from "../../src/features/main/QueryPanel/logic/workspaceTabs.ts";
 import { useQueryWorkspaceTabsStore } from "../../src/store/useQueryWorkspaceTabsStore.ts";
+import { usePluginTabsStore } from "../../src/store/usePluginTabsStore.ts";
 
 // 构造最小 data tab：覆盖工作区映射所需 bindingKey 与展示标题。
 function createDataTab(bindingKey: string, objectName: string, title?: string, sourceId = "sf-1", sourceName = "Org A", sourceColor = "#60A5FA") {
@@ -116,4 +117,27 @@ test("workspace tabs: 多 source tab 混合显示时应按全局工作区顺序�
   store.setTabOrder("sf-1", globalOrder);
 
   assert.deepEqual(useQueryWorkspaceTabsStore.getState().getTabOrder("mysql-1"), globalOrder);
+});
+
+test("plugin tabs: 同一个插件应支持多实例打开并独立关闭", () => {
+  usePluginTabsStore.setState({ pluginTabs: [], pendingActivatePluginTabId: "" });
+
+  usePluginTabsStore.getState().openPluginTab("com.sst.qr-code", "二维码生成");
+  usePluginTabsStore.getState().openPluginTab("com.sst.qr-code", "二维码生成");
+
+  const opened = usePluginTabsStore.getState().pluginTabs;
+  assert.equal(opened.length, 2);
+  assert.notEqual(opened[0].tabId, opened[1].tabId);
+  assert.equal(usePluginTabsStore.getState().pendingActivatePluginTabId, opened[1].tabId);
+
+  const workspaceTabs = buildWorkspaceTabs([], [], opened);
+  assert.equal(workspaceTabs.length, 2);
+  assert.equal(workspaceTabs[0].id, `plugin:${opened[0].tabId}`);
+  assert.equal(workspaceTabs[1].id, `plugin:${opened[1].tabId}`);
+
+  usePluginTabsStore.getState().closePluginTab(opened[0].tabId);
+  assert.deepEqual(
+    usePluginTabsStore.getState().pluginTabs.map((t) => t.tabId),
+    [opened[1].tabId]
+  );
 });

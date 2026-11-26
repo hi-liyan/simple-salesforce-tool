@@ -41,8 +41,8 @@ export function useWorkspaceTabs({
 }: UseWorkspaceTabsInput) {
   // 已打开的工作区插件 Tab 列表。
   const pluginTabs = usePluginTabsStore((state) => state.pluginTabs);
-  const pendingActivatePluginId = usePluginTabsStore((state) => state.pendingActivatePluginId);
-  const clearPendingActivatePluginId = usePluginTabsStore((state) => state.clearPendingActivatePluginId);
+  const pendingActivatePluginTabId = usePluginTabsStore((state) => state.pendingActivatePluginTabId);
+  const clearPendingActivatePluginTabId = usePluginTabsStore((state) => state.clearPendingActivatePluginTabId);
   // 当前激活工作区 Tab ID：由 UI 层控制并与 store 双向同步。
   const [activeWorkspaceTabId, setActiveWorkspaceTabId] = useState("");
   // 统一工作区原始 Tab 列表：用于计算增量与基础映射。
@@ -86,14 +86,14 @@ export function useWorkspaceTabs({
     setActiveWorkspaceTabId(nextWorkspaceTabId); // 回写修正后的激活态。
   }, [workspaceTabs, activeWorkspaceTabId, activeDataObjectName, activeConsoleTabId]);
 
-  // 当外部（如插件中心）打开或聚焦插件 Tab 时，立即将工作区焦点切到对应 plugin:* Tab。
+  // 当外部（如插件中心或工作区 + 菜单）打开插件 Tab 时，立即将工作区焦点切到对应 plugin:* Tab。
   useEffect(() => {
-    if (!pendingActivatePluginId) return;
-    const targetId = buildPluginWorkspaceTabId(pendingActivatePluginId);
+    if (!pendingActivatePluginTabId) return;
+    const targetId = buildPluginWorkspaceTabId(pendingActivatePluginTabId);
     if (!workspaceTabs.some((t) => t.id === targetId)) return;
     setActiveWorkspaceTabId(targetId);
-    clearPendingActivatePluginId();
-  }, [clearPendingActivatePluginId, pendingActivatePluginId, workspaceTabs]);
+    clearPendingActivatePluginTabId();
+  }, [clearPendingActivatePluginTabId, pendingActivatePluginTabId, workspaceTabs]);
 
   // 当 data 侧主动切换对象 Tab 时，若当前不是 console/plugin 焦点，则同步工作区激活态。
   useEffect(() => {

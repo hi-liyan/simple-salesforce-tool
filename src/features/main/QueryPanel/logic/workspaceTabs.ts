@@ -30,6 +30,8 @@ export type ConsoleWorkspaceTab = {
 
 // 插件 Tab 的最小输入结构：用于与 data/console Tab 平级渲染。
 export type PluginWorkspaceTab = {
+  // 插件实例 Tab 唯一 ID（缺省时回退 pluginId 以兼容旧数据）。
+  tabId?: string;
   // 插件 ID。
   pluginId: string;
   // 插件展示名称。
@@ -124,7 +126,7 @@ export function buildWorkspaceTabs(
       sourceColor: tab.sourceColor || ""
     })),
     ...pluginTabs.map((tab) => ({
-      id: buildPluginWorkspaceTabId(tab.pluginId),
+      id: buildPluginWorkspaceTabId(tab.tabId || tab.pluginId),
       kind: "plugin" as const,
       title: tab.title
     }))

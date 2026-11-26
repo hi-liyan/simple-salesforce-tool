@@ -46,4 +46,6 @@ export type ReusableTabsProps = {
   onCloseTabs?: (tabIds: string[]) => void;
   // 渲染标签追加内容。
   renderTabSuffix?: (tab: ReusableTabItem) => ReactNode;
+  // 标签栏尾部追加内容（如新建下拉触发按钮）。
+  trailingContent?: ReactNode;
 };
