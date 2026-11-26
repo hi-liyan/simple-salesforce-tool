@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import Editor, { useMonaco } from "@monaco-editor/react";
 import type * as Monaco from "monaco-editor";
+import { api } from "../api";
 import { getMonacoLanguageModule } from "./monaco/languages";
 import type { QueryLanguage } from "./monaco/types";
 import { getPlaceholderPosition, type PlaceholderPosition } from "./monaco/utils";
@@ -86,6 +87,47 @@ export function QueryMonacoEditor({
       objectFields: objectFieldsMap
     });
   }, [monaco, languageModule, fieldNames, objectNames, objectFieldsMap]);
+
+  useEffect(() => {
+    if (!monaco || !editorRef.current) return;
+    const model = editorRef.current.getModel();
+    if (!model) return;
+    if (language !== "mysql" || !value.trim()) {
+      monaco.editor.setModelMarkers(model, "sql-ast-lsp", []);
+      return;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void api
+        .diagnoseSql(value, "mysql")
+        .then((diagnostics) => {
+          if (cancelled || !editorRef.current) return;
+          const activeModel = editorRef.current.getModel();
+          if (!activeModel) return;
+          const markers: Monaco.editor.IMarkerData[] = diagnostics.map((diag) => ({
+            severity:
+              diag.severity === "warning"
+                ? monaco.MarkerSeverity.Warning
+                : monaco.MarkerSeverity.Error,
+            message: diag.message,
+            startLineNumber: Math.max(1, diag.line),
+            startColumn: Math.max(1, diag.column),
+            endLineNumber: Math.max(1, diag.line),
+            endColumn: Math.max(2, diag.column + 6)
+          }));
+          monaco.editor.setModelMarkers(activeModel, "sql-ast-lsp", markers);
+        })
+        .catch(() => {
+          // 非 Tauri 预览或诊断暂不可用时静默降级，不阻塞编辑器输入。
+        });
+    }, 300);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [monaco, language, value]);
 
   useEffect(() => {
     return () => {

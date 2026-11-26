@@ -1,4 +1,5 @@
 import { isCellEditableByMeta } from "../utils/field.ts";
+import { getDataSourceDriver } from "../../../drivers/registry.ts";
 
 type ResolveRowContextMenuCapabilitiesInput = {
   // 当前数据源类型：用于区分 Salesforce/MySQL 行为。
@@ -46,14 +47,14 @@ export function resolveRowContextMenuCapabilities({
   isNewRow,
   isDataColumn
 }: ResolveRowContextMenuCapabilitiesInput): RowContextMenuCapabilities {
-  const isMysqlSource = (selectedSourceType || "salesforce").toLowerCase() === "mysql";
+  const { gridAdapter } = getDataSourceDriver(selectedSourceType);
   const editable = isDataColumn && isCellEditableByMeta(metadata, isNewRow);
   const canSetNullish = editable && isNullableField(metadata);
-  const canSetDefaultValue = editable && isMysqlSource && hasMysqlColumnDefault(metadata);
+  const canSetDefaultValue = editable && gridAdapter.supportsDefaultValueAction && hasMysqlColumnDefault(metadata);
 
   return {
     canSetNullish,
-    nullishActionLabel: canSetNullish ? (isMysqlSource ? "Set Null" : "Set None") : "",
+    nullishActionLabel: canSetNullish ? gridAdapter.nullishActionLabel : "",
     canSetDefaultValue,
     defaultValueActionLabel: canSetDefaultValue ? "Set 默认值" : "",
     defaultValueMode: canSetDefaultValue ? "mysql-default" : ""

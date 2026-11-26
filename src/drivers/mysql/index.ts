@@ -1,9 +1,14 @@
 import type { DataSourceDriver } from "../types.ts";
 import {
+  createMysqlDraftDefaultValue,
   createMysqlDraftNullValue,
   createMysqlDraftOmitValue,
-  createMysqlDraftValue
+  createMysqlDraftValue,
+  isMysqlBlankValue,
+  resolveMysqlDisplayValue
 } from "../../features/main/QueryPanel/logic/mysqlValueSemantics.ts";
+import { normalizeMysqlDatetimeValueForSave } from "../../components/DataGrid/utils/datetime.ts";
+import { stringifyCellValue } from "../../components/DataGrid/utils/value.ts";
 
 // MySQL 前端数据源驱动。
 export const mysqlDriver: DataSourceDriver = {
@@ -22,6 +27,9 @@ export const mysqlDriver: DataSourceDriver = {
   },
   gridAdapter: {
     nullPlaceholder: "Null",
+    nullishActionLabel: "Set Null",
+    supportsDefaultValueAction: true,
+    omitEmptyOnNewRow: true,
     resolvePrimaryKeyField: (fieldMetadataMap) => {
       const entry = Object.entries(fieldMetadataMap).find(
         ([, metadata]) => String(metadata?.columnKey || "").toUpperCase() === "PRI"
@@ -36,10 +44,15 @@ export const mysqlDriver: DataSourceDriver = {
     },
     codec: {
       encodeNull: () => createMysqlDraftNullValue(),
-      encodeDefault: () => ({ kind: "default" }),
+      encodeDefault: () => createMysqlDraftDefaultValue(),
       encodeOmit: () => createMysqlDraftOmitValue(),
       encodeValue: (val) => createMysqlDraftValue(val)
     },
+    resolveDisplayValue: (raw, metadata) => resolveMysqlDisplayValue(raw, metadata),
+    isBlankValue: (raw) => isMysqlBlankValue(raw),
+    normalizeDatetimeForSave: (value) => normalizeMysqlDatetimeValueForSave(value),
+    formatDateDisplay: (value) => stringifyCellValue(value),
+    formatDatetimeDisplay: (value) => stringifyCellValue(value),
     resolveFieldStrategy: (meta) => {
       const t = String(meta.dataType || meta.type || "").toLowerCase();
       if (t === "enum" || t === "set") return "picklist";

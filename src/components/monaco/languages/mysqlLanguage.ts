@@ -71,9 +71,15 @@ function setGlobalDisposable(disposable: Monaco.IDisposable) {
   (globalThis as Record<string, unknown>)[MYSQL_COMPLETION_DISPOSABLE_KEY] = disposable;
 }
 
-// 提取主查询及 JOIN 中的表名与别名映射（支持 `FROM users u`、`JOIN orders AS o`）。
+// 提取主查询、CTE 及 JOIN 中的表名与别名映射（支持 `WITH cte AS (...)`、`FROM users u`、`JOIN orders AS o`）。
 function extractTableAliasMap(query: string): Record<string, string> {
   const aliasMap: Record<string, string> = {};
+  const cteRegex = /\b(?:with|,)\s+`?([A-Za-z_][\w$]*)`?\s+as\s*\(/gi;
+  let cteMatch: RegExpExecArray | null;
+  while ((cteMatch = cteRegex.exec(query)) !== null) {
+    const cteName = cteMatch[1]?.toLowerCase();
+    if (cteName) aliasMap[cteName] = cteName;
+  }
   const regex = /\b(?:from|join)\s+`?([A-Za-z_][\w$]*)`?(?:\s+(?:as\s+)?`?([A-Za-z_][\w$]*)`?)?/gi;
   let match: RegExpExecArray | null;
   while ((match = regex.exec(query)) !== null) {
@@ -261,13 +267,54 @@ function ensureMysqlLanguage(monaco: typeof Monaco) {
     }
   });
 
+  const formattingDisposable = monaco.languages.registerDocumentFormattingEditProvider(MYSQL_LANGUAGE_ID, {
+    provideDocumentFormattingEdits: (model) => {
+      const formatted = formatBasicSql(model.getValue());
+      return [
+        {
+          range: model.getFullModelRange(),
+          text: formatted
+        }
+      ];
+    }
+  });
+
   setGlobalDisposable({
     dispose: () => {
       completionDisposable.dispose();
       hoverDisposable.dispose();
+      formattingDisposable.dispose();
     }
   });
   initialized = true;
+}
+
+// 轻量 SQL 格式化：将核心子句关键字大写并按主子句换行缩进。
+export function formatBasicSql(sql: string): string {
+  const normalized = sql.trim();
+  if (!normalized) return "";
+  const clauseKeywords = [
+    "SELECT",
+    "FROM",
+    "LEFT JOIN",
+    "RIGHT JOIN",
+    "INNER JOIN",
+    "JOIN",
+    "WHERE",
+    "GROUP BY",
+    "HAVING",
+    "ORDER BY",
+    "LIMIT",
+    "OFFSET",
+    "UNION ALL",
+    "UNION"
+  ];
+  let result = normalized.replace(/\s+/g, " ");
+  for (const kw of clauseKeywords) {
+    const pattern = new RegExp(`\\b${kw.replace(/\s+/g, "\\s+")}\\b`, "gi");
+    result = result.replace(pattern, kw === "SELECT" ? "SELECT" : `\n${kw}`);
+  }
+  return result.trim();
 }
 
 // 导出 MySQL 语言模块。

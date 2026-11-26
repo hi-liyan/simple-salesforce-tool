@@ -1,11 +1,7 @@
 import { GridCellKind } from "@glideapps/glide-data-grid";
 import type { GridCell, GridColumn, Item } from "@glideapps/glide-data-grid";
 import { buildCellThemeOverride, buildRowThemeOverride } from "../logic/rowTheme.ts";
-import { isMysqlBlankValue, resolveMysqlDisplayValue } from "../../../features/main/QueryPanel/logic/mysqlValueSemantics.ts";
-import {
-  normalizeDateDisplayValue,
-  normalizeDatetimeDisplayValue
-} from "../utils/datetime.ts";
+import { getDataSourceDriver } from "../../../drivers/registry.ts";
 import {
   isCellEditableByMeta,
   isRequiredOnCreate
@@ -17,8 +13,6 @@ import {
 } from "../utils/picklist.ts";
 import {
   coerceNumber,
-  getNullPlaceholderBySourceType,
-  isEmptyValue,
   normalizeBooleanText,
   stringifyCellValue
 } from "../utils/value.ts";
@@ -63,8 +57,8 @@ export function createGetCellContent({
   currentOffset = 0,
   allowReadonlyOverlay = false
 }: CreateGetCellContentParams): (cell: Item) => GridCell {
-  const isMysqlSource = (selectedSourceType || "salesforce").toLowerCase() === "mysql";
-  const nullPlaceholderText = getNullPlaceholderBySourceType(selectedSourceType);
+  const { gridAdapter } = getDataSourceDriver(selectedSourceType);
+  const nullPlaceholderText = gridAdapter.nullPlaceholder;
   return ([col, row]) => {
     const columnId = String(columns[col]?.id ?? "");
     const record = records[row] || {};
@@ -97,13 +91,11 @@ export function createGetCellContent({
     const editable = isCellEditableByMeta(metadata, isNewRow);
     const requiredNewField = isRequiredOnCreate(metadata, isNewRow);
     const raw = record[columnId];
-    const mysqlDisplayState = isMysqlSource
-      ? resolveMysqlDisplayValue(raw, metadata)
-      : { value: raw, useNullPlaceholder: raw === null || raw === undefined };
-    const cellValue = mysqlDisplayState.value;
+    const displayState = gridAdapter.resolveDisplayValue(raw, metadata);
+    const cellValue = displayState.value;
     const isDirty = dirtyCellSet.has(`${recordId}:${columnId}`);
-    const isRequiredEmpty = requiredNewField && (isMysqlSource ? isMysqlBlankValue(raw) : isEmptyValue(raw));
-    const isNullishValue = mysqlDisplayState.useNullPlaceholder;
+    const isRequiredEmpty = requiredNewField && gridAdapter.isBlankValue(raw);
+    const isNullishValue = displayState.useNullPlaceholder;
 
     const commonTheme = buildCellThemeOverride(
       isDirty,
@@ -144,8 +136,8 @@ export function createGetCellContent({
     }
 
     if (strategy === "date") {
-      // MySQL 日期值直接展示标准字符串；Salesforce 继续按既有日期规范展示。
-      const text = isMysqlSource ? stringifyCellValue(cellValue) : normalizeDateDisplayValue(cellValue);
+      // 按数据源适配器格式化日期展示值。
+      const text = gridAdapter.formatDateDisplay(cellValue);
       return {
         kind: GridCellKind.Text,
         // date 单元格展示与提交统一为 Salesforce 日期格式（YYYY-MM-DD）。
@@ -159,8 +151,8 @@ export function createGetCellContent({
     }
 
     if (strategy === "datetime") {
-      // MySQL datetime/timestamp 不做 Salesforce 时区偏移转换，避免跨时区误差。
-      const text = isMysqlSource ? stringifyCellValue(cellValue) : normalizeDatetimeDisplayValue(cellValue, effectiveSalesforceTimezone);
+      // 按数据源适配器格式化日期时间展示值。
+      const text = gridAdapter.formatDatetimeDisplay(cellValue, effectiveSalesforceTimezone);
       return {
         kind: GridCellKind.Text,
         // datetime 单元格展示为 Salesforce 日期时间格式（YYYY-MM-DDTHH:mm:ss.SSS+0000）。

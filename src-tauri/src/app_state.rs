@@ -33,6 +33,8 @@ pub struct AppState {
     pub llm_conversations: Mutex<HashMap<String, Vec<LlmChatMessage>>>,
     /// LLM 流式请求取消令牌（按 requestId 存储）。
     pub llm_stream_cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    /// 进行中的慢查询取消令牌（按 queryId 存储）。
+    pub query_cancels: Mutex<HashMap<String, tokio::sync::watch::Sender<bool>>>,
     /// 终端会话池（按前端 Tab ID 持有 PTY 进程句柄）。
     pub terminal_sessions: Mutex<HashMap<String, TerminalSession>>,
     /// 局域网文件接收服务运行时（包含端口与关闭句柄）。

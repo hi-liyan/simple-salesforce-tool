@@ -2,6 +2,7 @@ use chrono::Utc;
 use rusqlite::{params, OptionalExtension, Transaction};
 
 use crate::error::AppError;
+use crate::storage::secret_crypto;
 
 /// 单条 secret 容器记录。
 #[derive(Debug, Clone)]
@@ -53,13 +54,14 @@ pub fn ensure_secret_bundle(
     Ok(bundle_id)
 }
 
-/// 写入或更新单条 secret。
+/// 写入或更新单条 secret（使用 AES-256-GCM AEAD 加密落盘）。
 pub fn upsert_secret_item(tx: &Transaction<'_>, record: &SecretItemRecord) -> Result<(), AppError> {
+    let (cipher_text, nonce, algorithm) = secret_crypto::encrypt_secret(&record.plain_text)?;
     tx.execute(
         "INSERT INTO secret_items (
             id, bundle_id, secret_key, cipher_text, algorithm, key_version, nonce, fingerprint,
             last_verified_at, rotated_at, expires_at, updated_at
-        ) VALUES (?1, ?2, ?3, ?4, 'plain-text/v1', 1, '', ?5, NULL, NULL, NULL, ?6)
+        ) VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, ?7, NULL, NULL, NULL, ?8)
          ON CONFLICT(bundle_id, secret_key) DO UPDATE SET
            cipher_text = excluded.cipher_text,
            algorithm = excluded.algorithm,
@@ -71,7 +73,9 @@ pub fn upsert_secret_item(tx: &Transaction<'_>, record: &SecretItemRecord) -> Re
             record.id,
             record.bundle_id,
             record.secret_key,
-            record.plain_text,
+            cipher_text,
+            algorithm,
+            nonce,
             build_secret_fingerprint(&record.plain_text),
             Utc::now().to_rfc3339()
         ],
@@ -98,20 +102,26 @@ pub fn delete_missing_secret_items(
     Ok(())
 }
 
-/// 读取 bundle 下的单条 secret 明文。
+/// 读取 bundle 下的单条 secret 明文（自动解密 AEAD 密文并兼容历史明文）。
 pub fn read_secret_item_plaintext(
     tx: &Transaction<'_>,
     bundle_id: &str,
     secret_key: &str,
 ) -> Result<Option<String>, AppError> {
-    let value = tx
+    let row = tx
         .query_row(
-            "SELECT cipher_text FROM secret_items WHERE bundle_id = ?1 AND secret_key = ?2",
+            "SELECT cipher_text, algorithm, nonce FROM secret_items WHERE bundle_id = ?1 AND secret_key = ?2",
             params![bundle_id, secret_key],
-            |row| row.get::<_, String>(0),
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)),
         )
         .optional()?;
-    Ok(value)
+    match row {
+        Some((cipher, algo, nonce)) => {
+            let plain = secret_crypto::decrypt_secret(&cipher, &algo, &nonce)?;
+            Ok(Some(plain))
+        }
+        None => Ok(None),
+    }
 }
 
 /// 读取 source 关联的 secret bundle。

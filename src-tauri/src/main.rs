@@ -4,12 +4,12 @@ mod ai;
 mod app_state;
 mod command_storage;
 mod commands;
-mod commands_ext;
 mod drivers;
 mod error;
 mod llm;
 mod lan_file_receiver;
 mod models;
+mod modules;
 mod providers;
 mod salesforce;
 mod services;
@@ -58,6 +58,7 @@ fn main() {
                 cli_login_cancel: Mutex::new(None),
                 llm_conversations: Mutex::new(HashMap::new()),
                 llm_stream_cancels: Mutex::new(HashMap::new()),
+                query_cancels: Mutex::new(HashMap::new()),
                 terminal_sessions: Mutex::new(HashMap::new()),
                 lan_file_receiver: Mutex::new(None),
             });
@@ -133,18 +134,21 @@ fn main() {
             lan_file_receiver::read_lan_file_receiver_preview,
             lan_file_receiver::delete_lan_file_receiver_file,
             lan_file_receiver::clear_lan_file_receiver_files,
-            commands_ext::get_plugin_kv,
-            commands_ext::set_plugin_kv,
-            commands_ext::delete_plugin_kv,
-            commands_ext::list_driver_capabilities,
-            commands_ext::check_sql_safety,
-            commands_ext::list_sql_execution_audits,
-            commands_ext::execute_guarded_query,
-            commands_ext::prepare_mutation_plan,
-            commands_ext::commit_mutation_plan,
-            commands_ext::get_app_setting,
-            commands_ext::set_app_setting,
-            commands_ext::delete_app_setting
+            commands::get_plugin_kv,
+            commands::set_plugin_kv,
+            commands::delete_plugin_kv,
+            commands::list_driver_capabilities,
+            commands::check_sql_safety,
+            commands::list_sql_execution_audits,
+            commands::execute_guarded_query,
+            commands::execute_multi_statement_query,
+            commands::cancel_query,
+            commands::diagnose_sql,
+            commands::prepare_mutation_plan,
+            commands::commit_mutation_plan,
+            commands::get_app_setting,
+            commands::set_app_setting,
+            commands::delete_app_setting
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -170,8 +174,13 @@ mod tests {
     fn sqlite_v2_has_no_command_store_compatibility_module() {
         let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let main_source = std::fs::read_to_string(manifest_dir.join("src/main.rs")).unwrap();
-        let commands_source =
-            std::fs::read_to_string(manifest_dir.join("src/commands.rs")).unwrap();
+        let mut commands_source = String::new();
+        for entry in std::fs::read_dir(manifest_dir.join("src/commands")).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|ext| ext.to_str()) == Some("rs") {
+                commands_source.push_str(&std::fs::read_to_string(path).unwrap());
+            }
+        }
         let runtime_main_source = main_source
             .lines()
             .take_while(|line| !line.contains("#[cfg(test)]"))

@@ -185,15 +185,45 @@ export const api = {
   // 两阶段提交 Phase 2：按 planId + planHash 原样执行已预览计划。
   commitMutationPlan: (planId: string, planHash: string) =>
     invokeApi<MutationExecutionResult>("commit_mutation_plan", { planId, planHash }),
-  // 受安全网关保护的查询执行入口。
-  executeGuardedQuery: (sourceId: string, queryText: string, objectName?: string, confirmed?: boolean) =>
+  // 受安全网关保护的查询执行入口（支持 queryId 取消慢查询）。
+  executeGuardedQuery: (
+    sourceId: string,
+    queryText: string,
+    objectName?: string,
+    confirmed?: boolean,
+    queryId?: string
+  ) =>
     invokeApi<{
       status: "executed" | "confirmation_required";
       guardDecision: Record<string, unknown>;
       executedSql: string;
       durationMs: number;
       result?: QueryResult | null;
-    }>("execute_guarded_query", { sourceId, queryText, objectName, confirmed }),
+    }>("execute_guarded_query", { sourceId, queryText, objectName, confirmed, queryId }),
+  // 取消正在执行中的慢查询。
+  cancelQuery: (queryId: string) => invokeApi<boolean>("cancel_query", { queryId }),
+  // 多语句拆解与顺序执行（返回多结果集与摘要）。
+  executeMultiStatementQuery: (sourceId: string, sqlBatch: string, confirmed?: boolean) =>
+    invokeApi<
+      {
+        index: number;
+        sql: string;
+        response?: {
+          status: "executed" | "confirmation_required";
+          guardDecision: Record<string, unknown>;
+          executedSql: string;
+          durationMs: number;
+          result?: QueryResult | null;
+        } | null;
+        error?: string | null;
+      }[]
+    >("execute_multi_statement_query", { sourceId, sqlBatch, confirmed }),
+  // 基于 Rust sqlparser AST 执行 SQL 实时语法诊断。
+  diagnoseSql: (sql: string, dialect: string) =>
+    invokeApi<{ line: number; column: number; severity: string; message: string }[]>("diagnose_sql", {
+      sql,
+      dialect
+    }),
   // 查询 SQL 执行审计记录。
   listSqlExecutionAudits: (sourceId?: string, limit?: number) =>
     invokeApi<Record<string, unknown>[]>("list_sql_execution_audits", { sourceId, limit }),

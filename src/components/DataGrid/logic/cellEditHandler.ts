@@ -5,11 +5,7 @@ import type {
   GridColumn,
   Item
 } from "@glideapps/glide-data-grid";
-import {
-  normalizeDateValueForSave,
-  normalizeDatetimeValueForSave,
-  normalizeMysqlDatetimeValueForSave
-} from "../utils/datetime.ts";
+import { normalizeDateValueForSave } from "../utils/datetime.ts";
 import { getDataSourceDriver } from "../../../drivers/registry.ts";
 import {
   buildReadonlyCellMessage,
@@ -53,8 +49,8 @@ export function createCellEditedHandler({
   onEditCell,
   onShowMessage
 }: CreateCellEditedHandlerParams): (location: Item, newValue: EditableGridCell) => void {
-  const isMysqlSource = (selectedSourceType || "salesforce").toLowerCase() === "mysql";
-  const { codec } = getDataSourceDriver(selectedSourceType).gridAdapter;
+  const gridAdapter = getDataSourceDriver(selectedSourceType).gridAdapter;
+  const { codec } = gridAdapter;
   return ([col, row], newValue) => {
     const columnId = String(columns[col]?.id ?? "");
 
@@ -91,7 +87,7 @@ export function createCellEditedHandler({
     if (strategy === "date") {
       const nextText = extractEditableString(newValue).trim();
       if (!nextText) {
-        if (isMysqlSource && isNewRow) {
+        if (gridAdapter.omitEmptyOnNewRow && isNewRow) {
           onEditCell(row, columnId, codec.encodeOmit());
           return;
         }
@@ -116,7 +112,7 @@ export function createCellEditedHandler({
     if (strategy === "datetime") {
       const nextText = extractEditableString(newValue).trim();
       if (!nextText) {
-        if (isMysqlSource && isNewRow) {
+        if (gridAdapter.omitEmptyOnNewRow && isNewRow) {
           onEditCell(row, columnId, codec.encodeOmit());
           return;
         }
@@ -128,9 +124,7 @@ export function createCellEditedHandler({
         return;
       }
 
-      const normalizedDatetime = isMysqlSource
-        ? normalizeMysqlDatetimeValueForSave(nextText)
-        : normalizeDatetimeValueForSave(nextText, effectiveSalesforceTimezone);
+      const normalizedDatetime = gridAdapter.normalizeDatetimeForSave(nextText, effectiveSalesforceTimezone);
       if (!normalizedDatetime) {
         onShowMessage(`${columnId} 字段仅支持日期时间格式。`);
         return;
@@ -157,7 +151,7 @@ export function createCellEditedHandler({
         onShowMessage(`${columnId} 字段仅支持数字。`);
         return;
       }
-      if (isMysqlSource && num === undefined) {
+      if (gridAdapter.omitEmptyOnNewRow && num === undefined) {
         if (isNewRow) {
           onEditCell(row, columnId, codec.encodeOmit());
           return;

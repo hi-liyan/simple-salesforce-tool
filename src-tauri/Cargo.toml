@@ -30,6 +30,10 @@ futures-util = "0.3"
 rig-core = "0.30.0"
 schemars = "1.2"
 sqlx = { version = "0.8", default-features = false, features = ["mysql", "runtime-tokio-rustls", "chrono", "json"] }
+aes-gcm = "0.10"
+rand = "0.8"
+sqlparser = "0.52"
+sha2 = "0.10"
 
 [features]
 default = []

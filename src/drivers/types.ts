@@ -15,6 +15,12 @@ export type GridDraftValue =
 export interface GridAdapter {
   // 空值显示占位符（如 "Null" / "None"）。
   nullPlaceholder: string;
+  // 右键置空动作文案（如 "Set Null" / "Set None"）。
+  nullishActionLabel: "Set Null" | "Set None";
+  // 是否支持右键“恢复默认值”动作。
+  supportsDefaultValueAction: boolean;
+  // 新建行留空时是否省略该字段（交由数据库默认值/自增生成）。
+  omitEmptyOnNewRow: boolean;
   // 从元数据中解析主键列名（无专用主键列时返回空字符串）。
   resolvePrimaryKeyField: (fieldMetadataMap: Record<string, Record<string, unknown>>) => string;
   // 从记录中解析唯一行定位键。
@@ -26,6 +32,19 @@ export interface GridAdapter {
     encodeOmit: () => unknown;
     encodeValue: (val: unknown) => unknown;
   };
+  // 解析单元格展示状态与空值占位标记。
+  resolveDisplayValue: (
+    raw: unknown,
+    metadata: Record<string, unknown>
+  ) => { value: unknown; useNullPlaceholder: boolean };
+  // 判断原始单元格值是否为空（用于新建行必填校验）。
+  isBlankValue: (raw: unknown) => boolean;
+  // 将日期时间字符串规范化为数据源保存格式。
+  normalizeDatetimeForSave: (value: string, timezone?: string | null) => string | null;
+  // 格式化日期单元格展示文本。
+  formatDateDisplay: (value: unknown) => string;
+  // 格式化日期时间单元格展示文本。
+  formatDatetimeDisplay: (value: unknown, timezone?: string | null) => string;
   // 解析字段编辑与渲染策略。
   resolveFieldStrategy: (fieldMeta: Partial<ObjectField> & Record<string, unknown>) => GridFieldStrategy;
   // 是否支持打开云端记录详情页。

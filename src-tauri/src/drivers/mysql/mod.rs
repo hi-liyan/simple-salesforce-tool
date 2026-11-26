@@ -1,3 +1,7 @@
+pub mod config;
+pub mod provider;
+pub mod sql_utils;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -10,7 +14,7 @@ use crate::models::{
     MutationExecutionResult, ObjectDdl, ObjectDescribe, QueryResult, RecordUpdatePayload,
     SalesforceObject, SalesforceSource, SourceUpsertPayload,
 };
-use crate::providers::mysql_provider::MySqlProvider;
+use provider::MySqlProvider;
 
 /// MySQL 数据源驱动：实现统一 `DataSourceDriver` Trait 并接入 `ConnectionManager` 连接池管理。
 pub struct MySqlDriver {

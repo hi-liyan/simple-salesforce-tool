@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Loader2, MessageSquare, Play, Plus, Table2, WandSparkles, X } from "lucide-react";
+import { Loader2, MessageSquare, Play, Plus, Sparkles, Square, Table2, WandSparkles, X } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import { ContextMenu, type ContextMenuEntry } from "../../../../components/ContextMenu";
 import { DataGrid } from "../../../../components/DataGrid";
 import { NoticeAlert } from "../../../../components/NoticeAlert";
 import { SoqlMonacoEditor } from "../../../../components/SoqlMonacoEditor";
 import { SqlMonacoEditor } from "../../../../components/SqlMonacoEditor";
+import { formatBasicSql } from "../../../../components/monaco/languages/mysqlLanguage";
 import { api } from "../../../../api";
 import { useObjectsQuery } from "../../../../queries/salesforce";
 import { useSoqlExecutorStore, createSoqlExecutorTab, type SoqlExecutorTab, type AiConversationItem } from "../../../../store/useSoqlExecutorStore";
@@ -151,6 +152,14 @@ export function SoqlExecutorWorkspace({
   const splitContainerRef = useRef<HTMLDivElement | null>(null);
   // 当前激活编辑器的最新选中文本（同步引用）：避免点击执行时读取到异步状态旧值。
   const selectedSoqlTextRef = useRef("");
+  // 当前进行中查询 ID（用于慢查询中断）。
+  const activeQueryIdRef = useRef<string | null>(null);
+  // 多语句执行结果集列表（仅在多语句模式下展示结果集切换 Tab）。
+  const [multiResultSets, setMultiResultSets] = useState<
+    Array<{ statementIndex: number; sql: string; result?: QueryResult; error?: string; durationMs: number }>
+  >([]);
+  // 当前激活的多结果集下标。
+  const [activeResultSetIndex, setActiveResultSetIndex] = useState(0);
   // 对象字段缓存：按需 describe 后用于上下文补全，避免重复请求。
   const [objectFieldsMap, setObjectFieldsMap] = useState<Record<string, string[]>>({});
   // 对象 describe 缓存：用于结果表字段 label/type 映射，保证显示与 Query 页面一致。
@@ -433,8 +442,29 @@ export function SoqlExecutorWorkspace({
     storePatchTab(activeTab.id, updater);
   }
 
-  // 执行当前标签中的 SOQL 并写入结果与日志。
-  async function executeActiveTabSoql() {
+  // 中断当前正在执行的慢查询。
+  async function stopActiveQuery() {
+    const queryId = activeQueryIdRef.current;
+    if (!queryId) return;
+    try {
+      await api.cancelQuery(queryId);
+      patchActiveTab((tab) => ({
+        ...tab,
+        loading: false,
+        notice: { type: "error", message: "已请求中断当前查询。" }
+      }));
+    } catch (error) {
+      patchActiveTab((tab) => ({
+        ...tab,
+        notice: { type: "error", message: `中断查询失败：${String(error)}` }
+      }));
+    } finally {
+      activeQueryIdRef.current = null;
+    }
+  }
+
+  // 执行当前标签中的 SOQL/SQL（支持单句取消、多语句多结果集与 EXPLAIN）并写入结果与日志。
+  async function executeActiveTabSoql(options?: { explain?: boolean }) {
     if (!activeTab) return;
     if (!effectiveSourceId) {
       patchActiveTab((tab) => ({
@@ -446,8 +476,8 @@ export function SoqlExecutorWorkspace({
 
     // 有选区时仅执行选中内容；无选区时回退执行全文。
     const latestSelectedSoqlText = selectedSoqlTextRef.current.trim();
-    const executeSoql = latestSelectedSoqlText || activeTab.selectedSoqlText.trim() || activeTab.soqlDraft.trim();
-    if (!executeSoql) {
+    const rawSql = latestSelectedSoqlText || activeTab.selectedSoqlText.trim() || activeTab.soqlDraft.trim();
+    if (!rawSql) {
       patchActiveTab((tab) => ({
         ...tab,
         notice: { type: "error", message: `${queryLanguageLabel} 不能为空。` }
@@ -455,12 +485,61 @@ export function SoqlExecutorWorkspace({
       return;
     }
 
+    const executeSoql = options?.explain ? `EXPLAIN ${rawSql.replace(/;+$/, "")}` : rawSql;
+    const queryId = `q-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    activeQueryIdRef.current = queryId;
     patchActiveTab((tab) => ({ ...tab, loading: true, notice: null }));
 
     try {
       const primaryObjectName = extractPrimaryObjectName(executeSoql);
+      const looksLikeMultiStatement =
+        isMysqlSource && !options?.explain && executeSoql.split(";").filter((s) => s.trim().length > 0).length > 1;
+
+      if (looksLikeMultiStatement) {
+        const rawItems = await api.executeMultiStatementQuery(effectiveSourceId, executeSoql, false);
+        const items = rawItems.map((entry) => ({
+          statementIndex: entry.index,
+          sql: entry.sql,
+          result: entry.response?.result || undefined,
+          error: entry.error || undefined,
+          durationMs: entry.response?.durationMs ?? 0
+        }));
+        setMultiResultSets(items);
+        setActiveResultSetIndex(0);
+        const firstValid = items.find((item) => item.result)?.result || { totalSize: 0, records: [] };
+        const normalizedResult = normalizeQueryResult(firstValid);
+        const totalDuration = items.reduce((acc, item) => acc + item.durationMs, 0);
+        const errorCount = items.filter((item) => Boolean(item.error)).length;
+
+        patchActiveTab((tab) => ({
+          ...tab,
+          result: normalizedResult,
+          loading: false,
+          selectedRecordIds: [],
+          showBottomPanel: true,
+          notice: {
+            type: errorCount > 0 ? "error" : "success",
+            message: `多语句执行完成（共 ${items.length} 条，失败 ${errorCount} 条，耗时 ${totalDuration}ms）。`
+          },
+          logs: [
+            buildSoqlLog(errorCount === 0, executeSoql, `多语句执行 ${items.length} 条，耗时 ${totalDuration}ms。`),
+            ...tab.logs
+          ].slice(0, 200)
+        }));
+        setBottomView("result");
+        return;
+      }
+
+      setMultiResultSets([]);
+      setActiveResultSetIndex(0);
       // 调用受后端 AST 安全网关保护的查询命令，并记录 sql_execution_audit 审计日志。
-      let guarded = await api.executeGuardedQuery(effectiveSourceId, executeSoql, primaryObjectName || undefined, false);
+      let guarded = await api.executeGuardedQuery(
+        effectiveSourceId,
+        executeSoql,
+        primaryObjectName || undefined,
+        false,
+        queryId
+      );
       if (guarded.status === "confirmation_required") {
         const reason = String(guarded.guardDecision?.reason || "检测到高危 SQL 操作，是否继续执行？");
         const confirmed = window.confirm(`${reason}\n\n待执行语句：\n${executeSoql}`);
@@ -472,7 +551,13 @@ export function SoqlExecutorWorkspace({
           }));
           return;
         }
-        guarded = await api.executeGuardedQuery(effectiveSourceId, executeSoql, primaryObjectName || undefined, true);
+        guarded = await api.executeGuardedQuery(
+          effectiveSourceId,
+          executeSoql,
+          primaryObjectName || undefined,
+          true,
+          queryId
+        );
       }
 
       const normalizedResult = normalizeQueryResult(guarded.result || { totalSize: 0, records: [] });
@@ -504,6 +589,8 @@ export function SoqlExecutorWorkspace({
       }));
       // 执行失败后切换到日志视图，便于快速定位问题。
       setBottomView("logs");
+    } finally {
+      activeQueryIdRef.current = null;
     }
   }
 
@@ -782,6 +869,42 @@ export function SoqlExecutorWorkspace({
             <Play size={14} />
             执行
           </button>
+          {activeTab.loading && (
+            <button
+              className="btn btn-error btn-outline btn-sm"
+              onClick={() => void stopActiveQuery()}
+            >
+              <Square size={12} />
+              停止
+            </button>
+          )}
+          {isMysqlSource && !activeTab.aiMode && (
+            <>
+              <button
+                className="btn btn-outline btn-sm"
+                disabled={activeTab.loading}
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                }}
+                onClick={() => void executeActiveTabSoql({ explain: true })}
+              >
+                EXPLAIN
+              </button>
+              <button
+                className="btn btn-ghost btn-sm"
+                disabled={activeTab.loading}
+                onClick={() => {
+                  const formatted = formatBasicSql(activeTab.soqlDraft);
+                  if (formatted) {
+                    patchActiveTab((tab) => ({ ...tab, soqlDraft: formatted }));
+                  }
+                }}
+              >
+                <Sparkles size={13} />
+                格式化
+              </button>
+            </>
+          )}
           {/* 中间说明文本。 */}
           <span className="text-[12px] text-neutral/70">
             {activeTab.aiMode
@@ -975,6 +1098,29 @@ export function SoqlExecutorWorkspace({
                 >
                   日志
                 </button>
+                {multiResultSets.length > 1 && (
+                  <div className="ml-2 flex items-center gap-1 overflow-x-auto">
+                    {multiResultSets.map((item, idx) => (
+                      <button
+                        key={item.statementIndex}
+                        className={`btn btn-xs ${activeResultSetIndex === idx ? "btn-secondary" : "btn-ghost"}`}
+                        onClick={() => {
+                          setActiveResultSetIndex(idx);
+                          setBottomView("result");
+                          if (item.result) {
+                            patchActiveTab((tab) => ({
+                              ...tab,
+                              result: normalizeQueryResult(item.result!)
+                            }));
+                          }
+                        }}
+                      >
+                        结果 {item.statementIndex + 1}
+                        {item.error ? " (失败)" : ""}
+                      </button>
+                    ))}
+                  </div>
+                )}
                 <div className="flex-1" />
                 <button
                   className="btn btn-circle btn-ghost btn-xs"
