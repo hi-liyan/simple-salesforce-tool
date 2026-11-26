@@ -1,25 +1,12 @@
-import {
-  getFieldType,
-  isBooleanType,
-  isDateTimeType,
-  isDateType,
-  isNumberType,
-  isPicklistType,
-  isPrecisionSensitiveIntegerType
-} from "../utils/field.ts";
+import { getDataSourceDriver } from "../../../drivers/registry.ts";
 
 // DataGrid 字段策略类型：统一映射不同字段到独立处理分支。
 export type FieldTypeStrategy = "picklist" | "date" | "datetime" | "number" | "boolean" | "text";
 
-// 根据字段元数据解析策略类型，供渲染/编辑/提交复用。
-export function resolveFieldTypeStrategy(metadata: Record<string, unknown>): FieldTypeStrategy {
-  const fieldType = getFieldType(metadata);
-  if (isPicklistType(fieldType)) return "picklist";
-  if (isDateType(fieldType)) return "date";
-  if (isDateTimeType(fieldType)) return "datetime";
-  // BIGINT UNSIGNED 在 JS Number 中会有精度风险，统一按文本处理。
-  if (isPrecisionSensitiveIntegerType(metadata)) return "text";
-  if (isNumberType(fieldType)) return "number";
-  if (isBooleanType(fieldType)) return "boolean";
-  return "text";
+// 根据字段元数据解析策略类型（统一收敛至当前数据源的 GridAdapter）。
+export function resolveFieldTypeStrategy(
+  metadata: Record<string, unknown>,
+  selectedSourceType?: string
+): FieldTypeStrategy {
+  return getDataSourceDriver(selectedSourceType).gridAdapter.resolveFieldStrategy(metadata);
 }

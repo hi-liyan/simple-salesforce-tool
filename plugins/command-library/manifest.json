@@ -1,0 +1,11 @@
+{
+  "id": "com.sst.command-library",
+  "name": "命令库",
+  "version": "1.0.0",
+  "apiVersion": "^1.0.0",
+  "description": "管理常用 SQL / CLI 命令片段，支持持久化存储、复制与一键插入当前查询编辑器。",
+  "category": "terminal",
+  "mountTargets": ["dock-right", "workspace-tab"],
+  "permissions": ["storage", "workspace:write"],
+  "entry": "index.html"
+}

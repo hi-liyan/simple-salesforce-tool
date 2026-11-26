@@ -1,6 +1,7 @@
 import { ChevronDown, ChevronRight, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
+import { getDataSourceDriver } from "../drivers/registry";
 import { ObjectDdl, ObjectDescribe, SalesforceObject } from "../types";
 import {
   buildDisplayMetadataFromField,
@@ -39,8 +40,9 @@ export function ObjectList({
   onRefreshMysqlObjectMetadata,
   treeMode = false
 }: Props) {
-  // 仅 Salesforce 数据源显示 Salesforce 专属菜单。
-  const isSalesforceSource = (sourceType || "salesforce").toLowerCase() === "salesforce";
+  const driver = getDataSourceDriver(sourceType);
+  const supportsDdl = driver.capabilities.supportsDdl;
+  const supportsOpenCloudPages = driver.gridAdapter.supportsOpenRecordPage;
   // 关键字：用于对象过滤。
   const [keyword, setKeyword] = useState("");
   // 已展开对象集合。
@@ -107,7 +109,6 @@ export function ObjectList({
   async function toggleObjectNode(objectItem: SalesforceObject) {
     const objectName = objectItem.name;
     const alreadyExpanded = expandedObjectNames.includes(objectName);
-    const isMysqlSource = (sourceType || "salesforce").toLowerCase() === "mysql";
 
     // 已展开则直接折叠，避免多余请求。
     if (alreadyExpanded) {
@@ -120,7 +121,7 @@ export function ObjectList({
 
     // 已有缓存时不再重复请求结构。
     const hasDescribeCache = Boolean(describeByObjectName[objectName]);
-    const hasDdlCache = !isMysqlSource || Boolean(ddlByObjectName[objectName]);
+    const hasDdlCache = !supportsDdl || Boolean(ddlByObjectName[objectName]);
     if (hasDescribeCache && hasDdlCache) {
       return;
     }
@@ -137,19 +138,19 @@ export function ObjectList({
       // 调用后端对象描述接口，后端已补齐 reference 字段 childRelationshipName。
       const describe = hasDescribeCache ? describeByObjectName[objectName] : await api.describeObject(sourceId, objectName);
       setDescribeByObjectName((current) => ({ ...current, [objectName]: describe }));
-      if (!isMysqlSource || hasDdlCache) return;
+      if (!supportsDdl || hasDdlCache) return;
       setDdlLoadingByObjectName((current) => ({ ...current, [objectName]: true }));
       setDdlErrorByObjectName((current) => ({ ...current, [objectName]: "" }));
       const ddl = await api.getObjectDdl(sourceId, objectName);
       setDdlByObjectName((current) => ({ ...current, [objectName]: ddl }));
     } catch (error) {
       setErrorByObjectName((current) => ({ ...current, [objectName]: `加载字段失败：${String(error)}` }));
-      if (isMysqlSource) {
+      if (supportsDdl) {
         setDdlErrorByObjectName((current) => ({ ...current, [objectName]: `加载 DDL 失败：${String(error)}` }));
       }
     } finally {
       setLoadingByObjectName((current) => ({ ...current, [objectName]: false }));
-      if (isMysqlSource) {
+      if (supportsDdl) {
         setDdlLoadingByObjectName((current) => ({ ...current, [objectName]: false }));
       }
     }
@@ -293,9 +294,8 @@ export function ObjectList({
   async function refreshMysqlObjectFromMenu() {
     if (!objectContextMenu) return;
     const objectName = objectContextMenu.objectItem.name;
-    const isMysqlSource = (sourceType || "salesforce").toLowerCase() === "mysql";
-    if (!isMysqlSource || !sourceId) {
-      setObjectContextMenu(null); // 非 MySQL 或未选中数据源时直接关闭菜单。
+    if (!supportsDdl || !sourceId) {
+      setObjectContextMenu(null); // 不支持 DDL 或未选中数据源时直接关闭菜单。
       return;
     }
 
@@ -401,7 +401,6 @@ export function ObjectList({
 
         {treeMode && filtered.map((item) => {
           const objectName = item.name;
-          const isMysqlSource = (sourceType || "salesforce").toLowerCase() === "mysql";
           const tooltip = `名称: ${objectName}\n标签: ${item.label}\n可查询: ${item.queryable}\n可新增: ${item.createable}\n可更新: ${item.updateable}\n可删除: ${item.deletable}`;
           const selected = objectName === activeObjectName;
           const expanded = expandedObjectNames.includes(objectName);
@@ -478,7 +477,7 @@ export function ObjectList({
                     <p className="py-1 text-[12px] text-neutral/70">暂无字段信息。</p>
                   )}
 
-                  {isMysqlSource && !objectLoading && !objectError && (
+                  {supportsDdl && !objectLoading && !objectError && (
                     <div>
                       {objectDdlLoading && <p className="py-1 text-[12px] text-neutral/70">加载 DDL 中...</p>}
                       {!objectDdlLoading && objectDdlError && <p className="py-1 text-[12px] text-error">{objectDdlError}</p>}
@@ -518,7 +517,7 @@ export function ObjectList({
                     </div>
                   )}
 
-                  {!isMysqlSource &&
+                  {!supportsDdl &&
                     !objectLoading &&
                     !objectError &&
                     objectFields.map((field) => {
@@ -585,18 +584,18 @@ export function ObjectList({
           >
             复制表名
           </button>
-          {!isSalesforceSource && (
+          {supportsDdl && (
             <button
               className="btn btn-ghost btn-xs w-full justify-start whitespace-nowrap px-2"
               disabled={!sourceId}
               onClick={() => {
-                void refreshMysqlObjectFromMenu(); // 强制刷新当前 MySQL 表的字段元数据与 DDL。
+                void refreshMysqlObjectFromMenu(); // 强制刷新当前表的字段元数据与 DDL。
               }}
             >
               刷新
             </button>
           )}
-          {isSalesforceSource && (
+          {supportsOpenCloudPages && (
             <>
               <div className="my-1 border-t border-base-300" />
               <button

@@ -100,20 +100,17 @@ export function isBooleanType(fieldType: string): boolean {
   return fieldType === "boolean" || fieldType === "bool";
 }
 
-// 判断数字字段类型。
+// 判断数字字段类型（不包含 decimal/numeric/bigint，此类高精度类型按文本展示以避免 JS Number 精度与尾随零丢失）。
 export function isNumberType(fieldType: string): boolean {
-  // 兼容 Salesforce 与 MySQL 常见数值类型。
+  // 兼容 Salesforce 与 MySQL 常见安全精度数值类型。
   return [
     "int",
     "integer",
     "tinyint",
     "smallint",
     "mediumint",
-    "bigint",
     "float",
     "double",
-    "decimal",
-    "numeric",
     "real",
     "year",
     "currency",
@@ -137,10 +134,20 @@ export function isDateTimeType(fieldType: string): boolean {
   return fieldType === "datetime" || fieldType === "timestamp";
 }
 
-// 判断是否需要按文本处理的大整数类型：避免 JS number 精度丢失。
+// 判断是否需要按文本处理的高精度数值类型：避免 JS number 精度或尾随零丢失。
 export function isPrecisionSensitiveIntegerType(metadata: Record<string, unknown>): boolean {
+  const fieldType = getFieldType(metadata);
+  const mysqlType = getMysqlDataType(metadata);
   const columnType = getColumnType(metadata);
-  return columnType.startsWith("bigint") && columnType.includes("unsigned");
+  return (
+    fieldType === "bigint" ||
+    mysqlType === "bigint" ||
+    columnType.startsWith("bigint") ||
+    fieldType === "decimal" ||
+    fieldType === "numeric" ||
+    mysqlType === "decimal" ||
+    mysqlType === "numeric"
+  );
 }
 
 // 判断字段是否可编辑。

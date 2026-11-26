@@ -10,6 +10,7 @@ import { resolveRowContextMenuCapabilities } from "../logic/contextMenu";
 import { resolveIndexHeaderToggleSelection, resolveIndexRowSelection } from "../logic/selection.ts";
 import { resolveSelectedEditableLocations } from "../logic/paste.ts";
 import { getDataGridSelectionConfig } from "../logic/surfaceConfig.ts";
+import type { DataGridScrollState } from "../../../store/useDataGridScrollStore.ts";
 
 // DataGrid 表头高度：与 DataEditor 的 headerHeight 配置保持一致。
 const DATA_GRID_HEADER_HEIGHT = 30;
@@ -102,7 +103,53 @@ type DataGridSurfaceProps = {
   provideEditor: NonNullable<React.ComponentProps<typeof DataEditor>["provideEditor"]>;
   // 表头绘制回调。
   drawHeader: NonNullable<React.ComponentProps<typeof DataEditor>["drawHeader"]>;
+  // 横向滚动偏移：用于在多 tab / 切 panel 后恢复当前表格的滚动位置。
+  scrollOffsetX?: number;
+  // 纵向滚动偏移：用于在多 tab / 切 panel 后恢复当前表格的滚动位置。
+  scrollOffsetY?: number;
+  // 运行态滚动位置回调：DataEditor 可见区域变化时回写给上层 store。
+  onScrollOffsetChange?: (nextState: DataGridScrollState) => void;
 };
+
+// 可见区域快照：从 Glide 回调中提取恢复滚动位置所需的最小字段集合。
+type VisibleRegionSnapshot = {
+  // 当前可见区域起始列索引。
+  x: number;
+  // 当前可见区域起始行索引。
+  y: number;
+  // 当前可见区域宽度（按可见列数）。
+  width: number;
+  // 当前可见区域高度（按可见行数）。
+  height: number;
+};
+
+// 根据 Glide 的可见区域与平移量，反推出 DataEditor 需要的像素级滚动偏移。
+function resolveGridScrollOffsets({
+  visibleRegion,
+  translateX,
+  translateY,
+  columns,
+  freezeColumns
+}: {
+  visibleRegion: VisibleRegionSnapshot;
+  translateX: number;
+  translateY: number;
+  columns: GridColumn[];
+  freezeColumns: number;
+}): DataGridScrollState {
+  const firstScrollableColumnIndex = Math.max(freezeColumns, visibleRegion.x);
+  const scrolledColumnsWidth = columns
+    .slice(freezeColumns, firstScrollableColumnIndex)
+    .reduce((sum, column) => {
+      const rawWidth = (column as { width?: unknown }).width;
+      return sum + (typeof rawWidth === "number" ? rawWidth : 160);
+    }, 0);
+
+  return {
+    x: Math.max(0, Math.round(scrolledColumnsWidth - translateX)),
+    y: Math.max(0, Math.round(visibleRegion.y * DATA_GRID_ROW_HEIGHT - translateY))
+  };
+}
 
 // DataGrid 渲染层：仅负责 DataEditor 与浮层/菜单的 UI 组装。
 export function DataGridSurface({
@@ -139,7 +186,10 @@ export function DataGridSurface({
   onCellsEdited,
   onPaste,
   provideEditor,
-  drawHeader
+  drawHeader,
+  scrollOffsetX,
+  scrollOffsetY,
+  onScrollOffsetChange
 }: DataGridSurfaceProps) {
   const selectionConfig = React.useMemo(() => getDataGridSelectionConfig(), []);
   // 受控选区状态：用于实现“点击 # 选整行”。
@@ -215,6 +265,23 @@ export function DataGridSurface({
     },
     [columns, selectableIds, onToggleAll, selectedRecordIds.length]
   );
+
+  // DataEditor 可见区域变化时，把当前像素级滚动位置回写到运行态 store。
+  const handleVisibleRegionChanged = React.useCallback((visibleRegion: VisibleRegionSnapshot, translateX: number, translateY: number) => {
+    if (!onScrollOffsetChange) return;
+    const container = gridBodyRef.current;
+    if (!container) return;
+    if (container.clientWidth <= 0 || container.clientHeight <= 0) return; // 行内注释：隐藏 panel 时容器尺寸为 0，此时忽略回写，避免把有效滚动状态覆盖成初始值。
+    onScrollOffsetChange(
+      resolveGridScrollOffsets({
+        visibleRegion,
+        translateX,
+        translateY,
+        columns,
+        freezeColumns: selectionConfig.freezeColumns
+      })
+    );
+  }, [columns, gridBodyRef, onScrollOffsetChange, selectionConfig.freezeColumns]);
 
   return (
     // 表格容器：仅承载数据表格主体与浮层。
@@ -415,6 +482,11 @@ export function DataGridSurface({
           // 平滑滚动：提升大数据量横向/纵向浏览体验。
           smoothScrollX
           smoothScrollY
+          // 受控滚动偏移：用于切换 panel / tab 后恢复到之前的横纵滚动位置。
+          scrollOffsetX={scrollOffsetX}
+          scrollOffsetY={scrollOffsetY}
+          // 可见区域变化时回写滚动位置，供当前会话内的多 tab 独立记忆。
+          onVisibleRegionChanged={handleVisibleRegionChanged}
           // 容器尺寸：铺满父容器区域。
           width="100%"
           height="100%"

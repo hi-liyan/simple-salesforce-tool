@@ -1,4 +1,4 @@
-import { Notice, ObjectDdl, ObjectDescribe, SalesforceObject, SalesforceSource, TabState } from "../../../types";
+import { MutationPreviewItem, Notice, ObjectDdl, ObjectDescribe, SalesforceObject, SalesforceSource, TabState } from "../../../types";
 import { MainViewMode } from "../../../store/useAppStore";
 
 // 单个对象的 MySQL DDL 加载状态：用于在抽屉内展示建表/索引/约束信息。
@@ -103,8 +103,8 @@ export type QueryPanelActions = {
   onSetViewMode: (viewMode: MainViewMode) => void;
   // 打开认证窗口。
   onOpenAuthWindow: () => void;
-  // 新建并打开查询控制台。
-  onOpenConsole: (source?: SalesforceSource) => void;
+  // 新建并打开查询控制台（支持可选初始 SQL）。
+  onOpenConsole: (source?: SalesforceSource, initialSql?: string) => void;
   // 激活统一工作区 Tab。
   onActivateWorkspaceTab: (workspaceTabId: string) => void;
   // 拖拽排序统一工作区 Tabs：基于拖拽前后 ID 调整展示顺序。
@@ -141,8 +141,12 @@ export type QueryPanelActions = {
   onCreateRecord: () => void;
   // 标记删除勾选记录。
   onDeleteCheckedRecords: () => void;
-  // 执行更新。
-  onApplyPendingChanges: () => void;
+  // 执行更新：携带两阶段计划凭据（planId/planHash）或预览 SQL，确保所见即所执。
+  onApplyPendingChanges: (options?: {
+    mysqlPreviewItems?: MutationPreviewItem[];
+    planId?: string;
+    planHash?: string;
+  }) => void;
   // 撤销未提交修改。
   onDiscardPendingChanges: () => void;
   // 打开/关闭抽屉（可指定目标视图：MySQL DDL / MySQL 字段 / Salesforce）。

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "../../../../api";
-import type { SalesforceObject, SalesforceSource } from "../../../../types";
+import { getDataSourceDriver } from "../../../../drivers/registry";
+import type { ObjectField, SalesforceObject, SalesforceSource } from "../../../../types";
 import { useQuerySourceTreeStore } from "../../../../store/useQuerySourceTreeStore.ts";
 import { getSourceColor } from "../logic/sourceColor.ts";
 import { runQuerySourceRequestWithRetry } from "../logic/sourceTreeRetry.ts";
@@ -13,7 +14,7 @@ import {
 } from "../logic/sourceTreePersistence.ts";
 import { resolveNodeDoubleClickAction } from "../logic/sourceTreeInteractions.ts";
 import { searchSourceObjects, type QuerySourceObjectSearchResult } from "../logic/sourceObjectSearch.ts";
-import { buildMySqlRootChildren, buildMySqlTableChildren, buildSalesforceRootChildren, buildSourceRootNodes } from "../logic/sourceTreeProviders.ts";
+import { buildDriverSourceChildren, buildGroupObjectChildren, buildObjectColumnChildren, buildSourceRootNodes } from "../logic/sourceTreeProviders.ts";
 import { beginRefreshingSource, finishRefreshingSource, focusSourceNode } from "../logic/sourceTreeState.ts";
 import type { QueryTreeNode, SourceTreeState } from "../types/tree.ts";
 
@@ -75,6 +76,12 @@ type UseSourceTreeStateResult = {
   onToggleNode: (node: QueryTreeNode) => Promise<void>;
   // 刷新聚焦数据源。
   refreshFocusedSource: () => Promise<void>;
+  // 刷新指定数据源。
+  refreshSourceById: (sourceId: string) => Promise<void>;
+  // 刷新单个对象/表的字段结构缓存。
+  refreshObjectColumns: (sourceId: string, objectName: string) => Promise<ObjectField[]>;
+  // 折叠指定数据源下的所有展开节点。
+  collapseSourceNodes: (sourceId: string) => void;
   // 定位指定 source/object 到左侧树。
   locateNodeByTarget: (target: { sourceId: string; objectName?: string }) => Promise<{ targetNodeId: string; groupNodeId?: string } | null>;
   // 搜索当前聚焦数据源下的对象/表。
@@ -92,6 +99,8 @@ function createEmptyTreeState(focusedSourceId: string, selectedNodeId = ""): Sou
     expandedNodeIds: [],
     sourceObjectsById: {},
     sourceTreeChildrenById: {},
+    objectFieldsByKey: {},
+    objectFieldsLoadingByKey: {},
     sourceLoadingById: {},
     sourceRefreshingById: {},
     sourceErrorById: {},
@@ -266,6 +275,49 @@ export function useSourceTreeState({
     };
   }, []);
 
+  // 监听工作区/控制台 DDL 触发的元数据刷新事件，保持左树对象列表与字段缓存实时同步。
+  useEffect(() => {
+    const onSourceObjectsRefreshed = (event: Event) => {
+      const detail = (event as CustomEvent<{ sourceId?: string; objects?: SalesforceObject[] }>).detail;
+      const sourceId = String(detail?.sourceId || "").trim();
+      const objects = detail?.objects;
+      if (!sourceId || !Array.isArray(objects)) return;
+      const source = sourceMap.get(sourceId);
+      if (!source) return;
+
+      void buildDriverSourceChildren(source, {
+        getSourceColor,
+        listObjects: async () => objects
+      }).then((children) => {
+        setTreeState((current) => {
+          const nextObjectFieldsByKey = { ...current.objectFieldsByKey };
+          Object.keys(nextObjectFieldsByKey).forEach((key) => {
+            if (key.startsWith(`${sourceId}:`)) {
+              delete nextObjectFieldsByKey[key];
+            }
+          });
+          return {
+            ...current,
+            sourceObjectsById: {
+              ...current.sourceObjectsById,
+              [sourceId]: objects
+            },
+            sourceTreeChildrenById: {
+              ...current.sourceTreeChildrenById,
+              [sourceId]: children
+            },
+            objectFieldsByKey: nextObjectFieldsByKey
+          };
+        });
+      });
+    };
+
+    window.addEventListener("query:source-objects-refreshed", onSourceObjectsRefreshed);
+    return () => {
+      window.removeEventListener("query:source-objects-refreshed", onSourceObjectsRefreshed);
+    };
+  }, [sourceMap]);
+
   // 加载单个数据源的根子节点，并按类型缓存对象/分组数据。
   const loadSourceChildren = useCallback(
     async (source: SalesforceSource, forceRefresh = false): Promise<SalesforceObject[]> => {
@@ -311,28 +363,37 @@ export function useSourceTreeState({
             listObjects: async () => objects,
             withSalesforceSourceReauth: async <T>(_source: SalesforceSource, action: () => Promise<T>) => action()
           };
-          const normalizedSourceType = String(source.sourceType || "salesforce").toLowerCase();
-          const children = normalizedSourceType === "mysql"
-            ? await buildMySqlRootChildren(source, context)
-            : await buildSalesforceRootChildren(source, context);
+          const children = await buildDriverSourceChildren(source, context);
 
           if (!isLatestSourceRequest()) return objects;
 
-          setTreeState((current) => ({
-            ...finishRefreshingSource(current, sourceId, ""),
-            sourceLoadingById: {
-              ...current.sourceLoadingById,
-              [sourceId]: false
-            },
-            sourceObjectsById: {
-              ...current.sourceObjectsById,
-              [sourceId]: objects
-            },
-            sourceTreeChildrenById: {
-              ...current.sourceTreeChildrenById,
-              [sourceId]: children
+          setTreeState((current) => {
+            // 强刷数据源时，清理该数据源下已缓存的表字段，保证结构变化后重新展开能拉到最新字段。
+            const nextObjectFieldsByKey = { ...current.objectFieldsByKey };
+            if (forceRefresh) {
+              Object.keys(nextObjectFieldsByKey).forEach((key) => {
+                if (key.startsWith(`${sourceId}:`)) {
+                  delete nextObjectFieldsByKey[key];
+                }
+              });
             }
-          }));
+            return {
+              ...finishRefreshingSource(current, sourceId, ""),
+              sourceLoadingById: {
+                ...current.sourceLoadingById,
+                [sourceId]: false
+              },
+              sourceObjectsById: {
+                ...current.sourceObjectsById,
+                [sourceId]: objects
+              },
+              sourceTreeChildrenById: {
+                ...current.sourceTreeChildrenById,
+                [sourceId]: children
+              },
+              objectFieldsByKey: nextObjectFieldsByKey
+            };
+          });
           return objects;
         } catch (error) {
           if (!isLatestSourceRequest()) return [];
@@ -385,10 +446,57 @@ export function useSourceTreeState({
   // 判断节点当前是否已展开：统一基于本地树状态读取，避免渲染层和状态层各自维护一套展开真值。
   const isNodeExpanded = useCallback((nodeId: string) => treeState.expandedNodeIds.includes(nodeId), [treeState.expandedNodeIds]);
 
-  // 确保 source/group 节点展开：先立刻写入展开态，再异步补拉 children，避免双击时展开态与加载态互相打架。
+  // 懒加载或强制刷新指定表/对象的字段列表。
+  const loadObjectFields = useCallback(
+    async (source: SalesforceSource, objectName: string, forceRefresh = false): Promise<ObjectField[]> => {
+      const cacheKey = `${source.id}:${objectName}`;
+      if (!forceRefresh && treeState.objectFieldsByKey[cacheKey]) {
+        return treeState.objectFieldsByKey[cacheKey];
+      }
+
+      setTreeState((current) => ({
+        ...current,
+        objectFieldsLoadingByKey: {
+          ...current.objectFieldsLoadingByKey,
+          [cacheKey]: true
+        }
+      }));
+
+      try {
+        const describe = await runQuerySourceRequestWithRetry(source, () =>
+          api.describeObject(source.id, objectName)
+        );
+        const fields = describe.fields || [];
+        setTreeState((current) => ({
+          ...current,
+          objectFieldsByKey: {
+            ...current.objectFieldsByKey,
+            [cacheKey]: fields
+          },
+          objectFieldsLoadingByKey: {
+            ...current.objectFieldsLoadingByKey,
+            [cacheKey]: false
+          }
+        }));
+        return fields;
+      } catch {
+        setTreeState((current) => ({
+          ...current,
+          objectFieldsLoadingByKey: {
+            ...current.objectFieldsLoadingByKey,
+            [cacheKey]: false
+          }
+        }));
+        return [];
+      }
+    },
+    [treeState.objectFieldsByKey]
+  );
+
+  // 确保 source/group/object 节点展开：先写入展开态，再按需补拉子节点。
   const ensureNodeExpanded = useCallback(
     async (node: QueryTreeNode) => {
-      if (node.kind === "object") {
+      if (node.kind === "column") {
         return;
       }
 
@@ -397,16 +505,21 @@ export function useSourceTreeState({
 
       focusSource(node.sourceId);
 
-      // source 首次展开时加载根节点；MySQL tables 分组首次展开时补拉表列表。
       const shouldLoadSourceChildren =
         node.kind === "source"
         && !treeState.sourceTreeChildrenById[node.sourceId]
         && !treeState.sourceLoadingById[node.sourceId];
-      const shouldLoadMySqlTables =
+      const shouldLoadGroupObjects =
         node.kind === "group"
         && node.groupType === "tables"
         && !treeState.sourceObjectsById[node.sourceId]
         && !treeState.sourceLoadingById[node.sourceId];
+      const objectCacheKey = node.kind === "object" ? `${node.sourceId}:${node.objectName}` : "";
+      const shouldLoadObjectFields =
+        node.kind === "object"
+        && node.expandable
+        && !treeState.objectFieldsByKey[objectCacheKey]
+        && !treeState.objectFieldsLoadingByKey[objectCacheKey];
 
       if (!isNodeExpanded(node.id)) {
         setTreeState((current) => ({
@@ -414,18 +527,31 @@ export function useSourceTreeState({
           expandedNodeIds: appendExpandedNode(current.expandedNodeIds, node.id)
         }));
 
-        if (shouldLoadSourceChildren || shouldLoadMySqlTables) {
+        if (shouldLoadSourceChildren || shouldLoadGroupObjects) {
           await loadSourceChildren(source, false);
+        } else if (shouldLoadObjectFields && node.kind === "object") {
+          await loadObjectFields(source, node.objectName, false);
         }
       }
     },
-    [focusSource, isNodeExpanded, loadSourceChildren, sourceMap, treeState.sourceLoadingById, treeState.sourceObjectsById, treeState.sourceTreeChildrenById]
+    [
+      focusSource,
+      isNodeExpanded,
+      loadObjectFields,
+      loadSourceChildren,
+      sourceMap,
+      treeState.objectFieldsByKey,
+      treeState.objectFieldsLoadingByKey,
+      treeState.sourceLoadingById,
+      treeState.sourceObjectsById,
+      treeState.sourceTreeChildrenById
+    ]
   );
 
-  // 展开/折叠 source/group 节点：点击箭头时保持原有 toggle 交互。
+  // 展开/折叠节点：点击箭头时切换展开态。
   const toggleNode = useCallback(
     async (node: QueryTreeNode) => {
-      if (node.kind === "object") {
+      if (!node.expandable) {
         return;
       }
 
@@ -477,14 +603,33 @@ export function useSourceTreeState({
     await toggleNode(node);
   }, [openObjectNode, toggleNode]);
 
-  // 刷新当前聚焦数据源：仅刷新该 source，不做全量同步。
-  const refreshFocusedSource = useCallback(async () => {
-    const sourceId = treeState.focusedSourceId;
+  // 刷新指定数据源。
+  const refreshSourceById = useCallback(async (sourceId: string) => {
     if (!sourceId) return;
     const source = sourceMap.get(sourceId);
     if (!source) return;
     await loadSourceChildren(source, true);
-  }, [loadSourceChildren, sourceMap, treeState.focusedSourceId]);
+  }, [loadSourceChildren, sourceMap]);
+
+  // 刷新当前聚焦数据源：仅刷新该 source，不做全量同步。
+  const refreshFocusedSource = useCallback(async () => {
+    await refreshSourceById(treeState.focusedSourceId);
+  }, [refreshSourceById, treeState.focusedSourceId]);
+
+  // 刷新单表字段结构。
+  const refreshObjectColumns = useCallback(async (sourceId: string, objectName: string) => {
+    const source = sourceMap.get(sourceId);
+    if (!source) return [];
+    return await loadObjectFields(source, objectName, true);
+  }, [loadObjectFields, sourceMap]);
+
+  // 折叠指定数据源下的所有展开节点。
+  const collapseSourceNodes = useCallback((sourceId: string) => {
+    setTreeState((current) => ({
+      ...current,
+      expandedNodeIds: current.expandedNodeIds.filter((id) => !id.includes(`:${sourceId}`))
+    }));
+  }, []);
 
   // 定位树节点：必要时先补齐 source children，再同步焦点/高亮/展开状态。
   const locateNodeByTarget = useCallback(
@@ -497,8 +642,8 @@ export function useSourceTreeState({
       if (!source) return null;
 
       const sourceNodeId = `source:${normalizedSourceId}`;
-      const normalizedSourceType = String(source.sourceType || "salesforce").toLowerCase();
-      const groupNodeId = normalizedObjectName && normalizedSourceType === "mysql" ? `group:${normalizedSourceId}:tables` : "";
+      const driver = getDataSourceDriver(source.sourceType);
+      const groupNodeId = normalizedObjectName && driver.treeConfig.useGroupNodes ? `group:${normalizedSourceId}:tables` : "";
       const targetNodeId = normalizedObjectName ? `object:${normalizedSourceId}:${normalizedObjectName}` : sourceNodeId;
 
       if (!treeState.sourceTreeChildrenById[normalizedSourceId] && !treeState.sourceLoadingById[normalizedSourceId]) {
@@ -583,29 +728,44 @@ export function useSourceTreeState({
     [loadSourceChildren, locateNodeByTarget, onNotQueryableObjectClick, onOpenObject, sourceMap, treeState.sourceObjectsById]
   );
 
-  // 构建树数据：source 为根，按类型挂载对象或分组。
+  // 构建树数据：source -> group/object -> column，支持按需展开字段节点。
   const treeData = useMemo<QueryTreeRenderNode[]>(() => {
     const rootNodes = buildSourceRootNodes(sources, {
       getSourceColor,
       listObjects: async () => []
     });
 
+    const attachObjectColumns = (node: QueryTreeNode): QueryTreeRenderNode => {
+      if (node.kind !== "object") return node;
+      const fields = treeState.objectFieldsByKey[`${node.sourceId}:${node.objectName}`] || [];
+      return {
+        ...node,
+        children: fields.length > 0
+          ? buildObjectColumnChildren(node.sourceId, node.sourceType, node.objectName, fields)
+          : []
+      };
+    };
+
     return rootNodes.map((rootNode) => {
       const sourceChildren = treeState.sourceTreeChildrenById[rootNode.sourceId] || [];
       return {
         ...rootNode,
         children: sourceChildren.map((child) => {
+          if (child.kind === "object") {
+            return attachObjectColumns(child);
+          }
           if (child.kind !== "group") return child;
+          const groupObjects = child.groupType === "tables"
+            ? buildGroupObjectChildren(child.sourceId, child.sourceType, treeState.sourceObjectsById[child.sourceId] || [])
+            : [];
           return {
             ...child,
-            children: child.groupType === "tables"
-              ? buildMySqlTableChildren(child.sourceId, treeState.sourceObjectsById[child.sourceId] || [])
-              : []
+            children: groupObjects.map(attachObjectColumns)
           };
         })
       };
     });
-  }, [sources, treeState.sourceObjectsById, treeState.sourceTreeChildrenById]);
+  }, [sources, treeState.objectFieldsByKey, treeState.sourceObjectsById, treeState.sourceTreeChildrenById]);
 
   // 将本地树 UI 状态持久化到 store，供切换 panel 与重启后恢复。
   useEffect(() => {
@@ -655,6 +815,9 @@ export function useSourceTreeState({
     onNodeDoubleClick,
     onToggleNode: toggleNode,
     refreshFocusedSource,
+    refreshSourceById,
+    refreshObjectColumns,
+    collapseSourceNodes,
     locateNodeByTarget,
     searchFocusedSourceObjects,
     openObjectByTarget

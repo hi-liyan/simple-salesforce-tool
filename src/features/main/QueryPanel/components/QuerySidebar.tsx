@@ -23,8 +23,10 @@ type QuerySidebarProps = {
   onChangeSource: (sourceId: string) => void;
   // 兼容层：新增数据源后刷新 source 列表。
   onRefreshSources: (sourceId?: string, options?: { skipObjectFetch?: boolean }) => void;
-  // 打开查询控制台回调。
-  onOpenConsole?: (source?: SalesforceSource) => void;
+  // 打开查询控制台回调（支持携带初始 SQL）。
+  onOpenConsole?: (source?: SalesforceSource, initialSql?: string) => void;
+  // 侧边栏提示消息回调。
+  onShowMessage?: (message: string) => void;
   // 当前页面已持有的对象列表：用于给树组件复用已缓存数据。
   objects: SalesforceObject[];
   // 当前激活对象名。
@@ -51,6 +53,7 @@ export function QuerySidebar({
   onChangeSource,
   onRefreshSources,
   onOpenConsole,
+  onShowMessage,
   objects,
   activeTabObjectName,
   onOpenObject,
@@ -361,10 +364,11 @@ export function QuerySidebar({
         if (!onOpenConsole) return;
         const targetSource = resolveConsoleTargetSource({
           sources,
+          activeWorkspaceSourceId: activeWorkspaceTreeTarget?.sourceId,
           focusedSourceId: treeFocusedSourceId,
           selectedSourceId
         });
-        onOpenConsole(targetSource || undefined); // 点击后按聚焦源优先创建对应来源的控制台 Tab。
+        onOpenConsole(targetSource || undefined); // 点击后按当前工作数据源优先创建对应来源的控制台 Tab。
       }
     },
     {
@@ -410,6 +414,9 @@ export function QuerySidebar({
           objects={objects}
           activeTabObjectName={activeTabObjectName}
           onOpenObject={onOpenObject}
+          onOpenConsole={onOpenConsole}
+          onOpenAuthWindow={onOpenAuthWindow}
+          onNotify={(message) => onShowMessage?.(message)}
           onRefreshMysqlObjectMetadata={onRefreshMysqlObjectMetadata}
           onRefreshSourceWorkspace={async (sourceId) => {
             await onRefreshSources(sourceId, { skipObjectFetch: true }); // 行内注释：工作区同步阶段只复用已刷新的对象缓存，不重复拉取列表。

@@ -1,5 +1,6 @@
 import { GridCellKind } from "@glideapps/glide-data-grid";
 import type { EditableGridCell } from "@glideapps/glide-data-grid";
+import { getDataSourceDriver } from "../../../drivers/registry.ts";
 
 // 布尔值统一转换为编辑器可识别文本。
 export function normalizeBooleanText(value: unknown): string {
@@ -52,9 +53,9 @@ export function stringifyCellValue(value: unknown): string {
   return String(value);
 }
 
-// 空值占位文案：按数据源区分 None/Null，避免与空字符串视觉混淆。
-export function getNullPlaceholderBySourceType(sourceType?: string): "None" | "Null" {
-  return (sourceType || "salesforce").toLowerCase() === "mysql" ? "Null" : "None";
+// 空值占位文案：通过 GridAdapter 动态获取，避免在通用表格中硬编码数据源分支。
+export function getNullPlaceholderBySourceType(sourceType?: string): string {
+  return getDataSourceDriver(sourceType).gridAdapter.nullPlaceholder;
 }
 
 // 抽取文本编辑值。

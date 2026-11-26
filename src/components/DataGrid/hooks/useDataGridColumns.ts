@@ -11,6 +11,8 @@ const DEFAULT_INDEX_COLUMN_WIDTH = 48;
 type UseDataGridColumnsParams = {
   // 当前可见字段列表。
   visibleColumns: string[];
+  // 是否严格保留上传入的列顺序。
+  preserveColumnOrder?: boolean;
   // 是否展示表头元数据 icon：影响表头右侧预留空间，从而影响最小列宽计算。
   showHeaderMetadata: boolean;
   // 当前记录列表：用于推导可选记录 Id。
@@ -22,6 +24,17 @@ type UseDataGridColumnsParams = {
   // 当前分页偏移量：用于让序号列宽度按“真实最大序号”自适应。
   currentOffset?: number;
 };
+
+// 解析最终列顺序：默认保留原有 Id/Name 提前规则，必要时允许外层严格保序。
+export function resolveDisplayColumns(visibleColumns: string[], preserveColumnOrder = false): string[] {
+  if (preserveColumnOrder) {
+    return [...visibleColumns];
+  }
+  // 列顺序规范：始终将 Id、Name 提前展示，其余字段保持原有顺序。
+  const priority = ["Id", "Name"].filter((column) => visibleColumns.includes(column));
+  const rest = visibleColumns.filter((column) => column !== "Id" && column !== "Name");
+  return [...priority, ...rest];
+}
 
 type BuildGridColumnsParams = {
   // 业务字段列顺序。
@@ -89,6 +102,7 @@ export function buildGridColumns({
 // DataGrid 列配置 Hook：统一管理列顺序、列宽和稳定记录键映射。
 export function useDataGridColumns({
   visibleColumns,
+  preserveColumnOrder = false,
   showHeaderMetadata,
   records,
   fieldMetadataMap,
@@ -99,13 +113,8 @@ export function useDataGridColumns({
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
 
   const displayColumns = useMemo(
-    () => {
-      // 列顺序规范：始终将 Id、Name 提前展示，其余字段保持原有顺序。
-      const priority = ["Id", "Name"].filter((column) => visibleColumns.includes(column));
-      const rest = visibleColumns.filter((column) => column !== "Id" && column !== "Name");
-      return [...priority, ...rest];
-    },
-    [visibleColumns]
+    () => resolveDisplayColumns(visibleColumns, preserveColumnOrder),
+    [visibleColumns, preserveColumnOrder]
   );
 
   // 表头最小列宽：使用 Canvas 测量表头文案宽度，保证表头不会因列过窄被“缩放压扁”。

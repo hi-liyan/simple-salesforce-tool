@@ -1,10 +1,7 @@
 import { useCallback } from "react";
 import { api } from "../../../api";
 import { RowContextMenuState } from "../types";
-import {
-  createMysqlDraftDefaultValue,
-  createMysqlDraftNullValue
-} from "../../../features/main/QueryPanel/logic/mysqlValueSemantics.ts";
+import { getDataSourceDriver } from "../../../drivers/registry.ts";
 
 type UseDataGridMenuActionsParams = {
   // 当前右键菜单状态。
@@ -33,7 +30,7 @@ export function useDataGridMenuActions({
   onEditCell,
   onShowMessage
 }: UseDataGridMenuActionsParams) {
-  const isMysqlSource = (selectedSourceType || "salesforce").toLowerCase() === "mysql";
+  const { codec } = getDataSourceDriver(selectedSourceType).gridAdapter;
   // 打开 Salesforce 记录页：后端校验 token 后直接打开系统浏览器。
   const openRecordPageFromMenu = useCallback(async () => {
     if (!rowContextMenu) return;
@@ -80,17 +77,17 @@ export function useDataGridMenuActions({
   const setCellNullishFromMenu = useCallback(() => {
     if (!rowContextMenu) return;
     if (!rowContextMenu.canSetNullish) return;
-    onEditCell(rowContextMenu.rowIndex, rowContextMenu.columnId, isMysqlSource ? createMysqlDraftNullValue() : null);
+    onEditCell(rowContextMenu.rowIndex, rowContextMenu.columnId, codec.encodeNull());
     setRowContextMenu(null); // 执行后关闭菜单，避免重复点击。
-  }, [rowContextMenu, onEditCell, setRowContextMenu, isMysqlSource]);
+  }, [rowContextMenu, onEditCell, setRowContextMenu, codec]);
 
   // 右键菜单动作：恢复字段默认值；统一写入 default 草稿，提交阶段再按 create/update 分流。
   const setCellDefaultValueFromMenu = useCallback(() => {
     if (!rowContextMenu) return;
     if (!rowContextMenu.canSetDefaultValue) return;
-    onEditCell(rowContextMenu.rowIndex, rowContextMenu.columnId, createMysqlDraftDefaultValue());
+    onEditCell(rowContextMenu.rowIndex, rowContextMenu.columnId, codec.encodeDefault());
     setRowContextMenu(null);
-  }, [rowContextMenu, onEditCell, setRowContextMenu]);
+  }, [rowContextMenu, onEditCell, setRowContextMenu, codec]);
 
   return {
     openRecordPageFromMenu,

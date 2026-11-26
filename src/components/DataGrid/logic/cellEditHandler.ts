@@ -5,16 +5,8 @@ import type {
   GridColumn,
   Item
 } from "@glideapps/glide-data-grid";
-import {
-  normalizeDateValueForSave,
-  normalizeDatetimeValueForSave,
-  normalizeMysqlDatetimeValueForSave
-} from "../utils/datetime.ts";
-import {
-  createMysqlDraftNullValue,
-  createMysqlDraftOmitValue,
-  createMysqlDraftValue
-} from "../../../features/main/QueryPanel/logic/mysqlValueSemantics.ts";
+import { normalizeDateValueForSave } from "../utils/datetime.ts";
+import { getDataSourceDriver } from "../../../drivers/registry.ts";
 import {
   buildReadonlyCellMessage,
   isCellEditableByMeta,
@@ -57,7 +49,8 @@ export function createCellEditedHandler({
   onEditCell,
   onShowMessage
 }: CreateCellEditedHandlerParams): (location: Item, newValue: EditableGridCell) => void {
-  const isMysqlSource = (selectedSourceType || "salesforce").toLowerCase() === "mysql";
+  const gridAdapter = getDataSourceDriver(selectedSourceType).gridAdapter;
+  const { codec } = gridAdapter;
   return ([col, row], newValue) => {
     const columnId = String(columns[col]?.id ?? "");
 
@@ -68,7 +61,7 @@ export function createCellEditedHandler({
     const record = records[row] || {};
     const isNewRow = Boolean(record.__isNew);
     const metadata = fieldMetadataMap[columnId] || {};
-    const strategy = resolveFieldTypeStrategy(metadata);
+    const strategy = gridAdapter.resolveFieldStrategy(metadata);
 
     if (!isCellEditableByMeta(metadata, isNewRow)) {
       // 只读提示优先解释“为什么不能改”，避免用户只看到静态禁用而不知道原因。
@@ -84,22 +77,22 @@ export function createCellEditedHandler({
         return;
       }
       if (nextText === PICKLIST_NONE_VALUE && isPicklistNullable(metadata)) {
-        onEditCell(row, columnId, isMysqlSource ? createMysqlDraftNullValue() : null);
+        onEditCell(row, columnId, codec.encodeNull());
         return;
       }
-      onEditCell(row, columnId, isMysqlSource ? createMysqlDraftValue(nextText) : nextText);
+      onEditCell(row, columnId, codec.encodeValue(nextText));
       return;
     }
 
     if (strategy === "date") {
       const nextText = extractEditableString(newValue).trim();
       if (!nextText) {
-        if (isMysqlSource && isNewRow) {
-          onEditCell(row, columnId, createMysqlDraftOmitValue());
+        if (gridAdapter.omitEmptyOnNewRow && isNewRow) {
+          onEditCell(row, columnId, codec.encodeOmit());
           return;
         }
         if (metadata.nillable === true) {
-          onEditCell(row, columnId, isMysqlSource ? createMysqlDraftNullValue() : null);
+          onEditCell(row, columnId, codec.encodeNull());
           return;
         }
         onShowMessage(`${columnId} 字段不允许为空。`);
@@ -112,34 +105,32 @@ export function createCellEditedHandler({
         return;
       }
 
-      onEditCell(row, columnId, isMysqlSource ? createMysqlDraftValue(normalizedDate) : normalizedDate);
+      onEditCell(row, columnId, codec.encodeValue(normalizedDate));
       return;
     }
 
     if (strategy === "datetime") {
       const nextText = extractEditableString(newValue).trim();
       if (!nextText) {
-        if (isMysqlSource && isNewRow) {
-          onEditCell(row, columnId, createMysqlDraftOmitValue());
+        if (gridAdapter.omitEmptyOnNewRow && isNewRow) {
+          onEditCell(row, columnId, codec.encodeOmit());
           return;
         }
         if (metadata.nillable === true) {
-          onEditCell(row, columnId, isMysqlSource ? createMysqlDraftNullValue() : null);
+          onEditCell(row, columnId, codec.encodeNull());
           return;
         }
         onShowMessage(`${columnId} 字段不允许为空。`);
         return;
       }
 
-      const normalizedDatetime = isMysqlSource
-        ? normalizeMysqlDatetimeValueForSave(nextText)
-        : normalizeDatetimeValueForSave(nextText, effectiveSalesforceTimezone);
+      const normalizedDatetime = gridAdapter.normalizeDatetimeForSave(nextText, effectiveSalesforceTimezone);
       if (!normalizedDatetime) {
         onShowMessage(`${columnId} 字段仅支持日期时间格式。`);
         return;
       }
 
-      onEditCell(row, columnId, isMysqlSource ? createMysqlDraftValue(normalizedDatetime) : normalizedDatetime);
+      onEditCell(row, columnId, codec.encodeValue(normalizedDatetime));
       return;
     }
 
@@ -150,7 +141,7 @@ export function createCellEditedHandler({
         return;
       }
       const nextValue = text === "true";
-      onEditCell(row, columnId, isMysqlSource ? createMysqlDraftValue(nextValue) : nextValue);
+      onEditCell(row, columnId, codec.encodeValue(nextValue));
       return;
     }
 
@@ -160,24 +151,24 @@ export function createCellEditedHandler({
         onShowMessage(`${columnId} 字段仅支持数字。`);
         return;
       }
-      if (isMysqlSource && num === undefined) {
+      if (gridAdapter.omitEmptyOnNewRow && num === undefined) {
         if (isNewRow) {
-          onEditCell(row, columnId, createMysqlDraftOmitValue());
+          onEditCell(row, columnId, codec.encodeOmit());
           return;
         }
         if (metadata.nillable === true) {
-          onEditCell(row, columnId, createMysqlDraftNullValue());
+          onEditCell(row, columnId, codec.encodeNull());
           return;
         }
         onShowMessage(`${columnId} 字段不允许为空。`);
         return;
       }
-      onEditCell(row, columnId, isMysqlSource ? createMysqlDraftValue(num) : num);
+      onEditCell(row, columnId, codec.encodeValue(num));
       return;
     }
 
     const nextText = extractEditableString(newValue);
-    onEditCell(row, columnId, isMysqlSource ? createMysqlDraftValue(nextText) : nextText);
+    onEditCell(row, columnId, codec.encodeValue(nextText));
   };
 }
 

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { SubWindowLayout } from "../layouts/SubWindowLayout";
 
 type FieldMetaPayload = {
   field_name: string;
@@ -35,13 +36,9 @@ export function FieldMetaPage() {
   }, []);
 
   return (
-    // 页面外层：保持原有留白和滚动区域高度。
-    <div className="min-h-screen bg-base-200 p-2">
-      {/* 标题区：显示字段名。 */}
-      <h1 className="mb-1.5 text-[20px] font-semibold">{fieldName ? `${fieldName} 字段元数据` : "字段元数据"}</h1>
-
+    <SubWindowLayout title={fieldName ? `${fieldName} 字段元数据` : "字段元数据"} subtitle="Metadata Inspector">
       {/* 元数据列表：可滚动浏览全部条目。 */}
-      <div className="max-h-[calc(100vh-110px)] overflow-auto pr-0.5">
+      <div className="space-y-1 pr-0.5">
         {Object.keys(metadata).length === 0 ? (
           // 空状态提示。
           <p className="text-[12px] text-neutral/70">暂无字段元数据。</p>
@@ -49,15 +46,16 @@ export function FieldMetaPage() {
           Object.entries(metadata).map(([key, value]) => (
             <p
               key={key}
-              className="block text-[12px] leading-[1.6]"
+              className="block rounded-md px-1.5 py-0.5 text-[12px] leading-[1.6] hover:bg-base-200/60"
               style={{ fontFamily: "'Cascadia Mono', Consolas, 'Courier New', monospace" }}
             >
-              {translateFieldMetaKey(key)}: {formatFieldMetaValue(value)}
+              <span className="font-semibold text-neutral/80">{translateFieldMetaKey(key)}:</span>{" "}
+              <span>{formatFieldMetaValue(value)}</span>
             </p>
           ))
         )}
       </div>
-    </div>
+    </SubWindowLayout>
   );
 }
 

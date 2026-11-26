@@ -416,6 +416,50 @@ export type ToolTabStateDto = {
   payloadJson: Record<string, unknown>;
 };
 
+// 局域网文件预览类型：由后端和工具页共同约定。
+export type LanFileReceiverPreviewKind = "image" | "text" | "unsupported";
+
+// 局域网访问地址：用于展示局域网设备应访问的入口。
+export type LanFileReceiverAddress = {
+  label: string;
+  ip: string;
+  url: string;
+  isPreferred: boolean;
+};
+
+// 局域网接收服务状态。
+export type LanFileReceiverStatus = {
+  enabled: boolean;
+  port: number | null;
+  localBaseUrl: string | null;
+  accessUrls: LanFileReceiverAddress[];
+  fileCount: number;
+};
+
+// 单个已接收文件信息。
+export type LanFileReceiverItem = {
+  id: string;
+  originalName: string;
+  mimeType: string;
+  previewKind: LanFileReceiverPreviewKind;
+  sizeBytes: number;
+  receivedAt: string;
+};
+
+// 已接收文件的预览载荷。
+export type LanFileReceiverPreviewPayload = {
+  id: string;
+  originalName: string;
+  mimeType: string;
+  previewKind: LanFileReceiverPreviewKind;
+  sizeBytes: number;
+  receivedAt: string;
+  textContent: string | null;
+  dataUrl: string | null;
+  truncated: boolean;
+  previewMessage: string | null;
+};
+
 // 终端标签状态 DTO。
 export type TerminalTabStateDto = {
   tabId: string;

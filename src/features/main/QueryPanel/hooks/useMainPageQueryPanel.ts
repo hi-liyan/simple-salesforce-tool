@@ -32,6 +32,7 @@ import {
 } from "../logic/queryUtils";
 import { QueryPanelActions, QueryPanelViewState } from "../types";
 import { getSourceColor } from "../logic/sourceColor.ts";
+import { resolveWorkingSource } from "../logic/activeSourceResolution.ts";
 
 type UseMainPageQueryPanelInput = {
   // 页面视图模式。
@@ -359,12 +360,17 @@ export function useMainPageQueryPanel({
 
       try {
         if (!skipObjectFetch) {
-          await queryClient.fetchQuery({
+          const refreshedObjects = await queryClient.fetchQuery({
             queryKey: ["objects", normalizedSourceId],
             staleTime: 0,
             retry: false,
-            queryFn: () => api.listObjects(normalizedSourceId)
+            queryFn: () => api.refreshObjects(normalizedSourceId)
           });
+          window.dispatchEvent(
+            new CustomEvent("query:source-objects-refreshed", {
+              detail: { sourceId: normalizedSourceId, objects: refreshedObjects }
+            })
+          );
         }
         await reloadTabsForSource(normalizedSourceId);
         showWorkspaceNotice({ type: "success", message: "数据源元数据已刷新。" });
@@ -556,6 +562,23 @@ export function useMainPageQueryPanel({
     [selectedSourceId, selectedSource, setMysqlDdlMap, patchTab, queryClient, loadColumnVisibilityFromDb, queryTabData]
   );
 
+  // 当前激活工作区 Tab：用于解析默认工作数据源。
+  const activeWorkspaceTab = useMemo(
+    () => workspaceTabs.find((item) => item.id === activeWorkspaceTabId) || null,
+    [workspaceTabs, activeWorkspaceTabId]
+  );
+
+  // 解析默认控制台数据源：优先继承当前激活工作区 Tab 的数据源。
+  const resolveDefaultConsoleSource = useCallback(
+    () =>
+      resolveWorkingSource({
+        sources,
+        activeWorkspaceTab,
+        selectedSourceId
+      }),
+    [sources, activeWorkspaceTab, selectedSourceId]
+  );
+
   // QueryPanel 交互输出：所有行为回调都在本 hook 侧实现。
   const rawQueryPanelActions: QueryPanelActions = useQueryPanelActions({
     activeTab,
@@ -563,6 +586,7 @@ export function useMainPageQueryPanel({
     selectedSourceType: selectedSource?.sourceType || "salesforce",
     selectedSourceName: selectedSource?.name || "",
     selectedSourceColor,
+    resolveDefaultConsoleSource,
     setViewMode,
     openAuthWindow,
     createSoqlConsoleTab,

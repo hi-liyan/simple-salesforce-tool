@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { extractMainFromObjectName } from "../../src/components/monaco/languages/soqlLanguage.ts";
+import { extractMainFromObjectName } from "../../src/components/codemirror/sqlCompletion.ts";
 
 // 主查询对象提取：基础 FROM 场景应返回对象名。
 test("SOQL 主查询对象提取：基础查询", () => {

@@ -1,4 +1,4 @@
-import type { SalesforceObject, SalesforceSource } from "../../../../types/index.ts";
+import type { ObjectField, SalesforceObject, SalesforceSource } from "../../../../types/index.ts";
 
 // Query 统一树节点：供左侧多数据源树与不同 provider 共享。
 export type QueryTreeNode =
@@ -31,13 +31,26 @@ export type QueryTreeNode =
       label: string;
       queryable: boolean;
       expandable: boolean;
+    }
+  | {
+      id: string;
+      kind: "column";
+      sourceId: string;
+      sourceType: string;
+      objectName: string;
+      columnName: string;
+      dataType: string;
+      isPrimaryKey: boolean;
+      nullable: boolean;
+      label: string;
+      expandable: false;
     };
 
 // 树 provider 上下文：封装颜色读取与对象列表获取能力。
 export type QueryTreeProviderContext = {
   // 读取数据源颜色：供 root source 节点展示色标。
   getSourceColor: (source: SalesforceSource) => string;
-  // 拉取指定数据源对象列表：供 Salesforce / MySQL provider 复用。
+  // 拉取指定数据源对象列表：供各类数据源 provider 复用。
   listObjects: (sourceId: string) => Promise<SalesforceObject[]>;
   // Salesforce 认证重试包装器：供 provider 在对象加载时复用现有 token 刷新链路。
   withSalesforceSourceReauth?: <T>(source: SalesforceSource, action: () => Promise<T>) => Promise<T>;
@@ -55,6 +68,10 @@ export type SourceTreeState = {
   sourceObjectsById: Record<string, SalesforceObject[]>;
   // 各数据源根子节点缓存。
   sourceTreeChildrenById: Record<string, QueryTreeNode[]>;
+  // 各表/对象已展开的字段列表缓存（key 为 `${sourceId}:${objectName}`）。
+  objectFieldsByKey: Record<string, ObjectField[]>;
+  // 各表/对象字段列表加载态（key 为 `${sourceId}:${objectName}`）。
+  objectFieldsLoadingByKey: Record<string, boolean>;
   // 各数据源加载态。
   sourceLoadingById: Record<string, boolean>;
   // 各数据源刷新态。

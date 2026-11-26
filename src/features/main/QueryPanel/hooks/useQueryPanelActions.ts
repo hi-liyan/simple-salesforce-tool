@@ -10,6 +10,7 @@ import {
   isMysqlDraftOmitValue,
   normalizeMysqlEditedCellValue
 } from "../logic/mysqlValueSemantics.ts";
+import type { MutationPreviewItem } from "../../../../types/index.ts";
 
 type EditableGridRecord = Record<string, unknown> & {
   // 是否为前端本地新增行。
@@ -31,12 +32,14 @@ type UseQueryPanelActionsInput = {
   selectedSourceName: string;
   // 当前选中数据源颜色：用于新建控制台 Tab 时绑定来源元信息。
   selectedSourceColor: string;
+  // 解析当前默认工作数据源：当未显式指定 source 时按统一优先级解析。
+  resolveDefaultConsoleSource?: () => SalesforceSource | null;
   // 切换页面模式。
   setViewMode: (viewMode: MainViewMode) => void;
   // 打开认证窗口。
   openAuthWindow: () => void;
   // 创建控制台 Tab。
-  createSoqlConsoleTab: (sourceMeta?: Partial<SourceBindingMeta>) => string;
+  createSoqlConsoleTab: (sourceMeta?: Partial<SourceBindingMeta>, initialSql?: string) => string;
   // 激活工作区 Tab。
   setActiveWorkspaceTabId: (workspaceTabId: string) => void;
   // 拖拽排序工作区 Tabs。
@@ -81,8 +84,8 @@ type UseQueryPanelActionsInput = {
   createRecordQuickly: () => void;
   // 标记删除勾选记录。
   deleteCheckedRecords: () => Promise<void>;
-  // 提交未提交修改。
-  applyPendingChanges: () => Promise<void>;
+  // 提交未提交修改：MySQL 可复用预览弹窗中的 SQL 明细写入操作日志。
+  applyPendingChanges: (options?: { mysqlPreviewItems?: MutationPreviewItem[] }) => Promise<void>;
   // 撤销未提交修改。
   discardPendingChanges: () => void;
   // 切换字段/DDL 抽屉。
@@ -120,6 +123,7 @@ export function useQueryPanelActions({
   selectedSourceType,
   selectedSourceName,
   selectedSourceColor,
+  resolveDefaultConsoleSource,
   setViewMode,
   openAuthWindow,
   createSoqlConsoleTab,
@@ -160,17 +164,18 @@ export function useQueryPanelActions({
     () => ({
       onSetViewMode: setViewMode,
       onOpenAuthWindow: openAuthWindow,
-      onOpenConsole: (source) => {
-        const targetSourceId = source?.id || selectedSourceId;
-        const targetSourceType = String(source?.sourceType || selectedSourceType || "");
-        const targetSourceName = source?.name || selectedSourceName;
-        const targetSourceColor = source ? getSourceColor(source) : selectedSourceColor;
+      onOpenConsole: (source, initialSql) => {
+        const resolvedSource = source || resolveDefaultConsoleSource?.() || null;
+        const targetSourceId = resolvedSource?.id || selectedSourceId;
+        const targetSourceType = String(resolvedSource?.sourceType || selectedSourceType || "");
+        const targetSourceName = resolvedSource?.name || selectedSourceName;
+        const targetSourceColor = resolvedSource ? getSourceColor(resolvedSource) : selectedSourceColor;
         const nextConsoleTabId = createSoqlConsoleTab({
           sourceId: targetSourceId,
           sourceType: targetSourceType,
           sourceName: targetSourceName,
           sourceColor: targetSourceColor
-        }); // 每次点击都新建并激活一个控制台 Tab。
+        }, initialSql); // 每次点击都新建并激活一个控制台 Tab。
         setActiveWorkspaceTabId(buildConsoleWorkspaceTabId(nextConsoleTabId)); // 激活新建的 console 工作区 Tab。
         setViewMode("query"); // 保持在统一 Query 工作区内切换，不跳离当前布局。
       },
@@ -234,7 +239,7 @@ export function useQueryPanelActions({
       onCloseAllTabs: closeAllTabs,
       onCreateRecord: createRecordQuickly,
       onDeleteCheckedRecords: () => void deleteCheckedRecords(),
-      onApplyPendingChanges: () => void applyPendingChanges(),
+      onApplyPendingChanges: (options) => void applyPendingChanges(options),
       onDiscardPendingChanges: discardPendingChanges,
       onToggleDrawer: (drawerView) => void toggleDrawerForActiveTab(drawerView),
       onRefreshMysqlDdl: () => {

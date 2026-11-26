@@ -1,9 +1,21 @@
-import { Suspense, lazy, useEffect, useRef, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { Settings, SquareTerminal, Table2, Wrench } from "lucide-react";
+import { api } from "../api";
+import { Blocks, Cpu, Trash2, Upload, X } from "lucide-react";
 import { NoticeAlert } from "../components/NoticeAlert";
+import { listDataSourceDrivers } from "../drivers/registry";
 import { useMainPageQueryPanel } from "../features/main/QueryPanel/hooks/useMainPageQueryPanel";
-import { MainLayout } from "../layouts/MainLayout";
+import { AppShellLayout } from "../layouts/AppShellLayout";
+import { CustomTitleBar } from "../layouts/CustomTitleBar";
+import { registerBuiltinPlugins } from "../plugins/builtin";
+import {
+  createPluginContext,
+  getPlugin,
+  listPlugins,
+  PluginHost,
+  registerExternalPluginRecord,
+  unregisterPlugin
+} from "../plugins/core";
 import { useAppStore } from "../store/useAppStore";
 import { useSoqlExecutorStore } from "../store/useSoqlExecutorStore";
 import { useTerminalStore } from "../store/useTerminalStore";
@@ -11,7 +23,11 @@ import { useQueryWorkspaceTabsStore } from "../store/useQueryWorkspaceTabsStore"
 import { useQuerySourceTreeStore } from "../store/useQuerySourceTreeStore";
 import { enableStorageWrite } from "../store/tauriStorage";
 import { checkGithubLatestVersion, waitForUiIdleFrame } from "../utils/versionUpdate";
-import { createStartupCoordinator, shouldMountQueryPanel } from "./mainPageStartup";
+import { createStartupCoordinator, shouldKeepQueryPanelMounted, shouldMountQueryPanel } from "./mainPageStartup";
+import { QueryPanel } from "../features/main/QueryPanel";
+
+// 初始化注册全部内置插件（命令库、系统终端与工具箱）。
+registerBuiltinPlugins();
 // 启动版本检查标志：避免 React StrictMode 在开发环境重复触发新版本通知。
 let startupVersionCheckTriggered = false;
 
@@ -60,13 +76,6 @@ const STARTUP_STAGE_MAP = Object.fromEntries(STARTUP_STAGES.map((stage) => [stag
 const mainPageStartupCoordinator = createStartupCoordinator<StartupStage>(STARTUP_STAGE_MAP.rehydrate);
 
 // 懒加载 Query 工作区：将 DataGrid / 控制台等较重 UI 拆出首包。
-const LazyQueryPanel = lazy(async () => {
-  const module = await import("../features/main/QueryPanel");
-  return {
-    default: module.QueryPanel
-  };
-});
-
 // 懒加载 Terminal 工作区：将 xterm 与 Monaco 等重模块延后到首次进入时再加载。
 const LazyTerminalPanel = lazy(async () => {
   const module = await import("../features/main/TerminalPanel");
@@ -127,8 +136,28 @@ export function MainPage() {
   const [startupState, setStartupState] = useState(() => mainPageStartupCoordinator.getSnapshot());
   // 新版本提示通知状态：有值时在右上角显示升级通知。
   const [versionUpdateNotice, setVersionUpdateNotice] = useState<VersionUpdateNoticeState | null>(null);
+  // Query 工作区是否已初始化：首次进入 Query 后保持挂载，避免切页时重建 DataGrid 等重组件。
+  const [queryPanelMounted, setQueryPanelMounted] = useState(() => shouldMountQueryPanel(viewMode, mainPageStartupCoordinator.getSnapshot().complete));
   // Terminal 面板是否已初始化：首次进入 Terminal 后保持挂载，避免切页时重建会话。
   const [terminalPanelMounted, setTerminalPanelMounted] = useState(viewMode === "terminal");
+  // 右侧停靠插件面板（如命令库 / 局域网接收）：默认收起，可从标题栏或插件中心开启。
+  const [rightDockPluginId, setRightDockPluginId] = useState<string | null>(null);
+  // 插件中心弹窗开关。
+  const [pluginCenterOpen, setPluginCenterOpen] = useState(false);
+  // 插件列表刷新版本号：安装/启停/卸载外部插件后触发重渲染。
+  const [pluginRegistryTick, setPluginRegistryTick] = useState(0);
+  // 待审批安装的 `.sstplugin` 预览包信息。
+  const [pendingPluginInstall, setPendingPluginInstall] = useState<{
+    bytes: number[];
+    inspection: Awaited<ReturnType<typeof api.inspectPluginPackageBytes>>;
+  } | null>(null);
+  // 外部插件包操作中的错误或状态提示。
+  const [pluginInstallError, setPluginInstallError] = useState("");
+  const pluginFileInputRef = useRef<HTMLInputElement | null>(null);
+  // 驱动管理弹窗开关。
+  const [driverManagerOpen, setDriverManagerOpen] = useState(false);
+  // 当前打开的工作区插件 ID（当 viewMode === "tools" 且通过插件中心打开指定插件时使用）。
+  const [activeWorkspacePluginId, setActiveWorkspacePluginId] = useState<string | null>(null);
 
   // 认证凭证刷新计数器：用于处理并发 API 请求下的开始/结束配对。
   const tokenRefreshingCountRef = useRef(0);
@@ -194,6 +223,17 @@ export function MainPage() {
       // 将恢复任务句柄保留下来，供后续版本检查避开启动重任务窗口。
       const restoredTabsPromise = reloadRestoredTabs(finalSelectedSourceId);
 
+      // 启动后后台加载已安装的外部 `.sstplugin` 插件并注册到前端沙箱注册表。
+      void api
+        .listInstalledPlugins()
+        .then((records) => {
+          records.forEach((record) => registerExternalPluginRecord(record));
+          setPluginRegistryTick((n) => n + 1);
+        })
+        .catch(() => {
+          // 非 Tauri 环境或首次无外部插件时静默忽略。
+        });
+
       // 启动后在后台静默同步 CLI 数据源，不再影响首屏可交互时间。
       // 这里继续沿用持久化的数据源 ID，避免“首屏本地列表未命中 -> 选中被清空”后无法恢复 CLI 数据源。
       void refreshSources(true, undefined, persistedSourceId, {
@@ -248,6 +288,12 @@ export function MainPage() {
       tokenRefreshingCountRef.current = 0;
     };
   }, []);
+
+  // 记录 Query 是否访问过：首次进入后保持挂载，仅通过显示/隐藏切换。
+  useEffect(() => {
+    if (!shouldKeepQueryPanelMounted(queryPanelMounted, viewMode, startupState.complete)) return;
+    setQueryPanelMounted(true);
+  }, [queryPanelMounted, startupState.complete, viewMode]);
 
   // 记录 Terminal 是否访问过：一旦访问即常驻挂载，仅通过显示/隐藏切换。
   useEffect(() => {
@@ -306,141 +352,452 @@ export function MainPage() {
     setVersionUpdateNotice(null);
   }
 
+  // 打开指定插件：根据挂载能力路由到工作区或右侧停靠浮岛。
+  function handleLaunchPlugin(pluginId: string) {
+    const manifest = getPlugin(pluginId);
+    if (!manifest) return;
+    setPluginCenterOpen(false);
+    if (pluginId === "builtin.terminal-workspace") {
+      queryPanelActions.onSetViewMode("terminal");
+      return;
+    }
+    if (manifest.mountTargets.includes("dock-right")) {
+      setRightDockPluginId(pluginId);
+      return;
+    }
+    setActiveWorkspacePluginId(pluginId);
+    queryPanelActions.onSetViewMode("tools");
+  }
+
+  // 为右侧停靠插件或工作区插件构建隔离上下文。
+  const dockPluginContext = useMemo(() => {
+    if (!rightDockPluginId) return null;
+    return createPluginContext({
+      pluginId: rightDockPluginId,
+      onNotify: (message, tone) =>
+        showWorkspaceNotice({
+          type: tone === "error" ? "error" : "success",
+          message
+        }),
+      onOpenPlugin: (targetId) => handleLaunchPlugin(targetId),
+      onCloseSelf: () => setRightDockPluginId(null),
+      getActiveSourceSummary: () =>
+        queryPanelViewState.selectedSourceId
+          ? {
+              id: queryPanelViewState.selectedSourceId,
+              name:
+                queryPanelViewState.sources.find((s) => s.id === queryPanelViewState.selectedSourceId)?.name || "",
+              sourceType: queryPanelViewState.selectedSourceType
+            }
+          : null,
+      getActiveEditorSelection: () => "",
+      insertTextToActiveEditor: () => {}
+    });
+  }, [rightDockPluginId, queryPanelViewState.selectedSourceId, queryPanelViewState.selectedSourceType, queryPanelViewState.sources]);
+
+  const workspacePluginContext = useMemo(() => {
+    if (!activeWorkspacePluginId) return null;
+    return createPluginContext({
+      pluginId: activeWorkspacePluginId,
+      onNotify: (message, tone) =>
+        showWorkspaceNotice({
+          type: tone === "error" ? "error" : "success",
+          message
+        }),
+      onOpenPlugin: (targetId) => handleLaunchPlugin(targetId),
+      onCloseSelf: () => {
+        setActiveWorkspacePluginId(null);
+        queryPanelActions.onSetViewMode("query");
+      },
+      getActiveSourceSummary: () =>
+        queryPanelViewState.selectedSourceId
+          ? {
+              id: queryPanelViewState.selectedSourceId,
+              name:
+                queryPanelViewState.sources.find((s) => s.id === queryPanelViewState.selectedSourceId)?.name || "",
+              sourceType: queryPanelViewState.selectedSourceType
+            }
+          : null,
+      getActiveEditorSelection: () => "",
+      insertTextToActiveEditor: () => {}
+    });
+  }, [activeWorkspacePluginId, queryPanelViewState.selectedSourceId, queryPanelViewState.selectedSourceType, queryPanelViewState.sources]);
+
+  const registeredPlugins = useMemo(() => listPlugins(), [pluginCenterOpen, pluginRegistryTick]);
+  const registeredDrivers = useMemo(() => listDataSourceDrivers(), []);
+
   return (
-    // 页面容器：用于承载主布局与启动遮罩层。
-    <div className="relative h-full w-full">
-      {/* 主布局：MainPage 统一承接导航 rail 与三视图编排。 */}
-      <MainLayout
-        navRail={
-          // 导航栏按钮区。
-          <div className="flex flex-col items-center gap-1 py-2">
-            {/* Query 工作区入口。 */}
+    <AppShellLayout
+      titleBar={
+        <CustomTitleBar
+          aiDockOpen={rightDockPluginId === "builtin.command-library"}
+          onToggleAiDock={() =>
+            setRightDockPluginId((current) =>
+              current === "builtin.command-library" ? null : "builtin.command-library"
+            )
+          }
+          onNewConnection={() => queryPanelActions.onSetViewMode("settings")}
+          onNewQuery={() => {
+            queryPanelActions.onSetViewMode("query");
+            queryPanelActions.onOpenConsole();
+          }}
+          onOpenDriverManager={() => setDriverManagerOpen(true)}
+          onOpenPluginCenter={() => setPluginCenterOpen(true)}
+          onOpenTerminal={() => queryPanelActions.onSetViewMode("terminal")}
+          onOpenSystemLogs={() => queryPanelActions.onSetViewMode("settings")}
+          onOpenSettings={() => queryPanelActions.onSetViewMode("settings")}
+        />
+      }
+      statusBar={
+        <>
+          <div className="flex items-center gap-2">
+            <span className="inline-block h-2 w-2 rounded-full bg-success" />
+            <span>
+              {startupState.loading
+                ? `正在后台恢复工作区：${startupState.stage.label} (${startupState.stage.progress}%)`
+                : "工作区已就绪"}
+            </span>
+          </div>
+          <div className="flex items-center gap-3">
             <button
-              className={`tool-rail-btn ${viewMode === "query" ? "tool-rail-btn--active" : ""}`}
-              title="Query 布局"
+              type="button"
               onClick={() => queryPanelActions.onSetViewMode("query")}
+              className={`hover:text-neutral ${viewMode === "query" ? "font-semibold text-primary" : ""}`}
             >
-              <Table2 size={16} />
+              查询工作区
             </button>
-            {/* Terminal 工作区入口。 */}
             <button
-              className={`tool-rail-btn ${viewMode === "terminal" ? "tool-rail-btn--active" : ""}`}
-              title="Terminal 布局"
+              type="button"
               onClick={() => queryPanelActions.onSetViewMode("terminal")}
+              className={`hover:text-neutral ${viewMode === "terminal" ? "font-semibold text-primary" : ""}`}
             >
-              <SquareTerminal size={16} />
+              系统终端
             </button>
-            {/* 工具面板入口。 */}
             <button
-              className={`tool-rail-btn ${viewMode === "tools" ? "tool-rail-btn--active" : ""}`}
-              title="工具面板"
-              onClick={() => queryPanelActions.onSetViewMode("tools")}
+              type="button"
+              onClick={() => setPluginCenterOpen(true)}
+              className="hover:text-neutral"
             >
-              <Wrench size={16} />
-            </button>
-            {/* 设置入口。 */}
-            <button
-              className={`tool-rail-btn ${viewMode === "settings" ? "tool-rail-btn--active" : ""}`}
-              title="设置"
-              onClick={() => queryPanelActions.onSetViewMode("settings")}
-            >
-              <Settings size={16} />
+              插件 ({registeredPlugins.length})
             </button>
           </div>
-        }
-        content={
-          <>
-            {/* Query 工作区：对象树 + 数据/控制台统一 Tab，首次进入时按需加载。 */}
-            {shouldMountQueryPanel(viewMode, startupState.complete) && (
-              <Suspense fallback={<WorkspaceLoadingFallback title="正在加载 Query 工作区" />}>
-                {/* Query 工作区主体。 */}
-                <LazyQueryPanel viewState={queryPanelViewState} actions={queryPanelActions} />
-              </Suspense>
-            )}
-            {/* Terminal 工作区：首次进入后常驻挂载，切换视图仅隐藏，避免终端进程重建。 */}
-            {terminalPanelMounted && (
-              <div className={viewMode === "terminal" ? "h-full w-full" : "hidden h-full w-full"}>
-                <Suspense fallback={<WorkspaceLoadingFallback title="正在加载 Terminal 工作区" />}>
-                  {/* Terminal 工作区主体。 */}
-                  <LazyTerminalPanel visible={viewMode === "terminal"} />
-                </Suspense>
+        </>
+      }
+      overlay={
+        <>
+          {versionUpdateNotice && (
+            <NoticeAlert
+              // 启动更新通知：仅提示存在新版本，引导用户到设置页查看下载信息。
+              tone="success"
+              message={`发现新版本：当前 ${versionUpdateNotice.currentVersion}，最新 ${versionUpdateNotice.latestVersion}。可前往 设置 -> 关于与反馈 查看下载信息。`}
+              onClose={closeVersionUpdateNotice}
+              className="fixed right-4 top-12 z-[70] max-w-[380px] rounded-xl shadow-lg"
+            />
+          )}
+
+          {/* 插件中心弹窗：展示全部已注册内置/外部插件，支持 `.sstplugin` 安装、权限审批、启停与卸载。 */}
+          {pluginCenterOpen && (
+            <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/25 backdrop-blur-[2px]">
+              <div className="w-[660px] max-w-[92vw] rounded-2xl border border-base-300 bg-base-100 p-4 shadow-2xl">
+                <div className="mb-3 flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-[14px] font-semibold">
+                    <Blocks size={16} className="text-primary" />
+                    <span>插件中心</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      ref={pluginFileInputRef}
+                      type="file"
+                      accept=".sstplugin,.zip"
+                      className="hidden"
+                      onChange={async (event) => {
+                        const file = event.target.files?.[0];
+                        event.target.value = "";
+                        if (!file) return;
+                        setPluginInstallError("");
+                        try {
+                          const buffer = await file.arrayBuffer();
+                          const bytes = Array.from(new Uint8Array(buffer));
+                          const inspection = await api.inspectPluginPackageBytes(bytes);
+                          setPendingPluginInstall({ bytes, inspection });
+                        } catch (error) {
+                          setPluginInstallError(String(error));
+                        }
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => pluginFileInputRef.current?.click()}
+                      className="btn btn-primary btn-xs gap-1"
+                    >
+                      <Upload size={12} />
+                      安装 .sstplugin
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPendingPluginInstall(null);
+                        setPluginInstallError("");
+                        setPluginCenterOpen(false);
+                      }}
+                      className="flex h-7 w-7 items-center justify-center rounded-lg text-neutral/70 hover:bg-base-200"
+                    >
+                      <X size={15} />
+                    </button>
+                  </div>
+                </div>
+
+                {pluginInstallError && (
+                  <div className="mb-3 rounded-lg border border-error/40 bg-error/10 px-3 py-2 text-[12px] text-error">
+                    {pluginInstallError}
+                  </div>
+                )}
+
+                {pendingPluginInstall && (
+                  <div className="mb-3 rounded-xl border border-primary/40 bg-primary/5 p-3 text-[12px]">
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold">
+                        确认{pendingPluginInstall.inspection.isUpgrade ? "升级" : "安装"}插件：
+                        {pendingPluginInstall.inspection.manifest.name} (v
+                        {pendingPluginInstall.inspection.manifest.version})
+                      </span>
+                      <span className="font-mono text-[11px] text-neutral/70">
+                        {pendingPluginInstall.inspection.manifest.id}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-neutral/75">
+                      申请权限：
+                      {pendingPluginInstall.inspection.manifest.permissions.length > 0
+                        ? pendingPluginInstall.inspection.manifest.permissions.join(", ")
+                        : "无特殊权限"}
+                    </p>
+                    <div className="mt-2.5 flex justify-end gap-2">
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-xs"
+                        onClick={() => setPendingPluginInstall(null)}
+                      >
+                        取消
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-xs"
+                        onClick={async () => {
+                          try {
+                            const installed = await api.installPluginPackageBytes(pendingPluginInstall.bytes);
+                            registerExternalPluginRecord(installed);
+                            setPendingPluginInstall(null);
+                            setPluginRegistryTick((n) => n + 1);
+                          } catch (error) {
+                            setPluginInstallError(String(error));
+                          }
+                        }}
+                      >
+                        授权并安装
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                <div className="grid max-h-[60vh] grid-cols-2 gap-2.5 overflow-auto pr-0.5">
+                  {registeredPlugins.map((plugin) => {
+                    const Icon = plugin.icon;
+                    const isDisabled = plugin.isExternal && plugin.enabled === false;
+                    return (
+                      <div
+                        key={plugin.id}
+                        className={`flex items-start gap-2.5 rounded-xl border border-base-300/80 bg-base-200/35 p-3 transition-colors ${isDisabled ? "opacity-60" : "hover:border-primary/40 hover:bg-primary/5"}`}
+                      >
+                        <button
+                          type="button"
+                          disabled={isDisabled}
+                          onClick={() => handleLaunchPlugin(plugin.id)}
+                          className="flex min-w-0 flex-1 items-start gap-2.5 text-left"
+                        >
+                          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                            <Icon size={16} />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="truncate text-[13px] font-semibold">{plugin.name}</span>
+                              <span className="rounded bg-base-300/60 px-1.5 py-0.5 text-[10px] text-neutral/70">
+                                v{plugin.version}
+                              </span>
+                            </div>
+                            <p className="mt-1 line-clamp-2 text-[11px] text-neutral/70">{plugin.description}</p>
+                          </div>
+                        </button>
+                        {plugin.isExternal && (
+                          <div className="flex shrink-0 flex-col items-end gap-1">
+                            <input
+                              type="checkbox"
+                              className="toggle toggle-xs toggle-primary"
+                              checked={!isDisabled}
+                              title={isDisabled ? "启用插件" : "禁用插件"}
+                              onChange={async () => {
+                                const nextEnabled = Boolean(isDisabled);
+                                await api.setInstalledPluginEnabled(plugin.id, nextEnabled);
+                                const records = await api.listInstalledPlugins();
+                                const target = records.find((r) => r.pluginId === plugin.id);
+                                if (target) registerExternalPluginRecord(target);
+                                setPluginRegistryTick((n) => n + 1);
+                              }}
+                            />
+                            <button
+                              type="button"
+                              title="卸载插件"
+                              className="btn btn-ghost btn-xs px-1 text-error"
+                              onClick={async () => {
+                                await api.uninstallPlugin(plugin.id);
+                                unregisterPlugin(plugin.id);
+                                setPluginRegistryTick((n) => n + 1);
+                              }}
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-            )}
-            {/* 工具视图：首次进入时按需加载。 */}
-            {viewMode === "tools" && (
-              <Suspense fallback={<WorkspaceLoadingFallback title="正在加载工具面板" />}>
-                {/* 工具面板主体。 */}
-                <LazyToolsPanel />
+            </div>
+          )}
+
+          {/* 驱动管理弹窗：展示全部已接入数据源驱动及其能力声明。 */}
+          {driverManagerOpen && (
+            <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/25 backdrop-blur-[2px]">
+              <div className="w-[560px] max-w-[92vw] rounded-2xl border border-base-300 bg-base-100 p-4 shadow-2xl">
+                <div className="mb-3 flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-[14px] font-semibold">
+                    <Cpu size={16} className="text-primary" />
+                    <span>数据源驱动管理</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setDriverManagerOpen(false)}
+                    className="flex h-7 w-7 items-center justify-center rounded-lg text-neutral/70 hover:bg-base-200"
+                  >
+                    <X size={15} />
+                  </button>
+                </div>
+                <div className="space-y-2.5">
+                  {registeredDrivers.map((driver) => (
+                    <div
+                      key={driver.kind}
+                      className="rounded-xl border border-base-300/80 bg-base-200/35 p-3 text-[12px]"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className={`rounded px-1.5 py-0.5 text-[11px] font-semibold ${driver.badgeClassName}`}>
+                            {driver.badgeLabel}
+                          </span>
+                          <span className="font-semibold">{driver.displayName}</span>
+                        </div>
+                        <span className="font-mono text-[11px] text-neutral/60">
+                          lang: {driver.capabilities.queryLanguage}
+                        </span>
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] text-neutral/75">
+                        <span className="rounded bg-base-100 px-2 py-0.5">
+                          DDL: {driver.capabilities.supportsDdl ? "支持" : "不支持"}
+                        </span>
+                        <span className="rounded bg-base-100 px-2 py-0.5">
+                          事务批量提交: {driver.capabilities.supportsTransactionalBatch ? "支持" : "不支持"}
+                        </span>
+                        <span className="rounded bg-base-100 px-2 py-0.5">
+                          SQL 预览: {driver.capabilities.supportsMutationPreview ? "支持" : "不支持"}
+                        </span>
+                        <span className="rounded bg-base-100 px-2 py-0.5">
+                          空值占位: {driver.gridAdapter.nullPlaceholder}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+        </>
+      }
+    >
+      {/* 三栏 Islands 浮岛内容区：中央工作区浮岛 + 可选右侧停靠插件浮岛。 */}
+      <div className="flex h-full min-h-0 w-full gap-1.5 overflow-hidden">
+        <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden rounded-xl border border-base-300/80 bg-base-100 shadow-2xs">
+          {/* Query 工作区：首帧直接挂载且常驻保活，后台水合数据源不阻塞用户交互。 */}
+          {queryPanelMounted && (
+            <div
+              className={
+                shouldMountQueryPanel(viewMode, startupState.complete)
+                  ? "absolute inset-0 z-10 h-full w-full"
+                  : "absolute inset-0 z-0 h-full w-full invisible pointer-events-none"
+              }
+              aria-hidden={!shouldMountQueryPanel(viewMode, startupState.complete)}
+            >
+              <QueryPanel viewState={queryPanelViewState} actions={queryPanelActions} />
+            </div>
+          )}
+
+          {/* Terminal 工作区：首次进入后常驻挂载，切换视图仅隐藏，避免终端进程重建。 */}
+          {terminalPanelMounted && (
+            <div
+              className={
+                viewMode === "terminal"
+                  ? "absolute inset-0 z-10 h-full w-full"
+                  : "absolute inset-0 z-0 h-full w-full invisible pointer-events-none"
+              }
+              aria-hidden={viewMode !== "terminal"}
+            >
+              <Suspense fallback={<WorkspaceLoadingFallback title="正在加载 Terminal 工作区" />}>
+                <LazyTerminalPanel visible={viewMode === "terminal"} />
               </Suspense>
-            )}
-            {/* 设置视图：首次进入时按需加载。 */}
-            {viewMode === "settings" && (
+            </div>
+          )}
+
+          {/* 工具/插件视图：优先渲染已选工作区插件，否则渲染传统工具面板。 */}
+          {viewMode === "tools" && (
+            <div className="absolute inset-0 z-10 h-full w-full">
+              {activeWorkspacePluginId && workspacePluginContext ? (
+                <PluginHost pluginId={activeWorkspacePluginId} ctx={workspacePluginContext} />
+              ) : (
+                <Suspense fallback={<WorkspaceLoadingFallback title="正在加载工具面板" />}>
+                  <LazyToolsPanel />
+                </Suspense>
+              )}
+            </div>
+          )}
+
+          {/* 设置视图：首次进入时按需加载。 */}
+          {viewMode === "settings" && (
+            <div className="absolute inset-0 z-10 h-full w-full">
               <Suspense fallback={<WorkspaceLoadingFallback title="正在加载设置页" />}>
-                {/* 设置页主体。 */}
                 <LazySettingsPanel />
               </Suspense>
-            )}
-          </>
-        }
-      />
-      {versionUpdateNotice && (
-        <NoticeAlert
-          // 启动更新通知：仅提示存在新版本，引导用户到设置页查看下载信息。
-          tone="success"
-          message={`发现新版本：当前 ${versionUpdateNotice.currentVersion}，最新 ${versionUpdateNotice.latestVersion}。可前往 设置 -> 关于与反馈 查看下载信息。`}
-          onClose={closeVersionUpdateNotice}
-          className="fixed right-4 top-4 z-[70] max-w-[380px] shadow-lg"
-        />
-      )}
-      {startupState.loading && (
-        // 启动遮罩：初始化期间覆盖全屏并拦截鼠标事件。
-        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-base-200/95 backdrop-blur-sm">
-          {/* 启动卡片：展示加载状态、进度条与当前动作。 */}
-          <div className="w-[420px] rounded-xl border border-base-300 bg-base-100 p-6 shadow-xl">
-            <div className="flex items-center gap-3">
-              <span className="loading loading-spinner text-primary" style={{ width: 26, height: 26 }} />
-              <div className="min-w-0">
-                <p className="text-[14px] font-semibold">正在启动应用</p>
-                <p className="mt-1 text-[12px] text-neutral/70">{startupState.stage.detail}</p>
-              </div>
             </div>
-            {/* 进度条：显示当前启动进度与动作名称。 */}
-            <div className="mt-5">
-              <div className="mb-2 flex items-center justify-between text-[12px] text-neutral/70">
-                <span>{startupState.stage.label}</span>
-                <span>{startupState.stage.progress}%</span>
-              </div>
-              <div className="h-2 overflow-hidden rounded-full bg-base-300">
-                <div
-                  className="h-full rounded-full bg-primary transition-all duration-300 ease-out"
-                  style={{ width: `${startupState.stage.progress}%` }}
-                />
-              </div>
-            </div>
-            {/* 启动步骤清单：帮助用户理解遮罩阶段当前做了哪些动作。 */}
-            <div className="mt-4 space-y-2">
-              {startupStageItems.map((stage) => (
-                <div
-                  key={stage.key}
-                  className={`flex items-center justify-between rounded-lg px-3 py-2 text-[12px] ${
-                    stage.isCurrentStage
-                      ? "bg-primary/10 text-primary"
-                      : stage.isCompletedStage
-                        ? "bg-success/10 text-success"
-                        : "bg-base-200/70 text-neutral/60"
-                  }`}
-                >
-                  {/* 步骤名称：说明当前启动流程的具体动作。 */}
-                  <span>{stage.label}</span>
-                  {/* 步骤状态：标记已完成、进行中或待开始。 */}
-                  <span>{stage.statusText}</span>
-                </div>
-              ))}
-            </div>
-          </div>
+          )}
         </div>
-      )}
-    </div>
+
+        {/* 右侧停靠插件浮岛（如命令库 / 局域网文件接收）。 */}
+        {rightDockPluginId && dockPluginContext && (
+          <aside className="flex h-full w-[320px] shrink-0 flex-col overflow-hidden rounded-xl border border-base-300/80 bg-base-100 shadow-2xs">
+            <div className="flex h-9 shrink-0 items-center justify-between border-b border-base-300/70 px-3 text-[12px]">
+              <span className="font-semibold">{getPlugin(rightDockPluginId)?.name || "插件面板"}</span>
+              <button
+                type="button"
+                onClick={() => setRightDockPluginId(null)}
+                className="flex h-6 w-6 items-center justify-center rounded-md text-neutral/70 hover:bg-base-200"
+              >
+                <X size={13} />
+              </button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-hidden">
+              <PluginHost pluginId={rightDockPluginId} ctx={dockPluginContext} />
+            </div>
+          </aside>
+        )}
+      </div>
+    </AppShellLayout>
   );
 }
 

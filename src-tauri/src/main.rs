@@ -4,9 +4,12 @@ mod ai;
 mod app_state;
 mod command_storage;
 mod commands;
+mod drivers;
 mod error;
 mod llm;
+mod lan_file_receiver;
 mod models;
+mod modules;
 mod providers;
 mod salesforce;
 mod services;
@@ -15,9 +18,11 @@ mod storage;
 mod terminal;
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use app_state::{ensure_data_dir, AppState};
+use drivers::connection_manager::ConnectionManager;
+use drivers::DriverRegistry;
 use salesforce::SalesforceClient;
 use storage::Storage;
 use tauri::Manager;
@@ -31,6 +36,46 @@ fn main() {
                 .open_js_links_on_click(false)
                 .build(),
         )
+        // 注册 `plugin://` 自定义协议：安全映射 `{app_data_dir}/plugins/<plugin-id>/` 下的静态资源供 iframe 沙箱加载。
+        .register_uri_scheme_protocol("plugin", |ctx, request| {
+            let app = ctx.app_handle();
+            let uri = request.uri();
+            let host = uri.host().unwrap_or_default();
+            let raw_path = uri.path().trim_start_matches('/');
+            let (plugin_id, asset_path) = if host.eq_ignore_ascii_case("plugin.localhost") || host.is_empty() {
+                let mut parts = raw_path.splitn(2, '/');
+                (parts.next().unwrap_or_default(), parts.next().unwrap_or("dist/index.html"))
+            } else {
+                (host, if raw_path.is_empty() { "dist/index.html" } else { raw_path })
+            };
+
+            let result = (|| -> Result<(Vec<u8>, String), String> {
+                let state = app
+                    .try_state::<AppState>()
+                    .ok_or_else(|| "应用状态尚未初始化".to_string())?;
+                let data_dir = ensure_data_dir(app)?;
+                let service = services::plugin_package_service::PluginPackageService::new(
+                    &state.storage,
+                    data_dir.join("plugins"),
+                );
+                service
+                    .read_plugin_asset(plugin_id, asset_path)
+                    .map_err(|e| e.to_string())
+            })();
+
+            match result {
+                Ok((bytes, mime)) => tauri::http::Response::builder()
+                    .status(200)
+                    .header("Content-Type", mime)
+                    .body(bytes)
+                    .unwrap_or_else(|_| tauri::http::Response::new(Vec::new())),
+                Err(err) => tauri::http::Response::builder()
+                    .status(404)
+                    .header("Content-Type", "text/plain; charset=utf-8")
+                    .body(err.into_bytes())
+                    .unwrap_or_else(|_| tauri::http::Response::new(Vec::new())),
+            }
+        })
         .setup(|app| {
             // 启动阶段初始化 SQLite v2 存储和共享客户端，避免运行时重复构建。
             let data_dir = ensure_data_dir(&app.handle())
@@ -39,13 +84,23 @@ fn main() {
                 std::io::Error::new(std::io::ErrorKind::Other, error.to_string())
             })?;
 
+            let sf_client = Arc::new(SalesforceClient::new());
+            let connection_manager = Arc::new(ConnectionManager::new());
+            let driver_registry =
+                DriverRegistry::with_builtin_drivers(Arc::clone(&sf_client), Arc::clone(&connection_manager));
+
             app.manage(AppState {
                 storage,
-                sf_client: SalesforceClient::new(),
+                driver_registry,
+                connection_manager,
+                mutation_plan_cache: services::mutation_plan_service::MutationPlanCache::new(),
+                sf_client,
                 cli_login_cancel: Mutex::new(None),
                 llm_conversations: Mutex::new(HashMap::new()),
                 llm_stream_cancels: Mutex::new(HashMap::new()),
+                query_cancels: Mutex::new(HashMap::new()),
                 terminal_sessions: Mutex::new(HashMap::new()),
+                lan_file_receiver: Mutex::new(None),
             });
 
             Ok(())
@@ -111,7 +166,35 @@ fn main() {
             commands::write_terminal_input,
             commands::resize_terminal_session,
             commands::close_terminal_session,
-            commands::open_elevated_terminal
+            commands::open_elevated_terminal,
+            lan_file_receiver::get_lan_file_receiver_status,
+            lan_file_receiver::start_lan_file_receiver,
+            lan_file_receiver::stop_lan_file_receiver,
+            lan_file_receiver::list_lan_file_receiver_files,
+            lan_file_receiver::read_lan_file_receiver_preview,
+            lan_file_receiver::delete_lan_file_receiver_file,
+            lan_file_receiver::clear_lan_file_receiver_files,
+            commands::get_plugin_kv,
+            commands::set_plugin_kv,
+            commands::delete_plugin_kv,
+            commands::inspect_plugin_package_bytes,
+            commands::install_plugin_package_bytes,
+            commands::install_plugin_package,
+            commands::list_installed_plugins,
+            commands::set_installed_plugin_enabled,
+            commands::uninstall_plugin,
+            commands::list_driver_capabilities,
+            commands::check_sql_safety,
+            commands::list_sql_execution_audits,
+            commands::execute_guarded_query,
+            commands::execute_multi_statement_query,
+            commands::cancel_query,
+            commands::diagnose_sql,
+            commands::prepare_mutation_plan,
+            commands::commit_mutation_plan,
+            commands::get_app_setting,
+            commands::set_app_setting,
+            commands::delete_app_setting
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -124,6 +207,8 @@ fn main() {
         ) {
             if let Some(state) = app_handle.try_state::<AppState>() {
                 let _ = terminal::close_all_terminal_sessions(&state.terminal_sessions);
+                let _ = lan_file_receiver::close_lan_file_receiver_runtime(&state.lan_file_receiver);
+                tauri::async_runtime::block_on(state.connection_manager.close_all());
             }
         }
     });
@@ -135,8 +220,13 @@ mod tests {
     fn sqlite_v2_has_no_command_store_compatibility_module() {
         let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let main_source = std::fs::read_to_string(manifest_dir.join("src/main.rs")).unwrap();
-        let commands_source =
-            std::fs::read_to_string(manifest_dir.join("src/commands.rs")).unwrap();
+        let mut commands_source = String::new();
+        for entry in std::fs::read_dir(manifest_dir.join("src/commands")).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|ext| ext.to_str()) == Some("rs") {
+                commands_source.push_str(&std::fs::read_to_string(path).unwrap());
+            }
+        }
         let runtime_main_source = main_source
             .lines()
             .take_while(|line| !line.contains("#[cfg(test)]"))

@@ -27,8 +27,8 @@ type QuerySourceTreeNodeProps = {
   onNodeDoubleClick: (node: QueryTreeRenderNode) => void | Promise<void>;
   // 点击展开箭头。
   onToggleNode: (node: QueryTreeRenderNode) => void | Promise<void>;
-  // 右键 Object 节点。
-  onObjectContextMenu?: (event: ReactMouseEvent<HTMLDivElement>, node: QueryTreeRenderNode) => void;
+  // 右键任意节点。
+  onNodeContextMenu?: (event: ReactMouseEvent<HTMLDivElement>, node: QueryTreeRenderNode) => void;
   // 解析 Object 节点 tooltip。
   getObjectTooltip?: (node: QueryTreeRenderNode) => string;
   // 注册节点 DOM：供父组件执行滚动定位。
@@ -79,6 +79,10 @@ function areQuerySourceTreeNodePropsEqual(prevProps: QuerySourceTreeNodeProps, n
   const nextSourceAuthPending = Boolean(nextProps.treeState.sourceAuthPendingById[nextSourceId]);
   const prevSourceError = prevProps.treeState.sourceErrorById[prevSourceId] || "";
   const nextSourceError = nextProps.treeState.sourceErrorById[nextSourceId] || "";
+  const prevObjKey = prevNode.kind === "object" ? `${prevNode.sourceId}:${prevNode.objectName}` : "";
+  const nextObjKey = nextNode.kind === "object" ? `${nextNode.sourceId}:${nextNode.objectName}` : "";
+  const prevObjLoading = prevObjKey ? Boolean(prevProps.treeState.objectFieldsLoadingByKey[prevObjKey]) : false;
+  const nextObjLoading = nextObjKey ? Boolean(nextProps.treeState.objectFieldsLoadingByKey[nextObjKey]) : false;
 
   return (
     prevNode === nextNode
@@ -88,13 +92,14 @@ function areQuerySourceTreeNodePropsEqual(prevProps: QuerySourceTreeNodeProps, n
     && prevProps.onNodeClick === nextProps.onNodeClick
     && prevProps.onNodeDoubleClick === nextProps.onNodeDoubleClick
     && prevProps.onToggleNode === nextProps.onToggleNode
-    && prevProps.onObjectContextMenu === nextProps.onObjectContextMenu
+    && prevProps.onNodeContextMenu === nextProps.onNodeContextMenu
     && prevProps.getObjectTooltip === nextProps.getObjectTooltip
     && prevProps.registerNodeElement === nextProps.registerNodeElement
     && prevIsSelectedNode === nextIsSelectedNode
     && prevIsFocusedSource === nextIsFocusedSource
     && prevIsActiveObject === nextIsActiveObject
     && prevSourceLoading === nextSourceLoading
+    && prevObjLoading === nextObjLoading
     && prevSourceAuthPending === nextSourceAuthPending
     && prevSourceError === nextSourceError
   );
@@ -111,7 +116,7 @@ function QuerySourceTreeNodeComponent({
   onNodeClick,
   onNodeDoubleClick,
   onToggleNode,
-  onObjectContextMenu,
+  onNodeContextMenu,
   getObjectTooltip,
   registerNodeElement
 }: QuerySourceTreeNodeProps) {
@@ -121,18 +126,20 @@ function QuerySourceTreeNodeComponent({
   const sourceId = data.sourceId;
   const isSourceNode = data.kind === "source";
   const isObjectNode = data.kind === "object";
+  const isColumnNode = data.kind === "column";
   const objectBindingKey = isObjectNode ? buildObjectTabBindingKey(data.sourceId, data.objectName) : "";
   const isFocusedSource = isSourceNode && treeState.focusedSourceId === sourceId;
   const isActiveObject = isObjectNode && (activeTabObjectName === objectBindingKey || activeTabObjectName === data.objectName);
   const isSelectedNode = treeState.selectedNodeId === data.id;
   const sourceLoading = Boolean(treeState.sourceLoadingById[sourceId] || treeState.sourceRefreshingById[sourceId]);
+  const objectFieldsLoading = isObjectNode && Boolean(treeState.objectFieldsLoadingByKey[`${data.sourceId}:${data.objectName}`]);
   const sourceAuthPending = Boolean(treeState.sourceAuthPendingById[sourceId]);
   const sourceError = treeState.sourceErrorById[sourceId] || "";
   const sourceErrorPresentation = buildQuerySourceErrorPresentation(sourceError);
   const sourceHasVisibleError = isSourceNode && !sourceLoading && Boolean(sourceError);
   const visualKind = resolveQueryTreeVisualKind(data);
   const badgeMeta = resolveQueryTreeBadgeMeta(visualKind);
-  const showFolderIcon = data.expandable && !isSourceNode;
+  const showFolderIcon = data.kind === "group";
   const folderIconClassName = visualKind === "group-views" ? "text-violet-400" : "text-primary/75";
   // Object 节点 tooltip：恢复旧版“鼠标经过显示对象元数据”的能力。
   const objectTooltip = isObjectNode ? getObjectTooltip?.(data) || "" : "";
@@ -165,8 +172,8 @@ function QuerySourceTreeNodeComponent({
           void onNodeDoubleClick(data);
         }}
         onContextMenu={(event) => {
-          if (!isObjectNode || !onObjectContextMenu) return;
-          onObjectContextMenu(event, data);
+          if (!onNodeContextMenu) return;
+          onNodeContextMenu(event, data);
         }}
       >
         {/* 节点主体：统一收紧箭头、图标、文字的间距，避免当前树看起来松散又凌乱。 */}
@@ -244,12 +251,20 @@ function QuerySourceTreeNodeComponent({
             </span>
           )}
 
-          {/* 名称主体：错误时切换为红色，恢复成功后自动回到默认样式。 */}
+          {/* 名称主体：错误时切换为红色，字段节点使用更紧凑的等宽/辅助样式。 */}
           <span
-            className={`whitespace-nowrap leading-[1.35] ${isFocusedSource ? "font-semibold" : ""} ${sourceHasVisibleError ? "text-error" : ""}`}
+            className={`whitespace-nowrap leading-[1.35] ${isFocusedSource ? "font-semibold" : ""} ${
+              sourceHasVisibleError ? "text-error" : isColumnNode ? "text-[11px] text-neutral/85" : ""
+            }`}
           >
-            {data.label}
+            {isColumnNode ? data.columnName : data.label}
           </span>
+          {isColumnNode && data.dataType && (
+            <span className="shrink-0 font-mono text-[10px] text-neutral/50">{data.dataType}</span>
+          )}
+          {objectFieldsLoading && (
+            <span className="loading loading-spinner shrink-0 text-neutral/50" style={{ width: 11, height: 11 }} />
+          )}
 
           {/* 认证刷新提示：当前 source 正在自动刷新 token 时显示轻量文案。 */}
           {isSourceNode && sourceAuthPending && (

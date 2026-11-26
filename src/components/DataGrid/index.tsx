@@ -16,6 +16,8 @@ import { useDataGridContextMenu } from "./hooks/useDataGridContextMenu";
 import { useHeaderMetaPopover } from "./hooks/useHeaderMetaPopover";
 import { useDataGridMenuActions } from "./hooks/useDataGridMenuActions";
 import { DataGridSurface } from "./components/DataGridSurface";
+import { useDataGridRuntimeScroll } from "../../store/useDataGridScrollStore";
+import { getDataSourceDriver } from "../../drivers/registry";
 
 export type DataGridProps = {
   result: QueryResult;
@@ -37,6 +39,8 @@ export type DataGridProps = {
   sourceId?: string;
   // 当前数据源类型：用于控制 Salesforce 专属菜单项显隐。
   selectedSourceType?: string;
+  // 是否严格保留 visibleColumns 的输入顺序。
+  preserveColumnOrder?: boolean;
   // 当前对象 API 名称：用于打开 Salesforce 记录页（可选）。
   objectName?: string;
   // 待删除记录 Id 列表：用于将整行标记为灰色背景。
@@ -54,6 +58,8 @@ export type DataGridProps = {
   onPageSizeChange?: (pageSize: number) => void;
   // 分页导航：用于首页/上一页/下一页/末页触发重查。
   onPageNavigate?: (action: "first" | "previous" | "next" | "last") => void;
+  // 运行态滚动状态 key：用于在当前会话内按 tab 记住横纵滚动位置。
+  scrollStateKey?: string;
 };
 
 // 查询结果表：主入口只负责装配 hooks 与各模块能力。
@@ -70,6 +76,7 @@ export function DataGrid({
   salesforceTimezone,
   sourceId,
   selectedSourceType,
+  preserveColumnOrder = false,
   objectName,
   pendingDeleteRecordIds,
   onToggleAll,
@@ -79,9 +86,12 @@ export function DataGrid({
   enableReadonlyCellHint = true,
   allowReadonlyOverlay = false,
   onPageSizeChange,
-  onPageNavigate
+  onPageNavigate,
+  scrollStateKey
 }: DataGridProps) {
   const records = result.records;
+  // 当前表格运行态滚动位置：按 key 绑定，仅在本次运行内保留。
+  const { scrollOffsetX, scrollOffsetY, onScrollOffsetChange } = useDataGridRuntimeScroll(scrollStateKey);
   // 生效元数据：只读模式下统一覆写 createable/updateable，避免误触发编辑链路。
   const effectiveFieldMetadataMap = useMemo(() => {
     if (!readOnlyMode) return fieldMetadataMap;
@@ -102,17 +112,19 @@ export function DataGrid({
     () => resolveSalesforceTimezone(salesforceTimezone),
     [salesforceTimezone]
   );
-  // MySQL 主键列名：当查询结果无 Id 时，用主键值作为记录键与行选中键。
+  // 通过 GridAdapter 解析当前数据源驱动与主键字段，消除表格组件硬编码分支。
+  const gridAdapter = useMemo(
+    () => getDataSourceDriver(selectedSourceType).gridAdapter,
+    [selectedSourceType]
+  );
   const mysqlPrimaryKeyField = useMemo(() => {
-    if ((selectedSourceType || "salesforce").toLowerCase() !== "mysql") return "";
-    const field = Object.entries(effectiveFieldMetadataMap).find(
-      ([, metadata]) => String(metadata?.columnKey || "").toUpperCase() === "PRI"
-    )?.[0];
-    return field || "";
-  }, [effectiveFieldMetadataMap, selectedSourceType]);
+    const resolved = gridAdapter.resolvePrimaryKeyField(effectiveFieldMetadataMap);
+    return resolved === "Id" ? "" : resolved;
+  }, [effectiveFieldMetadataMap, gridAdapter]);
 
   const { columns, setColumnWidths, headerMinWidths, selectableIds } = useDataGridColumns({
     visibleColumns,
+    preserveColumnOrder,
     showHeaderMetadata,
     records,
     fieldMetadataMap: effectiveFieldMetadataMap,
@@ -325,6 +337,9 @@ export function DataGrid({
       onPaste={handlePaste}
       provideEditor={provideEditor}
       drawHeader={drawHeader}
+      scrollOffsetX={scrollOffsetX}
+      scrollOffsetY={scrollOffsetY}
+      onScrollOffsetChange={onScrollOffsetChange}
     />
   );
 }

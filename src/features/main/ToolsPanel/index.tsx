@@ -1,10 +1,11 @@
-import { type LucideIcon, ArrowLeftRight, Braces, ChevronRight, Languages, QrCode, Wrench } from "lucide-react";
+import { type LucideIcon, ArrowLeftRight, Braces, ChevronRight, Languages, QrCode, Wrench, Wifi } from "lucide-react";
 import { useAppStore, type ToolsPanelActiveToolId } from "../../../store/useAppStore";
 import { JsonFormatterTool } from "./components/JsonFormatterTool";
 import { TextDiffTool } from "./components/TextDiffTool";
 import { JsonDiffTool } from "./components/JsonDiffTool";
 import { QrCodeTool } from "./components/QrCodeTool";
 import { UnicodeConverterTool } from "./components/UnicodeConverterTool";
+import { LanFileReceiverTool } from "./components/LanFileReceiverTool";
 
 // 工具标识：当前面板已实现的工具集合。
 type ToolItemId = Exclude<ToolsPanelActiveToolId, null>;
@@ -59,6 +60,13 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     description: "提供 Unicode/中文/ASCII 双向转换，支持 `\\uXXXX` 与 HTML 实体双格式、结果持久化与历史记录管理。",
     statusText: "已上线",
     icon: Languages
+  },
+  {
+    id: "lan-file-receiver",
+    title: "局域网接收文件",
+    description: "提供局域网上传页、随机端口监听、移动端自适应上传，以及桌面端文件预览与清理管理能力。",
+    statusText: "已上线",
+    icon: Wifi
   }
 ];
 
@@ -87,6 +95,10 @@ export function ToolsPanel() {
 
   if (activeToolId === "unicode-converter") {
     return <UnicodeConverterTool onBack={() => setToolsPanelActiveToolId(null)} />;
+  }
+
+  if (activeToolId === "lan-file-receiver") {
+    return <LanFileReceiverTool onBack={() => setToolsPanelActiveToolId(null)} />;
   }
 
   return (

@@ -9,6 +9,9 @@ import type {
   CurrentUserContext,
   LlmSettings,
   LlmSettingsSavePayload,
+  LanFileReceiverItem,
+  LanFileReceiverPreviewPayload,
+  LanFileReceiverStatus,
   MutationExecutionResult,
   MutationPreviewSqlItem,
   ObjectDdl,
@@ -158,5 +161,137 @@ export const api = {
   // 保存终端 Shell 命令路径。
   saveTerminalShellCommand: (command: string) => invokeApi<void>("save_terminal_shell_command", { command }),
   // 以管理员身份打开终端（仅 Windows）。
-  openElevatedTerminal: () => invokeApi<void>("open_elevated_terminal")
+  openElevatedTerminal: () => invokeApi<void>("open_elevated_terminal"),
+  // 读取局域网文件接收服务当前状态。
+  getLanFileReceiverStatus: () => invokeApi<LanFileReceiverStatus>("get_lan_file_receiver_status"),
+  // 启动局域网文件接收服务。
+  startLanFileReceiver: () => invokeApi<LanFileReceiverStatus>("start_lan_file_receiver"),
+  // 停止局域网文件接收服务。
+  stopLanFileReceiver: () => invokeApi<void>("stop_lan_file_receiver"),
+  // 列出已接收文件。
+  listLanFileReceiverFiles: () => invokeApi<LanFileReceiverItem[]>("list_lan_file_receiver_files"),
+  // 读取指定文件的预览内容。
+  readLanFileReceiverPreview: (fileId: string) =>
+    invokeApi<LanFileReceiverPreviewPayload>("read_lan_file_receiver_preview", { fileId }),
+  // 删除单个已接收文件。
+  deleteLanFileReceiverFile: (fileId: string) => invokeApi<void>("delete_lan_file_receiver_file", { fileId }),
+  // 清空全部已接收文件。
+  clearLanFileReceiverFiles: () => invokeApi<void>("clear_lan_file_receiver_files"),
+  // 两阶段提交 Phase 1：编译并缓存变更计划。
+  prepareMutationPlan: (payload: RecordSaveWithDeletePayload) =>
+    invokeApi<{ planId: string; planHash: string; previewItems: MutationPreviewSqlItem[] }>("prepare_mutation_plan", {
+      payload
+    }),
+  // 两阶段提交 Phase 2：按 planId + planHash 原样执行已预览计划。
+  commitMutationPlan: (planId: string, planHash: string) =>
+    invokeApi<MutationExecutionResult>("commit_mutation_plan", { planId, planHash }),
+  // 受安全网关保护的查询执行入口（支持 queryId 取消慢查询）。
+  executeGuardedQuery: (
+    sourceId: string,
+    queryText: string,
+    objectName?: string,
+    confirmed?: boolean,
+    queryId?: string
+  ) =>
+    invokeApi<{
+      status: "executed" | "confirmation_required";
+      guardDecision: Record<string, unknown>;
+      executedSql: string;
+      durationMs: number;
+      result?: QueryResult | null;
+    }>("execute_guarded_query", { sourceId, queryText, objectName, confirmed, queryId }),
+  // 取消正在执行中的慢查询。
+  cancelQuery: (queryId: string) => invokeApi<boolean>("cancel_query", { queryId }),
+  // 多语句拆解与顺序执行（返回多结果集与摘要）。
+  executeMultiStatementQuery: (sourceId: string, sqlBatch: string, confirmed?: boolean) =>
+    invokeApi<
+      {
+        index: number;
+        sql: string;
+        response?: {
+          status: "executed" | "confirmation_required";
+          guardDecision: Record<string, unknown>;
+          executedSql: string;
+          durationMs: number;
+          result?: QueryResult | null;
+        } | null;
+        error?: string | null;
+      }[]
+    >("execute_multi_statement_query", { sourceId, sqlBatch, confirmed }),
+  // 基于 Rust sqlparser AST 执行 SQL 实时语法诊断。
+  diagnoseSql: (sql: string, dialect: string) =>
+    invokeApi<{ line: number; column: number; severity: string; message: string }[]>("diagnose_sql", {
+      sql,
+      dialect
+    }),
+  // 查询 SQL 执行审计记录。
+  listSqlExecutionAudits: (sourceId?: string, limit?: number) =>
+    invokeApi<Record<string, unknown>[]>("list_sql_execution_audits", { sourceId, limit }),
+  // 按 key 增量读取应用外壳设置。
+  getAppSetting: (key: string) => invokeApi<string | null>("get_app_setting", { key }),
+  // 按 key 增量写入应用外壳设置。
+  setAppSetting: (key: string, value: string) => invokeApi<void>("set_app_setting", { key, value }),
+  // 按 key 删除应用外壳设置。
+  deleteAppSetting: (key: string) => invokeApi<void>("delete_app_setting", { key }),
+  // 预览解析本地 `.sstplugin` 插件包（不落盘，返回清单供审批权限）。
+  inspectPluginPackageBytes: (bytes: number[]) =>
+    invokeApi<{
+      manifest: {
+        id: string;
+        name: string;
+        version: string;
+        apiVersion: string;
+        description: string;
+        category: string;
+        mountTargets: string[];
+        permissions: string[];
+        entry: string;
+        icon?: string | null;
+      };
+      packageSha256: string;
+      packageSizeBytes: number;
+      isUpgrade: boolean;
+      previousVersion?: string | null;
+    }>("inspect_plugin_package_bytes", { bytes }),
+  // 安装或升级 `.sstplugin` 插件包。
+  installPluginPackageBytes: (bytes: number[]) =>
+    invokeApi<{
+      pluginId: string;
+      name: string;
+      version: string;
+      apiVersion: string;
+      description: string;
+      category: string;
+      manifestJson: string;
+      installDir: string;
+      enabled: boolean;
+      grantedPermissions: string;
+      packageSha256: string;
+      installedAt: string;
+      updatedAt: string;
+    }>("install_plugin_package_bytes", { bytes }),
+  // 列出全部已安装的外部插件。
+  listInstalledPlugins: () =>
+    invokeApi<
+      {
+        pluginId: string;
+        name: string;
+        version: string;
+        apiVersion: string;
+        description: string;
+        category: string;
+        manifestJson: string;
+        installDir: string;
+        enabled: boolean;
+        grantedPermissions: string;
+        packageSha256: string;
+        installedAt: string;
+        updatedAt: string;
+      }[]
+    >("list_installed_plugins"),
+  // 切换已安装外部插件启用状态。
+  setInstalledPluginEnabled: (pluginId: string, enabled: boolean) =>
+    invokeApi<void>("set_installed_plugin_enabled", { pluginId, enabled }),
+  // 卸载外部插件。
+  uninstallPlugin: (pluginId: string) => invokeApi<void>("uninstall_plugin", { pluginId })
 };

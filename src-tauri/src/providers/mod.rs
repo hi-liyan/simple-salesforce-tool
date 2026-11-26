@@ -1,4 +1,3 @@
-mod mysql_provider;
 mod salesforce_provider;
 
 use std::collections::HashMap;
@@ -6,15 +5,14 @@ use std::collections::HashMap;
 use serde_json::Value;
 
 use crate::app_state::AppState;
+pub use crate::drivers::mysql::provider::{
+    preview_create_record_sql, preview_delete_record_sql, preview_save_records_with_deletes_items,
+    preview_update_record_sql, MySqlProvider,
+};
 use crate::error::AppError;
 use crate::models::{
     CurrentUserContext, MutationExecutionResult, ObjectDdl, ObjectDescribe, QueryResult,
     RecordUpdatePayload, SalesforceObject, SalesforceSource,
-};
-use mysql_provider::MySqlProvider;
-pub use mysql_provider::{
-    preview_create_record_sql, preview_delete_record_sql, preview_save_records_with_deletes_items,
-    preview_update_record_sql,
 };
 use salesforce_provider::SalesforceProvider;
 

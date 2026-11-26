@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api } from "../api";
+import { SubWindowLayout } from "../layouts/SubWindowLayout";
 
 // 登录窗口页面：处理 Salesforce CLI 授权登录。
 export function AuthPage() {
@@ -30,21 +31,22 @@ export function AuthPage() {
   }
 
   return (
-    // 登录页外层容器：保持原布局结构与间距。
-    <div className="min-h-screen bg-base-200 p-3">
-      {/* 内容列：标题、说明、输入与按钮。 */}
-      <div className="flex flex-col gap-2">
-        {/* 页面标题。 */}
-        <h1 className="text-[20px] font-semibold">连接 Salesforce</h1>
+    <SubWindowLayout
+      title="连接 Salesforce"
+      subtitle="OAuth 浏览器授权"
+      onClose={() => void api.closeAuthWindow()}
+    >
+      {/* 内容列：说明、输入与按钮。 */}
+      <div className="flex flex-col gap-3">
         {/* 页面说明。 */}
         <p className="text-[12px] text-neutral/70">请输入 Instance URL，点击登录后将在浏览器完成 OAuth 授权。</p>
 
         {/* 输入区域：保持 Enter 提交逻辑。 */}
         <div className="w-full">
-          <label className="mb-1 block text-[12px]">Instance URL</label>
+          <label className="mb-1 block text-[12px] font-medium">Instance URL</label>
           <input
             autoFocus
-            className={`input input-bordered input-sm w-full ${error ? "input-error" : ""}`}
+            className={`input input-bordered input-sm w-full rounded-lg ${error ? "input-error" : ""}`}
             value={instanceUrl}
             onChange={(event) => setInstanceUrl(event.target.value)}
             onKeyDown={(event) => {
@@ -60,16 +62,16 @@ export function AuthPage() {
         </div>
 
         {/* 底部操作栏：按钮顺序和逻辑不变。 */}
-        <div className="flex flex-row justify-end gap-2">
-          <button className="btn btn-outline btn-sm" onClick={() => void api.closeAuthWindow()} disabled={busy}>
+        <div className="flex flex-row justify-end gap-2 pt-1">
+          <button className="btn btn-outline btn-sm rounded-lg" onClick={() => void api.closeAuthWindow()} disabled={busy}>
             取消
           </button>
-          <button className="btn btn-primary btn-sm" onClick={() => void loginWithCli()} disabled={busy}>
+          <button className="btn btn-primary btn-sm rounded-lg" onClick={() => void loginWithCli()} disabled={busy}>
             {busy ? "登录中..." : "登录"}
           </button>
         </div>
       </div>
-    </div>
+    </SubWindowLayout>
   );
 }
 

@@ -1,27 +1,13 @@
-import { Suspense, lazy } from "react";
-import { MonacoEditorLoadingFallback } from "./MonacoEditorLoadingFallback";
-import type { QueryMonacoEditorProps } from "./QueryMonacoEditor";
+import { CodeMirrorQueryEditor, type CodeMirrorQueryEditorProps } from "./codemirror/CodeMirrorQueryEditor";
 
-// 懒加载通用查询编辑器：将 Monaco 相关代码拆出首包。
-const LazyQueryMonacoEditor = lazy(async () => {
-  const module = await import("./QueryMonacoEditor");
-  return {
-    default: module.QueryMonacoEditor
-  };
-});
+// SQL 编辑器参数：基于 CodeMirror 6 查询编辑器，固定 language=mysql。
+type SqlMonacoEditorProps = Omit<CodeMirrorQueryEditorProps, "language"> & {
+  wordWrapColumn?: number;
+};
 
-// SQL 编辑器参数：复用通用查询编辑器参数，固定 language=mysql。
-type SqlMonacoEditorProps = Omit<QueryMonacoEditorProps, "language">;
-
-// SQL(MySQL) 编辑器：按需加载 Monaco，减少主包体积。
-export function SqlMonacoEditor(props: SqlMonacoEditorProps) {
-  return (
-    // Suspense：在 Monaco 代码分片加载期间显示占位 UI。
-    <Suspense fallback={<MonacoEditorLoadingFallback height={props.height} />}>
-      {/* 实际编辑器：固定为 MySQL 语法模式。 */}
-      <LazyQueryMonacoEditor language="mysql" {...props} />
-    </Suspense>
-  );
+// SQL(MySQL) 编辑器：使用 CodeMirror 6 + 自研 statement-scoped 补全引擎（对齐 dbx 实现）。
+export function SqlMonacoEditor({ wordWrapColumn: _wordWrapColumn, ...props }: SqlMonacoEditorProps) {
+  return <CodeMirrorQueryEditor language="mysql" {...props} />;
 }
 
 export type { SqlMonacoEditorProps };
