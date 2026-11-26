@@ -1,4 +1,4 @@
-mod mysql_provider;
+pub(crate) mod mysql_provider;
 mod salesforce_provider;
 
 use std::collections::HashMap;

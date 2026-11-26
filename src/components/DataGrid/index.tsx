@@ -17,6 +17,7 @@ import { useHeaderMetaPopover } from "./hooks/useHeaderMetaPopover";
 import { useDataGridMenuActions } from "./hooks/useDataGridMenuActions";
 import { DataGridSurface } from "./components/DataGridSurface";
 import { useDataGridRuntimeScroll } from "../../store/useDataGridScrollStore";
+import { getDataSourceDriver } from "../../drivers/registry";
 
 export type DataGridProps = {
   result: QueryResult;
@@ -111,14 +112,15 @@ export function DataGrid({
     () => resolveSalesforceTimezone(salesforceTimezone),
     [salesforceTimezone]
   );
-  // MySQL 主键列名：当查询结果无 Id 时，用主键值作为记录键与行选中键。
+  // 通过 GridAdapter 解析当前数据源驱动与主键字段，消除表格组件硬编码分支。
+  const gridAdapter = useMemo(
+    () => getDataSourceDriver(selectedSourceType).gridAdapter,
+    [selectedSourceType]
+  );
   const mysqlPrimaryKeyField = useMemo(() => {
-    if ((selectedSourceType || "salesforce").toLowerCase() !== "mysql") return "";
-    const field = Object.entries(effectiveFieldMetadataMap).find(
-      ([, metadata]) => String(metadata?.columnKey || "").toUpperCase() === "PRI"
-    )?.[0];
-    return field || "";
-  }, [effectiveFieldMetadataMap, selectedSourceType]);
+    const resolved = gridAdapter.resolvePrimaryKeyField(effectiveFieldMetadataMap);
+    return resolved === "Id" ? "" : resolved;
+  }, [effectiveFieldMetadataMap, gridAdapter]);
 
   const { columns, setColumnWidths, headerMinWidths, selectableIds } = useDataGridColumns({
     visibleColumns,

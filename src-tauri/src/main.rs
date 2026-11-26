@@ -4,6 +4,8 @@ mod ai;
 mod app_state;
 mod command_storage;
 mod commands;
+mod commands_ext;
+mod drivers;
 mod error;
 mod llm;
 mod lan_file_receiver;
@@ -16,9 +18,11 @@ mod storage;
 mod terminal;
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use app_state::{ensure_data_dir, AppState};
+use drivers::connection_manager::ConnectionManager;
+use drivers::DriverRegistry;
 use salesforce::SalesforceClient;
 use storage::Storage;
 use tauri::Manager;
@@ -40,9 +44,17 @@ fn main() {
                 std::io::Error::new(std::io::ErrorKind::Other, error.to_string())
             })?;
 
+            let sf_client = Arc::new(SalesforceClient::new());
+            let connection_manager = Arc::new(ConnectionManager::new());
+            let driver_registry =
+                DriverRegistry::with_builtin_drivers(Arc::clone(&sf_client), Arc::clone(&connection_manager));
+
             app.manage(AppState {
                 storage,
-                sf_client: SalesforceClient::new(),
+                driver_registry,
+                connection_manager,
+                mutation_plan_cache: services::mutation_plan_service::MutationPlanCache::new(),
+                sf_client,
                 cli_login_cancel: Mutex::new(None),
                 llm_conversations: Mutex::new(HashMap::new()),
                 llm_stream_cancels: Mutex::new(HashMap::new()),
@@ -120,7 +132,13 @@ fn main() {
             lan_file_receiver::list_lan_file_receiver_files,
             lan_file_receiver::read_lan_file_receiver_preview,
             lan_file_receiver::delete_lan_file_receiver_file,
-            lan_file_receiver::clear_lan_file_receiver_files
+            lan_file_receiver::clear_lan_file_receiver_files,
+            commands_ext::get_plugin_kv,
+            commands_ext::set_plugin_kv,
+            commands_ext::delete_plugin_kv,
+            commands_ext::list_driver_capabilities,
+            commands_ext::check_sql_safety,
+            commands_ext::list_sql_execution_audits
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -134,6 +152,7 @@ fn main() {
             if let Some(state) = app_handle.try_state::<AppState>() {
                 let _ = terminal::close_all_terminal_sessions(&state.terminal_sessions);
                 let _ = lan_file_receiver::close_lan_file_receiver_runtime(&state.lan_file_receiver);
+                tauri::async_runtime::block_on(state.connection_manager.close_all());
             }
         }
     });

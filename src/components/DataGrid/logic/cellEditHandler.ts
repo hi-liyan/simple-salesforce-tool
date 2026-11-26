@@ -10,11 +10,7 @@ import {
   normalizeDatetimeValueForSave,
   normalizeMysqlDatetimeValueForSave
 } from "../utils/datetime.ts";
-import {
-  createMysqlDraftNullValue,
-  createMysqlDraftOmitValue,
-  createMysqlDraftValue
-} from "../../../features/main/QueryPanel/logic/mysqlValueSemantics.ts";
+import { getDataSourceDriver } from "../../../drivers/registry.ts";
 import {
   buildReadonlyCellMessage,
   isCellEditableByMeta,
@@ -58,6 +54,7 @@ export function createCellEditedHandler({
   onShowMessage
 }: CreateCellEditedHandlerParams): (location: Item, newValue: EditableGridCell) => void {
   const isMysqlSource = (selectedSourceType || "salesforce").toLowerCase() === "mysql";
+  const { codec } = getDataSourceDriver(selectedSourceType).gridAdapter;
   return ([col, row], newValue) => {
     const columnId = String(columns[col]?.id ?? "");
 
@@ -84,10 +81,10 @@ export function createCellEditedHandler({
         return;
       }
       if (nextText === PICKLIST_NONE_VALUE && isPicklistNullable(metadata)) {
-        onEditCell(row, columnId, isMysqlSource ? createMysqlDraftNullValue() : null);
+        onEditCell(row, columnId, codec.encodeNull());
         return;
       }
-      onEditCell(row, columnId, isMysqlSource ? createMysqlDraftValue(nextText) : nextText);
+      onEditCell(row, columnId, codec.encodeValue(nextText));
       return;
     }
 
@@ -95,11 +92,11 @@ export function createCellEditedHandler({
       const nextText = extractEditableString(newValue).trim();
       if (!nextText) {
         if (isMysqlSource && isNewRow) {
-          onEditCell(row, columnId, createMysqlDraftOmitValue());
+          onEditCell(row, columnId, codec.encodeOmit());
           return;
         }
         if (metadata.nillable === true) {
-          onEditCell(row, columnId, isMysqlSource ? createMysqlDraftNullValue() : null);
+          onEditCell(row, columnId, codec.encodeNull());
           return;
         }
         onShowMessage(`${columnId} 字段不允许为空。`);
@@ -112,7 +109,7 @@ export function createCellEditedHandler({
         return;
       }
 
-      onEditCell(row, columnId, isMysqlSource ? createMysqlDraftValue(normalizedDate) : normalizedDate);
+      onEditCell(row, columnId, codec.encodeValue(normalizedDate));
       return;
     }
 
@@ -120,11 +117,11 @@ export function createCellEditedHandler({
       const nextText = extractEditableString(newValue).trim();
       if (!nextText) {
         if (isMysqlSource && isNewRow) {
-          onEditCell(row, columnId, createMysqlDraftOmitValue());
+          onEditCell(row, columnId, codec.encodeOmit());
           return;
         }
         if (metadata.nillable === true) {
-          onEditCell(row, columnId, isMysqlSource ? createMysqlDraftNullValue() : null);
+          onEditCell(row, columnId, codec.encodeNull());
           return;
         }
         onShowMessage(`${columnId} 字段不允许为空。`);
@@ -139,7 +136,7 @@ export function createCellEditedHandler({
         return;
       }
 
-      onEditCell(row, columnId, isMysqlSource ? createMysqlDraftValue(normalizedDatetime) : normalizedDatetime);
+      onEditCell(row, columnId, codec.encodeValue(normalizedDatetime));
       return;
     }
 
@@ -150,7 +147,7 @@ export function createCellEditedHandler({
         return;
       }
       const nextValue = text === "true";
-      onEditCell(row, columnId, isMysqlSource ? createMysqlDraftValue(nextValue) : nextValue);
+      onEditCell(row, columnId, codec.encodeValue(nextValue));
       return;
     }
 
@@ -162,22 +159,22 @@ export function createCellEditedHandler({
       }
       if (isMysqlSource && num === undefined) {
         if (isNewRow) {
-          onEditCell(row, columnId, createMysqlDraftOmitValue());
+          onEditCell(row, columnId, codec.encodeOmit());
           return;
         }
         if (metadata.nillable === true) {
-          onEditCell(row, columnId, createMysqlDraftNullValue());
+          onEditCell(row, columnId, codec.encodeNull());
           return;
         }
         onShowMessage(`${columnId} 字段不允许为空。`);
         return;
       }
-      onEditCell(row, columnId, isMysqlSource ? createMysqlDraftValue(num) : num);
+      onEditCell(row, columnId, codec.encodeValue(num));
       return;
     }
 
     const nextText = extractEditableString(newValue);
-    onEditCell(row, columnId, isMysqlSource ? createMysqlDraftValue(nextText) : nextText);
+    onEditCell(row, columnId, codec.encodeValue(nextText));
   };
 }
 
