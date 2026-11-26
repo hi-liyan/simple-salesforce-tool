@@ -27,12 +27,12 @@ export type QueryOverrides = {
   sortClause?: string;
 };
 
-// 统一工作区 Tab 项：用于在 Query 视图中同时承载 data 与 console。
+// 统一工作区 Tab 项：用于在 Query 视图中同时承载 data、console 与 plugin。
 export type QueryWorkspaceTabItem = {
-  // 唯一 ID（例如 data:Account / console:soql-tab-xxx）。
+  // 唯一 ID（例如 data:Account / console:soql-tab-xxx / plugin:com.sst.qr-code）。
   id: string;
-  // Tab 类型：data=对象查询，console=查询控制台。
-  kind: "data" | "console";
+  // Tab 类型：data=对象查询，console=查询控制台，plugin=独立插件。
+  kind: "data" | "console" | "plugin";
   // Tab 标题。
   title: string;
   // Tab 绑定的数据源 ID：供左侧树定位当前激活来源。
@@ -94,7 +94,7 @@ export type QueryPanelViewState = {
   // 当前激活的统一工作区 Tab ID。
   activeWorkspaceTabId: string;
   // 当前激活的统一工作区 Tab 类型。
-  activeWorkspaceTabKind: "data" | "console";
+  activeWorkspaceTabKind: "data" | "console" | "plugin";
 };
 
 // QueryPanel 交互回调：将行为从渲染层抽离，便于未来替换实现。

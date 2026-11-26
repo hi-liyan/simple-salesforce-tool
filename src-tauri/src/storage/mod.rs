@@ -1,3 +1,4 @@
+pub mod ai_repo;
 pub mod audit_repo;
 pub mod automation_repo;
 pub mod bootstrap;

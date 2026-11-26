@@ -7,6 +7,7 @@ import { QueryPaginationToolbar } from "../../../../components/DataGrid/componen
 import { NoticeAlert } from "../../../../components/NoticeAlert";
 import { SoqlMonacoEditor } from "../../../../components/SoqlMonacoEditor";
 import { api } from "../../../../api";
+import { getDataSourceDriver } from "../../../../drivers/registry";
 import { useAppStore } from "../../../../store/useAppStore";
 import { buildObjectTabBindingKey, MutationPreviewItem, Notice, ObjectDdl, TabState } from "../../../../types";
 import { buildMysqlMutationPlan, mergeMysqlPreviewSqlItems } from "../logic/mysqlMutationPlanner.ts";
@@ -1559,10 +1560,10 @@ export function DataQueryTabPane({
                 selectedRecordIds={activeTab.selectedRecordIds}
                 readOnlyMode={Boolean(mysqlResultReadonlyReason)}
                 readOnlyReasonText={mysqlResultReadonlyReason}
-                salesforceTimezone={salesforceTimezone}
+                displayTimezone={salesforceTimezone}
                 pendingDeleteRecordIds={pendingDeleteRecordIds}
                 sourceId={selectedSourceId}
-                selectedSourceType={selectedSourceType}
+                gridAdapter={getDataSourceDriver(selectedSourceType).gridAdapter}
                 objectName={activeTab.objectName}
                 scrollStateKey={`query:${activeTab.bindingKey}`}
                 onPageSizeChange={handlePageSizeChange}

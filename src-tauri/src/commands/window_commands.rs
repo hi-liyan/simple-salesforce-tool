@@ -229,17 +229,22 @@ pub async fn open_field_meta_window(
     Ok(())
 }
 
-/// 分页查询系统日志(倒序)。
+/// 分页查询系统日志(倒序，异步线程池执行)。
 #[tauri::command]
-pub fn list_system_logs(
-    state: State<'_, AppState>,
+pub async fn list_system_logs(
+    app: tauri::AppHandle,
     page: i64,
     page_size: i64,
 ) -> Result<SystemLogPage, String> {
-    state
-        .storage
-        .read(|connection| db::list_system_logs(connection, page, page_size))
-        .map_err(AppError::to_string_error)
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        state
+            .storage
+            .read(|connection| db::list_system_logs(connection, page, page_size))
+            .map_err(AppError::to_string_error)
+    })
+    .await
+    .map_err(|e| format!("查询系统日志线程失败: {e}"))?
 }
 
 

@@ -184,6 +184,23 @@ pub trait DataSourceDriver: Send + Sync {
         object_name: &'a str,
         record_id: &'a str,
     ) -> BoxFuture<'a, Result<(), AppError>>;
+
+    /// 按主键按需读取单个大字段完整内容（默认返回不支持）。
+    fn read_cell_full_value<'a>(
+        &'a self,
+        _source: &'a SalesforceSource,
+        _object_name: &'a str,
+        _primary_key_field: &'a str,
+        _primary_key_value: &'a str,
+        _column_name: &'a str,
+    ) -> BoxFuture<'a, Result<Option<String>, AppError>> {
+        let kind = self.kind();
+        Box::pin(async move {
+            Err(AppError::Biz(format!(
+                "数据源类型 {kind} 暂不支持按需读取大字段"
+            )))
+        })
+    }
 }
 
 /// 驱动注册表：统一管理全部已接入的数据源驱动实例。

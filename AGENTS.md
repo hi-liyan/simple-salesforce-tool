@@ -31,8 +31,9 @@
 
 ### 1. 多数据源抽象约束（禁止硬编码分支）
 - **后端**：所有数据源能力必须通过 `drivers/mod.rs` 中的 `DataSourceDriver` Trait + `ProviderCapabilities` + `DriverRegistry` 接入；连接池与物理客户端由 `ConnectionManager` 统一托管与驱逐。**禁止**在 `commands/`、`services/` 或 `storage/` 中新增 `if source.is_salesforce()`、`if source_type == "mysql"` 等硬编码数据源分支。
-- **前端**：所有数据源差异必须收口至 `src/drivers/<kind>/` 并通过 `getDataSourceDriver(sourceType)` 获取。**禁止**在通用组件（尤其是 `DataGrid`、`SourcePanel`、`DataSourceSelector`、`QueryPanel`）中直接判断 `sourceType === "mysql"` 或反向导入特定数据源的逻辑文件（如 `mysqlValueSemantics.ts`）。
-- **DataGrid 抽象**：表格组件必须通过 `GridAdapter` 消费主键解析、空值文本、草稿值编解码、字段编辑器与右键菜单，保持数据源无关性。
+- **前端**：所有数据源差异必须收口至 `src/drivers/<kind>/` 并通过 `getDataSourceDriver(sourceType)` 获取。**禁止**在通用组件（尤其是 `DataGrid`、`DataSourceSelector`、`QueryPanel`、`SourceConnectionModal`）中直接判断 `sourceType === "mysql"` 或反向导入特定数据源的逻辑文件（如 `mysqlValueSemantics.ts`），**严禁**出现特定数据源命名的 Props 或变量。
+- **连接表单 Schema 驱动**：所有数据源的新建、编辑与复制**必须**统一复用 `src/features/source-manager/SourceConnectionModal.tsx`；各驱动的连接字段、默认值、密钥回填（`extractFormValues`）与 Payload 构造（`buildPayload`）**必须**声明在 `DataSourceDriver.connectionSchema` 中，**严禁**在侧边栏、设置页或其它业务组件中自建连接弹窗或硬编码表单。
+- **DataGrid 抽象与大字段按需加载**：表格组件仅允许通过 `gridAdapter` 与 `displayTimezone` 消费主键解析、空值文本、草稿值编解码、字段编辑器与右键菜单，保持数据源无关性。查询列表中的超大文本 / BLOB 字段（超过 `MAX_INLINE_CELL_CHARS = 4096` 字符）**必须**在后端驱动层截断为预览并附加 `__truncatedFields` 元信息；前端展示截断标识并禁止行内覆写，由用户触发时通过 `DataSourceDriver::read_cell_full_value` 按主键按需拉取完整内容。
 
 ### 2. UI 风格、窗口与布局约束
 - **视觉规范**：全面采用 **Islands 大圆角浮岛风格**（浅灰画布底壳 + 白色大圆角浮岛卡片 `rounded-xl`/`12px` + `6px–8px` 呼吸间隙 + `1px` 极细边框）。
@@ -66,3 +67,24 @@
 ### 7. 目录与单文件体量约束
 - **后端（`src-tauri/src/`）**：严格按 `domain/`、`drivers/`、`services/`、`storage/`、`commands/`、`modules/` 分层；禁止在 `commands/` 中内嵌业务校验或 SQL 拼接逻辑。
 - **前端（`src/`）**：严格按 `core/`、`drivers/`、`plugins/`、`layouts/`、`components/`（纯 UI 无数据源耦合）、`features/` 组织；单文件组件建议控制在 400 行以内，严禁再次出现上千行的巨型 God File。
+
+### 8. 前端核心功能域目录与标准扩展规范
+- **核心功能域目录职责**：
+  - `src/features/source-manager/`：统一数据源连接向导（`SourceConnectionModal`）与跨组件操作事件总线（`sourceModalEvents`）。
+  - `src/features/settings/`：居中浮岛设置中心（`SettingsModal`，快捷键 `Ctrl + ,`）及独立分区 `sections/`；设置页只承载应用配置，**严禁**混入数据源管理列表或系统日志。
+  - `src/features/logs/`：统一日志与 SQL 审计中心（`LogAuditModal`），整合 `SqlAuditTab`（`sql_execution_audit`）与 `SystemLogsTab`（`system_logs`）。
+  - `src/features/terminal/`：VSCode 风格底部集成终端抽屉（`BottomConsoleDrawer`，快捷键 `Ctrl + \`` 呼出/收起，隐藏时保持 PTY 存活，纯内存不持久化）与常用命令面板（`SavedCommandsPanel` + `CommandEditorModal`）。
+- **标准扩展路径（新增功能必须按以下方式接入）**：
+  1. **扩展新数据源**：后端在 `src-tauri/src/drivers/<kind>/` 实现 `DataSourceDriver` Trait（含 `read_cell_full_value`）并注册至 `DriverRegistry`，连接池交由 `ConnectionManager` 托管；前端在 `src/drivers/<kind>/` 实现 `DataSourceDriver`（含 `capabilities`、`treeConfig`、`gridAdapter`、`connectionSchema`）并注册至 `src/drivers/registry.ts`。
+  2. **扩展新设置分区**：在 `src/features/settings/sections/` 新建独立组件（建议 < 300 行），在 `SettingsModal.tsx` 注册导航项，使用 `api.getAppSetting` / `api.setAppSetting` 按 key 增量读写。
+  3. **扩展新工具或辅助面板**：在 `src/plugins/builtin/<plugin-id>/` 按标准插件规范开发并注册至 `src/plugins/builtin/index.ts`，仅通过 `PluginContext` 与宿主通信。
+
+### 9. Tauri 线程安全与性能防阻塞规范
+- **后端命令异步化铁律**：所有涉及外部子进程（如 `sf` CLI）、网络请求、PTY 终端操作、文件 IO 或 SQLite 读写（含 `SQLITE_BUSY` 重试）的 `#[tauri::command]`，**必须**声明为 `pub async fn`，并通过 `tauri::async_runtime::spawn_blocking`（使用 `app: tauri::AppHandle` 获取 `AppState`）在后台线程池执行。**严禁**在同步 `#[tauri::command]` 中执行阻塞操作，以免冻结 Tauri 窗口主线程。
+- **连接池复用铁律**：关系型数据库驱动**必须**通过 `ConnectionManager` 按 `source_id + config_hash` 缓存与复用连接池，配置更新或删除时调用 `evict`；**严禁**每次查询或元数据请求临时创建并销毁连接池。
+- **自绘标题栏拖拽规范**：`CustomTitleBar` 仅在纯空白区域设置 `data-tauri-drag-region`（使用独立弹性 Spacer），并通过非交互区域左键 `onMouseDown` 显式调用 `startDragging()`（单击）与 `toggleMaximize()`（双击）。
+- **前端分包与启动首屏规范**：`vite.config.ts` 必须保持 `manualChunks` 独立拆分重型依赖（React/State、Monaco、CodeMirror、DataGrid、Xterm）；`src/App.tsx` 按窗口 `label` 懒加载页面入口；禁止引入全量大体积本地字体包阻塞首屏；CLI 同步与外部插件扫描等非首屏必需任务必须延迟至启动空闲窗口后台执行。
+
+### 10. 代码整洁度与编译零警告规范
+- **禁止全局抑制警告**：**严禁**在文件顶部添加 `#![allow(dead_code, unused_imports)]` 掩盖编译警告；重构替换后的旧模块、死代码与无用导入必须同步清理删除，仅对明确保留的架构接口或测试辅助函数使用精准的局部 `#[allow(dead_code)]`。
+- **交付验证铁律**：任何代码提交前，必须确保 `npm run build`（`tsc && vite build`）、`cargo check`、`cargo test` 与对应模块的前端单元测试全部通过。

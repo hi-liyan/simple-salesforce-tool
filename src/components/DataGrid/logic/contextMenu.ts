@@ -1,9 +1,9 @@
 import { isCellEditableByMeta } from "../utils/field.ts";
-import { getDataSourceDriver } from "../../../drivers/registry.ts";
+import type { GridAdapter } from "../../../drivers/types.ts";
 
 type ResolveRowContextMenuCapabilitiesInput = {
-  // 当前数据源类型：用于区分 Salesforce/MySQL 行为。
-  selectedSourceType?: string;
+  // 数据源表格适配器。
+  gridAdapter: GridAdapter;
   // 当前字段元数据。
   metadata: Record<string, unknown>;
   // 当前命中的是否为新建行。
@@ -42,12 +42,11 @@ function hasMysqlColumnDefault(metadata: Record<string, unknown>): boolean {
 
 // 统一推导行右键菜单能力，避免渲染层散落条件分支。
 export function resolveRowContextMenuCapabilities({
-  selectedSourceType,
+  gridAdapter,
   metadata,
   isNewRow,
   isDataColumn
 }: ResolveRowContextMenuCapabilitiesInput): RowContextMenuCapabilities {
-  const { gridAdapter } = getDataSourceDriver(selectedSourceType);
   const editable = isDataColumn && isCellEditableByMeta(metadata, isNewRow);
   const canSetNullish = editable && isNullableField(metadata);
   const canSetDefaultValue = editable && gridAdapter.supportsDefaultValueAction && hasMysqlColumnDefault(metadata);

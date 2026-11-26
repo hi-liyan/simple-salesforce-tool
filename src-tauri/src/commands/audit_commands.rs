@@ -1,4 +1,4 @@
-use tauri::State;
+use tauri::{Manager, State};
 
 use crate::app_state::AppState;
 use crate::drivers::ProviderCapabilities;
@@ -33,14 +33,19 @@ pub fn check_sql_safety(
     )
 }
 
-/// 查询 SQL 执行审计日志。
+/// 查询 SQL 执行审计日志（异步线程池执行）。
 #[tauri::command]
-pub fn list_sql_execution_audits(
-    state: State<'_, AppState>,
+pub async fn list_sql_execution_audits(
+    app: tauri::AppHandle,
     source_id: Option<String>,
     limit: Option<i64>,
 ) -> Result<Vec<SqlExecutionAuditEntry>, String> {
-    AuditService::new(&state.storage)
-        .list_sql_audits(source_id.as_deref(), limit.unwrap_or(100))
-        .map_err(AppError::to_string_error)
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        AuditService::new(&state.storage)
+            .list_sql_audits(source_id.as_deref(), limit.unwrap_or(100))
+            .map_err(AppError::to_string_error)
+    })
+    .await
+    .map_err(|e| format!("查询 SQL 审计线程失败: {e}"))?
 }

@@ -203,6 +203,7 @@ export function useSourceTreeState({
             sourceType: String(selectedSource.sourceType || "salesforce"),
             objectName: item.name,
             label: item.label || item.name,
+            comment: item.comment?.trim() || undefined,
             queryable: item.queryable,
             expandable: false
           }))

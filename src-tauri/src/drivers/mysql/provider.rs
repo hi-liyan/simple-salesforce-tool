@@ -533,6 +533,43 @@ impl MySqlProvider {
         })
     }
 
+    /// 按主键按需读取单个大字段完整内容（用于 BLOB / 长文本截断预览展开）。
+    pub async fn read_cell_full_value(
+        &self,
+        source: &SalesforceSource,
+        object_name: &str,
+        primary_key_field: &str,
+        primary_key_value: &str,
+        column_name: &str,
+    ) -> Result<Option<String>, AppError> {
+        let safe_table = ensure_safe_identifier(object_name, "表名")?;
+        let safe_pk = ensure_safe_identifier(primary_key_field, "主键列名")?;
+        let safe_col = ensure_safe_identifier(column_name, "字段名")?;
+        let config = MySqlSourceConfig::from_source(source)?;
+        let pool = self.acquire_pool(source, &config).await?;
+
+        let sql = format!("SELECT `{safe_col}` FROM `{safe_table}` WHERE `{safe_pk}` = ? LIMIT 1");
+        let row = sqlx::query(&sql)
+            .bind(primary_key_value)
+            .fetch_optional(&pool)
+            .await
+            .map_err(|error| AppError::Db(format!("按需读取大字段失败: {error}")))?;
+
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let col_info = row.columns().first();
+        let runtime_type = col_info
+            .map(|c| c.type_info().name().to_string())
+            .unwrap_or_default();
+        let value = row_try_get_json_value(&row, &safe_col, &runtime_type);
+        Ok(match value {
+            Value::Null => None,
+            Value::String(s) => Some(s),
+            other => Some(value_to_string(&other)),
+        })
+    }
+
     /// MySQL 数据源无 Salesforce 用户上下文，返回空值。
     pub async fn get_current_user_context(
         &self,
@@ -1440,18 +1477,38 @@ fn push_bind_json_value(builder: &mut QueryBuilder<'_, MySql>, value: &Value) {
     };
 }
 
-/// 将数据库行转换为 JSON 记录。
+/// 列表查询时单单元格内联返回的最大字符数，超出则截断并按需按主键拉取完整内容。
+const MAX_INLINE_CELL_CHARS: usize = 4096;
+
+/// 将数据库行转换为 JSON 记录（对超大字段做截断预览并记录 `__truncatedFields` 元信息）。
 fn row_to_json_record(
     row: &MySqlRow,
     actual_column_types: Option<&HashMap<String, String>>,
 ) -> HashMap<String, Value> {
     let mut item = HashMap::new();
+    let mut truncated_fields = serde_json::Map::new();
     for column in row.columns() {
         let name = column.name().to_string();
         let runtime_type = column.type_info().name().to_string();
         let mysql_type = resolve_mysql_result_type(&name, &runtime_type, actual_column_types);
         let value = row_try_get_json_value(row, &name, &mysql_type);
-        item.insert(name, value);
+        let final_value = match value {
+            Value::String(text) => {
+                let total_chars = text.chars().count();
+                if total_chars > MAX_INLINE_CELL_CHARS {
+                    let preview: String = text.chars().take(MAX_INLINE_CELL_CHARS).collect();
+                    truncated_fields.insert(name.clone(), Value::Number((total_chars as u64).into()));
+                    Value::String(format!("{preview}…"))
+                } else {
+                    Value::String(text)
+                }
+            }
+            other => other,
+        };
+        item.insert(name, final_value);
+    }
+    if !truncated_fields.is_empty() {
+        item.insert("__truncatedFields".to_string(), Value::Object(truncated_fields));
     }
     item
 }

@@ -22,6 +22,8 @@ export type GridDraftValue =
 
 // DataGrid 数据源适配器：将表格组件与具体数据源解耦。
 export interface GridAdapter {
+  // 驱动类型标识（供通用元数据格式化等纯适配层使用）。
+  sourceKind: string;
   // 空值显示占位符（如 "Null" / "None"）。
   nullPlaceholder: string;
   // 右键置空动作文案（如 "Set Null" / "Set None"）。

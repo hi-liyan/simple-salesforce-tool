@@ -39,6 +39,7 @@ export const mysqlDriver: DataSourceDriver = {
     objectSubFolders: ["columns", "keys", "indexes"]
   },
   gridAdapter: {
+    sourceKind: "mysql",
     nullPlaceholder: "Null",
     nullishActionLabel: "Set Null",
     supportsDefaultValueAction: true,

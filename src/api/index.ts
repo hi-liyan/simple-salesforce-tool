@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+export { aiApi } from "./ai.ts";
 import type {
   AiCapabilities,
   AiChatTurnV2Request,
@@ -101,6 +102,13 @@ export const api = {
     invokeApi<string | null>("resolve_field_child_relationship_name", { sourceId, objectName, fieldName }),
   queryRecords: (sourceId: string, soql: string, objectName?: string) =>
     invokeApi<QueryResult>("query_records", { sourceId, soql, objectName }),
+  readCellFullValue: (params: {
+    sourceId: string;
+    objectName: string;
+    primaryKeyField: string;
+    primaryKeyValue: string;
+    columnName: string;
+  }) => invokeApi<string | null>("read_cell_full_value", params),
   getCurrentUserContext: (sourceId: string) =>
     invokeApi<CurrentUserContext>("get_current_user_context", { sourceId }),
   createRecord: (payload: RecordMutationPayload) => invokeApi<string>("create_record", { payload }),

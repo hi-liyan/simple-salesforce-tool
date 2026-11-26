@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Plus, Table2, X } from "lucide-react";
+import { Plus, Sparkles, Table2, X } from "lucide-react";
+import { useAiStore } from "../../../../store/useAiStore";
 import { ContextMenu, type ContextMenuEntry } from "../../../../components/ContextMenu";
 import { DataGrid } from "../../../../components/DataGrid";
 import { NoticeAlert } from "../../../../components/NoticeAlert";
@@ -813,8 +814,8 @@ export function SoqlExecutorWorkspace({
                   readOnlyMode={true}
                   dirtyCellKeys={[]}
                   selectedRecordIds={activeTab.selectedRecordIds}
-                  salesforceTimezone={salesforceTimezone}
-                  selectedSourceType={effectiveSourceType}
+                  displayTimezone={salesforceTimezone}
+                  gridAdapter={getDataSourceDriver(effectiveSourceType).gridAdapter}
                   preserveColumnOrder={preserveRawColumns}
                   pendingDeleteRecordIds={[]}
                   enableReadonlyCellHint={false}
@@ -843,9 +844,29 @@ export function SoqlExecutorWorkspace({
                   ) : (
                     activeTab.logs.map((log) => (
                       <div key={log.id} className="mb-2 rounded border border-base-300 bg-base-100 p-2">
-                        <p className={`mb-1 block text-[12px] ${log.success ? "text-success" : "text-error"}`}>
-                          {formatLogTime(log.timestamp)} [{log.action}] {log.success ? "成功" : "失败"}
-                        </p>
+                        <div className="mb-1 flex items-center justify-between gap-2">
+                          <p className={`text-[12px] ${log.success ? "text-success" : "text-error"}`}>
+                            {formatLogTime(log.timestamp)} [{log.action}] {log.success ? "成功" : "失败"}
+                          </p>
+                          {!log.success && log.errorMessage && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                useAiStore.getState().triggerLaunchIntent({
+                                  prompt: `请分析并修复这条执行报错的语句：\n\`\`\`sql\n${log.request}\n\`\`\``,
+                                  action: "fix",
+                                  mode: "agent",
+                                  errorMessage: log.errorMessage,
+                                  autoSend: true
+                                })
+                              }
+                              className="inline-flex items-center gap-1 rounded-md bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary hover:bg-primary/20"
+                            >
+                              <Sparkles size={11} />
+                              <span>AI 修复</span>
+                            </button>
+                          )}
+                        </div>
                         <p className="block font-mono text-[12px]">请求: {log.request}</p>
                         <p className="block text-[12px]">响应: {log.summary}</p>
                         {log.errorMessage && <p className="block text-[12px] text-error">错误: {log.errorMessage}</p>}

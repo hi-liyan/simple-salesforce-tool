@@ -36,24 +36,24 @@ type DateTimeEditorProps = {
   editorKind: "date" | "datetime-local";
   // 字段是否可空。
   nillable: boolean;
-  // Salesforce 用户时区。
-  effectiveSalesforceTimezone: string | null;
+  // 展示与编辑时区（IANA）。
+  effectiveTimezone: string | null;
   // 用户提示回调。
   onShowMessage: (message: string) => void;
 };
 
-// Salesforce 风格日期/日期时间编辑器。
+// 日期/日期时间编辑器。
 export function DateTimeEditor({
   editorProps,
   columnId,
   editorKind,
   nillable,
-  effectiveSalesforceTimezone,
+  effectiveTimezone,
   onShowMessage
 }: DateTimeEditorProps) {
   const textValue = editorProps.value as TextCell;
   const currentText = String(textValue.data ?? "");
-  const initialDatetimeLocal = normalizeDatetimeLocalInputValue(currentText, effectiveSalesforceTimezone);
+  const initialDatetimeLocal = normalizeDatetimeLocalInputValue(currentText, effectiveTimezone);
   const initialDate = editorKind === "date"
     ? normalizeDateInputValue(currentText)
     : extractDatePartFromDatetimeLocal(initialDatetimeLocal);
@@ -61,15 +61,15 @@ export function DateTimeEditor({
   const [draftTime, setDraftTime] = useState(extractTimePartFromDatetimeLocal(initialDatetimeLocal));
   const [viewMonthStart, setViewMonthStart] = useState(() => {
     const selected = buildUtcDateFromDateLiteral(initialDate);
-    return startOfUtcMonth(selected || getTodayUtcDate(effectiveSalesforceTimezone));
+    return startOfUtcMonth(selected || getTodayUtcDate(effectiveTimezone));
   });
 
   const viewMonthYear = viewMonthStart.getUTCFullYear();
   const viewMonth = viewMonthStart.getUTCMonth();
   const yearOptions = useMemo(() => buildYearOptions(viewMonthYear, 8), [viewMonthYear]);
   const calendarCells = useMemo(
-    () => buildSalesforceCalendarCells(viewMonthStart, draftDate, getTodayDateLiteral(effectiveSalesforceTimezone)),
-    [viewMonthStart, draftDate, effectiveSalesforceTimezone]
+    () => buildSalesforceCalendarCells(viewMonthStart, draftDate, getTodayDateLiteral(effectiveTimezone)),
+    [viewMonthStart, draftDate, effectiveTimezone]
   );
 
   const commitEditorValue = (next: string) => {
@@ -109,10 +109,10 @@ export function DateTimeEditor({
   };
 
   const handlePickToday = () => {
-    const todayLiteral = getTodayDateLiteral(effectiveSalesforceTimezone);
+    const todayLiteral = getTodayDateLiteral(effectiveTimezone);
     handlePickDate(todayLiteral);
     if (editorKind === "datetime-local" && !draftTime) {
-      setDraftTime(getCurrentTimeHm(effectiveSalesforceTimezone)); // datetime 默认补齐当前时分，减少手动输入。
+      setDraftTime(getCurrentTimeHm(effectiveTimezone)); // datetime 默认补齐当前时分，减少手动输入。
     }
   };
 

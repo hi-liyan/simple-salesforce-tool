@@ -31,6 +31,11 @@ const MIGRATIONS: &[Migration] = &[
         id: "2026-11-26-v3-installed-plugins",
         up: migrate_v3_installed_plugins,
     },
+    Migration {
+        version: 4,
+        id: "2026-11-26-v4-ai-assistant",
+        up: migrate_v4_ai_assistant,
+    },
 ];
 
 /// 执行版本化增量迁移：基于 `PRAGMA user_version` 在事务内幂等推进。
@@ -199,6 +204,54 @@ fn rebuild_object_constraints_with_fk(tx: &Transaction<'_>) -> Result<(), AppErr
     Ok(())
 }
 
+/// V4 增量迁移：创建 AI 助手多配置、会话持久化与提示词模板表。
+fn migrate_v4_ai_assistant(tx: &Transaction<'_>) -> Result<(), AppError> {
+    tx.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS ai_configs (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            api_style TEXT NOT NULL DEFAULT 'completions',
+            base_url TEXT NOT NULL,
+            model TEXT NOT NULL,
+            timeout_ms INTEGER NOT NULL DEFAULT 60000,
+            is_default INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_configs_single_default
+        ON ai_configs(is_default)
+        WHERE is_default = 1;
+
+        CREATE TABLE IF NOT EXISTS ai_conversations (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            source_id TEXT NOT NULL DEFAULT '',
+            source_name TEXT NOT NULL DEFAULT '',
+            mode TEXT NOT NULL DEFAULT 'ask',
+            messages_json TEXT NOT NULL DEFAULT '[]',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_ai_conversations_updated_at
+        ON ai_conversations(updated_at DESC);
+
+        CREATE TABLE IF NOT EXISTS ai_prompt_templates (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            category TEXT NOT NULL DEFAULT 'general',
+            content TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        "#,
+    )?;
+    Ok(())
+}
+
 /// 判断是否已存在无 `user_version` 的旧版 v2 `schema_meta`。
 fn has_existing_v2_schema_meta(connection: &Connection) -> Result<bool, AppError> {
     let has_table: Option<String> = connection
@@ -317,7 +370,7 @@ mod tests {
         let user_version: i64 = storage
             .read(|conn| Ok(conn.query_row("PRAGMA user_version", [], |row| row.get(0))?))
             .unwrap();
-        assert_eq!(user_version, 3, "迁移完成后应推进到最新版本 3");
+        assert_eq!(user_version, 4, "迁移完成后应推进到最新版本 4");
 
         // 验证 V2 新建表与索引已就位，且未产生 stale backup。
         let has_stale_backup = fs::read_dir(&root)

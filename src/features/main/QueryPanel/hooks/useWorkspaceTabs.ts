@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { sortTabsByOrder, moveTabOrder } from "../../../../components/tabs/tabOrder";
+import { usePluginTabsStore } from "../../../../store/usePluginTabsStore";
 import { useQueryWorkspaceTabsStore } from "../../../../store/useQueryWorkspaceTabsStore";
 import {
   buildConsoleWorkspaceTabId,
   buildDataWorkspaceTabId,
+  buildPluginWorkspaceTabId,
   buildWorkspaceTabs,
   parseWorkspaceTabId,
   resolveActiveWorkspaceTabId,
@@ -37,10 +39,17 @@ export function useWorkspaceTabs({
   activeDataObjectName,
   activeConsoleTabId
 }: UseWorkspaceTabsInput) {
+  // 已打开的工作区插件 Tab 列表。
+  const pluginTabs = usePluginTabsStore((state) => state.pluginTabs);
+  const pendingActivatePluginId = usePluginTabsStore((state) => state.pendingActivatePluginId);
+  const clearPendingActivatePluginId = usePluginTabsStore((state) => state.clearPendingActivatePluginId);
   // 当前激活工作区 Tab ID：由 UI 层控制并与 store 双向同步。
   const [activeWorkspaceTabId, setActiveWorkspaceTabId] = useState("");
   // 统一工作区原始 Tab 列表：用于计算增量与基础映射。
-  const baseWorkspaceTabs = useMemo(() => buildWorkspaceTabs(dataTabs, consoleTabs), [dataTabs, consoleTabs]);
+  const baseWorkspaceTabs = useMemo(
+    () => buildWorkspaceTabs(dataTabs, consoleTabs, pluginTabs),
+    [dataTabs, consoleTabs, pluginTabs]
+  );
   // 全局工作区持久化顺序：data/console 混排，不再按 source 分桶。
   const workspaceTabOrder = useQueryWorkspaceTabsStore(useCallback((state) => state.getTabOrder(), []));
   // 回写工作区顺序。
@@ -77,11 +86,20 @@ export function useWorkspaceTabs({
     setActiveWorkspaceTabId(nextWorkspaceTabId); // 回写修正后的激活态。
   }, [workspaceTabs, activeWorkspaceTabId, activeDataObjectName, activeConsoleTabId]);
 
-  // 当 data 侧主动切换对象 Tab 时，若当前不是 console 焦点，则同步工作区激活态。
+  // 当外部（如插件中心）打开或聚焦插件 Tab 时，立即将工作区焦点切到对应 plugin:* Tab。
+  useEffect(() => {
+    if (!pendingActivatePluginId) return;
+    const targetId = buildPluginWorkspaceTabId(pendingActivatePluginId);
+    if (!workspaceTabs.some((t) => t.id === targetId)) return;
+    setActiveWorkspaceTabId(targetId);
+    clearPendingActivatePluginId();
+  }, [clearPendingActivatePluginId, pendingActivatePluginId, workspaceTabs]);
+
+  // 当 data 侧主动切换对象 Tab 时，若当前不是 console/plugin 焦点，则同步工作区激活态。
   useEffect(() => {
     if (!activeDataObjectName) return;
     const current = parseWorkspaceTabId(activeWorkspaceTabId);
-    if (current?.kind === "console") return; // 用户明确在 console，不覆盖焦点。
+    if (current?.kind === "console" || current?.kind === "plugin") return; // 用户明确在 console 或插件 Tab，不覆盖焦点。
     const nextWorkspaceTabId = buildDataWorkspaceTabId(activeDataObjectName);
     if (nextWorkspaceTabId === activeWorkspaceTabId) return;
     setActiveWorkspaceTabId(nextWorkspaceTabId); // 保持 data 焦点与工作区一致。
@@ -104,7 +122,7 @@ export function useWorkspaceTabs({
     [activeWorkspaceTabId]
   );
   // 当前激活工作区类型：默认 data，保证 Query 页面可渲染。
-  const activeWorkspaceTabKind: "data" | "console" = activeWorkspaceTabParsed?.kind || "data";
+  const activeWorkspaceTabKind: "data" | "console" | "plugin" = activeWorkspaceTabParsed?.kind || "data";
 
   return {
     workspaceTabs,

@@ -261,6 +261,10 @@ function QuerySourceTreeNodeComponent({
           >
             {isColumnNode ? data.columnName : data.label}
           </span>
+          {/* 表/对象注释：存在非空 comment 时以弱化辅助样式紧跟在表名右侧展示。 */}
+          {isObjectNode && data.comment && (
+            <span className="whitespace-nowrap text-[11px] text-base-content/45">{data.comment}</span>
+          )}
           {(data.kind === "group" || isObjectFolderNode) && typeof data.count === "number" && (
             <span className="shrink-0 text-[11px] text-base-content/45">{data.count}</span>
           )}

@@ -1,10 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Braces, Crosshair, Plus, RefreshCw } from "lucide-react";
 import type { ObjectDdl, ObjectDescribe, SalesforceObject, SalesforceSource } from "../../../../types";
 import type { QuerySourceObjectSearchResult } from "../logic/sourceObjectSearch.ts";
-import { resolveConsoleTargetSource } from "../logic/querySidebarConsoleSource.ts";
-import { emitOpenSourceModal } from "../../../source-manager/sourceModalEvents.ts";
-import { QuerySidebarActions, type QuerySidebarActionItem } from "./QuerySidebarActions";
 import { QuerySidebarSearch } from "./QuerySidebarSearch";
 import { QuerySourceTree } from "./QuerySourceTree";
 
@@ -47,10 +43,8 @@ type QuerySidebarProps = {
 export function QuerySidebar({
   sources,
   selectedSourceId,
-  pageLoading,
   objectsLoading,
   onOpenAuthWindow,
-  onChangeSource,
   onRefreshSources,
   onOpenConsole,
   onShowMessage,
@@ -58,9 +52,7 @@ export function QuerySidebar({
   activeTabObjectName,
   onOpenObject,
   onNotQueryableObjectClick,
-  onRefreshMysqlObjectMetadata,
-  objectListMode = "list",
-  activeWorkspaceTreeTarget = null
+  onRefreshMysqlObjectMetadata
 }: QuerySidebarProps) {
   type QuerySourceTreeActions = {
     refreshFocusedSource: () => Promise<void>;
@@ -82,8 +74,6 @@ export function QuerySidebar({
   const [treeFocusedSourceId, setTreeFocusedSourceId] = useState("");
   // 搜索请求序号：仅允许最后一轮搜索写回结果，避免旧请求覆盖新关键字或新数据源。
   const searchRequestSeqRef = useRef(0);
-  // 当前激活工作区是否具备可定位的左树目标。
-  const canLocateActiveWorkspaceNode = Boolean(activeWorkspaceTreeTarget?.sourceId);
   // 当前聚焦数据源 ID：左树已就绪时优先使用树内焦点，否则回退到页面选中源。
   const focusedSourceId = treeFocusedSourceId || selectedSourceId;
   // 当前聚焦数据源信息：用于搜索范围提示和结果打开时兜底。
@@ -95,11 +85,6 @@ export function QuerySidebar({
   // 接收左树动作句柄：使用 ref 承接，避免内部回调身份变化触发整块侧边栏反复重渲染。
   function handleTreeReady(actions: QuerySourceTreeActions) {
     treeActionsRef.current = actions;
-  }
-
-  // 打开统一新建数据源弹窗。
-  function openCreateSourceModal() {
-    emitOpenSourceModal("create");
   }
 
   // 根据关键字搜索当前聚焦数据源：复用左树缓存并带轻量延迟，避免输入时抖动。
@@ -181,71 +166,8 @@ export function QuerySidebar({
     })();
   }
 
-  // 左侧动作区：统一用配置项渲染，便于未来按数据库类型扩展更多动作。
-  const actionItems: QuerySidebarActionItem[] = [
-    {
-      id: "create-source",
-      icon: Plus,
-      ariaLabel: "新增数据源",
-      onClick: openCreateSourceModal
-    },
-    {
-      id: "refresh-source",
-      icon: RefreshCw,
-      ariaLabel: "刷新数据源",
-      onClick: () => {
-        const focusedSourceId = treeFocusedSourceId || selectedSourceId;
-        if (!focusedSourceId) {
-          onRefreshSources();
-          return;
-        }
-        void (async () => {
-          if (treeActionsRef.current) {
-            await treeActionsRef.current.refreshFocusedSource(); // 行内注释：顶部按钮统一复用树内单次强刷链路，避免按钮层串两段刷新。
-            return;
-          }
-          await onRefreshSources(focusedSourceId);
-        })();
-      }
-    },
-    {
-      id: "open-console",
-      icon: Braces,
-      ariaLabel: "查询控制台",
-      onClick: () => {
-        if (!onOpenConsole) return;
-        const targetSource = resolveConsoleTargetSource({
-          sources,
-          activeWorkspaceSourceId: activeWorkspaceTreeTarget?.sourceId,
-          focusedSourceId: treeFocusedSourceId,
-          selectedSourceId
-        });
-        onOpenConsole(targetSource || undefined); // 点击后按当前工作数据源优先创建对应来源的控制台 Tab。
-      }
-    },
-    {
-      id: "locate-active-workspace-node",
-      icon: Crosshair,
-      ariaLabel: "定位当前标签节点",
-      disabled: !canLocateActiveWorkspaceNode,
-      onClick: () => {
-        if (!activeWorkspaceTreeTarget) return;
-        void treeActionsRef.current?.locateNodeByTarget({
-          sourceId: activeWorkspaceTreeTarget.sourceId,
-          objectName: activeWorkspaceTreeTarget.kind === "data" ? activeWorkspaceTreeTarget.objectName : undefined
-        }); // 点击后将左树滚动到当前激活工作区对应的 source/object 节点。
-      }
-    }
-  ];
-
   return (
     <>
-      {/* 数据源动作区：统一放置“新增/刷新/查询控制台”按钮。 */}
-      <div className="border-b border-base-300 px-3 py-2">
-        {/* 动作按钮行。 */}
-        <QuerySidebarActions actions={actionItems} disabled={pageLoading} />
-      </div>
-
       {/* 左侧快速搜索：针对当前聚焦数据源检索 Object/表。 */}
       <QuerySidebarSearch
         keyword={searchKeyword}

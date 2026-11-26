@@ -221,4 +221,25 @@ impl DataSourceDriver for MySqlDriver {
                 .await
         })
     }
+
+    fn read_cell_full_value<'a>(
+        &'a self,
+        source: &'a SalesforceSource,
+        object_name: &'a str,
+        primary_key_field: &'a str,
+        primary_key_value: &'a str,
+        column_name: &'a str,
+    ) -> BoxFuture<'a, Result<Option<String>, AppError>> {
+        Box::pin(async move {
+            self.inner
+                .read_cell_full_value(
+                    source,
+                    object_name,
+                    primary_key_field,
+                    primary_key_value,
+                    column_name,
+                )
+                .await
+        })
+    }
 }

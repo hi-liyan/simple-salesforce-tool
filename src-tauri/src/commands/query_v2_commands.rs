@@ -142,3 +142,32 @@ pub async fn commit_mutation_plan(
         .await
         .map_err(AppError::to_string_error)
 }
+
+/// 按主键按需读取单个大字段完整内容（用于列表截断后的展开查看）。
+#[tauri::command]
+pub async fn read_cell_full_value(
+    state: State<'_, AppState>,
+    source_id: String,
+    object_name: String,
+    primary_key_field: String,
+    primary_key_value: String,
+    column_name: String,
+) -> Result<Option<String>, String> {
+    let source = crate::services::source_service::SourceService::new(&state.storage)
+        .get_runtime_source(&source_id)
+        .map_err(AppError::to_string_error)?;
+    let driver = state
+        .driver_registry
+        .get(&source.source_type)
+        .map_err(AppError::to_string_error)?;
+    driver
+        .read_cell_full_value(
+            &source,
+            &object_name,
+            &primary_key_field,
+            &primary_key_value,
+            &column_name,
+        )
+        .await
+        .map_err(AppError::to_string_error)
+}
