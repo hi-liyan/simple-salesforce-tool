@@ -4,6 +4,7 @@ import { DateTimeEditor } from "./dateTimeEditor";
 import { SelectEditor } from "./selectEditor";
 import { getPicklistEditorOptions } from "../utils/picklist";
 import { resolveFieldTypeStrategy } from "../logic/fieldTypeStrategy";
+import type { GridAdapter } from "../../../drivers/types";
 
 type DataEditorProvideEditor = NonNullable<React.ComponentProps<typeof DataEditor>["provideEditor"]>;
 
@@ -16,8 +17,10 @@ type CreateProvideEditorParams = {
   columns: GridColumn[];
   // 字段元数据：用于推断编辑器类型。
   fieldMetadataMap: Record<string, Record<string, unknown>>;
-  // Salesforce 用户时区。
-  effectiveSalesforceTimezone: string | null;
+  // 数据源表格适配器。
+  gridAdapter: GridAdapter;
+  // 展示与编辑时区。
+  effectiveTimezone: string | null;
   // 用户提示回调。
   onShowMessage: (message: string) => void;
 };
@@ -28,7 +31,8 @@ export function createProvideEditor({
   activeEditorCellRef,
   columns,
   fieldMetadataMap,
-  effectiveSalesforceTimezone,
+  gridAdapter,
+  effectiveTimezone,
   onShowMessage
 }: CreateProvideEditorParams): DataEditorProvideEditor {
   return (cell) => {
@@ -41,7 +45,7 @@ export function createProvideEditor({
     if (!columnId || columnId.startsWith("__")) return undefined;
 
     const metadata = fieldMetadataMap[columnId] || {};
-    const strategy = resolveFieldTypeStrategy(metadata);
+    const strategy = resolveFieldTypeStrategy(metadata, gridAdapter);
 
     // picklist/boolean 使用下拉；date/datetime 使用 Salesforce 风格日历面板。
     let editorKind: "select" | "date" | "datetime-local" | null = null;
@@ -72,7 +76,7 @@ export function createProvideEditor({
           columnId={columnId}
           editorKind={editorKind}
           nillable={metadata.nillable === true}
-          effectiveSalesforceTimezone={effectiveSalesforceTimezone}
+          effectiveTimezone={effectiveTimezone}
           onShowMessage={onShowMessage}
         />
       );

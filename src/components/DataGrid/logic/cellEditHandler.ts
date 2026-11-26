@@ -6,7 +6,7 @@ import type {
   Item
 } from "@glideapps/glide-data-grid";
 import { normalizeDateValueForSave } from "../utils/datetime.ts";
-import { getDataSourceDriver } from "../../../drivers/registry.ts";
+import type { GridAdapter } from "../../../drivers/types.ts";
 import {
   buildReadonlyCellMessage,
   isCellEditableByMeta,
@@ -29,10 +29,10 @@ type CreateCellEditedHandlerParams = {
   records: Record<string, unknown>[];
   // 字段元数据：用于校验可编辑性与类型规则。
   fieldMetadataMap: Record<string, Record<string, unknown>>;
-  // Salesforce 用户时区：用于 datetime 保存时规范化。
-  effectiveSalesforceTimezone: string | null;
-  // 当前数据源类型：用于区分 Salesforce/MySQL 保存格式。
-  selectedSourceType?: string;
+  // 展示与编辑时区：用于 datetime 保存时规范化。
+  effectiveTimezone: string | null;
+  // 数据源表格适配器。
+  gridAdapter: GridAdapter;
   // 单元格编辑回调。
   onEditCell: (rowIndex: number, columnName: string, value: unknown) => void;
   // 用户提示回调。
@@ -44,12 +44,11 @@ export function createCellEditedHandler({
   columns,
   records,
   fieldMetadataMap,
-  effectiveSalesforceTimezone,
-  selectedSourceType,
+  effectiveTimezone,
+  gridAdapter,
   onEditCell,
   onShowMessage
 }: CreateCellEditedHandlerParams): (location: Item, newValue: EditableGridCell) => void {
-  const gridAdapter = getDataSourceDriver(selectedSourceType).gridAdapter;
   const { codec } = gridAdapter;
   return ([col, row], newValue) => {
     const columnId = String(columns[col]?.id ?? "");
@@ -124,7 +123,7 @@ export function createCellEditedHandler({
         return;
       }
 
-      const normalizedDatetime = gridAdapter.normalizeDatetimeForSave(nextText, effectiveSalesforceTimezone);
+      const normalizedDatetime = gridAdapter.normalizeDatetimeForSave(nextText, effectiveTimezone);
       if (!normalizedDatetime) {
         onShowMessage(`${columnId} 字段仅支持日期时间格式。`);
         return;
@@ -179,31 +178,53 @@ type CreateCellClickedHandlerParams = {
   records: Record<string, unknown>[];
   // 字段元数据：用于提示只读或无选项场景。
   fieldMetadataMap: Record<string, Record<string, unknown>>;
+  // 数据源表格适配器。
+  gridAdapter: GridAdapter;
   // 是否启用只读提示逻辑。
   enableReadonlyCellHint: boolean;
+  // 双击截断大字段时按需展开完整内容回调。
+  onInspectTruncatedCell?: (params: {
+    record: Record<string, unknown>;
+    columnName: string;
+    totalChars: number;
+    previewText: string;
+  }) => void;
   // 用户提示回调。
   onShowMessage: (message: string) => void;
 };
 
-// 构建点击处理器：双击只读提示 + picklist 配置校验提示。
+// 构建点击处理器：双击大字段展开 + 只读提示 + picklist 配置校验提示。
 export function createCellClickedHandler({
   columns,
   records,
   fieldMetadataMap,
+  gridAdapter,
   enableReadonlyCellHint,
+  onInspectTruncatedCell,
   onShowMessage
 }: CreateCellClickedHandlerParams): (cell: Item, event: CellClickedEventArgs) => void {
   return (cell, event) => {
     const [col, row] = cell;
     const columnId = String(columns[col]?.id ?? "");
-    if (!enableReadonlyCellHint) return;
     if (!event.isDoubleClick) return;
     if (!columnId || columnId.startsWith("__")) return;
 
     const record = records[row] || {};
+    const truncatedTotal = (record.__truncatedFields as Record<string, unknown> | undefined)?.[columnId];
+    if (typeof truncatedTotal === "number" && onInspectTruncatedCell) {
+      onInspectTruncatedCell({
+        record,
+        columnName: columnId,
+        totalChars: truncatedTotal,
+        previewText: String(record[columnId] ?? "")
+      });
+      return;
+    }
+
+    if (!enableReadonlyCellHint) return;
     const isNewRow = Boolean(record.__isNew);
     const metadata = fieldMetadataMap[columnId] || {};
-    const strategy = resolveFieldTypeStrategy(metadata);
+    const strategy = resolveFieldTypeStrategy(metadata, gridAdapter);
 
     if (!isCellEditableByMeta(metadata, isNewRow)) {
       // 双击只读格时给出明确原因，避免用户误以为表格卡住或点击未生效。

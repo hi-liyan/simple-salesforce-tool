@@ -1,7 +1,7 @@
 import { useCallback } from "react";
 import { api } from "../../../api";
 import { RowContextMenuState } from "../types";
-import { getDataSourceDriver } from "../../../drivers/registry.ts";
+import type { GridAdapter } from "../../../drivers/types.ts";
 
 type UseDataGridMenuActionsParams = {
   // 当前右键菜单状态。
@@ -12,8 +12,8 @@ type UseDataGridMenuActionsParams = {
   sourceId?: string;
   // 当前对象 API 名称。
   objectName?: string;
-  // 当前数据源类型：用于区分 Set None / Set Null 的实际写入语义。
-  selectedSourceType?: string;
+  // 数据源表格适配器：用于区分 Set None / Set Null 编解码语义。
+  gridAdapter: GridAdapter;
   // 单元格编辑回调。
   onEditCell: (rowIndex: number, columnName: string, value: unknown) => void;
   // 用户提示回调。
@@ -26,11 +26,11 @@ export function useDataGridMenuActions({
   setRowContextMenu,
   sourceId,
   objectName,
-  selectedSourceType,
+  gridAdapter,
   onEditCell,
   onShowMessage
 }: UseDataGridMenuActionsParams) {
-  const { codec } = getDataSourceDriver(selectedSourceType).gridAdapter;
+  const { codec } = gridAdapter;
   // 打开 Salesforce 记录页：后端校验 token 后直接打开系统浏览器。
   const openRecordPageFromMenu = useCallback(async () => {
     if (!rowContextMenu) return;

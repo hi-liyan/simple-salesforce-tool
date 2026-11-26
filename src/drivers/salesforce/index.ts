@@ -30,6 +30,7 @@ export const salesforceDriver: DataSourceDriver = {
     objectSubFolders: []
   },
   gridAdapter: {
+    sourceKind: "salesforce",
     nullPlaceholder: "None",
     nullishActionLabel: "Set None",
     supportsDefaultValueAction: false,

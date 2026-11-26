@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import type { GridColumn } from "@glideapps/glide-data-grid";
 import { buildHeaderDisplayLines } from "../renderers/drawHeader.ts";
 import { estimateAutoColumnWidth } from "../utils/columnWidth.ts";
+import type { GridAdapter } from "../../../drivers/types.ts";
 
 // 默认列宽采样行数：按表头 + 前 50 行内容估算，兼顾体验与性能。
 const DEFAULT_COLUMN_WIDTH_SAMPLE_ROWS = 50;
@@ -17,10 +18,10 @@ type UseDataGridColumnsParams = {
   showHeaderMetadata: boolean;
   // 当前记录列表：用于推导可选记录 Id。
   records: Record<string, unknown>[];
-  // 字段元数据映射：MySQL 下用于识别主键列（columnKey=PRI）。
+  // 字段元数据映射：用于识别主键列。
   fieldMetadataMap: Record<string, Record<string, unknown>>;
-  // 当前数据源类型：用于按源类型切换记录 Id 提取策略。
-  selectedSourceType?: string;
+  // 数据源表格适配器：用于统一解析主键列。
+  gridAdapter: GridAdapter;
   // 当前分页偏移量：用于让序号列宽度按“真实最大序号”自适应。
   currentOffset?: number;
 };
@@ -106,7 +107,7 @@ export function useDataGridColumns({
   showHeaderMetadata,
   records,
   fieldMetadataMap,
-  selectedSourceType,
+  gridAdapter,
   currentOffset = 0
 }: UseDataGridColumnsParams) {
   // 列宽状态：支持用户拖拽后即时更新列宽。
@@ -186,14 +187,11 @@ export function useDataGridColumns({
     [displayColumns, headerMinWidths, columnWidths, autoColumnWidths]
   );
 
-  // MySQL 主键列：用于缺失 Id 时的勾选回退键。
-  const mysqlPrimaryKeyField = useMemo(() => {
-    if ((selectedSourceType || "salesforce").toLowerCase() !== "mysql") return "";
-    const field = Object.entries(fieldMetadataMap).find(
-      ([, metadata]) => String(metadata?.columnKey || "").toUpperCase() === "PRI"
-    )?.[0];
-    return field || "";
-  }, [fieldMetadataMap, selectedSourceType]);
+  // 统一通过 GridAdapter 解析主键列，用于缺失 Id 时的勾选回退键。
+  const primaryKeyField = useMemo(
+    () => gridAdapter.resolvePrimaryKeyField(fieldMetadataMap),
+    [fieldMetadataMap, gridAdapter]
+  );
 
   const selectableIds = useMemo(
     () =>
@@ -205,15 +203,15 @@ export function useDataGridColumns({
         if (fromId !== null && fromId !== undefined && String(fromId).trim() !== "") {
           return String(fromId);
         }
-        if (mysqlPrimaryKeyField) {
-          const fromPrimary = item[mysqlPrimaryKeyField];
+        if (primaryKeyField) {
+          const fromPrimary = item[primaryKeyField];
           if (fromPrimary !== null && fromPrimary !== undefined && String(fromPrimary).trim() !== "") {
             return String(fromPrimary);
           }
         }
         return `row:${index}`;
       }),
-    [records, mysqlPrimaryKeyField]
+    [records, primaryKeyField]
   );
 
   return {

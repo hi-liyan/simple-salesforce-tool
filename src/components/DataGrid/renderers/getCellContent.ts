@@ -1,7 +1,7 @@
 import { GridCellKind } from "@glideapps/glide-data-grid";
 import type { GridCell, GridColumn, Item } from "@glideapps/glide-data-grid";
 import { buildCellThemeOverride, buildRowThemeOverride } from "../logic/rowTheme.ts";
-import { getDataSourceDriver } from "../../../drivers/registry.ts";
+import type { GridAdapter } from "../../../drivers/types.ts";
 import {
   isCellEditableByMeta,
   isRequiredOnCreate
@@ -31,10 +31,10 @@ type CreateGetCellContentParams = {
   dirtyCellSet: Set<string>;
   // 待删除记录集合：用于整行灰色高亮。
   pendingDeleteRecordSet: Set<string>;
-  // Salesforce 用户时区：用于 datetime 显示对齐。
-  effectiveSalesforceTimezone: string | null;
-  // 当前数据源类型：用于区分 Salesforce/MySQL 展示策略。
-  selectedSourceType?: string;
+  // 展示与编辑时区：用于 datetime 显示对齐。
+  effectiveTimezone: string | null;
+  // 数据源表格适配器：用于区分展示策略。
+  gridAdapter: GridAdapter;
   // 行键提取器：统一获取 recordId。
   getRecordKey: (rowIndex: number) => string;
   // 当前分页偏移量：用于把序号列渲染为跨页连续编号。
@@ -51,13 +51,12 @@ export function createGetCellContent({
   selectedRecordSet,
   dirtyCellSet,
   pendingDeleteRecordSet,
-  effectiveSalesforceTimezone,
-  selectedSourceType,
+  effectiveTimezone,
+  gridAdapter,
   getRecordKey,
   currentOffset = 0,
   allowReadonlyOverlay = false
 }: CreateGetCellContentParams): (cell: Item) => GridCell {
-  const { gridAdapter } = getDataSourceDriver(selectedSourceType);
   const nullPlaceholderText = gridAdapter.nullPlaceholder;
   return ([col, row]) => {
     const columnId = String(columns[col]?.id ?? "");
@@ -152,7 +151,7 @@ export function createGetCellContent({
 
     if (strategy === "datetime") {
       // 按数据源适配器格式化日期时间展示值。
-      const text = gridAdapter.formatDatetimeDisplay(cellValue, effectiveSalesforceTimezone);
+      const text = gridAdapter.formatDatetimeDisplay(cellValue, effectiveTimezone);
       return {
         kind: GridCellKind.Text,
         // datetime 单元格展示为 Salesforce 日期时间格式（YYYY-MM-DDTHH:mm:ss.SSS+0000）。
@@ -183,12 +182,18 @@ export function createGetCellContent({
     }
 
     const text = stringifyCellValue(cellValue);
+    const truncatedTotal = (record.__truncatedFields as Record<string, unknown> | undefined)?.[columnId];
+    const isTruncatedLargeField = typeof truncatedTotal === "number";
     return {
       kind: GridCellKind.Text,
       data: text,
-      displayData: isNullishValue ? nullPlaceholderText : text,
-      allowOverlay: editable || allowReadonlyOverlay,
-      readonly: !editable,
+      displayData: isNullishValue
+        ? nullPlaceholderText
+        : isTruncatedLargeField
+          ? `[大字段 ${(truncatedTotal / 1024).toFixed(1)}K · 双击查看] ${text.slice(0, 120)}`
+          : text,
+      allowOverlay: isTruncatedLargeField ? false : (editable || allowReadonlyOverlay),
+      readonly: isTruncatedLargeField ? true : !editable,
       themeOverride: commonTheme,
       style: nullPlaceholderStyle
     };

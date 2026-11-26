@@ -3,7 +3,10 @@ import { listen } from "@tauri-apps/api/event";
 import { api } from "../api";
 import { Blocks, Cpu, Trash2, Upload, X } from "lucide-react";
 import { NoticeAlert } from "../components/NoticeAlert";
-import { listDataSourceDrivers } from "../drivers/registry";
+import { listDataSourceDrivers, getDataSourceDriver } from "../drivers/registry";
+import { AiAssistantPanel } from "../features/ai/AiAssistantPanel";
+import { useAiStore } from "../store/useAiStore";
+import type { AiWorkspaceContextBridge } from "../types/ai";
 import { useMainPageQueryPanel } from "../features/main/QueryPanel/hooks/useMainPageQueryPanel";
 import { AppShellLayout } from "../layouts/AppShellLayout";
 import { CustomTitleBar } from "../layouts/CustomTitleBar";
@@ -156,6 +159,15 @@ export function MainPage() {
   const [driverManagerOpen, setDriverManagerOpen] = useState(false);
   // 当前打开的工作区插件 ID（当 viewMode === "tools" 且通过插件中心打开指定插件时使用）。
   const [activeWorkspacePluginId, setActiveWorkspacePluginId] = useState<string | null>(null);
+  const aiDockOpen = useAiStore((state) => state.dockOpen);
+  const aiDockMaximized = useAiStore((state) => state.dockMaximized);
+  const aiDockWidth = useAiStore((state) => state.dockWidth);
+  const toggleAiDockOpen = useAiStore((state) => state.toggleDockOpen);
+  const setAiDockOpen = useAiStore((state) => state.setDockOpen);
+  const setAiDockWidth = useAiStore((state) => state.setDockWidth);
+  const consoleTabs = useSoqlExecutorStore((state) => state.tabs);
+  const activeConsoleTabId = useSoqlExecutorStore((state) => state.activeTabId);
+  const patchConsoleTab = useSoqlExecutorStore((state) => state.patchTab);
 
   // 认证凭证刷新计数器：用于处理并发 API 请求下的开始/结束配对。
   const tokenRefreshingCountRef = useRef(0);
@@ -449,24 +461,65 @@ export function MainPage() {
   const registeredPlugins = useMemo(() => listPlugins(), [pluginCenterOpen, pluginRegistryTick]);
   const registeredDrivers = useMemo(() => listDataSourceDrivers(), []);
 
+  // 构建 AI 助手工作区上下文桥接：实时同步当前控制台数据源、草稿、选区与写回/执行动作。
+  const aiWorkspaceBridge = useMemo<AiWorkspaceContextBridge>(() => {
+    const activeConsoleTab =
+      consoleTabs.find((tab) => tab.id === activeConsoleTabId) || consoleTabs[0] || null;
+    const boundSourceId = activeConsoleTab?.sourceId || queryPanelViewState.selectedSourceId || "";
+    const boundSource =
+      queryPanelViewState.sources.find((s) => s.id === boundSourceId) || null;
+    const boundSourceType = String(
+      boundSource?.sourceType || activeConsoleTab?.sourceType || queryPanelViewState.selectedSourceType || "salesforce"
+    );
+    const driver = getDataSourceDriver(boundSourceType);
+
+    return {
+      sourceId: boundSourceId,
+      sourceName: boundSource?.name || activeConsoleTab?.sourceName || "",
+      sourceType: boundSourceType,
+      queryLanguage: driver.capabilities.queryLanguage,
+      currentEditorSql: activeConsoleTab?.soqlDraft || "",
+      selectedEditorSql: activeConsoleTab?.selectedSoqlText || "",
+      availableObjects: queryPanelViewState.objects.map((obj) => obj.name),
+      onReplaceEditorSql: (sql) => {
+        if (activeConsoleTab) {
+          patchConsoleTab(activeConsoleTab.id, (tab) => ({ ...tab, soqlDraft: sql }));
+          queryPanelActions.onSetViewMode("query");
+          return;
+        }
+        queryPanelActions.onSetViewMode("query");
+        queryPanelActions.onOpenConsole(boundSource || undefined, sql);
+      },
+      onOpenNewConsoleWithSql: (sql) => {
+        queryPanelActions.onSetViewMode("query");
+        queryPanelActions.onOpenConsole(boundSource || undefined, sql);
+      },
+      onExecuteSqlDirect: (sql) => {
+        queryPanelActions.onSetViewMode("query");
+        queryPanelActions.onOpenConsole(boundSource || undefined, sql);
+      }
+    };
+  }, [
+    activeConsoleTabId,
+    consoleTabs,
+    patchConsoleTab,
+    queryPanelActions,
+    queryPanelViewState.objects,
+    queryPanelViewState.selectedSourceId,
+    queryPanelViewState.selectedSourceType,
+    queryPanelViewState.sources
+  ]);
+
   return (
     <AppShellLayout
       titleBar={
         <CustomTitleBar
-          aiDockOpen={Boolean(rightDockPluginId)}
+          aiDockOpen={aiDockOpen}
           onToggleAiDock={() => {
-            if (rightDockPluginId) {
+            if (!aiDockOpen && rightDockPluginId) {
               setRightDockPluginId(null);
-              return;
             }
-            const dockPlugin = registeredPlugins.find(
-              (plugin) => plugin.enabled !== false && plugin.mountTargets.includes("dock-right")
-            );
-            if (dockPlugin) {
-              setRightDockPluginId(dockPlugin.id);
-              return;
-            }
-            setPluginCenterOpen(true);
+            toggleAiDockOpen();
           }}
           onNewConnection={() => setSourceModalState({ open: true, mode: "create", source: null })}
           onNewQuery={() => {
@@ -937,8 +990,56 @@ export function MainPage() {
           />
         </div>
 
+        {/* 右侧停靠 AI 助手浮岛（参考 dbx：支持拖拽调宽、最大化与实时流式工具调用）。 */}
+        {aiDockOpen && (
+          <div
+            className="flex h-full shrink-0"
+            style={{ width: aiDockMaximized ? "58%" : `${aiDockWidth}px` }}
+          >
+            {!aiDockMaximized && (
+              <div
+                role="separator"
+                aria-orientation="vertical"
+                title="拖拽调整 AI 面板宽度"
+                onPointerDown={(event) => {
+                  event.preventDefault();
+                  const startX = event.clientX;
+                  const startWidth = aiDockWidth;
+                  const prevCursor = document.body.style.cursor;
+                  const prevSelect = document.body.style.userSelect;
+                  document.body.style.cursor = "col-resize";
+                  document.body.style.userSelect = "none";
+
+                  const onMove = (moveEvent: PointerEvent) => {
+                    const delta = startX - moveEvent.clientX;
+                    setAiDockWidth(startWidth + delta);
+                  };
+                  const onUp = () => {
+                    document.body.style.cursor = prevCursor;
+                    document.body.style.userSelect = prevSelect;
+                    window.removeEventListener("pointermove", onMove);
+                    window.removeEventListener("pointerup", onUp);
+                  };
+                  window.addEventListener("pointermove", onMove);
+                  window.addEventListener("pointerup", onUp);
+                }}
+                className="group relative -ml-1.5 w-2 shrink-0 cursor-col-resize select-none"
+              >
+                <div className="absolute inset-y-3 left-[3px] w-[2px] rounded-full bg-transparent transition-colors group-hover:bg-primary/35" />
+              </div>
+            )}
+            <div className="min-w-0 flex-1">
+              <AiAssistantPanel
+                workspaceBridge={aiWorkspaceBridge}
+                onOpenAiSettings={() => setSettingsModalOpen(true)}
+                onClose={() => setAiDockOpen(false)}
+              />
+            </div>
+          </div>
+        )}
+
         {/* 右侧停靠插件浮岛（如命令库 / 局域网文件接收）。 */}
-        {rightDockPluginId && dockPluginContext && (
+        {!aiDockOpen && rightDockPluginId && dockPluginContext && (
           <aside className="flex h-full w-[320px] shrink-0 flex-col overflow-hidden rounded-xl border border-base-300/80 bg-base-100 shadow-2xs">
             <div className="flex h-9 shrink-0 items-center justify-between border-b border-base-300/70 px-3 text-[12px]">
               <span className="font-semibold">{getPlugin(rightDockPluginId)?.name || "插件面板"}</span>

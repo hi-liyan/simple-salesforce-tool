@@ -16,8 +16,11 @@ import { useDataGridContextMenu } from "./hooks/useDataGridContextMenu";
 import { useHeaderMetaPopover } from "./hooks/useHeaderMetaPopover";
 import { useDataGridMenuActions } from "./hooks/useDataGridMenuActions";
 import { DataGridSurface } from "./components/DataGridSurface";
+import { LargeCellViewerModal } from "./components/LargeCellViewerModal";
 import { useDataGridRuntimeScroll } from "../../store/useDataGridScrollStore";
-import { getDataSourceDriver } from "../../drivers/registry";
+import { salesforceDriver } from "../../drivers/salesforce";
+import type { GridAdapter } from "../../drivers/types";
+import { api } from "../../api";
 
 export type DataGridProps = {
   result: QueryResult;
@@ -33,12 +36,12 @@ export type DataGridProps = {
   readOnlyMode?: boolean;
   // 结果集只读原因：开启只读模式时透传到单元格提示文案。
   readOnlyReasonText?: string;
-  // Salesforce 当前用户时区（IANA），用于 datetime 与 Salesforce Web 行为对齐。
-  salesforceTimezone?: string | null;
-  // 当前选中的数据源 ID：用于打开 Salesforce 记录页（可选）。
+  // 展示与编辑时区（IANA）。
+  displayTimezone?: string | null;
+  // 当前选中的数据源 ID（用于按需加载大字段或打开外部记录页）。
   sourceId?: string;
-  // 当前数据源类型：用于控制 Salesforce 专属菜单项显隐。
-  selectedSourceType?: string;
+  // 数据源表格适配器（由调用方通过驱动注册表注入，默认回退 Salesforce 适配器）。
+  gridAdapter?: GridAdapter;
   // 是否严格保留 visibleColumns 的输入顺序。
   preserveColumnOrder?: boolean;
   // 当前对象 API 名称：用于打开 Salesforce 记录页（可选）。
@@ -73,9 +76,9 @@ export function DataGrid({
   selectedRecordIds,
   readOnlyMode = false,
   readOnlyReasonText = "",
-  salesforceTimezone,
+  displayTimezone,
   sourceId,
-  selectedSourceType,
+  gridAdapter = salesforceDriver.gridAdapter,
   preserveColumnOrder = false,
   objectName,
   pendingDeleteRecordIds,
@@ -107,20 +110,16 @@ export function DataGrid({
     }, {} as Record<string, Record<string, unknown>>);
   }, [fieldMetadataMap, readOnlyMode, readOnlyReasonText]);
 
-  // 仅在时区字符串合法时启用 Salesforce 用户时区；非法值自动回退浏览器本地时区。
-  const effectiveSalesforceTimezone = useMemo(
-    () => resolveSalesforceTimezone(salesforceTimezone),
-    [salesforceTimezone]
+  // 仅在时区字符串合法时启用；非法值自动回退浏览器本地时区。
+  const effectiveTimezone = useMemo(
+    () => resolveSalesforceTimezone(displayTimezone),
+    [displayTimezone]
   );
-  // 通过 GridAdapter 解析当前数据源驱动与主键字段，消除表格组件硬编码分支。
-  const gridAdapter = useMemo(
-    () => getDataSourceDriver(selectedSourceType).gridAdapter,
-    [selectedSourceType]
+  // 通过 GridAdapter 解析当前数据源的主键字段，消除表格组件硬编码分支。
+  const primaryKeyField = useMemo(
+    () => gridAdapter.resolvePrimaryKeyField(effectiveFieldMetadataMap),
+    [effectiveFieldMetadataMap, gridAdapter]
   );
-  const mysqlPrimaryKeyField = useMemo(() => {
-    const resolved = gridAdapter.resolvePrimaryKeyField(effectiveFieldMetadataMap);
-    return resolved === "Id" ? "" : resolved;
-  }, [effectiveFieldMetadataMap, gridAdapter]);
 
   const { columns, setColumnWidths, headerMinWidths, selectableIds } = useDataGridColumns({
     visibleColumns,
@@ -128,7 +127,7 @@ export function DataGrid({
     showHeaderMetadata,
     records,
     fieldMetadataMap: effectiveFieldMetadataMap,
-    selectedSourceType,
+    gridAdapter,
     currentOffset
   });
 
@@ -148,13 +147,22 @@ export function DataGrid({
   // 当前激活单元格：用于 provideEditor 判断是否为 picklist 编辑。
   const [activeEditorCell, setActiveEditorCell] = useState<Item | null>(null);
   const activeEditorCellRef = useRef<Item | null>(null);
+  // 截断大字段按需检视弹窗状态。
+  const [largeCellTarget, setLargeCellTarget] = useState<{
+    columnName: string;
+    totalChars: number;
+    previewText: string;
+    loading: boolean;
+    fullText: string | null;
+    error: string;
+  } | null>(null);
 
   const { openRecordPageFromMenu, copyCellValueFromMenu, setCellNullishFromMenu, setCellDefaultValueFromMenu } = useDataGridMenuActions({
     rowContextMenu,
     setRowContextMenu,
     sourceId,
     objectName,
-    selectedSourceType,
+    gridAdapter,
     onEditCell,
     onShowMessage
   });
@@ -163,15 +171,10 @@ export function DataGrid({
     const record = records[rowIndex] || {};
     if (record.__rowStableId) return String(record.__rowStableId);
     if (record.__localId) return String(record.__localId);
-    if (record.Id) return String(record.Id);
-    if (mysqlPrimaryKeyField) {
-      const value = record[mysqlPrimaryKeyField];
-      if (value !== null && value !== undefined && String(value).trim() !== "") {
-        return String(value);
-      }
-    }
+    const resolvedKey = gridAdapter.resolveRecordKey(record, primaryKeyField);
+    if (resolvedKey) return resolvedKey;
     return `row:${rowIndex}`;
-  }, [records, mysqlPrimaryKeyField]);
+  }, [records, gridAdapter, primaryKeyField]);
 
   const getCellContent = useMemo(
     () =>
@@ -182,8 +185,8 @@ export function DataGrid({
         selectedRecordSet,
         dirtyCellSet,
         pendingDeleteRecordSet,
-        effectiveSalesforceTimezone,
-        selectedSourceType,
+        effectiveTimezone,
+        gridAdapter,
         getRecordKey,
         currentOffset,
         allowReadonlyOverlay
@@ -195,8 +198,8 @@ export function DataGrid({
       selectedRecordSet,
       dirtyCellSet,
       pendingDeleteRecordSet,
-      effectiveSalesforceTimezone,
-      selectedSourceType,
+      effectiveTimezone,
+      gridAdapter,
       getRecordKey,
       currentOffset,
       allowReadonlyOverlay
@@ -209,8 +212,8 @@ export function DataGrid({
         columns,
         records,
         fieldMetadataMap: effectiveFieldMetadataMap,
-        effectiveSalesforceTimezone,
-        selectedSourceType,
+        effectiveTimezone,
+        gridAdapter,
         onEditCell,
         onShowMessage
       }),
@@ -218,11 +221,55 @@ export function DataGrid({
       columns,
       records,
       effectiveFieldMetadataMap,
-      effectiveSalesforceTimezone,
-      selectedSourceType,
+      effectiveTimezone,
+      gridAdapter,
       onEditCell,
       onShowMessage
     ]
+  );
+
+  // 双击截断大字段时弹出检视窗并按主键按需拉取完整内容。
+  const handleInspectTruncatedCell = useCallback(
+    (params: { record: Record<string, unknown>; columnName: string; totalChars: number; previewText: string }) => {
+      const pkField = primaryKeyField || (params.record.Id !== undefined ? "Id" : "");
+      const pkValue = pkField ? params.record[pkField] : undefined;
+      const canFetchFull = Boolean(sourceId && objectName && pkField && pkValue !== null && pkValue !== undefined);
+
+      setLargeCellTarget({
+        columnName: params.columnName,
+        totalChars: params.totalChars,
+        previewText: params.previewText,
+        loading: canFetchFull,
+        fullText: null,
+        error: ""
+      });
+
+      if (!canFetchFull || !sourceId || !objectName) return;
+
+      void api
+        .readCellFullValue({
+          sourceId,
+          objectName,
+          primaryKeyField: pkField,
+          primaryKeyValue: String(pkValue),
+          columnName: params.columnName
+        })
+        .then((full) => {
+          setLargeCellTarget((prev) =>
+            prev && prev.columnName === params.columnName
+              ? { ...prev, loading: false, fullText: full ?? "" }
+              : prev
+          );
+        })
+        .catch((err) => {
+          setLargeCellTarget((prev) =>
+            prev && prev.columnName === params.columnName
+              ? { ...prev, loading: false, error: String(err) }
+              : prev
+          );
+        });
+    },
+    [primaryKeyField, sourceId, objectName]
   );
 
   const handleCellClicked = useMemo(
@@ -231,10 +278,12 @@ export function DataGrid({
         columns,
         records,
         fieldMetadataMap: effectiveFieldMetadataMap,
+        gridAdapter,
         enableReadonlyCellHint,
+        onInspectTruncatedCell: handleInspectTruncatedCell,
         onShowMessage
       }),
-    [columns, records, effectiveFieldMetadataMap, enableReadonlyCellHint, onShowMessage]
+    [columns, records, effectiveFieldMetadataMap, gridAdapter, enableReadonlyCellHint, handleInspectTruncatedCell, onShowMessage]
   );
 
   const handleCellsEdited = useCallback((newValues: readonly EditListItem[]) => {
@@ -264,14 +313,16 @@ export function DataGrid({
         activeEditorCellRef,
         columns,
         fieldMetadataMap: effectiveFieldMetadataMap,
-        effectiveSalesforceTimezone,
+        gridAdapter,
+        effectiveTimezone,
         onShowMessage
       }),
     [
       activeEditorCell,
       columns,
       effectiveFieldMetadataMap,
-      effectiveSalesforceTimezone,
+      gridAdapter,
+      effectiveTimezone,
       onShowMessage
     ]
   );
@@ -298,48 +349,53 @@ export function DataGrid({
   }
 
   return (
-    <DataGridSurface
-      records={records}
-      columns={columns}
-      fieldMetadataMap={effectiveFieldMetadataMap}
-      selectedSourceType={selectedSourceType}
-      selectedRecordIds={selectedRecordIds}
-      showHeaderMetadata={showHeaderMetadata}
-      selectableIds={selectableIds}
-      gridBodyRef={gridBodyRef}
-      rowContextMenu={rowContextMenu}
-      hoveredHeaderMeta={hoveredHeaderMeta}
-      metaPanelHovering={metaPanelHovering}
-      cancelMetaClose={cancelMetaClose}
-      scheduleMetaClose={scheduleMetaClose}
-      setMetaPanelHovering={setMetaPanelHovering}
-      setRowContextMenu={setRowContextMenu}
-      setHoveredHeaderMeta={setHoveredHeaderMeta}
-      setColumnWidths={setColumnWidths}
-      headerMinWidths={headerMinWidths}
-      activeEditorCellRef={activeEditorCellRef}
-      setActiveEditorCell={setActiveEditorCell}
-      canOpenRecordPage={Boolean(sourceId && objectName && rowContextMenu?.recordId)}
-      showOpenRecordPage={(selectedSourceType || "salesforce").toLowerCase() === "salesforce"}
-      onToggleAll={onToggleAll}
-      onCopyCell={() => {
-        void copyCellValueFromMenu();
-      }}
-      onSetNullish={setCellNullishFromMenu}
-      onSetDefaultValue={setCellDefaultValueFromMenu}
-      onOpenRecordPage={() => {
-        void openRecordPageFromMenu();
-      }}
-      getCellContent={getCellContent}
-      onCellEdited={handleCellEdited}
-      onCellClicked={handleCellClicked}
-      onCellsEdited={handleCellsEdited}
-      onPaste={handlePaste}
-      provideEditor={provideEditor}
-      drawHeader={drawHeader}
-      scrollOffsetX={scrollOffsetX}
-      scrollOffsetY={scrollOffsetY}
-      onScrollOffsetChange={onScrollOffsetChange}
-    />
+    <>
+      <DataGridSurface
+        records={records}
+        columns={columns}
+        fieldMetadataMap={effectiveFieldMetadataMap}
+        gridAdapter={gridAdapter}
+        selectedRecordIds={selectedRecordIds}
+        showHeaderMetadata={showHeaderMetadata}
+        selectableIds={selectableIds}
+        gridBodyRef={gridBodyRef}
+        rowContextMenu={rowContextMenu}
+        hoveredHeaderMeta={hoveredHeaderMeta}
+        metaPanelHovering={metaPanelHovering}
+        cancelMetaClose={cancelMetaClose}
+        scheduleMetaClose={scheduleMetaClose}
+        setMetaPanelHovering={setMetaPanelHovering}
+        setRowContextMenu={setRowContextMenu}
+        setHoveredHeaderMeta={setHoveredHeaderMeta}
+        setColumnWidths={setColumnWidths}
+        headerMinWidths={headerMinWidths}
+        activeEditorCellRef={activeEditorCellRef}
+        setActiveEditorCell={setActiveEditorCell}
+        canOpenRecordPage={Boolean(sourceId && objectName && rowContextMenu?.recordId)}
+        showOpenRecordPage={gridAdapter.supportsOpenRecordPage}
+        onToggleAll={onToggleAll}
+        onCopyCell={() => {
+          void copyCellValueFromMenu();
+        }}
+        onSetNullish={setCellNullishFromMenu}
+        onSetDefaultValue={setCellDefaultValueFromMenu}
+        onOpenRecordPage={() => {
+          void openRecordPageFromMenu();
+        }}
+        getCellContent={getCellContent}
+        onCellEdited={handleCellEdited}
+        onCellClicked={handleCellClicked}
+        onCellsEdited={handleCellsEdited}
+        onPaste={handlePaste}
+        provideEditor={provideEditor}
+        drawHeader={drawHeader}
+        scrollOffsetX={scrollOffsetX}
+        scrollOffsetY={scrollOffsetY}
+        onScrollOffsetChange={onScrollOffsetChange}
+      />
+
+      {/* 超大字段按需加载检视弹窗。 */}
+      <LargeCellViewerModal target={largeCellTarget} onClose={() => setLargeCellTarget(null)} />
+    </>
   );
 }

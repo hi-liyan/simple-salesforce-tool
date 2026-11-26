@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { GridCellKind } from "@glideapps/glide-data-grid";
 import { createCellEditedHandler } from "../../src/components/DataGrid/logic/cellEditHandler.ts";
+import { mysqlDriver } from "../../src/drivers/mysql/index.ts";
 import {
   createMysqlDraftNullValue,
   createMysqlDraftOmitValue,
@@ -21,8 +22,8 @@ function createMysqlHandler(params?: {
     fieldMetadataMap: {
       price: params?.metadata || { mysqlDataType: "int", type: "int", nillable: true }
     },
-    effectiveSalesforceTimezone: null,
-    selectedSourceType: "mysql",
+    effectiveTimezone: null,
+    gridAdapter: mysqlDriver.gridAdapter,
     onEditCell: (rowIndex, columnName, value) => {
       edited.push({ rowIndex, columnName, value });
     },

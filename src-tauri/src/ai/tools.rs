@@ -1,380 +1,552 @@
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
-use serde::Deserialize;
+use chrono::Utc;
 use serde_json::{json, Value};
-use tauri::Manager;
 
-use crate::app_state::AppState;
-use crate::commands;
+use crate::ai::events::{AiAssistantMode, ToolCall, ToolDefinition, ToolResult};
+use crate::drivers::{DriverRegistry, ProviderCapabilities};
+use crate::services::metadata_service::MetadataService;
+use crate::services::query_service::QueryService;
+use crate::services::source_service::SourceService;
+use crate::services::sql_guard::{evaluate_sql_safety, SqlGuardContext, SqlGuardDecision};
+use crate::storage::Storage;
 
-/// AI 工具统一错误类型：将内部错误文本化后回传给模型。
-#[derive(Debug, thiserror::Error)]
-#[error("{message}")]
-pub struct AiToolError {
-    /// 错误消息文本。
-    pub message: String,
+/// 单次工具返回最大字符数（防止超大结果撑爆模型上下文）。
+const MAX_TOOL_OUTPUT_CHARS: usize = 12_000;
+
+/// Agent 运行时工具上下文（封装存储、驱动注册表与写操作确认快照）。
+pub struct AgentToolContext<'a> {
+    /// SQLite 存储入口。
+    pub storage: &'a Storage,
+    /// 数据源驱动注册表。
+    pub driver_registry: &'a DriverRegistry,
+    /// 目标数据源 ID。
+    pub source_id: String,
+    /// 数据源运行环境（default / prod 等）。
+    pub environment: String,
+    /// 数据源是否只读。
+    pub read_only: bool,
+    /// 驱动能力声明矩阵。
+    pub capabilities: ProviderCapabilities,
+    /// 前端已确认执行的精确写操作 SQL（Fail-Closed）。
+    pub confirmed_write_sql: Option<String>,
+    /// 前端确认时绑定的数据源 ID 快照。
+    pub confirmed_source_id: Option<String>,
 }
 
-impl AiToolError {
-    /// 快速构建错误对象。
-    fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
+/// 截断过长的工具文本输出。
+fn truncate_tool_output(raw: String) -> String {
+    if raw.chars().count() <= MAX_TOOL_OUTPUT_CHARS {
+        return raw;
+    }
+    let prefix: String = raw.chars().take(MAX_TOOL_OUTPUT_CHARS).collect();
+    format!("{prefix}\n\n... [结果已截断，请缩小查询范围或增加 LIMIT]")
+}
+
+/// 规范化 SQL 文本以便进行写确认精确比对。
+pub fn normalize_sql_for_confirmation(sql: &str) -> String {
+    sql.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim_end_matches(';')
+        .trim()
+        .to_string()
+}
+
+/// 校验写操作目标快照与精确 SQL 是否匹配（Fail-Closed）。
+pub fn is_write_sql_confirmed(ctx: &AgentToolContext<'_>, sql: &str) -> bool {
+    if ctx.read_only {
+        return false;
+    }
+    let Some(confirmed_source) = ctx.confirmed_source_id.as_deref() else {
+        return false;
+    };
+    if confirmed_source.trim() != ctx.source_id.trim() {
+        return false;
+    }
+    let Some(confirmed_sql) = ctx.confirmed_write_sql.as_deref() else {
+        return false;
+    };
+    !confirmed_sql.trim().is_empty()
+        && normalize_sql_for_confirmation(confirmed_sql) == normalize_sql_for_confirmation(sql)
+}
+
+/// 检查工具调用是否触发未确认的写/高危 SQL 或只读/生产拦截。
+pub enum WriteGateCheck {
+    /// 允许直接执行。
+    Allowed,
+    /// 被只读或生产环境策略硬拦截。
+    Blocked { sql: String, reason: String },
+    /// 需要前端用户二次确认后才能执行。
+    NeedsConfirmation { sql: String, reason: String },
+}
+
+/// 在执行 `execute_query` 工具前进行 Fail-Closed 安全检查。
+pub fn check_tool_write_gate(ctx: &AgentToolContext<'_>, call: &ToolCall) -> WriteGateCheck {
+    if call.name != "execute_query" {
+        return WriteGateCheck::Allowed;
+    }
+    let sql = call
+        .arguments
+        .get("sql")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if sql.is_empty() {
+        return WriteGateCheck::Allowed;
+    }
+
+    let confirmed = is_write_sql_confirmed(ctx, &sql);
+    let decision = evaluate_sql_safety(
+        &sql,
+        &SqlGuardContext {
+            environment: ctx.environment.clone(),
+            read_only: ctx.read_only,
+            confirmed,
+        },
+    );
+
+    match decision {
+        SqlGuardDecision::Allow { .. } => WriteGateCheck::Allowed,
+        SqlGuardDecision::Deny { reason, .. } => WriteGateCheck::Blocked { sql, reason },
+        SqlGuardDecision::RequireConfirmation { reason, .. } => {
+            WriteGateCheck::NeedsConfirmation { sql, reason }
         }
     }
 }
 
-/// 参数：按关键词检索对象列表。
-#[derive(Debug, Deserialize)]
-pub struct FindObjectsArgs {
-    pub keyword: String,
-    pub limit: Option<u64>,
-}
-
-/// 参数：获取对象元数据摘要。
-#[derive(Debug, Deserialize)]
-pub struct GetObjectMetadataArgs {
-    pub object_name: String,
-    pub include_reference_parents: Option<bool>,
-}
-
-/// 参数：按关键词搜索字段。
-#[derive(Debug, Deserialize)]
-pub struct SearchFieldsArgs {
-    pub object_name: String,
-    pub keyword: String,
-    pub limit: Option<u64>,
-}
-
-/// 参数：读取单字段元数据。
-#[derive(Debug, Deserialize)]
-pub struct GetFieldMetadataArgs {
-    pub object_name: String,
-    pub field_name: String,
-}
-
-/// 参数：获取对象关系图。
-#[derive(Debug, Deserialize)]
-pub struct GetRelationshipGraphArgs {
-    pub object_name: String,
-}
-
-/// 工具：搜索对象。
-#[derive(Clone)]
-pub struct FindObjectsTool {
-    pub app: tauri::AppHandle,
-    pub source_id: String,
-}
-
-impl Tool for FindObjectsTool {
-    const NAME: &'static str = "find_salesforce_objects";
-    type Error = AiToolError;
-    type Args = FindObjectsArgs;
-    type Output = Value;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
+/// 根据数据源能力与运行模式动态构造可用工具列表（完全驱动无关）。
+pub fn build_tools_for_mode(
+    mode: AiAssistantMode,
+    capabilities: &ProviderCapabilities,
+) -> Vec<ToolDefinition> {
+    let mut tools = vec![
         ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "根据对象 API 名或标签关键词检索 Salesforce 可查询对象。".to_string(),
+            name: "list_objects".to_string(),
+            description: "按关键词检索当前数据源下的表或对象列表（支持名称或标签模糊过滤）。"
+                .to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
-                    "keyword": { "type": "string" },
-                    "limit": { "type": "integer", "minimum": 1, "maximum": 50 }
-                },
-                "required": ["keyword"]
+                    "keyword": { "type": "string", "description": "可选模糊搜索关键词，留空返回前 60 个对象" },
+                    "limit": { "type": "integer", "description": "返回数量上限，默认 40，最大 100" }
+                }
             }),
-        }
-    }
-
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let state = self.app.state::<AppState>();
-        let objects = commands::list_objects(self.app.clone(), state, self.source_id.clone())
-            .await
-            .map_err(AiToolError::new)?;
-        let keyword = args.keyword.trim().to_lowercase();
-        let limit = args.limit.unwrap_or(10).clamp(1, 50) as usize;
-        let matches = objects
-            .into_iter()
-            .filter(|item| item.queryable)
-            .filter(|item| {
-                item.name.to_lowercase().contains(&keyword)
-                    || item.label.to_lowercase().contains(&keyword)
-            })
-            .take(limit)
-            .map(|item| {
-                json!({
-                    "name": item.name,
-                    "label": item.label,
-                    "queryable": item.queryable
-                })
-            })
-            .collect::<Vec<_>>();
-        Ok(json!({ "ok": true, "matches": matches }))
-    }
-}
-
-/// 工具：获取对象元数据。
-#[derive(Clone)]
-pub struct GetObjectMetadataTool {
-    pub app: tauri::AppHandle,
-    pub source_id: String,
-}
-
-impl Tool for GetObjectMetadataTool {
-    const NAME: &'static str = "get_salesforce_object_metadata";
-    type Error = AiToolError;
-    type Args = GetObjectMetadataArgs;
-    type Output = Value;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
+            parallel_ok: true,
+        },
         ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "读取对象字段及关系元数据，用于 SOQL 生成。".to_string(),
+            name: "describe_object".to_string(),
+            description: "获取指定表或对象的完整字段结构（列名、数据类型、是否可空、主键/读写属性及关联关系）。"
+                .to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
-                    "object_name": { "type": "string" },
-                    "include_reference_parents": { "type": "boolean" }
+                    "objectName": { "type": "string", "description": "目标表名或对象 API 名称" }
                 },
-                "required": ["object_name"]
+                "required": ["objectName"]
             }),
-        }
-    }
-
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let state = self.app.state::<AppState>();
-        let describe = commands::describe_object(
-            self.app.clone(),
-            state,
-            self.source_id.clone(),
-            args.object_name.trim().to_string(),
-        )
-        .await
-        .map_err(AiToolError::new)?;
-        let fields = describe
-            .fields
-            .iter()
-            .map(|item| {
-                json!({
-                    "name": item.name,
-                    "label": item.label,
-                    "type": item.data_type,
-                    "metadata": item.metadata
-                })
-            })
-            .collect::<Vec<_>>();
-        let children = describe
-            .child_relationships
-            .iter()
-            .map(|item| {
-                json!({
-                    "childSobject": item.child_sobject,
-                    "field": item.field,
-                    "relationshipName": item.relationship_name,
-                    "deprecatedAndHidden": item.deprecated_and_hidden
-                })
-            })
-            .collect::<Vec<_>>();
-        Ok(json!({
-            "ok": true,
-            "objectName": describe.name,
-            "objectLabel": describe.label,
-            "fields": fields,
-            "childRelationships": children,
-            "includeReferenceParents": args.include_reference_parents.unwrap_or(true)
-        }))
-    }
-}
-
-/// 工具：字段搜索。
-#[derive(Clone)]
-pub struct SearchFieldsTool {
-    pub app: tauri::AppHandle,
-    pub source_id: String,
-}
-
-impl Tool for SearchFieldsTool {
-    const NAME: &'static str = "search_salesforce_object_fields";
-    type Error = AiToolError;
-    type Args = SearchFieldsArgs;
-    type Output = Value;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
+            parallel_ok: true,
+        },
         ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "按关键词搜索某个对象字段。".to_string(),
+            name: "get_current_time".to_string(),
+            description: "获取当前系统 UTC 与本地时间，用于构造精确的日期时间过滤条件。".to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {}
+            }),
+            parallel_ok: true,
+        },
+    ];
+
+    if capabilities.supports_ddl {
+        tools.push(ToolDefinition {
+            name: "get_object_ddl".to_string(),
+            description: "获取关系型数据表的建表 DDL、索引与约束定义。".to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
-                    "object_name": { "type": "string" },
-                    "keyword": { "type": "string" },
-                    "limit": { "type": "integer", "minimum": 1, "maximum": 80 }
+                    "objectName": { "type": "string", "description": "目标表名" }
                 },
-                "required": ["object_name", "keyword"]
+                "required": ["objectName"]
             }),
-        }
+            parallel_ok: true,
+        });
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let state = self.app.state::<AppState>();
-        let describe = commands::describe_object(
-            self.app.clone(),
-            state,
-            self.source_id.clone(),
-            args.object_name.trim().to_string(),
-        )
-        .await
-        .map_err(AiToolError::new)?;
-        let keyword = args.keyword.trim().to_lowercase();
-        let limit = args.limit.unwrap_or(20).clamp(1, 80) as usize;
-        let matches = describe
-            .fields
-            .iter()
-            .filter(|item| {
-                item.name.to_lowercase().contains(&keyword)
-                    || item.label.to_lowercase().contains(&keyword)
-            })
-            .take(limit)
-            .map(|item| {
-                json!({
-                    "name": item.name,
-                    "label": item.label,
-                    "type": item.data_type
-                })
-            })
-            .collect::<Vec<_>>();
-        Ok(json!({ "ok": true, "matches": matches }))
-    }
-}
-
-/// 工具：单字段元数据。
-#[derive(Clone)]
-pub struct GetFieldMetadataTool {
-    pub app: tauri::AppHandle,
-    pub source_id: String,
-}
-
-impl Tool for GetFieldMetadataTool {
-    const NAME: &'static str = "get_salesforce_field_metadata";
-    type Error = AiToolError;
-    type Args = GetFieldMetadataArgs;
-    type Output = Value;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "读取某个字段的完整元数据。".to_string(),
+    if mode == AiAssistantMode::Agent {
+        tools.push(ToolDefinition {
+            name: "get_sample_data".to_string(),
+            description: "采样读取指定表或对象的前几行数据（最多 10 行），快速了解字段实际值格式。"
+                .to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
-                    "object_name": { "type": "string" },
-                    "field_name": { "type": "string" }
+                    "objectName": { "type": "string", "description": "目标表名或对象名称" },
+                    "limit": { "type": "integer", "description": "采样行数，默认 5，最大 10" }
                 },
-                "required": ["object_name", "field_name"]
+                "required": ["objectName"]
             }),
-        }
-    }
+            parallel_ok: false,
+        });
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let state = self.app.state::<AppState>();
-        let describe = commands::describe_object(
-            self.app.clone(),
-            state,
-            self.source_id.clone(),
-            args.object_name.trim().to_string(),
-        )
-        .await
-        .map_err(AiToolError::new)?;
-        let field = describe
-            .fields
-            .iter()
-            .find(|item| item.name.eq_ignore_ascii_case(args.field_name.trim()))
-            .map(|item| {
-                json!({
-                    "name": item.name,
-                    "label": item.label,
-                    "type": item.data_type,
-                    "nillable": item.nillable,
-                    "createable": item.createable,
-                    "updateable": item.updateable,
-                    "metadata": item.metadata
-                })
+        tools.push(ToolDefinition {
+            name: "execute_query".to_string(),
+            description: format!(
+                "在当前数据源执行 {} 语句（查询结果会自动限制展示条数；写操作/高危 DDL 会触发安全确认）。",
+                capabilities.query_language.to_uppercase()
+            ),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "sql": { "type": "string", "description": "待执行的完整 SQL 或 SOQL 语句" },
+                    "objectName": { "type": "string", "description": "可选主表/主对象名（用于字段类型映射）" }
+                },
+                "required": ["sql"]
+            }),
+            parallel_ok: false,
+        });
+
+        if capabilities.supports_ddl {
+            tools.push(ToolDefinition {
+                name: "explain_query".to_string(),
+                description: "对 SELECT 查询执行 EXPLAIN 执行计划分析，用于排查全表扫描与索引命中情况。"
+                    .to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "sql": { "type": "string", "description": "待分析的 SELECT 查询语句" }
+                    },
+                    "required": ["sql"]
+                }),
+                parallel_ok: false,
             });
-        Ok(json!({ "ok": field.is_some(), "field": field }))
-    }
-}
-
-/// 工具：对象关系图。
-#[derive(Clone)]
-pub struct GetRelationshipGraphTool {
-    pub app: tauri::AppHandle,
-    pub source_id: String,
-}
-
-impl Tool for GetRelationshipGraphTool {
-    const NAME: &'static str = "get_salesforce_object_relationship_graph";
-    type Error = AiToolError;
-    type Args = GetRelationshipGraphArgs;
-    type Output = Value;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "读取对象父子关系图，支持子查询和父关系推导。".to_string(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "object_name": { "type": "string" }
-                },
-                "required": ["object_name"]
-            }),
         }
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let state = self.app.state::<AppState>();
-        let describe = commands::describe_object(
-            self.app.clone(),
-            state,
-            self.source_id.clone(),
-            args.object_name.trim().to_string(),
-        )
+    tools
+}
+
+/// 执行单个工具调用，并返回给模型的结构化文本结果。
+pub async fn execute_agent_tool(ctx: &AgentToolContext<'_>, call: &ToolCall) -> ToolResult {
+    let res = match call.name.as_str() {
+        "list_objects" => run_list_objects(ctx, &call.arguments).await,
+        "describe_object" => run_describe_object(ctx, &call.arguments).await,
+        "get_object_ddl" => run_get_object_ddl(ctx, &call.arguments).await,
+        "get_current_time" => Ok(json!({
+            "utc": Utc::now().to_rfc3339(),
+            "local": chrono::Local::now().to_rfc3339()
+        })
+        .to_string()),
+        "get_sample_data" => run_sample_data(ctx, &call.arguments).await,
+        "execute_query" => run_execute_query(ctx, &call.arguments).await,
+        "explain_query" => run_explain_query(ctx, &call.arguments).await,
+        other => Err(format!("未知工具: {other}")),
+    };
+
+    match res {
+        Ok(content) => ToolResult {
+            tool_call_id: call.id.clone(),
+            tool_name: call.name.clone(),
+            content: truncate_tool_output(content),
+            is_error: false,
+        },
+        Err(err) => ToolResult {
+            tool_call_id: call.id.clone(),
+            tool_name: call.name.clone(),
+            content: err,
+            is_error: true,
+        },
+    }
+}
+
+/// 检索数据源对象/表列表（优先复用 SQLite 元数据缓存，未命中时自动回源）。
+async fn run_list_objects(ctx: &AgentToolContext<'_>, args: &Value) -> Result<String, String> {
+    let keyword = args
+        .get("keyword")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_lowercase();
+    let limit = args
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(40)
+        .clamp(1, 100) as usize;
+
+    let metadata_service = MetadataService::new(ctx.storage);
+    let mut objects = metadata_service
+        .list_cached_objects(&ctx.source_id)
+        .map_err(|e| e.to_string())?;
+
+    if objects.is_empty() {
+        let source = SourceService::new(ctx.storage)
+            .get_runtime_source(&ctx.source_id)
+            .map_err(|e| e.to_string())?;
+        let driver = ctx
+            .driver_registry
+            .get(&source.source_type)
+            .map_err(|e| e.to_string())?;
+        objects = driver
+            .list_objects(&source)
+            .await
+            .map_err(|e| e.to_string())?;
+        let _ = metadata_service.replace_cached_objects(&ctx.source_id, &objects, "ai_agent");
+    }
+
+    let matched: Vec<Value> = objects
+        .into_iter()
+        .filter(|obj| {
+            keyword.is_empty()
+                || obj.name.to_lowercase().contains(&keyword)
+                || obj.label.to_lowercase().contains(&keyword)
+        })
+        .take(limit)
+        .map(|obj| {
+            json!({
+                "name": obj.name,
+                "label": obj.label,
+                "queryable": obj.queryable
+            })
+        })
+        .collect();
+
+    Ok(json!({ "count": matched.len(), "objects": matched }).to_string())
+}
+
+/// 获取指定对象/表的字段元数据（优先缓存，缺失时自动回源）。
+async fn run_describe_object(ctx: &AgentToolContext<'_>, args: &Value) -> Result<String, String> {
+    let object_name = args
+        .get("objectName")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    if object_name.is_empty() {
+        return Err("objectName 不能为空".to_string());
+    }
+
+    let metadata_service = MetadataService::new(ctx.storage);
+    let mut describe = metadata_service
+        .get_cached_describe(&ctx.source_id, object_name)
+        .map_err(|e| e.to_string())?;
+
+    if describe.is_none() {
+        let source = SourceService::new(ctx.storage)
+            .get_runtime_source(&ctx.source_id)
+            .map_err(|e| e.to_string())?;
+        let driver = ctx
+            .driver_registry
+            .get(&source.source_type)
+            .map_err(|e| e.to_string())?;
+        let fresh = driver
+            .describe_object(&source, object_name)
+            .await
+            .map_err(|e| e.to_string())?;
+        let _ = metadata_service.cache_describe(&ctx.source_id, &fresh, "ai_agent");
+        describe = Some(fresh);
+    }
+
+    let desc = describe.ok_or_else(|| format!("未找到对象结构: {object_name}"))?;
+    let fields: Vec<Value> = desc
+        .fields
+        .iter()
+        .take(160)
+        .map(|f| {
+            let column_key = f
+                .metadata
+                .get("columnKey")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let column_type = f
+                .metadata
+                .get("columnType")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&f.data_type);
+            json!({
+                "name": f.name,
+                "label": f.label,
+                "type": column_type,
+                "nullable": f.nillable,
+                "key": column_key,
+                "relationshipName": f.metadata.get("relationshipName").cloned().unwrap_or(Value::Null),
+                "referenceTo": f.metadata.get("referenceTo").cloned().unwrap_or(Value::Null)
+            })
+        })
+        .collect();
+
+    Ok(json!({
+        "name": desc.name,
+        "label": desc.label,
+        "totalFields": desc.fields.len(),
+        "fields": fields,
+        "childRelationships": desc.child_relationships.iter().take(40).collect::<Vec<_>>()
+    })
+    .to_string())
+}
+
+/// 获取关系型数据表的 DDL（仅在驱动支持 DDL 时有效）。
+async fn run_get_object_ddl(ctx: &AgentToolContext<'_>, args: &Value) -> Result<String, String> {
+    if !ctx.capabilities.supports_ddl {
+        return Err("当前数据源不支持 DDL 读取".to_string());
+    }
+    let object_name = args
+        .get("objectName")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    if object_name.is_empty() {
+        return Err("objectName 不能为空".to_string());
+    }
+
+    let metadata_service = MetadataService::new(ctx.storage);
+    if let Ok(Some(cached)) = metadata_service.get_cached_object_ddl(&ctx.source_id, object_name) {
+        return Ok(serde_json::to_string(&cached).unwrap_or_default());
+    }
+
+    let source = SourceService::new(ctx.storage)
+        .get_runtime_source(&ctx.source_id)
+        .map_err(|e| e.to_string())?;
+    let driver = ctx
+        .driver_registry
+        .get(&source.source_type)
+        .map_err(|e| e.to_string())?;
+    let ddl = driver
+        .get_object_ddl(&source, object_name)
         .await
-        .map_err(AiToolError::new)?;
-        let parent_edges = describe
-            .fields
-            .iter()
-            .filter_map(|item| {
-                let refs = item
-                    .metadata
-                    .get("referenceTo")
-                    .and_then(|v| v.as_array())
-                    .cloned()?;
-                Some(json!({
-                    "fieldName": item.name,
-                    "referenceTo": refs,
-                    "relationshipName": item.metadata.get("relationshipName"),
-                    "childRelationshipName": item.metadata.get("childRelationshipName")
-                }))
+        .map_err(|e| e.to_string())?;
+    let _ = metadata_service.cache_object_ddl(&ctx.source_id, object_name, &ddl);
+    Ok(serde_json::to_string(&ddl).unwrap_or_default())
+}
+
+/// 采样查询前几行数据（统一走 QueryService 受安全网关与审计保护）。
+async fn run_sample_data(ctx: &AgentToolContext<'_>, args: &Value) -> Result<String, String> {
+    let object_name = args
+        .get("objectName")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    if object_name.is_empty() {
+        return Err("objectName 不能为空".to_string());
+    }
+    let limit = args
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(5)
+        .clamp(1, 10);
+
+    let query = if ctx.capabilities.query_language.eq_ignore_ascii_case("soql") {
+        // SOQL 需要显式字段列表，先从 describe 读取前 12 个字段。
+        let desc_json = run_describe_object(ctx, &json!({ "objectName": object_name })).await?;
+        let parsed: Value = serde_json::from_str(&desc_json).unwrap_or_default();
+        let field_names: Vec<String> = parsed
+            .get("fields")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|item| item.get("name").and_then(|n| n.as_str()).map(ToOwned::to_owned))
+                    .take(12)
+                    .collect()
             })
-            .collect::<Vec<_>>();
-        let child_edges = describe
-            .child_relationships
-            .iter()
-            .map(|item| {
-                json!({
-                    "childObject": item.child_sobject,
-                    "fieldName": item.field,
-                    "relationshipName": item.relationship_name
-                })
-            })
-            .collect::<Vec<_>>();
-        Ok(json!({
-            "ok": true,
-            "objectName": describe.name,
-            "parentEdges": parent_edges,
-            "childEdges": child_edges
-        }))
+            .unwrap_or_else(|| vec!["Id".to_string()]);
+        let select_cols = if field_names.is_empty() {
+            "Id".to_string()
+        } else {
+            field_names.join(", ")
+        };
+        format!("SELECT {select_cols} FROM {object_name} LIMIT {limit}")
+    } else {
+        let safe_name = object_name.replace('`', "");
+        format!("SELECT * FROM `{safe_name}` LIMIT {limit}")
+    };
+
+    run_execute_query(
+        ctx,
+        &json!({
+            "sql": query,
+            "objectName": object_name
+        }),
+    )
+    .await
+}
+
+/// 执行 SQL/SOQL 语句（严格经由 QueryService + SqlGuard + 审计落盘）。
+async fn run_execute_query(ctx: &AgentToolContext<'_>, args: &Value) -> Result<String, String> {
+    let sql = args
+        .get("sql")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    if sql.is_empty() {
+        return Err("sql 不能为空".to_string());
+    }
+    let object_name = args
+        .get("objectName")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|v| !v.is_empty());
+
+    let confirmed = is_write_sql_confirmed(ctx, sql);
+    let service = QueryService::new(ctx.storage, ctx.driver_registry);
+    let response = service
+        .execute_guarded_query(&ctx.source_id, sql, object_name, confirmed)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if response.status == "confirmation_required" {
+        return Err(
+            response
+                .guard_decision
+                .reason()
+                .unwrap_or("该写操作需要用户二次确认后才能执行。")
+                .to_string(),
+        );
+    }
+
+    let result = response.result.unwrap_or(crate::models::QueryResult {
+        total_size: 0,
+        records: Vec::new(),
+    });
+    let sample_rows: Vec<_> = result.records.into_iter().take(30).collect();
+    Ok(json!({
+        "executedSql": response.executed_sql,
+        "durationMs": response.duration_ms,
+        "totalSize": result.total_size,
+        "returnedRows": sample_rows.len(),
+        "records": sample_rows
+    })
+    .to_string())
+}
+
+/// 执行 EXPLAIN 分析查询计划（仅在驱动支持时暴露）。
+async fn run_explain_query(ctx: &AgentToolContext<'_>, args: &Value) -> Result<String, String> {
+    if !ctx.capabilities.supports_ddl {
+        return Err("当前数据源不支持 EXPLAIN 执行计划".to_string());
+    }
+    let sql = args
+        .get("sql")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .trim_end_matches(';');
+    if sql.is_empty() {
+        return Err("sql 不能为空".to_string());
+    }
+    let explain_sql = if sql.to_ascii_lowercase().starts_with("explain") {
+        sql.to_string()
+    } else {
+        format!("EXPLAIN {sql}")
+    };
+    run_execute_query(ctx, &json!({ "sql": explain_sql })).await
+}
+
+trait GuardReasonExt {
+    fn reason(&self) -> Option<&str>;
+}
+
+impl GuardReasonExt for SqlGuardDecision {
+    fn reason(&self) -> Option<&str> {
+        match self {
+            SqlGuardDecision::Allow { .. } => None,
+            SqlGuardDecision::Deny { reason, .. } => Some(reason.as_str()),
+            SqlGuardDecision::RequireConfirmation { reason, .. } => Some(reason.as_str()),
+        }
     }
 }

@@ -11,6 +11,7 @@ import { resolveIndexHeaderToggleSelection, resolveIndexRowSelection } from "../
 import { resolveSelectedEditableLocations } from "../logic/paste.ts";
 import { getDataGridSelectionConfig } from "../logic/surfaceConfig.ts";
 import type { DataGridScrollState } from "../../../store/useDataGridScrollStore.ts";
+import type { GridAdapter } from "../../../drivers/types.ts";
 
 // DataGrid 表头高度：与 DataEditor 的 headerHeight 配置保持一致。
 const DATA_GRID_HEADER_HEIGHT = 30;
@@ -41,8 +42,8 @@ type DataGridSurfaceProps = {
   columns: GridColumn[];
   // 字段元数据映射。
   fieldMetadataMap: Record<string, Record<string, unknown>>;
-  // 当前数据源类型：用于元数据展示适配（如 MySQL 类型显示）。
-  selectedSourceType?: string;
+  // 数据源表格适配器。
+  gridAdapter: GridAdapter;
   // 已选中记录 Id。
   selectedRecordIds: string[];
   // 是否展示表头元数据 icon。
@@ -156,7 +157,7 @@ export function DataGridSurface({
   records,
   columns,
   fieldMetadataMap,
-  selectedSourceType,
+  gridAdapter,
   selectedRecordIds,
   showHeaderMetadata,
   selectableIds,
@@ -338,7 +339,7 @@ export function DataGridSurface({
             const metadata = isDataColumn ? (fieldMetadataMap[columnId] || {}) : {};
             const isNewRow = Boolean(record.__isNew);
             const contextMenuCapabilities = resolveRowContextMenuCapabilities({
-              selectedSourceType,
+              gridAdapter,
               metadata,
               isNewRow,
               isDataColumn
@@ -459,7 +460,7 @@ export function DataGridSurface({
             setHoveredHeaderMeta({
               fieldName: columnId,
               // 元数据展示统一走共享格式化逻辑，确保与 SOQL 执行器字段展开完全一致。
-              metadata: buildDisplayMetadataFromRaw(metadata, selectedSourceType),
+              metadata: buildDisplayMetadataFromRaw(metadata, gridAdapter.sourceKind),
               anchorClientX,
               anchorClientY
             });

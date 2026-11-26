@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createGetCellContent } from "../../src/components/DataGrid/renderers/getCellContent.ts";
+import { mysqlDriver } from "../../src/drivers/mysql/index.ts";
+import { salesforceDriver } from "../../src/drivers/salesforce/index.ts";
 
 test("createGetCellContent: 序号列应按分页 offset 连续编号", () => {
   const getCellContent = createGetCellContent({
@@ -10,7 +12,8 @@ test("createGetCellContent: 序号列应按分页 offset 连续编号", () => {
     selectedRecordSet: new Set(),
     dirtyCellSet: new Set(),
     pendingDeleteRecordSet: new Set(),
-    effectiveSalesforceTimezone: null,
+    effectiveTimezone: null,
+    gridAdapter: salesforceDriver.gridAdapter,
     currentOffset: 200,
     getRecordKey: (rowIndex) => `row-${rowIndex}`,
     allowReadonlyOverlay: false
@@ -46,8 +49,8 @@ test("createGetCellContent: MySQL DECIMAL 与 BIGINT 应按高精度文本原样
     selectedRecordSet: new Set(),
     dirtyCellSet: new Set(),
     pendingDeleteRecordSet: new Set(),
-    effectiveSalesforceTimezone: null,
-    selectedSourceType: "mysql",
+    effectiveTimezone: null,
+    gridAdapter: mysqlDriver.gridAdapter,
     getRecordKey: (rowIndex) => `row-${rowIndex}`,
     allowReadonlyOverlay: false
   });

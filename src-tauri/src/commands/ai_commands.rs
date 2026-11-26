@@ -84,20 +84,19 @@ pub fn detect_local_cli_paths(state: State<'_, AppState>) -> Result<Vec<CliPathP
     Ok(sf_cli::detect_available_cli_paths(custom))
 }
 
-/// 读取 LLM 设置(apiKey 仅返回掩码与是否已配置)。
+/// 读取 LLM 设置(apiKey 仅返回掩码与是否已配置；优先读取加密的默认 ai_config)。
 #[tauri::command]
 pub fn get_llm_settings(state: State<'_, AppState>) -> Result<LlmSettingsView, String> {
     let settings = read_llm_settings(&state)?;
     Ok(to_llm_settings_view(&settings))
 }
 
-/// 保存 LLM 设置(apiKey 采用覆盖保存策略)。
+/// 保存 LLM 设置(通过 ai_repo + secret_repo AEAD 加密落盘，不再明文存入 app_settings)。
 #[tauri::command]
 pub fn save_llm_settings(
     state: State<'_, AppState>,
     payload: SaveLlmSettingsPayload,
 ) -> Result<LlmSettingsView, String> {
-    let mut current = read_llm_settings(&state)?;
     let base_url = payload.base_url.trim();
     let model = payload.model.trim();
     if base_url.is_empty() {
@@ -107,26 +106,39 @@ pub fn save_llm_settings(
         return Err("LLM model 不能为空".to_string());
     }
 
-    current.base_url = base_url.to_string();
-    current.model = model.to_string();
-    current.timeout_ms = payload.timeout_ms.unwrap_or(current.timeout_ms).max(1000);
-
-    // 仅当用户输入了新值时覆盖 apiKey,空字符串视为不覆盖。
-    if let Some(next_key) = payload.api_key {
-        let trimmed = next_key.trim();
-        if !trimmed.is_empty() {
-            current.api_key = trimmed.to_string();
-        }
-    }
-
-    let raw = serde_json::to_string(&current)
-        .map_err(|error| AppError::to_string_error(error.into()))?;
-    state
-        .storage
-        .write(|connection| db::write_app_setting(connection, LLM_SETTINGS_KEY, &raw))
+    let existing = crate::storage::ai_repo::get_ai_config_with_secret(&state.storage, None)
         .map_err(AppError::to_string_error)?;
 
-    Ok(to_llm_settings_view(&current))
+    let saved = crate::storage::ai_repo::upsert_ai_config(
+        &state.storage,
+        crate::storage::ai_repo::AiConfigUpsertPayload {
+            id: existing.as_ref().map(|(c, _)| c.id.clone()),
+            name: existing
+                .as_ref()
+                .map(|(c, _)| c.name.clone())
+                .unwrap_or_else(|| "默认模型配置".to_string()),
+            provider: existing
+                .as_ref()
+                .map(|(c, _)| c.provider.clone())
+                .unwrap_or_else(|| "openai".to_string()),
+            api_style: existing.as_ref().map(|(c, _)| c.api_style.clone()),
+            base_url: base_url.to_string(),
+            model: model.to_string(),
+            api_key: payload.api_key,
+            timeout_ms: payload.timeout_ms.map(|v| v as i64),
+            is_default: Some(true),
+        },
+    )
+    .map_err(AppError::to_string_error)?;
+
+    Ok(LlmSettingsView {
+        provider: saved.config.provider,
+        base_url: saved.config.base_url,
+        model: saved.config.model,
+        api_key_configured: saved.api_key_configured,
+        api_key_masked: saved.api_key_masked,
+        timeout_ms: saved.config.timeout_ms as u64,
+    })
 }
 
 /// 停止指定 requestId 的 LLM 流式生成。
@@ -139,6 +151,7 @@ pub fn stop_llm_stream_generation(
     if normalized.is_empty() {
         return Err("requestId 不能为空".to_string());
     }
+    crate::ai::provider::cancel_stream(&normalized);
     cancel_llm_stream_by_request_id(&state, &normalized);
     Ok(())
 }
@@ -146,6 +159,153 @@ pub fn stop_llm_stream_generation(
 #[tauri::command]
 pub fn ai_stop_turn(state: State<'_, AppState>, request_id: String) -> Result<(), String> {
     stop_llm_stream_generation(state, request_id)
+}
+
+#[tauri::command]
+pub fn ai_cancel_stream(state: State<'_, AppState>, session_id: String) -> Result<bool, String> {
+    let normalized = session_id.trim().to_string();
+    if normalized.is_empty() {
+        return Ok(false);
+    }
+    let cancelled = crate::ai::provider::cancel_stream(&normalized);
+    cancel_llm_stream_by_request_id(&state, &normalized);
+    Ok(cancelled)
+}
+
+/// 列出全部加密存储的 AI 模型配置视图。
+#[tauri::command]
+pub fn ai_list_configs(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::storage::ai_repo::AiConfigView>, String> {
+    // 行内注释：首次读取时顺带将历史 app_settings 明文配置迁移到加密 ai_configs，并清理旧明文。
+    let _ = migrate_legacy_llm_settings_if_needed(&state);
+    crate::storage::ai_repo::list_ai_configs(&state.storage).map_err(AppError::to_string_error)
+}
+
+/// 新增或更新 AI 模型配置（apiKey 走 AEAD 加密）。
+#[tauri::command]
+pub fn ai_save_config(
+    state: State<'_, AppState>,
+    payload: crate::storage::ai_repo::AiConfigUpsertPayload,
+) -> Result<crate::storage::ai_repo::AiConfigView, String> {
+    crate::storage::ai_repo::upsert_ai_config(&state.storage, payload)
+        .map_err(AppError::to_string_error)
+}
+
+/// 删除指定 AI 模型配置。
+#[tauri::command]
+pub fn ai_delete_config(state: State<'_, AppState>, config_id: String) -> Result<(), String> {
+    crate::storage::ai_repo::delete_ai_config(&state.storage, &config_id)
+        .map_err(AppError::to_string_error)
+}
+
+/// 将指定 AI 配置设为默认。
+#[tauri::command]
+pub fn ai_set_default_config(state: State<'_, AppState>, config_id: String) -> Result<(), String> {
+    crate::storage::ai_repo::set_default_ai_config(&state.storage, &config_id)
+        .map_err(AppError::to_string_error)
+}
+
+/// 测试指定 AI 模型配置的连通性。
+#[tauri::command]
+pub async fn ai_test_config_connection(
+    state: State<'_, AppState>,
+    config_id: String,
+) -> Result<crate::ai::provider::AiConnectionTestResult, String> {
+    let (config, api_key) =
+        crate::storage::ai_repo::get_ai_config_with_secret(&state.storage, Some(&config_id))
+            .map_err(AppError::to_string_error)?
+            .ok_or_else(|| format!("未找到 AI 配置: {config_id}"))?;
+    crate::ai::provider::test_ai_connection(&config, &api_key)
+        .await
+        .map_err(AppError::to_string_error)
+}
+
+/// 拉取指定 AI 配置的远端可用模型列表。
+#[tauri::command]
+pub async fn ai_list_config_models(
+    state: State<'_, AppState>,
+    config_id: String,
+) -> Result<Vec<String>, String> {
+    let (config, api_key) =
+        crate::storage::ai_repo::get_ai_config_with_secret(&state.storage, Some(&config_id))
+            .map_err(AppError::to_string_error)?
+            .ok_or_else(|| format!("未找到 AI 配置: {config_id}"))?;
+    crate::ai::provider::list_remote_models(&config, &api_key)
+        .await
+        .map_err(AppError::to_string_error)
+}
+
+/// 启动多轮流式 Agent 对话（通过 `ai-agent-event` 事件流实时推送至前端）。
+#[tauri::command]
+pub async fn ai_agent_stream(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    request: crate::ai::events::AiAgentStreamRequest,
+) -> Result<(), String> {
+    let _ = migrate_legacy_llm_settings_if_needed(&state);
+    crate::ai::agent_loop::run_agent_stream(app, &state, request).await
+}
+
+/// 列出全部持久化的 AI 会话历史。
+#[tauri::command]
+pub fn ai_list_conversations(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::storage::ai_repo::AiConversationRecord>, String> {
+    crate::storage::ai_repo::list_ai_conversations(&state.storage)
+        .map_err(AppError::to_string_error)
+}
+
+/// 保存或更新单条 AI 会话历史。
+#[tauri::command]
+pub fn ai_save_conversation(
+    state: State<'_, AppState>,
+    record: crate::storage::ai_repo::AiConversationRecord,
+) -> Result<crate::storage::ai_repo::AiConversationRecord, String> {
+    crate::storage::ai_repo::save_ai_conversation(&state.storage, record)
+        .map_err(AppError::to_string_error)
+}
+
+/// 删除指定 AI 会话历史。
+#[tauri::command]
+pub fn ai_delete_conversation(
+    state: State<'_, AppState>,
+    conversation_id: String,
+) -> Result<(), String> {
+    crate::storage::ai_repo::delete_ai_conversation(&state.storage, &conversation_id)
+        .map_err(AppError::to_string_error)
+}
+
+/// 列出全部自定义提示词模板。
+#[tauri::command]
+pub fn ai_list_prompt_templates(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::storage::ai_repo::AiPromptTemplateRecord>, String> {
+    crate::storage::ai_repo::list_ai_prompt_templates(&state.storage)
+        .map_err(AppError::to_string_error)
+}
+
+/// 新增或更新自定义提示词模板。
+#[tauri::command]
+pub fn ai_save_prompt_template(
+    state: State<'_, AppState>,
+    id: Option<String>,
+    name: String,
+    category: String,
+    content: String,
+) -> Result<crate::storage::ai_repo::AiPromptTemplateRecord, String> {
+    crate::storage::ai_repo::save_ai_prompt_template(&state.storage, id, name, category, content)
+        .map_err(AppError::to_string_error)
+}
+
+/// 删除自定义提示词模板。
+#[tauri::command]
+pub fn ai_delete_prompt_template(
+    state: State<'_, AppState>,
+    template_id: String,
+) -> Result<(), String> {
+    crate::storage::ai_repo::delete_ai_prompt_template(&state.storage, &template_id)
+        .map_err(AppError::to_string_error)
 }
 
 #[tauri::command]
@@ -177,38 +337,72 @@ pub async fn ai_chat_turn_v2(
 
 /// 强制刷新对象列表(跳过缓存,直接请求 Salesforce API 并回写缓存)。
 
-/// 读取 LLM 设置,未配置时返回默认值。
-fn read_llm_settings(state: &State<'_, AppState>) -> Result<LlmSettings, String> {
+/// 将历史明文 `app_settings["llm.settings.openai"]` 迁移至加密 `ai_configs` 并清理旧明文。
+fn migrate_legacy_llm_settings_if_needed(state: &State<'_, AppState>) -> Result<(), AppError> {
+    let existing = crate::storage::ai_repo::list_ai_configs(&state.storage)?;
+    if !existing.is_empty() {
+        return Ok(());
+    }
     let raw = state
         .storage
-        .read(|connection| db::read_app_setting(connection, LLM_SETTINGS_KEY))
-        .map_err(AppError::to_string_error)?
+        .read(|connection| db::read_app_setting(connection, LLM_SETTINGS_KEY))?
         .unwrap_or_default();
     if raw.trim().is_empty() {
+        return Ok(());
+    }
+    if let Ok(parsed) = serde_json::from_str::<LlmSettings>(&raw) {
+        if !parsed.base_url.trim().is_empty() && !parsed.model.trim().is_empty() {
+            crate::storage::ai_repo::upsert_ai_config(
+                &state.storage,
+                crate::storage::ai_repo::AiConfigUpsertPayload {
+                    id: None,
+                    name: "默认模型配置".to_string(),
+                    provider: if parsed.provider.trim().is_empty() {
+                        "openai".to_string()
+                    } else {
+                        parsed.provider
+                    },
+                    api_style: None,
+                    base_url: parsed.base_url,
+                    model: parsed.model,
+                    api_key: if parsed.api_key.trim().is_empty() {
+                        None
+                    } else {
+                        Some(parsed.api_key)
+                    },
+                    timeout_ms: Some(parsed.timeout_ms as i64),
+                    is_default: Some(true),
+                },
+            )?;
+            let _ = state
+                .storage
+                .write(|connection| db::delete_app_setting(connection, LLM_SETTINGS_KEY));
+        }
+    }
+    Ok(())
+}
+
+/// 读取 LLM 设置,未配置时返回默认值（优先读取加密 ai_configs）。
+fn read_llm_settings(state: &State<'_, AppState>) -> Result<LlmSettings, String> {
+    let _ = migrate_legacy_llm_settings_if_needed(state);
+    if let Some((cfg, key)) = crate::storage::ai_repo::get_ai_config_with_secret(&state.storage, None)
+        .map_err(AppError::to_string_error)?
+    {
         return Ok(LlmSettings {
-            provider: "openai".to_string(),
-            base_url: "https://api.openai.com/v1".to_string(),
-            model: "gpt-4.1-mini".to_string(),
-            api_key: "".to_string(),
-            timeout_ms: 30_000,
+            provider: cfg.provider,
+            base_url: cfg.base_url,
+            model: cfg.model,
+            api_key: key,
+            timeout_ms: cfg.timeout_ms as u64,
         });
     }
-
-    let mut parsed: LlmSettings =
-        serde_json::from_str(&raw).map_err(|error| AppError::to_string_error(error.into()))?;
-    if parsed.provider.trim().is_empty() {
-        parsed.provider = "openai".to_string();
-    }
-    if parsed.base_url.trim().is_empty() {
-        parsed.base_url = "https://api.openai.com/v1".to_string();
-    }
-    if parsed.model.trim().is_empty() {
-        parsed.model = "gpt-4.1-mini".to_string();
-    }
-    if parsed.timeout_ms == 0 {
-        parsed.timeout_ms = 30_000;
-    }
-    Ok(parsed)
+    Ok(LlmSettings {
+        provider: "openai".to_string(),
+        base_url: "https://api.openai.com/v1".to_string(),
+        model: "gpt-4.1-mini".to_string(),
+        api_key: "".to_string(),
+        timeout_ms: 60_000,
+    })
 }
 
 /// 生成对前端安全的 LLM 设置视图(隐藏 apiKey 明文)。
