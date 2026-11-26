@@ -12,6 +12,7 @@ import { resolveSelectedEditableLocations } from "../logic/paste.ts";
 import { getDataGridSelectionConfig } from "../logic/surfaceConfig.ts";
 import type { DataGridScrollState } from "../../../store/useDataGridScrollStore.ts";
 import type { GridAdapter } from "../../../drivers/types.ts";
+import type { ExportFormat } from "../../../types";
 
 // DataGrid 表头高度：与 DataEditor 的 headerHeight 配置保持一致。
 const DATA_GRID_HEADER_HEIGHT = 30;
@@ -84,6 +85,7 @@ type DataGridSurfaceProps = {
   onToggleAll: (checked: boolean, recordIds: string[]) => void;
   // 右键菜单动作：复制。
   onCopyCell: () => void;
+  onCopyRowsAsFormat: (format: Exclude<ExportFormat, "xlsx">) => void;
   // 右键菜单动作：置空（None/Null）。
   onSetNullish: () => void;
   // 右键菜单动作：恢复默认值。
@@ -178,6 +180,7 @@ export function DataGridSurface({
   showOpenRecordPage,
   onToggleAll,
   onCopyCell,
+  onCopyRowsAsFormat,
   onSetNullish,
   onSetDefaultValue,
   onOpenRecordPage,
@@ -556,6 +559,7 @@ export function DataGridSurface({
           <RowContextMenu
             menuState={rowContextMenu}
             onCopyCell={onCopyCell}
+            onCopyRowsAsFormat={onCopyRowsAsFormat}
             onSetNullish={onSetNullish}
             onSetDefaultValue={onSetDefaultValue}
             onOpenRecordPage={onOpenRecordPage}

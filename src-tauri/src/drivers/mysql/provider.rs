@@ -10,6 +10,7 @@ use sqlx::mysql::{MySqlPool, MySqlPoolOptions, MySqlRow};
 use sqlx::{types::Json, Column, MySql, QueryBuilder, Row, TypeInfo};
 
 use crate::drivers::connection_manager::ConnectionManager;
+use crate::drivers::TransactionMode;
 use crate::error::AppError;
 use crate::models::{
     CurrentUserContext, MutationExecutionItem, MutationExecutionResult, MutationPreviewSqlItem,
@@ -531,6 +532,232 @@ impl MySqlProvider {
             },
             records,
         })
+    }
+
+    /// 在控制台会话上下文中执行 SQL（支持 Auto / Manual / Smart 事务模式与持久化物理连接）。
+    pub async fn execute_console_query(
+        &self,
+        source: &SalesforceSource,
+        session_id: &str,
+        query_text: &str,
+        describe: Option<&ObjectDescribe>,
+    ) -> Result<QueryResult, AppError> {
+        let trimmed = query_text.trim();
+        let Some(manager) = &self.connection_manager else {
+            return self.query_records(source, trimmed, describe).await;
+        };
+
+        let config = MySqlSourceConfig::from_source(source)?;
+        let pool = self.acquire_pool(source, &config).await?;
+        let default_mode = TransactionMode::from_str_lossy(
+            source
+                .config_json
+                .get("transactionMode")
+                .and_then(Value::as_str)
+                .unwrap_or("auto"),
+        );
+
+        let mut session = manager
+            .take_or_init_console_session(session_id, &source.id, default_mode)
+            .await;
+
+        let action = classify_console_sql(trimmed);
+        let result = match action {
+            ConsoleSqlAction::Begin => {
+                ensure_session_transaction_started(&pool, &mut session).await?;
+                Ok(empty_affected_result(0))
+            }
+            ConsoleSqlAction::Commit => {
+                if session.in_transaction {
+                    if let Some(conn) = session.conn.as_mut() {
+                        sqlx::query("COMMIT")
+                            .execute(&mut **conn)
+                            .await
+                            .map_err(|err| AppError::Db(format!("提交 MySQL 事务失败: {err}")))?;
+                        let _ = sqlx::query("SET autocommit = 1").execute(&mut **conn).await;
+                    }
+                    session.in_transaction = false;
+                    session.uncommitted_sqls.clear();
+                    session.conn = None;
+                }
+                Ok(empty_affected_result(0))
+            }
+            ConsoleSqlAction::Rollback => {
+                if session.in_transaction {
+                    if let Some(conn) = session.conn.as_mut() {
+                        sqlx::query("ROLLBACK")
+                            .execute(&mut **conn)
+                            .await
+                            .map_err(|err| AppError::Db(format!("回滚 MySQL 事务失败: {err}")))?;
+                        let _ = sqlx::query("SET autocommit = 1").execute(&mut **conn).await;
+                    }
+                    session.in_transaction = false;
+                    session.uncommitted_sqls.clear();
+                    session.conn = None;
+                }
+                Ok(empty_affected_result(0))
+            }
+            ConsoleSqlAction::Ddl => {
+                if let Some(conn) = session.conn.as_mut() {
+                    let res = execute_query_on_executor(&mut **conn, &pool, &config, trimmed, describe).await;
+                    session.in_transaction = false;
+                    session.uncommitted_sqls.clear();
+                    res
+                } else {
+                    execute_query_on_executor(&pool, &pool, &config, trimmed, describe).await
+                }
+            }
+            ConsoleSqlAction::ReadOnly => {
+                if session.in_transaction {
+                    if let Some(conn) = session.conn.as_mut() {
+                        execute_query_on_executor(&mut **conn, &pool, &config, trimmed, describe).await
+                    } else {
+                        execute_query_on_executor(&pool, &pool, &config, trimmed, describe).await
+                    }
+                } else {
+                    execute_query_on_executor(&pool, &pool, &config, trimmed, describe).await
+                }
+            }
+            ConsoleSqlAction::Write => {
+                let should_tx = match session.mode {
+                    TransactionMode::Manual => true,
+                    TransactionMode::Smart => session.in_transaction || !matches!(action, ConsoleSqlAction::ReadOnly),
+                    TransactionMode::Auto => session.in_transaction,
+                };
+                if should_tx {
+                    ensure_session_transaction_started(&pool, &mut session).await?;
+                    if let Some(conn) = session.conn.as_mut() {
+                        let res = execute_query_on_executor(&mut **conn, &pool, &config, trimmed, describe).await;
+                        if res.is_ok() {
+                            push_uncommitted_sql_summary(&mut session.uncommitted_sqls, trimmed);
+                        }
+                        res
+                    } else {
+                        execute_query_on_executor(&pool, &pool, &config, trimmed, describe).await
+                    }
+                } else {
+                    execute_query_on_executor(&pool, &pool, &config, trimmed, describe).await
+                }
+            }
+        };
+
+        manager.put_console_session(session_id.to_string(), session).await;
+        result
+    }
+
+    /// 读取控制台会话当前事务状态。
+    pub async fn get_console_transaction_status(
+        &self,
+        source: &SalesforceSource,
+        session_id: &str,
+    ) -> Result<crate::drivers::ConsoleTransactionStatus, AppError> {
+        let default_mode = TransactionMode::from_str_lossy(
+            source
+                .config_json
+                .get("transactionMode")
+                .and_then(Value::as_str)
+                .unwrap_or("auto"),
+        );
+        if let Some(manager) = &self.connection_manager {
+            return Ok(manager
+                .get_console_session_status(session_id, &source.id, default_mode)
+                .await);
+        }
+        Ok(crate::drivers::ConsoleTransactionStatus {
+            session_id: session_id.to_string(),
+            source_id: source.id.clone(),
+            mode: default_mode,
+            in_transaction: false,
+            uncommitted_sqls: Vec::new(),
+            supported: true,
+        })
+    }
+
+    /// 切换控制台会话事务模式。
+    pub async fn set_console_transaction_mode(
+        &self,
+        source: &SalesforceSource,
+        session_id: &str,
+        mode: TransactionMode,
+    ) -> Result<crate::drivers::ConsoleTransactionStatus, AppError> {
+        let Some(manager) = &self.connection_manager else {
+            return Err(AppError::Biz("连接管理器未初始化".to_string()));
+        };
+        let mut session = manager
+            .take_or_init_console_session(session_id, &source.id, mode)
+            .await;
+        session.mode = mode;
+        let status = session.to_status(session_id);
+        manager.put_console_session(session_id.to_string(), session).await;
+        Ok(status)
+    }
+
+    /// 提交控制台会话挂起事务。
+    pub async fn commit_console_transaction(
+        &self,
+        source: &SalesforceSource,
+        session_id: &str,
+    ) -> Result<crate::drivers::ConsoleTransactionStatus, AppError> {
+        let Some(manager) = &self.connection_manager else {
+            return Err(AppError::Biz("连接管理器未初始化".to_string()));
+        };
+        let default_mode = TransactionMode::Auto;
+        let mut session = manager
+            .take_or_init_console_session(session_id, &source.id, default_mode)
+            .await;
+        if session.in_transaction {
+            if let Some(conn) = session.conn.as_mut() {
+                sqlx::query("COMMIT")
+                    .execute(&mut **conn)
+                    .await
+                    .map_err(|err| AppError::Db(format!("提交 MySQL 事务失败: {err}")))?;
+                let _ = sqlx::query("SET autocommit = 1").execute(&mut **conn).await;
+            }
+            session.in_transaction = false;
+            session.uncommitted_sqls.clear();
+            session.conn = None;
+        }
+        let status = session.to_status(session_id);
+        manager.put_console_session(session_id.to_string(), session).await;
+        Ok(status)
+    }
+
+    /// 回滚控制台会话挂起事务。
+    pub async fn rollback_console_transaction(
+        &self,
+        source: &SalesforceSource,
+        session_id: &str,
+    ) -> Result<crate::drivers::ConsoleTransactionStatus, AppError> {
+        let Some(manager) = &self.connection_manager else {
+            return Err(AppError::Biz("连接管理器未初始化".to_string()));
+        };
+        let default_mode = TransactionMode::Auto;
+        let mut session = manager
+            .take_or_init_console_session(session_id, &source.id, default_mode)
+            .await;
+        if session.in_transaction {
+            if let Some(conn) = session.conn.as_mut() {
+                sqlx::query("ROLLBACK")
+                    .execute(&mut **conn)
+                    .await
+                    .map_err(|err| AppError::Db(format!("回滚 MySQL 事务失败: {err}")))?;
+                let _ = sqlx::query("SET autocommit = 1").execute(&mut **conn).await;
+            }
+            session.in_transaction = false;
+            session.uncommitted_sqls.clear();
+            session.conn = None;
+        }
+        let status = session.to_status(session_id);
+        manager.put_console_session(session_id.to_string(), session).await;
+        Ok(status)
+    }
+
+    /// 关闭并清理指定控制台事务会话。
+    pub async fn close_console_session(&self, session_id: &str) -> Result<(), AppError> {
+        if let Some(manager) = &self.connection_manager {
+            manager.close_console_session(session_id).await;
+        }
+        Ok(())
     }
 
     /// 按主键按需读取单个大字段完整内容（用于 BLOB / 长文本截断预览展开）。

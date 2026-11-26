@@ -1,4 +1,5 @@
 pub mod provider;
+pub mod table_ddl;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -6,7 +7,9 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use crate::drivers::connection_manager::ConnectionManager;
-use crate::drivers::{BoxFuture, DataSourceDriver, ProviderCapabilities};
+use crate::drivers::{
+    BoxFuture, ConsoleTransactionStatus, DataSourceDriver, ProviderCapabilities, TransactionMode,
+};
 use crate::error::AppError;
 use crate::models::{
     MutationExecutionResult, ObjectDdl, ObjectDescribe, QueryResult, RecordUpdatePayload,
@@ -38,14 +41,16 @@ impl DataSourceDriver for MySqlDriver {
         ProviderCapabilities {
             query_language: "mysql".to_string(),
             supports_ddl: true,
+            supports_table_designer: true,
+            supports_backup: true,
             supports_transactional_batch: true,
             supports_create: true,
             supports_update: true,
             supports_delete: true,
             supports_mutation_preview: true,
             supports_child_relationships: false,
-            supports_interactive_transaction: true,
             supports_auth_window: false,
+            supports_interactive_transaction: true,
             null_display_text: "Null".to_string(),
         }
     }
@@ -153,6 +158,7 @@ impl DataSourceDriver for MySqlDriver {
                 .await
         })
     }
+
     fn execute_console_query<'a>(
         &'a self,
         source: &'a SalesforceSource,
@@ -219,7 +225,6 @@ impl DataSourceDriver for MySqlDriver {
     fn close_console_session<'a>(&'a self, session_id: &'a str) -> BoxFuture<'a, Result<(), AppError>> {
         Box::pin(async move { self.inner.close_console_session(session_id).await })
     }
-
 
     fn create_record<'a>(
         &'a self,

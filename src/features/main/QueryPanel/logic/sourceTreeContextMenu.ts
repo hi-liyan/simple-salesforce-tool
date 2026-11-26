@@ -32,6 +32,16 @@ export type SourceTreeContextMenuHandlers = {
   onOpenCloudListPage: (source: SalesforceSource, objectItem: SalesforceObject) => void;
   // 打开云端对象管理页（仅支持驱动）。
   onOpenCloudEditPage: (source: SalesforceSource, objectItem: SalesforceObject) => void;
+  // 打开新建表设计器（仅支持表设计器的驱动）。
+  onCreateTable?: (source: SalesforceSource) => void;
+  // 打开编辑表结构设计器（仅支持表设计器的驱动）。
+  onEditTable?: (source: SalesforceSource, tableName: string) => void;
+  // 打开多格式全表导出弹窗。
+  onExportTableData?: (source: SalesforceSource, tableName: string) => void;
+  // 打开整库备份弹窗（仅支持备份的驱动）。
+  onBackupDatabase?: (source: SalesforceSource) => void;
+  // 打开单表备份弹窗（仅支持备份的驱动）。
+  onBackupTable?: (source: SalesforceSource, tableName: string) => void;
 };
 
 type BuildTreeContextMenuInput = {
@@ -102,6 +112,17 @@ export function buildSourceTreeContextMenuEntries({
         : [])
     ];
 
+    if (driver.capabilities.supportsBackup && handlers.onBackupDatabase) {
+      entries.push(
+        { id: "source-backup-sep", type: "separator" },
+        {
+          id: "source-backup-db",
+          label: "备份数据库 (.sql)",
+          onClick: () => handlers.onBackupDatabase?.(source)
+        }
+      );
+    }
+
     if (driver.capabilities.supportsAuthWindow) {
       entries.push(
         { id: "source-auth-sep", type: "separator" },
@@ -116,7 +137,7 @@ export function buildSourceTreeContextMenuEntries({
   }
 
   if (node.kind === "group") {
-    return [
+    const groupEntries: ContextMenuEntry[] = [
       {
         id: "group-refresh",
         label: "刷新列表",
@@ -128,6 +149,17 @@ export function buildSourceTreeContextMenuEntries({
         onClick: () => handlers.onOpenConsole(source)
       }
     ];
+    if (node.groupType === "tables" && driver.capabilities.supportsTableDesigner && handlers.onCreateTable) {
+      groupEntries.push(
+        { id: "group-designer-sep", type: "separator" },
+        {
+          id: "group-create-table",
+          label: "新建表",
+          onClick: () => handlers.onCreateTable?.(source)
+        }
+      );
+    }
+    return groupEntries;
   }
 
   if (node.kind === "object-folder") {
@@ -238,6 +270,33 @@ export function buildSourceTreeContextMenuEntries({
       label: "复制建表 DDL",
       onClick: () => handlers.onCopyObjectDdl(source, targetObject.name)
     });
+  }
+
+  if (driver.capabilities.supportsTableDesigner && handlers.onEditTable) {
+    objectEntries.push({
+      id: "object-edit-table",
+      label: "编辑表结构",
+      onClick: () => handlers.onEditTable?.(source, targetObject.name)
+    });
+  }
+
+  if (handlers.onExportTableData || (driver.capabilities.supportsBackup && handlers.onBackupTable)) {
+    objectEntries.push({ id: "object-export-backup-sep", type: "separator" });
+    if (handlers.onExportTableData) {
+      objectEntries.push({
+        id: "object-export-data",
+        label: "导出表数据...",
+        disabled: !targetObject.queryable,
+        onClick: () => handlers.onExportTableData?.(source, targetObject.name)
+      });
+    }
+    if (driver.capabilities.supportsBackup && handlers.onBackupTable) {
+      objectEntries.push({
+        id: "object-backup-table",
+        label: "备份表 (.sql)",
+        onClick: () => handlers.onBackupTable?.(source, targetObject.name)
+      });
+    }
   }
 
   if (driver.gridAdapter.supportsOpenRecordPage) {

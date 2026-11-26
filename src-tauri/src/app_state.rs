@@ -35,6 +35,10 @@ pub struct AppState {
     pub llm_stream_cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
     /// 进行中的慢查询取消令牌（按 queryId 存储）。
     pub query_cancels: Mutex<HashMap<String, tokio::sync::watch::Sender<bool>>>,
+    /// 进行中的数据导出取消令牌（按 taskId 存储）。
+    pub export_cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    /// 进行中的数据库备份取消令牌（按 taskId 存储）。
+    pub backup_cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
     /// 终端会话池（按前端 Tab ID 持有 PTY 进程句柄）。
     pub terminal_sessions: Mutex<HashMap<String, TerminalSession>>,
     /// 局域网文件接收服务运行时（包含端口与关闭句柄）。

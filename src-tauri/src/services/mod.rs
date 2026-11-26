@@ -1,5 +1,7 @@
 pub mod audit_service;
+pub mod backup_service;
 pub mod diagnostic_service;
+pub mod export_service;
 pub mod metadata_service;
 pub mod mutation_plan_service;
 pub mod plugin_package_service;

@@ -3,12 +3,15 @@ import type { MouseEvent as ReactMouseEvent } from "react";
 import { api } from "../../../../api";
 import { ContextMenu, type ContextMenuEntry } from "../../../../components/ContextMenu";
 import { getDataSourceDriver } from "../../../../drivers/registry";
-import type { SalesforceObject, SalesforceSource } from "../../../../types";
+import type { BackupScope, SalesforceObject, SalesforceSource } from "../../../../types";
 import { useSourceTreeState, type QueryTreeRenderNode } from "../hooks/useSourceTreeState.ts";
 import { buildSourceSurfacePalette, getSourceColor } from "../logic/sourceColor.ts";
 import type { QuerySourceObjectSearchResult } from "../logic/sourceObjectSearch.ts";
 import { buildSourceTreeContextMenuEntries } from "../logic/sourceTreeContextMenu.ts";
 import { emitDeleteSourceRequest, emitOpenSourceModal } from "../../../source-manager/sourceModalEvents.ts";
+import { TableDesignerModal } from "../../../table-designer/TableDesignerModal.tsx";
+import { DataExportModal } from "../../../data-export/DataExportModal.tsx";
+import { DatabaseBackupModal } from "../../../data-export/DatabaseBackupModal.tsx";
 import { QuerySourceTreeNode } from "./QuerySourceTreeNode";
 
 type QuerySourceTreeProps = {
@@ -163,6 +166,29 @@ export function QuerySourceTree({
       }, {}),
     [sources]
   );
+
+  // 表结构设计器弹窗状态（新建表 / 编辑表结构）。
+  const [tableDesignerModal, setTableDesignerModal] = useState<{
+    open: boolean;
+    sourceId: string;
+    tableName: string | null;
+  }>({ open: false, sourceId: "", tableName: null });
+
+  // 多格式全表导出弹窗状态。
+  const [exportModal, setExportModal] = useState<{
+    open: boolean;
+    sourceId: string;
+    objectName: string;
+  }>({ open: false, sourceId: "", objectName: "" });
+
+  // 数据库逻辑 SQL 备份弹窗状态。
+  const [backupModal, setBackupModal] = useState<{
+    open: boolean;
+    sourceId: string;
+    sourceName: string;
+    scope: BackupScope;
+    tableName?: string;
+  }>({ open: false, sourceId: "", sourceName: "", scope: "database" });
 
   const {
     treeData,
@@ -379,6 +405,37 @@ export function QuerySourceTree({
           setNodeContextMenu(null);
           emitDeleteSourceRequest(source);
         },
+        onCreateTable: (source) => {
+          setNodeContextMenu(null);
+          setTableDesignerModal({ open: true, sourceId: source.id, tableName: null });
+        },
+        onEditTable: (source, tableName) => {
+          setNodeContextMenu(null);
+          setTableDesignerModal({ open: true, sourceId: source.id, tableName });
+        },
+        onExportTableData: (source, tableName) => {
+          setNodeContextMenu(null);
+          setExportModal({ open: true, sourceId: source.id, objectName: tableName });
+        },
+        onBackupDatabase: (source) => {
+          setNodeContextMenu(null);
+          setBackupModal({
+            open: true,
+            sourceId: source.id,
+            sourceName: source.name,
+            scope: "database"
+          });
+        },
+        onBackupTable: (source, tableName) => {
+          setNodeContextMenu(null);
+          setBackupModal({
+            open: true,
+            sourceId: source.id,
+            sourceName: source.name,
+            scope: "table",
+            tableName
+          });
+        },
         onOpenAuthWindow: () => {
           setNodeContextMenu(null);
           onOpenAuthWindow?.();
@@ -481,6 +538,44 @@ export function QuerySourceTree({
       {nodeContextMenu && (
         <ContextMenu x={nodeContextMenu.x} y={nodeContextMenu.y} entries={contextMenuEntries} />
       )}
+
+      {/* 表结构设计器弹窗（新建表 / 编辑表结构） */}
+      <TableDesignerModal
+        open={tableDesignerModal.open}
+        sourceId={tableDesignerModal.sourceId}
+        tableName={tableDesignerModal.tableName}
+        onClose={() => setTableDesignerModal((prev) => ({ ...prev, open: false }))}
+        onSuccess={() => {
+          const targetSourceId = tableDesignerModal.sourceId;
+          void (async () => {
+            await refreshSourceById(targetSourceId);
+            if (onRefreshSourceWorkspace) {
+              await onRefreshSourceWorkspace(targetSourceId);
+            }
+          })();
+        }}
+        onShowMessage={(message) => onNotify?.(message, "success")}
+      />
+
+      {/* 多格式异步流式导出弹窗 */}
+      <DataExportModal
+        open={exportModal.open}
+        sourceId={exportModal.sourceId}
+        objectName={exportModal.objectName}
+        onClose={() => setExportModal((prev) => ({ ...prev, open: false }))}
+        onShowMessage={(message) => onNotify?.(message, "success")}
+      />
+
+      {/* 纯 Rust 逻辑 SQL 备份弹窗 */}
+      <DatabaseBackupModal
+        open={backupModal.open}
+        sourceId={backupModal.sourceId}
+        sourceName={backupModal.sourceName}
+        scope={backupModal.scope}
+        tableName={backupModal.tableName}
+        onClose={() => setBackupModal((prev) => ({ ...prev, open: false }))}
+        onShowMessage={(message) => onNotify?.(message, "success")}
+      />
     </div>
   );
 }

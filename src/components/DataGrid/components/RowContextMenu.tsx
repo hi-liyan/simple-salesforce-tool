@@ -1,4 +1,5 @@
 import { ContextMenu, type ContextMenuEntry } from "../../ContextMenu";
+import type { ExportFormat } from "../../../types";
 import { RowContextMenuState } from "../types";
 
 type RowContextMenuProps = {
@@ -6,6 +7,8 @@ type RowContextMenuProps = {
   menuState: RowContextMenuState;
   // 复制单元格值。
   onCopyCell: () => void;
+  // 将选中行或当前行复制为指定格式。
+  onCopyRowsAsFormat: (format: Exclude<ExportFormat, "xlsx">) => void;
   // 设置单元格为空（None/Null）。
   onSetNullish: () => void;
   // 设置单元格恢复默认值。
@@ -22,6 +25,7 @@ type RowContextMenuProps = {
 export function RowContextMenu({
   menuState,
   onCopyCell,
+  onCopyRowsAsFormat,
   onSetNullish,
   onSetDefaultValue,
   onOpenRecordPage,
@@ -32,10 +36,38 @@ export function RowContextMenu({
   const entries: ContextMenuEntry[] = [
     {
       id: "copy-cell",
-      label: "复制",
+      label: "复制单元格",
       onClick: () => {
         onCopyCell(); // 复制当前单元格数据并关闭菜单。
       }
+    },
+    {
+      id: "copy-rows-sep",
+      type: "separator"
+    },
+    {
+      id: "copy-rows-sql",
+      label: "复制为 SQL INSERT",
+      onClick: () => onCopyRowsAsFormat("sqlInsert")
+    },
+    {
+      id: "copy-rows-json",
+      label: "复制为 JSON",
+      onClick: () => onCopyRowsAsFormat("json")
+    },
+    {
+      id: "copy-rows-csv",
+      label: "复制为 CSV",
+      onClick: () => onCopyRowsAsFormat("csv")
+    },
+    {
+      id: "copy-rows-md",
+      label: "复制为 Markdown",
+      onClick: () => onCopyRowsAsFormat("markdown")
+    },
+    {
+      id: "copy-rows-end-sep",
+      type: "separator"
     },
     ...(menuState.canSetNullish
       ? [{

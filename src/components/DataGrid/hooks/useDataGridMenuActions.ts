@@ -2,6 +2,8 @@ import { useCallback } from "react";
 import { api } from "../../../api";
 import { RowContextMenuState } from "../types";
 import type { GridAdapter } from "../../../drivers/types.ts";
+import type { ExportFormat } from "../../../types";
+import { copyTextToClipboard, formatRecordsToText } from "../../../features/data-export/formatters";
 
 type UseDataGridMenuActionsParams = {
   // 当前右键菜单状态。
@@ -18,6 +20,11 @@ type UseDataGridMenuActionsParams = {
   onEditCell: (rowIndex: number, columnName: string, value: unknown) => void;
   // 用户提示回调。
   onShowMessage: (message: string) => void;
+  // 当前展示的记录集与可见列（用于多格式复制）。
+  records?: Record<string, unknown>[];
+  columnNames?: string[];
+  selectedRecordIds?: string[];
+  primaryKeyField?: string;
 };
 
 // 右键菜单动作 Hook：封装复制、置空、打开记录页的副作用逻辑。
@@ -28,7 +35,11 @@ export function useDataGridMenuActions({
   objectName,
   gridAdapter,
   onEditCell,
-  onShowMessage
+  onShowMessage,
+  records = [],
+  columnNames = [],
+  selectedRecordIds = [],
+  primaryKeyField = ""
 }: UseDataGridMenuActionsParams) {
   const { codec } = gridAdapter;
   // 打开 Salesforce 记录页：后端校验 token 后直接打开系统浏览器。
@@ -89,10 +100,56 @@ export function useDataGridMenuActions({
     setRowContextMenu(null);
   }, [rowContextMenu, onEditCell, setRowContextMenu, codec]);
 
+  // 右键菜单动作：将当前勾选行（若无勾选则取当前右键所在行）复制为指定格式。
+  const copyRowsAsFormatFromMenu = useCallback(
+    async (format: Exclude<ExportFormat, "xlsx">) => {
+      if (!rowContextMenu) return;
+      setRowContextMenu(null);
+      const selectedSet = new Set(selectedRecordIds);
+      const matched =
+        selectedSet.size > 0
+          ? records.filter((row) => {
+              const id = gridAdapter.resolveRecordKey(row, primaryKeyField);
+              return Boolean(id) && selectedSet.has(id);
+            })
+          : [];
+      const targetRows =
+        matched.length > 0
+          ? matched
+          : records[rowContextMenu.rowIndex]
+            ? [records[rowContextMenu.rowIndex]]
+            : [];
+      if (targetRows.length === 0 || columnNames.length === 0) {
+        onShowMessage("当前没有可复制的数据行。");
+        return;
+      }
+      const text = formatRecordsToText({
+        format,
+        columns: columnNames,
+        records: targetRows,
+        tableName: objectName || "exported_table"
+      });
+      await copyTextToClipboard(text);
+      onShowMessage(`已复制 ${targetRows.length} 行（${format.toUpperCase()}）到剪贴板。`);
+    },
+    [
+      rowContextMenu,
+      setRowContextMenu,
+      selectedRecordIds,
+      records,
+      columnNames,
+      gridAdapter,
+      primaryKeyField,
+      objectName,
+      onShowMessage
+    ]
+  );
+
   return {
     openRecordPageFromMenu,
     copyCellValueFromMenu,
     setCellNullishFromMenu,
-    setCellDefaultValueFromMenu
+    setCellDefaultValueFromMenu,
+    copyRowsAsFormatFromMenu
   };
 }

@@ -643,3 +643,120 @@ export type TerminalCommandReorderPayload = {
   groupId: string;
   commandIds: string[];
 };
+
+// 表结构列定义（新建表与编辑表结构对比通用）。
+export type TableColumnSpec = {
+  originalName?: string | null;
+  name: string;
+  dataType: string;
+  nullable: boolean;
+  isPrimaryKey: boolean;
+  autoIncrement: boolean;
+  defaultValue?: string | null;
+  comment: string;
+  markedForDrop?: boolean;
+};
+
+// 表索引定义。
+export type TableIndexSpec = {
+  originalName?: string | null;
+  name: string;
+  columns: string[];
+  unique: boolean;
+  indexType: string;
+  markedForDrop?: boolean;
+};
+
+// 表外键定义。
+export type TableForeignKeySpec = {
+  originalName?: string | null;
+  name: string;
+  column: string;
+  refTable: string;
+  refColumn: string;
+  onDelete: string;
+  onUpdate: string;
+  markedForDrop?: boolean;
+};
+
+// 完整表结构定义。
+export type TableStructureSpec = {
+  tableName: string;
+  comment: string;
+  engine: string;
+  charset: string;
+  columns: TableColumnSpec[];
+  indexes: TableIndexSpec[];
+  foreignKeys: TableForeignKeySpec[];
+};
+
+// 导出文件格式。
+export type ExportFormat = "csv" | "tsv" | "json" | "markdown" | "sqlInsert" | "xlsx";
+
+// 后端流式导出请求参数。
+export type ExportDataRequest = {
+  taskId: string;
+  sourceId: string;
+  objectName?: string;
+  sql?: string;
+  format: ExportFormat;
+  outputPath: string;
+  includeHeader?: boolean;
+  batchSize?: number;
+};
+
+// 后端流式导出进度载荷。
+export type ExportProgressPayload = {
+  taskId: string;
+  exportedRows: number;
+  totalRows?: number | null;
+  phase: "querying" | "writing" | "finalizing" | "completed" | "cancelled" | "failed";
+  message: string;
+};
+
+// 后端导出结果摘要。
+export type ExportResult = {
+  taskId: string;
+  outputPath: string;
+  exportedRows: number;
+  fileSizeBytes: number;
+  durationMs: number;
+};
+
+// 数据库备份范围。
+export type BackupScope = "database" | "table";
+
+// 数据库逻辑 SQL 备份请求参数。
+export type BackupRequest = {
+  taskId: string;
+  sourceId: string;
+  scope: BackupScope;
+  tableName?: string;
+  outputPath: string;
+  includeDropTable?: boolean;
+  includeCreateDatabase?: boolean;
+  stripAutoIncrement?: boolean;
+  includeData?: boolean;
+  batchSize?: number;
+};
+
+// 数据库备份进度载荷。
+export type BackupProgressPayload = {
+  taskId: string;
+  currentTable: string;
+  completedTables: number;
+  totalTables: number;
+  exportedRows: number;
+  phase: "preparing" | "dumping" | "finalizing" | "completed" | "cancelled" | "failed";
+  message: string;
+};
+
+// 数据库备份完成结果。
+export type BackupResult = {
+  taskId: string;
+  outputPath: string;
+  tableCount: number;
+  exportedRows: number;
+  fileSizeBytes: number;
+  durationMs: number;
+};

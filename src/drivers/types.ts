@@ -68,6 +68,10 @@ export interface FrontendDriverCapabilities {
   queryLanguage: QueryLanguage;
   // 是否支持 DDL 视图。
   supportsDdl: boolean;
+  // 是否支持图形化新建表与编辑表结构。
+  supportsTableDesigner: boolean;
+  // 是否支持逻辑数据库备份。
+  supportsBackup: boolean;
   // 是否支持 EXPLAIN 执行计划。
   supportsExplain: boolean;
   // 是否支持多语句顺序执行。
@@ -77,9 +81,9 @@ export interface FrontendDriverCapabilities {
   // 是否支持单事务批量提交（含删除）。
   supportsTransactionalBatch: boolean;
   // 是否支持独立 OAuth 授权窗口。
+  supportsAuthWindow: boolean;
   // 是否支持控制台交互式会话事务（Auto / Manual / Smart）。
   supportsInteractiveTransaction: boolean;
-  supportsAuthWindow: boolean;
   // 默认右侧抽屉视图。
   defaultDrawerView: QueryDrawerView;
 }

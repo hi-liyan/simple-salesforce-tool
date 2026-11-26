@@ -157,14 +157,24 @@ export function DataGrid({
     error: string;
   } | null>(null);
 
-  const { openRecordPageFromMenu, copyCellValueFromMenu, setCellNullishFromMenu, setCellDefaultValueFromMenu } = useDataGridMenuActions({
+  const {
+    openRecordPageFromMenu,
+    copyCellValueFromMenu,
+    setCellNullishFromMenu,
+    setCellDefaultValueFromMenu,
+    copyRowsAsFormatFromMenu
+  } = useDataGridMenuActions({
     rowContextMenu,
     setRowContextMenu,
     sourceId,
     objectName,
     gridAdapter,
     onEditCell,
-    onShowMessage
+    onShowMessage,
+    records,
+    columnNames: columns.map((col) => String(col.id || col.title)),
+    selectedRecordIds,
+    primaryKeyField
   });
 
   const getRecordKey = useCallback((rowIndex: number): string => {
@@ -376,6 +386,9 @@ export function DataGrid({
         onToggleAll={onToggleAll}
         onCopyCell={() => {
           void copyCellValueFromMenu();
+        }}
+        onCopyRowsAsFormat={(format) => {
+          void copyRowsAsFormatFromMenu(format);
         }}
         onSetNullish={setCellNullishFromMenu}
         onSetDefaultValue={setCellDefaultValueFromMenu}

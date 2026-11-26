@@ -36,6 +36,7 @@ fn main() {
                 .open_js_links_on_click(false)
                 .build(),
         )
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         // 注册 `plugin://` 自定义协议：安全映射 `{app_data_dir}/plugins/<plugin-id>/` 下的静态资源供 iframe 沙箱加载。
@@ -124,6 +125,8 @@ fn main() {
                 llm_conversations: Mutex::new(HashMap::new()),
                 llm_stream_cancels: Mutex::new(HashMap::new()),
                 query_cancels: Mutex::new(HashMap::new()),
+                export_cancels: Mutex::new(HashMap::new()),
+                backup_cancels: Mutex::new(HashMap::new()),
                 terminal_sessions: Mutex::new(HashMap::new()),
                 lan_file_receiver: Mutex::new(None),
             });
@@ -164,6 +167,13 @@ fn main() {
             commands::resolve_field_child_relationship_name,
             commands::query_records,
             commands::read_cell_full_value,
+            commands::get_table_structure_spec,
+            commands::preview_create_table_sql,
+            commands::preview_alter_table_sql,
+            commands::export_data_to_file,
+            commands::cancel_data_export,
+            commands::backup_database_to_file,
+            commands::cancel_database_backup,
             commands::get_current_user_context,
             commands::create_record,
             commands::save_records,
@@ -228,12 +238,12 @@ fn main() {
             commands::list_sql_execution_audits,
             commands::execute_guarded_query,
             commands::execute_multi_statement_query,
+            commands::cancel_query,
             commands::get_console_transaction_status,
             commands::set_console_transaction_mode,
             commands::commit_console_transaction,
             commands::rollback_console_transaction,
             commands::close_console_session,
-            commands::cancel_query,
             commands::diagnose_sql,
             commands::prepare_mutation_plan,
             commands::commit_mutation_plan,
