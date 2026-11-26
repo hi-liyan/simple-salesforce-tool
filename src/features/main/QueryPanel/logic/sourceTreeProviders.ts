@@ -1,4 +1,5 @@
-import type { SalesforceObject, SalesforceSource } from "../../../../types/index.ts";
+import { getDataSourceDriver } from "../../../../drivers/registry.ts";
+import type { ObjectField, SalesforceObject, SalesforceSource } from "../../../../types/index.ts";
 import type { QueryTreeNode, QueryTreeProviderContext } from "../types/tree.ts";
 
 // 构造 source 根节点：统一供左侧树第一层渲染使用。
@@ -21,36 +22,71 @@ export function buildSourceRootNodes(sources: SalesforceSource[], context: Query
     }));
 }
 
-// Salesforce 根子节点：第一版直接映射为对象节点。
-export async function buildSalesforceRootChildren(
+// 按驱动树配置构造数据源根子节点（由驱动声明决定是否分组及是否允许列展开）。
+export async function buildDriverSourceChildren(
   source: SalesforceSource,
   context: QueryTreeProviderContext
 ): Promise<QueryTreeNode[]> {
+  const sourceType = String(source.sourceType || "salesforce");
+  const driver = getDataSourceDriver(sourceType);
+  if (driver.treeConfig.useGroupNodes) {
+    return driver.treeConfig.groups.map((group) =>
+      buildGroupNode(source.id, sourceType, group.groupType, group.label)
+    );
+  }
+
   const objects = context.withSalesforceSourceReauth
     ? await context.withSalesforceSourceReauth(source, () => context.listObjects(source.id))
     : await context.listObjects(source.id);
-  return objects.map((item) => buildObjectNode(source.id, String(source.sourceType || "salesforce"), item));
+  return objects.map((item) =>
+    buildObjectNode(source.id, sourceType, item, driver.treeConfig.supportsColumnExpansion)
+  );
 }
 
-// MySQL 根子节点：第一版先提供数据库客户端风格分组。
-export async function buildMySqlRootChildren(
-  source: SalesforceSource,
-  _context: QueryTreeProviderContext
-): Promise<QueryTreeNode[]> {
-  return [
-    buildGroupNode(source.id, String(source.sourceType || "mysql"), "tables", "tables"),
-    buildGroupNode(source.id, String(source.sourceType || "mysql"), "collations", "collations"),
-    buildGroupNode(source.id, String(source.sourceType || "mysql"), "users", "users"),
-    buildGroupNode(source.id, String(source.sourceType || "mysql"), "virtual-views", "virtual views")
-  ];
+// 兼容导出：构造分组下表/对象子节点。
+export function buildGroupObjectChildren(
+  sourceId: string,
+  sourceType: string,
+  objects: SalesforceObject[]
+): QueryTreeNode[] {
+  const driver = getDataSourceDriver(sourceType);
+  return objects.map((item) =>
+    buildObjectNode(sourceId, sourceType, item, driver.treeConfig.supportsColumnExpansion)
+  );
 }
 
-// MySQL tables 分组子节点：当前使用对象列表映射表节点，其余分组待后端能力补齐。
-export function buildMySqlTableChildren(sourceId: string, objects: SalesforceObject[]): QueryTreeNode[] {
-  return objects.map((item) => buildObjectNode(sourceId, "mysql", item));
+// 构造表/对象下的字段（Columns）子节点列表。
+export function buildObjectColumnChildren(
+  sourceId: string,
+  sourceType: string,
+  objectName: string,
+  fields: ObjectField[]
+): QueryTreeNode[] {
+  return fields.map((field) => {
+    const columnKey = String(field.metadata?.columnKey || "").toUpperCase();
+    const isPrimaryKey = columnKey === "PRI" || field.name === "Id";
+    const dataType = String(field.metadata?.columnType || field.dataType || "");
+    return {
+      id: `column:${sourceId}:${objectName}:${field.name}`,
+      kind: "column",
+      sourceId,
+      sourceType,
+      objectName,
+      columnName: field.name,
+      dataType,
+      isPrimaryKey,
+      nullable: field.nillable,
+      label: dataType ? `${field.name} (${dataType})` : field.name,
+      expandable: false
+    };
+  });
 }
 
-// 构造 group 节点：后续可继续补数量与深层 children。
+// 兼容导出：委托给通用驱动树构建函数。
+export const buildSalesforceRootChildren = buildDriverSourceChildren;
+export const buildMySqlRootChildren = buildDriverSourceChildren;
+
+// 构造 group 节点。
 function buildGroupNode(sourceId: string, sourceType: string, groupType: string, label: string): QueryTreeNode {
   return {
     id: `group:${sourceId}:${groupType}`,
@@ -63,8 +99,13 @@ function buildGroupNode(sourceId: string, sourceType: string, groupType: string,
   };
 }
 
-// 构造 object 节点：保留 queryable 信息供后续打开行为判定。
-function buildObjectNode(sourceId: string, sourceType: string, objectItem: SalesforceObject): QueryTreeNode {
+// 构造 object 节点：保留 queryable 与可展开列信息。
+function buildObjectNode(
+  sourceId: string,
+  sourceType: string,
+  objectItem: SalesforceObject,
+  supportsColumnExpansion: boolean
+): QueryTreeNode {
   return {
     id: `object:${sourceId}:${objectItem.name}`,
     kind: "object",
@@ -73,6 +114,6 @@ function buildObjectNode(sourceId: string, sourceType: string, objectItem: Sales
     objectName: objectItem.name,
     label: objectItem.label || objectItem.name,
     queryable: objectItem.queryable,
-    expandable: false
+    expandable: supportsColumnExpansion
   };
 }

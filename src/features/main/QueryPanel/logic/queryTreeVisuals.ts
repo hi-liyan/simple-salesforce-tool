@@ -1,6 +1,6 @@
 import type { QueryTreeNode } from "../types/tree.ts";
 
-// 左侧树视觉类型：统一约束 source/group/object 的极简图标风格。
+// 左侧树视觉类型：统一约束 source/group/object/column 的极简图标风格。
 export type QueryTreeVisualKind =
   | "source-salesforce"
   | "source-mysql"
@@ -12,7 +12,9 @@ export type QueryTreeVisualKind =
   | "group-generic"
   | "object-mysql-table"
   | "object-queryable"
-  | "object-readonly";
+  | "object-readonly"
+  | "column-pk"
+  | "column-field";
 
 // 左侧树文字徽标定义：统一控制文案与色调，避免组件内散落判断。
 export type QueryTreeBadgeMeta = {
@@ -37,6 +39,10 @@ export function resolveQueryTreeVisualKind(node: QueryTreeNode): QueryTreeVisual
     if (node.groupType === "users") return "group-users";
     if (node.groupType === "virtual-views") return "group-views";
     return "group-generic";
+  }
+
+  if (node.kind === "column") {
+    return node.isPrimaryKey ? "column-pk" : "column-field";
   }
 
   if (String(node.sourceType || "").toLowerCase() === "mysql") {
@@ -69,6 +75,10 @@ export function resolveQueryTreeBadgeMeta(kind: QueryTreeVisualKind): QueryTreeB
       return { text: "T", tone: "amber" };
     case "object-readonly":
       return { text: "NQ", tone: "muted" };
+    case "column-pk":
+      return { text: "PK", tone: "amber" };
+    case "column-field":
+      return { text: "C", tone: "gray" };
     case "object-queryable":
     default:
       return { text: "O", tone: "amber" };

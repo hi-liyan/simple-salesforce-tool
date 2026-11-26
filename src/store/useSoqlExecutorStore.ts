@@ -163,8 +163,8 @@ type SoqlExecutorState = {
   setTabs: (tabs: SoqlExecutorTab[] | ((tabs: SoqlExecutorTab[]) => SoqlExecutorTab[])) => void;
   // 设置激活 Tab ID。
   setActiveTabId: (tabId: string | ((current: string) => string)) => void;
-  // 新建 Tab：创建时写入来源数据源上下文。
-  createTab: (sourceMeta?: Partial<SourceBindingMeta>) => string;
+  // 新建 Tab：创建时写入来源数据源上下文与可选初始 SQL。
+  createTab: (sourceMeta?: Partial<SourceBindingMeta>, initialSql?: string) => string;
   // 关闭指定 Tab（批量）。
   closeTabsByIds: (tabIds: string[]) => void;
   // 关闭单个 Tab。
@@ -197,9 +197,12 @@ export const useSoqlExecutorStore = create<SoqlExecutorState>()(
           activeTabId: typeof tabId === "function" ? tabId(state.activeTabId) : tabId
         })),
 
-      createTab: (sourceMeta = {}) => {
+      createTab: (sourceMeta = {}, initialSql = "") => {
         const { tabs } = get();
-        const nextTab = createSoqlExecutorTab(tabs.length + 1, sourceMeta);
+        const nextTab = {
+          ...createSoqlExecutorTab(tabs.length + 1, sourceMeta),
+          soqlDraft: initialSql || ""
+        };
         set((state) => ({
           tabs: [...state.tabs, nextTab],
           activeTabId: nextTab.id

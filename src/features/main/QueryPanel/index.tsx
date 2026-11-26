@@ -165,6 +165,7 @@ export function QueryPanel({ viewState, actions }: QueryPanelProps) {
           onChangeSource={actions.onChangeSource}
           onRefreshSources={actions.onRefreshSources}
           onOpenConsole={actions.onOpenConsole}
+          onShowMessage={(message) => actions.onShowMessage(message)}
           objects={viewState.objects}
           activeTabObjectName={viewState.activeTabObjectName}
           onOpenObject={actions.onOpenObject}

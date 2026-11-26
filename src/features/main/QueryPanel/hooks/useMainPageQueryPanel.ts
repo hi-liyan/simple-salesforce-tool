@@ -360,12 +360,17 @@ export function useMainPageQueryPanel({
 
       try {
         if (!skipObjectFetch) {
-          await queryClient.fetchQuery({
+          const refreshedObjects = await queryClient.fetchQuery({
             queryKey: ["objects", normalizedSourceId],
             staleTime: 0,
             retry: false,
-            queryFn: () => api.listObjects(normalizedSourceId)
+            queryFn: () => api.refreshObjects(normalizedSourceId)
           });
+          window.dispatchEvent(
+            new CustomEvent("query:source-objects-refreshed", {
+              detail: { sourceId: normalizedSourceId, objects: refreshedObjects }
+            })
+          );
         }
         await reloadTabsForSource(normalizedSourceId);
         showWorkspaceNotice({ type: "success", message: "数据源元数据已刷新。" });

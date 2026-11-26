@@ -103,8 +103,8 @@ export type QueryPanelActions = {
   onSetViewMode: (viewMode: MainViewMode) => void;
   // 打开认证窗口。
   onOpenAuthWindow: () => void;
-  // 新建并打开查询控制台。
-  onOpenConsole: (source?: SalesforceSource) => void;
+  // 新建并打开查询控制台（支持可选初始 SQL）。
+  onOpenConsole: (source?: SalesforceSource, initialSql?: string) => void;
   // 激活统一工作区 Tab。
   onActivateWorkspaceTab: (workspaceTabId: string) => void;
   // 拖拽排序统一工作区 Tabs：基于拖拽前后 ID 调整展示顺序。
