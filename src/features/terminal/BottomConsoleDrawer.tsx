@@ -15,7 +15,7 @@ import { ReusableTabs } from "../../components/tabs/ReusableTabs";
 import { sortTabsByOrder } from "../../components/tabs/tabOrder";
 import { subscribePluginEvent } from "../../plugins/core/createPluginContext";
 import { useTerminalStore } from "../../store/useTerminalStore";
-import { buildTerminalTabTooltip, type TerminalProcessMeta } from "../main/TerminalPanel/uiState.ts";
+import { buildTerminalTabTooltip, type TerminalProcessMeta } from "./uiState.ts";
 import { SavedCommandsPanel } from "./SavedCommandsPanel";
 import { TerminalViewport, type TerminalViewportHandle } from "./TerminalViewport";
 

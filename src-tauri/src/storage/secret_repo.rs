@@ -6,6 +6,7 @@ use crate::storage::secret_crypto;
 
 /// 单条 secret 容器记录。
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct SecretBundleRecord {
     /// 容器 ID。
     pub id: String,
@@ -125,6 +126,7 @@ pub fn read_secret_item_plaintext(
 }
 
 /// 读取 source 关联的 secret bundle。
+#[allow(dead_code)]
 pub fn find_bundle_by_owner(
     tx: &Transaction<'_>,
     owner_type: &str,

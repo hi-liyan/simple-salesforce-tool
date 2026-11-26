@@ -92,6 +92,7 @@ impl<'a> SourceService<'a> {
     }
 
     /// 指定 ID 执行 upsert：供 CLI 数据源同步链路使用。
+    #[allow(dead_code)]
     pub fn upsert_source_with_id(
         &self,
         source_id: &str,
@@ -139,6 +140,7 @@ impl<'a> SourceService<'a> {
     }
 
     /// 清理未保留的 CLI 数据源。
+    #[allow(dead_code)]
     pub fn prune_cli_sources(&self, keep_ids: &[String]) -> Result<(), AppError> {
         self.storage
             .write(|conn| source_repo::prune_cli_sources(conn, keep_ids))

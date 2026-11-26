@@ -7,7 +7,7 @@ import {
   SYSTEM_LOG_COLLAPSE_CHAR_LIMIT,
   buildSystemLogContent,
   shouldCollapseSystemLogContent
-} from "../../src/features/main/SettingsPanel/systemLogContent.ts";
+} from "../../src/features/logs/systemLogContent.ts";
 
 test("buildSystemLogContent: 应在存在 detail 时输出统一的可读内容块", () => {
   assert.equal(buildSystemLogContent("请求失败", "stack line 1"), "请求失败\n\n详情:\nstack line 1");

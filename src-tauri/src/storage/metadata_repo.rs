@@ -436,6 +436,7 @@ pub fn snapshot_to_describe(snapshot: &ObjectSnapshot) -> ObjectDescribe {
 }
 
 /// 尝试从 blob 中读取 describe JSON。
+#[allow(dead_code)]
 pub fn extract_describe_blob(snapshot: &ObjectSnapshot) -> Option<Value> {
     snapshot
         .blobs

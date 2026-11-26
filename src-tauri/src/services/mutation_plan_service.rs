@@ -13,6 +13,7 @@ const PLAN_TTL: Duration = Duration::from_secs(300);
 #[derive(Debug, Clone)]
 pub struct CompiledMutationPlan {
     /// 计划唯一 ID。
+    #[allow(dead_code)]
     pub plan_id: String,
     /// 计划内容哈希（用于前端回传校验）。
     pub plan_hash: String,

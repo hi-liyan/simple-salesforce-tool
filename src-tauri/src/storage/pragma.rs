@@ -28,8 +28,3 @@ pub fn apply_read_pragmas(connection: &Connection) -> Result<(), AppError> {
     )?;
     Ok(())
 }
-
-/// 兼容旧入口：默认应用写连接 PRAGMA。
-pub fn apply_pragmas(connection: &Connection) -> Result<(), AppError> {
-    apply_write_pragmas(connection)
-}

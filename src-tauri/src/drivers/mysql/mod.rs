@@ -1,6 +1,4 @@
-pub mod config;
 pub mod provider;
-pub mod sql_utils;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -20,16 +18,13 @@ use provider::MySqlProvider;
 pub struct MySqlDriver {
     /// 内部 MySQL 执行器。
     inner: MySqlProvider,
-    /// 连接池管理器（用于后续复用连接池与配置变更驱逐）。
-    _connection_manager: Arc<ConnectionManager>,
 }
 
 impl MySqlDriver {
     /// 创建 MySQL 驱动实例。
     pub fn new(connection_manager: Arc<ConnectionManager>) -> Self {
         Self {
-            inner: MySqlProvider::new(),
-            _connection_manager: connection_manager,
+            inner: MySqlProvider::with_connection_manager(connection_manager),
         }
     }
 }

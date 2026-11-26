@@ -6,13 +6,13 @@ import "@xterm/xterm/css/xterm.css";
 import { api } from "../../api";
 import { useTerminalStore, type TerminalTab } from "../../store/useTerminalStore";
 import type { TerminalClosedEvent, TerminalOutputEvent } from "../../types";
-import { buildTerminalInlineNotice, type TerminalProcessMeta } from "../main/TerminalPanel/uiState.ts";
+import { buildTerminalInlineNotice, type TerminalProcessMeta } from "./uiState.ts";
 import {
   fitTerminalViewportToContainer,
   shouldOpenTerminalSessionForViewport,
   shouldResizeTerminalSessionForViewport,
   type TerminalViewportSize
-} from "../main/TerminalPanel/viewport.ts";
+} from "./viewport.ts";
 
 // 单个 xterm 运行时实例。
 type TerminalRuntime = {

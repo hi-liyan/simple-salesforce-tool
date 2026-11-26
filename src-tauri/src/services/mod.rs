@@ -8,4 +8,3 @@ pub mod query_service;
 pub mod secret_service;
 pub mod source_service;
 pub mod sql_guard;
-pub mod workspace_service;

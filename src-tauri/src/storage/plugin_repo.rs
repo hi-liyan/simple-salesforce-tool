@@ -5,6 +5,7 @@ use crate::error::AppError;
 
 /// 插件持久化键值记录。
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct PluginKvEntry {
     /// 插件唯一标识。
     pub plugin_id: String,
@@ -233,6 +234,7 @@ pub fn delete_installed_plugin(tx: &Transaction<'_>, plugin_id: &str) -> Result<
 }
 
 /// 列出指定插件的全部键值项。
+#[allow(dead_code)]
 pub fn list_plugin_kv(
     connection: &Connection,
     plugin_id: &str,

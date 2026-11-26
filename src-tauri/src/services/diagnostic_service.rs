@@ -3,11 +3,13 @@ use crate::models::{SecretAuditEntry, SecretAuditRecord};
 use crate::storage::{log_repo, secret_repo, Storage};
 
 /// 诊断服务：负责系统日志与 secret 访问审计。
+#[allow(dead_code)]
 pub struct DiagnosticService<'a> {
     /// 存储入口。
     storage: &'a Storage,
 }
 
+#[allow(dead_code)]
 impl<'a> DiagnosticService<'a> {
     /// 创建诊断服务。
     pub fn new(storage: &'a Storage) -> Self {

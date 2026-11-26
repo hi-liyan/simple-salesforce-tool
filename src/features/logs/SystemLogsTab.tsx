@@ -6,7 +6,7 @@ import {
   buildSystemLogContent,
   extractSystemLogStructuredFailureText,
   parseSystemLogDetail
-} from "../main/SettingsPanel/systemLogContent";
+} from "./systemLogContent";
 
 // 系统运行日志视图：支持级别/失败筛选、搜索、分页与右侧详情检视。
 export function SystemLogsTab() {

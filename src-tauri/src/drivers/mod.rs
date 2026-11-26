@@ -46,6 +46,7 @@ pub struct ProviderCapabilities {
 }
 
 /// 统一数据源驱动抽象：所有数据源必须实现该 Trait 并注册到 `DriverRegistry`。
+#[allow(dead_code)]
 pub trait DataSourceDriver: Send + Sync {
     /// 返回驱动类型标识（小写，如 "salesforce"、"mysql"、"postgres"）。
     fn kind(&self) -> &'static str;

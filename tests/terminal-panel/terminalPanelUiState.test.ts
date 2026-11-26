@@ -6,7 +6,7 @@ import {
   buildTerminalStatusSummary,
   buildTerminalTabTooltip,
   type TerminalProcessMeta
-} from "../../src/features/main/TerminalPanel/uiState.ts";
+} from "../../src/features/terminal/uiState.ts";
 
 function createMeta(overrides?: Partial<TerminalProcessMeta>): TerminalProcessMeta {
   return {
@@ -72,8 +72,8 @@ test("buildTerminalTabTooltip: 应按 tooltip 约定输出 PID、命令行与终
   assert.equal(tooltip, "进程 ID (PID): 9527\n命令行: powershell.exe -NoLogo\n终端版本: PowerShell 7.5.1");
 });
 
-test("TerminalPanel: 不应再渲染顶部状态栏", () => {
-  const source = readFileSync(new URL("../../src/features/main/TerminalPanel/index.tsx", import.meta.url), "utf8");
+test("BottomConsoleDrawer: 不应再渲染顶部状态栏", () => {
+  const source = readFileSync(new URL("../../src/features/terminal/BottomConsoleDrawer.tsx", import.meta.url), "utf8");
 
   assert.equal(source.includes("活动终端状态栏"), false);
   assert.equal(source.includes("activeTerminalStatus"), false);
