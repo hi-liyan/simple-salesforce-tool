@@ -1,7 +1,7 @@
 {
   "name": "simple-salesforce-tool",
   "private": true,
-  "version": "0.5.1",
+  "version": "0.6.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
