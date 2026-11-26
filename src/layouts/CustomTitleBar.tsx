@@ -67,17 +67,38 @@ export function CustomTitleBar({
 
   useEffect(() => {
     let active = true;
+    let unlistenResize: (() => void) | null = null;
+    const win = getCurrentWindow();
+
     const syncMaximized = async () => {
       try {
-        const isMax = await getCurrentWindow().isMaximized();
+        const isMax = await win.isMaximized();
         if (active) setMaximized(isMax);
       } catch {
         // 非 Tauri 环境忽略。
       }
     };
+
     void syncMaximized();
+    // 监听窗口尺寸变化，确保通过双击标题栏、系统贴靠或按钮缩放时最大化图标状态始终同步。
+    void win
+      .onResized(() => {
+        void syncMaximized();
+      })
+      .then((unlisten) => {
+        if (active) {
+          unlistenResize = unlisten;
+        } else {
+          unlisten();
+        }
+      })
+      .catch(() => {
+        // 非 Tauri 环境忽略。
+      });
+
     return () => {
       active = false;
+      unlistenResize?.();
     };
   }, []);
 
@@ -109,10 +130,12 @@ export function CustomTitleBar({
 
   const handleHeaderMouseDown = (event: React.MouseEvent<HTMLElement>) => {
     // 仅在左键点击非交互控件区域时触发原生窗口拖拽/双击最大化。
+    // 注意：此处统一由 onMouseDown 接管，不再叠加 data-tauri-drag-region，避免双击时触发两次 toggleMaximize 导致“全屏后立刻缩小”。
     if (event.button !== 0) return;
     const target = event.target as HTMLElement | null;
     if (target?.closest("button, input, select, a, [data-no-drag]")) return;
     if (event.detail === 2) {
+      event.preventDefault();
       void handleToggleMaximize();
       return;
     }
@@ -125,7 +148,6 @@ export function CustomTitleBar({
 
   return (
     <header
-      data-tauri-drag-region
       onMouseDown={handleHeaderMouseDown}
       className="flex h-[42px] shrink-0 select-none items-center justify-between px-2 text-[12px]"
     >
@@ -164,8 +186,8 @@ export function CustomTitleBar({
         </button>
       </div>
 
-      {/* 中间弹性拖拽区：确保空白处稳定响应拖拽与双击全屏。 */}
-      <div data-tauri-drag-region className="h-full min-w-[40px] flex-1" />
+      {/* 中间弹性拖拽区：由外层 header 的 onMouseDown 统一处理拖拽与双击最大化。 */}
+      <div className="h-full min-w-[40px] flex-1" />
 
       {/* 右侧：更新入口、插件入口、AI 开关、日志设置与自绘窗口控制按钮。 */}
       <div className="flex items-center gap-1">
