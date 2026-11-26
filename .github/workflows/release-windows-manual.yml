@@ -1,0 +1,98 @@
+name: Manual Release Windows
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "版本号递增方式（默认 auto 根据提交记录自动判断）"
+        required: true
+        default: "auto"
+        type: choice
+        options:
+          - auto
+          - patch
+          - minor
+          - major
+
+# 需要写入仓库代码（回写版本号、打 Tag）以及创建 GitHub Release
+permissions:
+  contents: write
+
+jobs:
+  build-and-release-windows:
+    name: Build & Release Windows
+    runs-on: windows-latest
+
+    steps:
+      # 1. 拉取完整 Git 历史与所有 Tag，用于精确计算上一版本与分类生成发布说明
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch all tags
+        run: git fetch --tags --force
+
+      # 2. 安装 Node.js 与 Rust 工具链
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      # 3. 自动计算下一版本号、回写应用内版本文件并生成分类 Release Notes
+      - name: Prepare version and release notes
+        id: prepare
+        shell: pwsh
+        run: |
+          node .github/scripts/prepare-release.mjs `
+            --bump "${{ inputs.bump }}" `
+            --repo "${{ github.repository }}" `
+            --notes-file "release-notes.md"
+
+      # 4. 安装前端依赖并构建 Windows 安装包（MSI + NSIS EXE）
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Windows Tauri bundles
+        run: npm run tauri build -- --bundles msi,nsis
+
+      # 5. 构建成功后再提交版本回写、创建 Tag 并推送到当前分支，避免构建失败污染历史
+      - name: Commit bumped version and push tag
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add package.json package-lock.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock
+          git diff --cached --quiet
+          if ($LASTEXITCODE -ne 0) {
+            git commit -m "chore(release): ${{ steps.prepare.outputs.tag }} [skip ci]"
+            git push origin "HEAD:${{ github.ref_name }}"
+          } else {
+            Write-Host "版本文件无变化，跳过提交"
+          }
+
+          git tag -a "${{ steps.prepare.outputs.tag }}" -m "Release ${{ steps.prepare.outputs.tag }}"
+          git push origin "${{ steps.prepare.outputs.tag }}"
+
+      # 6. 发布到 GitHub Releases 并附带分类整理的中文更新说明与安装包
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.prepare.outputs.tag }}
+          name: Simple Salesforce Tool ${{ steps.prepare.outputs.tag }}
+          body_path: release-notes.md
+          files: |
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/nsis/*.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
