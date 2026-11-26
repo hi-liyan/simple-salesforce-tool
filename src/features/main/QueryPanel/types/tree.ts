@@ -32,6 +32,8 @@ export type QueryTreeNode =
       sourceType: string;
       objectName: string;
       label: string;
+      // 表/对象注释（可选）。
+      comment?: string;
       queryable: boolean;
       expandable: boolean;
     }

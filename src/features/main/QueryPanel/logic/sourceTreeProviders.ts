@@ -249,13 +249,14 @@ function buildGroupNode(sourceId: string, sourceType: string, groupType: string,
   };
 }
 
-// 构造 object 节点：保留 queryable 与可展开列信息。
+// 构造 object 节点：保留 queryable、注释与可展开列信息。
 function buildObjectNode(
   sourceId: string,
   sourceType: string,
   objectItem: SalesforceObject,
   supportsColumnExpansion: boolean
 ): QueryTreeNode {
+  const trimmedComment = objectItem.comment?.trim() || ""; // 行内注释：过滤纯空白注释，避免节点渲染空占位。
   return {
     id: `object:${sourceId}:${objectItem.name}`,
     kind: "object",
@@ -263,6 +264,7 @@ function buildObjectNode(
     sourceType,
     objectName: objectItem.name,
     label: objectItem.label || objectItem.name,
+    comment: trimmedComment || undefined,
     queryable: objectItem.queryable,
     expandable: supportsColumnExpansion
   };

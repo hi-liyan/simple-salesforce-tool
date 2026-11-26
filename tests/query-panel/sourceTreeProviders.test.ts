@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  buildGroupObjectChildren,
   buildMySqlRootChildren,
   buildObjectSubFolderChildren,
   buildSalesforceRootChildren,
@@ -135,6 +136,26 @@ test("buildObjectSubFolderChildren: 应生成 columns、keys、indexes 三类目
         count: 2,
         childLabels: ["PRIMARY", "idx_articles_name"]
       }
+    ]
+  );
+});
+
+test("buildGroupObjectChildren: 应保留非空表注释并忽略空白注释", () => {
+  const nodes = buildGroupObjectChildren("mysql-1", "mysql", [
+    { name: "articles", label: "articles", comment: "  文章表  ", queryable: true, createable: true, updateable: true, deletable: true },
+    { name: "cars", label: "cars", comment: "   ", queryable: true, createable: true, updateable: true, deletable: true },
+    { name: "drivers", label: "drivers", queryable: true, createable: true, updateable: true, deletable: true }
+  ]);
+
+  assert.deepEqual(
+    nodes.map((item) => ({
+      name: item.kind === "object" ? item.objectName : "",
+      comment: item.kind === "object" ? item.comment : undefined
+    })),
+    [
+      { name: "articles", comment: "文章表" },
+      { name: "cars", comment: undefined },
+      { name: "drivers", comment: undefined }
     ]
   );
 });
