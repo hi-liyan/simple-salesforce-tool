@@ -36,6 +36,8 @@ fn main() {
                 .open_js_links_on_click(false)
                 .build(),
         )
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         // 注册 `plugin://` 自定义协议：安全映射 `{app_data_dir}/plugins/<plugin-id>/` 下的静态资源供 iframe 沙箱加载。
         .register_uri_scheme_protocol("plugin", |ctx, request| {
             let app = ctx.app_handle();

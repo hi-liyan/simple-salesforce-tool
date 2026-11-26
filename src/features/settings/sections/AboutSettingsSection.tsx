@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { ExternalLink, Info, RefreshCw } from "lucide-react";
+import { Download, ExternalLink, Info, RefreshCw } from "lucide-react";
 import { getVersion } from "@tauri-apps/api/app";
+import type { Update } from "@tauri-apps/plugin-updater";
 import { api } from "../../../api";
-import { checkGithubLatestVersion } from "../../../utils/versionUpdate";
+import { checkAppUpdateWithFallback, installNativeAppUpdate } from "../../../utils/versionUpdate";
 
 const FEEDBACK_ISSUE_URL = "https://github.com/hi-liyan/simple-salesforce-tool/issues/new";
 
@@ -10,8 +11,11 @@ const FEEDBACK_ISSUE_URL = "https://github.com/hi-liyan/simple-salesforce-tool/i
 export function AboutSettingsSection() {
   const [appVersion, setAppVersion] = useState("-");
   const [checking, setChecking] = useState(false);
+  const [installing, setInstalling] = useState(false);
+  const [progressText, setProgressText] = useState("");
   const [updateMsg, setUpdateMsg] = useState("");
   const [releaseUrl, setReleaseUrl] = useState("");
+  const [nativeUpdate, setNativeUpdate] = useState<Update | null>(null);
 
   useEffect(() => {
     void getVersion()
@@ -23,15 +27,18 @@ export function AboutSettingsSection() {
     setChecking(true);
     setUpdateMsg("");
     setReleaseUrl("");
+    setNativeUpdate(null);
+    setProgressText("");
     try {
-      const result = await checkGithubLatestVersion();
+      const result = await checkAppUpdateWithFallback();
       if (!result) {
         setUpdateMsg("未能获取最新版本信息，请检查网络或稍后再试。");
         return;
       }
       if (result.hasUpdate) {
-        setUpdateMsg(`发现新版本：v${result.latestVersion}（当前 v${result.currentVersion}）`);
+        setUpdateMsg(`发现新版本：v${result.latestVersion.replace(/^[vV]/, "")}（当前 v${result.currentVersion}）`);
         setReleaseUrl(result.releasePageUrl);
+        setNativeUpdate(result.nativeUpdate);
       } else {
         setUpdateMsg(`当前已是最新版本（v${result.currentVersion}）。`);
       }
@@ -39,6 +46,25 @@ export function AboutSettingsSection() {
       setUpdateMsg(`检查更新失败：${String(err)}`);
     } finally {
       setChecking(false);
+    }
+  }
+
+  async function handleInstallUpdate() {
+    if (!nativeUpdate || installing) return;
+    setInstalling(true);
+    setProgressText("正在连接更新服务器...");
+    try {
+      await installNativeAppUpdate(nativeUpdate, ({ phase, percent }) => {
+        if (phase === "downloading") {
+          setProgressText(percent !== null ? `正在下载更新包 ${percent}%...` : "正在下载更新包...");
+        } else {
+          setProgressText("正在校验并安装更新，即将重启...");
+        }
+      });
+    } catch (err) {
+      setUpdateMsg(`自动更新失败：${String(err)}`);
+      setProgressText("");
+      setInstalling(false);
     }
   }
 
@@ -81,16 +107,30 @@ export function AboutSettingsSection() {
         {updateMsg && (
           <div className="rounded-lg border border-base-300 bg-base-100 p-2.5 text-[12px]">
             <p className="text-neutral">{updateMsg}</p>
-            {releaseUrl && (
-              <button
-                type="button"
-                className="mt-1.5 inline-flex items-center gap-1 text-primary hover:underline"
-                onClick={() => void api.openExternalUrl(releaseUrl)}
-              >
-                <ExternalLink size={12} />
-                <span>前往 Release 页面下载</span>
-              </button>
-            )}
+            {progressText && <p className="mt-1 text-[11px] text-primary">{progressText}</p>}
+            <div className="mt-2 flex flex-wrap items-center gap-3">
+              {nativeUpdate && (
+                <button
+                  type="button"
+                  disabled={installing}
+                  className="btn btn-primary btn-xs gap-1 rounded-md"
+                  onClick={() => void handleInstallUpdate()}
+                >
+                  <Download size={12} />
+                  <span>{installing ? "更新中..." : "立即更新并重启"}</span>
+                </button>
+              )}
+              {releaseUrl && (
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 text-primary hover:underline"
+                  onClick={() => void api.openExternalUrl(releaseUrl)}
+                >
+                  <ExternalLink size={12} />
+                  <span>前往 Release 页面下载</span>
+                </button>
+              )}
+            </div>
           </div>
         )}
       </div>

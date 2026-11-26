@@ -20,7 +20,8 @@ import { useSoqlExecutorStore } from "../store/useSoqlExecutorStore";
 import { useQueryWorkspaceTabsStore } from "../store/useQueryWorkspaceTabsStore";
 import { useQuerySourceTreeStore } from "../store/useQuerySourceTreeStore";
 import { enableStorageWrite } from "../store/tauriStorage";
-import { checkGithubLatestVersion, waitForUiIdleFrame } from "../utils/versionUpdate";
+import type { Update } from "@tauri-apps/plugin-updater";
+import { checkAppUpdateWithFallback, installNativeAppUpdate, waitForUiIdleFrame } from "../utils/versionUpdate";
 import { createStartupCoordinator, shouldKeepQueryPanelMounted, shouldMountQueryPanel } from "./mainPageStartup";
 import { QueryPanel } from "../features/main/QueryPanel";
 import { BottomConsoleDrawer } from "../features/terminal/BottomConsoleDrawer";
@@ -533,13 +534,61 @@ export function MainPage() {
           )}
 
           {versionUpdateNotice && (
-            <NoticeAlert
-              // 启动更新通知：仅提示存在新版本，引导用户到设置页查看下载信息。
-              tone="success"
-              message={`发现新版本：当前 ${versionUpdateNotice.currentVersion}，最新 ${versionUpdateNotice.latestVersion}。可前往 设置 -> 关于与反馈 查看下载信息。`}
-              onClose={closeVersionUpdateNotice}
-              className="fixed right-4 top-12 z-[70] max-w-[380px] rounded-xl shadow-lg"
-            />
+            <div className="fixed right-4 top-12 z-[70] flex max-w-[400px] items-center gap-3 rounded-xl border border-success/40 bg-base-100 px-3.5 py-2.5 text-[12px] shadow-lg">
+              <div className="min-w-0 flex-1">
+                <p className="font-medium text-neutral">
+                  发现新版本 v{versionUpdateNotice.latestVersion.replace(/^[vV]/, "")}（当前 v{versionUpdateNotice.currentVersion}）
+                </p>
+                {versionUpdateNotice.progressText && (
+                  <p className="mt-0.5 text-[11px] text-primary">{versionUpdateNotice.progressText}</p>
+                )}
+              </div>
+              {versionUpdateNotice.nativeUpdate && (
+                <button
+                  type="button"
+                  disabled={Boolean(versionUpdateNotice.installing)}
+                  className="btn btn-primary btn-xs shrink-0"
+                  onClick={async () => {
+                    const targetUpdate = versionUpdateNotice.nativeUpdate;
+                    if (!targetUpdate) return;
+                    setVersionUpdateNotice((prev) =>
+                      prev ? { ...prev, installing: true, progressText: "正在下载更新包..." } : prev
+                    );
+                    try {
+                      await installNativeAppUpdate(targetUpdate, ({ phase, percent }) => {
+                        setVersionUpdateNotice((prev) =>
+                          prev
+                            ? {
+                                ...prev,
+                                progressText:
+                                  phase === "downloading"
+                                    ? percent !== null
+                                      ? `正在下载 ${percent}%...`
+                                      : "正在下载..."
+                                    : "正在安装并重启..."
+                              }
+                            : prev
+                        );
+                      });
+                    } catch (error) {
+                      setVersionUpdateNotice((prev) =>
+                        prev ? { ...prev, installing: false, progressText: `更新失败：${String(error)}` } : prev
+                      );
+                    }
+                  }}
+                >
+                  {versionUpdateNotice.installing ? "更新中" : "立即更新"}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={closeVersionUpdateNotice}
+                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-neutral/60 hover:bg-base-200"
+                aria-label="关闭更新提示"
+              >
+                <X size={13} />
+              </button>
+            </div>
           )}
 
           {/* 插件中心弹窗：展示全部已注册内置/外部插件，支持 `.sstplugin` 安装、权限审批、启停与卸载。 */}
@@ -911,22 +960,26 @@ export function MainPage() {
   );
 }
 
-// 新版本提示通知载荷：包含版本差异与发布页地址。
+// 新版本提示通知载荷：包含版本差异与原生热更新句柄。
 type VersionUpdateNoticeState = {
   currentVersion: string;
   latestVersion: string;
+  nativeUpdate: Update | null;
+  installing?: boolean;
+  progressText?: string;
 };
 
 // 启动时检查 GitHub 最新版本；若有更新则触发右上角升级通知。
 async function checkLatestVersionOnStartup(onFoundNewVersion: (payload: VersionUpdateNoticeState) => void): Promise<void> {
   try {
-    const result = await checkGithubLatestVersion();
+    const result = await checkAppUpdateWithFallback();
     if (!result?.hasUpdate) return;
     // 命中新版本后先让出 UI 一帧，减少通知出现瞬间与启动尾任务竞争主线程。
     await waitForUiIdleFrame();
     onFoundNewVersion({
       currentVersion: result.currentVersion,
-      latestVersion: result.latestVersion
+      latestVersion: result.latestVersion,
+      nativeUpdate: result.nativeUpdate
     });
   } catch (error) {
     // 版本检查失败不影响业务启动，只打印调试日志。

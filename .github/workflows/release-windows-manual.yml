@@ -69,6 +69,20 @@ jobs:
 
       - name: Build Windows Tauri bundles
         run: pnpm tauri build --bundles msi,nsis
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+      # 4.1 生成 Tauri 自动更新清单 latest.json（仅当签名密钥已配置且产出 .sig 时生成）
+      - name: Generate updater manifest
+        shell: pwsh
+        run: |
+          node .github/scripts/generate-updater-manifest.mjs `
+            --version "${{ steps.prepare.outputs.version }}" `
+            --tag "${{ steps.prepare.outputs.tag }}" `
+            --repo "${{ github.repository }}" `
+            --notes-file "release-notes.md" `
+            --output "latest.json"
 
       # 5. 构建成功后再提交版本回写、创建 Tag 并推送到当前分支，避免构建失败污染历史
       - name: Commit bumped version and push tag
@@ -98,6 +112,9 @@ jobs:
           body_path: release-notes.md
           files: |
             src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/msi/*.msi.sig
             src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/nsis/*.exe.sig
+            latest.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

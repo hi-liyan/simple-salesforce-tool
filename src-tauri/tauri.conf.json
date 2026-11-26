@@ -28,6 +28,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -47,6 +48,17 @@
       },
       "webviewInstallMode": {
         "type": "downloadBootstrapper"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEFDNDIzNDQ2MEI5MTFBQjYKUldTMkdwRUxSalJDckN2M1pESkxyWWY2clJobVl6Z3ZEcnp0V2hoWW5TUGpTZjRxMWd2VjVwWXoK",
+      "endpoints": [
+        "https://github.com/hi-liyan/simple-salesforce-tool/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
       }
     }
   }
