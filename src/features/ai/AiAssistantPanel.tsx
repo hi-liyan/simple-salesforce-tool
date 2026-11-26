@@ -171,6 +171,7 @@ export function AiAssistantPanel({
               scheduleDeltaFlush();
               break;
             case "reasoning_delta":
+              setStatusText("深度思考中...");
               pendingReasoningDeltaRef.current += payload.delta;
               scheduleDeltaFlush();
               break;

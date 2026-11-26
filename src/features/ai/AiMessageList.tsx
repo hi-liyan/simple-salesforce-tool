@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { AlertTriangle, Check, ChevronDown, ChevronRight, Copy, Play, PlusSquare, Replace, ShieldAlert, Wrench } from "lucide-react";
 import type { AiChatMessage } from "../../types/ai";
+import { AiMarkdownContent } from "./AiMarkdownContent";
 
 type AiMessageListProps = {
   // 对话消息列表。
@@ -180,11 +181,14 @@ export function AiMessageList({
               <div className="space-y-2 leading-relaxed">
                 {segments.map((seg, index) => {
                   if (seg.kind === "text") {
-                    return (
-                      <div key={index} className="whitespace-pre-wrap break-words">
-                        {seg.content}
-                      </div>
-                    );
+                    if (isUser) {
+                      return (
+                        <div key={index} className="whitespace-pre-wrap break-words">
+                          {seg.content}
+                        </div>
+                      );
+                    }
+                    return <AiMarkdownContent key={index} content={seg.content} />;
                   }
                   const codeKey = `${msg.id}-code-${index}`;
                   const isQueryCode = ["sql", "mysql", "soql", ""].includes(seg.lang);

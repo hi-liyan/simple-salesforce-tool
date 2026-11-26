@@ -310,7 +310,11 @@ where
         body["tool_choice"] = Value::String("auto".to_string());
     }
 
-    let mut req = client.post(&url).json(&body);
+    let mut req = client
+        .post(&url)
+        .header("Accept", "text/event-stream")
+        .header("Cache-Control", "no-cache")
+        .json(&body);
     if !api_key.trim().is_empty() {
         req = req.bearer_auth(api_key.trim());
     }
@@ -331,7 +335,7 @@ where
     }
 
     let mut stream = resp.bytes_stream();
-    let mut sse_buffer = String::new();
+    let mut sse_buffer: Vec<u8> = Vec::new();
     let mut full_text = String::new();
     let mut input_tokens = 0u64;
     let mut output_tokens = 0u64;
@@ -350,11 +354,11 @@ where
             break;
         };
         let bytes = chunk_res.map_err(|e| AppError::Biz(format!("读取流式响应失败: {e}")))?;
-        sse_buffer.push_str(&String::from_utf8_lossy(&bytes));
+        sse_buffer.extend_from_slice(&bytes);
 
-        while let Some(newline_pos) = sse_buffer.find('\n') {
-            let line = sse_buffer[..newline_pos].trim().to_string();
-            sse_buffer.drain(..=newline_pos);
+        while let Some(newline_pos) = sse_buffer.iter().position(|&b| b == b'\n') {
+            let line_bytes: Vec<u8> = sse_buffer.drain(..=newline_pos).collect();
+            let line = String::from_utf8_lossy(&line_bytes).trim().to_string();
 
             if line.is_empty() || !line.starts_with("data:") {
                 continue;
