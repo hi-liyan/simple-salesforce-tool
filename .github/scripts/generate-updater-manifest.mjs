@@ -64,6 +64,8 @@ function main() {
 
   const signature = fs.readFileSync(sigPath, "utf8").trim();
   const installerFileName = path.basename(installerPath);
+  // GitHub Releases 上传资产时会自动将文件名中的空格替换为点号（.），此处需与线上资产名保持一致以避免下载 404
+  const githubAssetFileName = installerFileName.replace(/\s+/g, ".");
   const notes = fs.existsSync(args.notesFile) ? fs.readFileSync(args.notesFile, "utf8").trim() : "";
 
   const manifest = {
@@ -73,7 +75,7 @@ function main() {
     platforms: {
       "windows-x86_64": {
         signature,
-        url: `https://github.com/${args.repo}/releases/download/${args.tag}/${encodeURIComponent(installerFileName)}`
+        url: `https://github.com/${args.repo}/releases/download/${args.tag}/${encodeURIComponent(githubAssetFileName)}`
       }
     }
   };

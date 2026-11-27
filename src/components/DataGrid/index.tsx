@@ -87,8 +87,10 @@ export function DataGrid({
   onEditCell,
   onShowMessage,
   showHeaderMetadata = true,
-  enableReadonlyCellHint = true,
-  allowReadonlyOverlay = false,
+  // 默认关闭双击只读格弹出错误提示，避免用户双击查看/复制主键等只读列时误报红框。
+  enableReadonlyCellHint = false,
+  // 默认允许只读格打开只读浮层（仅查看/复制，不可修改保存）。
+  allowReadonlyOverlay = true,
   onPageSizeChange,
   onPageNavigate,
   scrollStateKey
