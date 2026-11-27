@@ -70,11 +70,25 @@ export type CurrentUserContext = {
 };
 
 // SOQL/SQL 查询结果。
+// 查询结果集可编辑性元信息：由后端驱动层判定并透传给前端控制台与 Diff 引擎。
+export type QueryResultEditMeta = {
+  // 结果集对应的物理表/对象名（多表/聚合/只读语句时为空）。
+  sourceTable?: string;
+  // 唯一行定位主键列列表。
+  primaryKeyFields?: string[];
+  // 当前结果集是否允许行内编辑。
+  editable: boolean;
+  // 不可编辑时的只读原因说明。
+  readonlyReason?: string;
+};
+
 export type QueryResult = {
   totalSize: number;
   records: Record<string, unknown>[];
   // 结果列运行时类型映射（键为列名，值为数据源类型文本；可选）。
   columnTypes?: Record<string, string>;
+  // 结果集可编辑性与来源表元信息（可选）。
+  resultMeta?: QueryResultEditMeta;
 };
 
 // 对象 DDL 信息（关系型数据源专用）。

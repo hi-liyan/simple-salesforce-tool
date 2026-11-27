@@ -18,6 +18,17 @@ export type RowContextMenuState = {
   defaultValueMode: "mysql-default" | "";
 };
 
+// Diff 行状态：added=新增，modified=修改，deleted=基线已删除幽灵行。
+export type DataGridDiffRowStatus = "added" | "modified" | "deleted";
+
+// DataGrid Diff 叠加层：数据源无关的对比高亮状态。
+export type DataGridDiffOverlay = {
+  // 按行定位键映射的行级变更状态。
+  rowStatusByKey?: Record<string, DataGridDiffRowStatus>;
+  // 按 `${rowKey}:${columnName}` 映射的单元格变更详情（含旧值与新值）。
+  cellDiffByKey?: Record<string, { oldValue: unknown; newValue: unknown }>;
+};
+
 // DataGrid 表头元数据浮层状态：记录字段名、格式化元数据和锚点坐标。
 export type HoveredHeaderMetaState = {
   fieldName: string;

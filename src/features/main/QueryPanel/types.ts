@@ -1,5 +1,6 @@
 import { MutationPreviewItem, Notice, ObjectDdl, ObjectDescribe, SalesforceObject, SalesforceSource, TabState } from "../../../types";
 import { MainViewMode } from "../../../store/useAppStore";
+import type { ConsoleMode } from "../../../store/useSoqlExecutorStore";
 
 // 单个对象的 MySQL DDL 加载状态：用于在抽屉内展示建表/索引/约束信息。
 export type MysqlDdlStateItem = {
@@ -103,8 +104,8 @@ export type QueryPanelActions = {
   onSetViewMode: (viewMode: MainViewMode) => void;
   // 打开认证窗口。
   onOpenAuthWindow: () => void;
-  // 新建并打开查询控制台（支持可选初始 SQL）。
-  onOpenConsole: (source?: SalesforceSource, initialSql?: string) => void;
+  // 新建并打开查询控制台（支持可选初始 SQL 与控制台模式）。
+  onOpenConsole: (source?: SalesforceSource, initialSql?: string, consoleMode?: ConsoleMode) => void;
   // 激活统一工作区 Tab。
   onActivateWorkspaceTab: (workspaceTabId: string) => void;
   // 拖拽排序统一工作区 Tabs：基于拖拽前后 ID 调整展示顺序。

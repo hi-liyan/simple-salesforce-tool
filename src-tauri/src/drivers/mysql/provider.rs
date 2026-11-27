@@ -15,8 +15,8 @@ use crate::error::AppError;
 use crate::models::{
     CurrentUserContext, DatabaseCollation, DatabaseEvent, DatabaseRoutine, DatabaseTrigger,
     DatabaseUser, MutationExecutionItem, MutationExecutionResult, MutationPreviewSqlItem,
-    ObjectDdl, ObjectDescribe, ObjectField, QueryResult, RecordUpdatePayload, SalesforceObject,
-    SalesforceSource,
+    ObjectDdl, ObjectDescribe, ObjectField, QueryResult, QueryResultEditMeta, RecordUpdatePayload,
+    SalesforceObject, SalesforceSource,
 };
 
 /// MySQL 数据源连接配置（来自 source.config_json）。
@@ -734,6 +734,7 @@ impl MySqlProvider {
                 total_size: usize::try_from(rows_affected).unwrap_or(0),
                 records: vec![summary],
                 column_types: None,
+                result_meta: None,
             });
         }
 
@@ -780,6 +781,13 @@ impl MySqlProvider {
             records.push(item);
         }
 
+        let result_meta = build_mysql_result_edit_meta(
+            trimmed_query,
+            inferred_table.as_deref(),
+            inferred_primary_key.as_deref(),
+            &records,
+        );
+
         Ok(QueryResult {
             total_size: if has_paginated_clause {
                 total_size
@@ -788,6 +796,7 @@ impl MySqlProvider {
             },
             records,
             column_types,
+            result_meta: Some(result_meta),
         })
     }
 
@@ -2614,6 +2623,98 @@ fn classify_console_sql(sql: &str) -> ConsoleSqlAction {
     }
 }
 
+/// 判定 MySQL 查询结果是否允许控制台行内编辑，并返回来源表与主键元信息。
+fn build_mysql_result_edit_meta(
+    trimmed_query: &str,
+    inferred_table: Option<&str>,
+    inferred_primary_key: Option<&str>,
+    records: &[HashMap<String, Value>],
+) -> QueryResultEditMeta {
+    let normalized = trimmed_query
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let lower = normalized.to_ascii_lowercase();
+    let table_name = inferred_table
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    let pk_fields = inferred_primary_key
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|pk| vec![pk.to_string()])
+        .unwrap_or_default();
+
+    // 行内注释：仅允许单表简单 SELECT，遇到 JOIN、UNION、聚合、去重或非 SELECT 语句时保守判为只读。
+    if !lower.starts_with("select ") {
+        return QueryResultEditMeta {
+            source_table: table_name,
+            primary_key_fields: pk_fields,
+            editable: false,
+            readonly_reason: Some("仅单表 SELECT 查询结果支持行内编辑。".to_string()),
+        };
+    }
+
+    let has_complex_keyword = [
+        " join ",
+        " union ",
+        " group by ",
+        " having ",
+        " distinct ",
+        " into ",
+        " procedure ",
+    ]
+    .iter()
+    .any(|kw| lower.contains(kw));
+    if has_complex_keyword {
+        return QueryResultEditMeta {
+            source_table: table_name,
+            primary_key_fields: pk_fields,
+            editable: false,
+            readonly_reason: Some("当前语句包含多表关联、分组或去重，无法定位单表行更新，已设为只读。".to_string()),
+        };
+    }
+
+    let Some(table) = table_name.clone() else {
+        return QueryResultEditMeta {
+            source_table: None,
+            primary_key_fields: pk_fields,
+            editable: false,
+            readonly_reason: Some("未能识别单一来源表，已设为只读。".to_string()),
+        };
+    };
+
+    let Some(pk) = pk_fields.first().cloned() else {
+        return QueryResultEditMeta {
+            source_table: Some(table),
+            primary_key_fields: Vec::new(),
+            editable: false,
+            readonly_reason: Some("当前表缺少单列主键，无法安全定位行更新，已设为只读。".to_string()),
+        };
+    };
+
+    // 行内注释：若结果集非空但未查询主键列（例如 SELECT name FROM users），禁止编辑。
+    if let Some(first_row) = records.first() {
+        if !first_row.contains_key(&pk) {
+            return QueryResultEditMeta {
+                source_table: Some(table),
+                primary_key_fields: vec![pk.clone()],
+                editable: false,
+                readonly_reason: Some(format!(
+                    "查询结果未包含主键列 `{pk}`，无法定位行更新，已设为只读。"
+                )),
+            };
+        }
+    }
+
+    QueryResultEditMeta {
+        source_table: Some(table),
+        primary_key_fields: vec![pk],
+        editable: true,
+        readonly_reason: None,
+    }
+}
+
 /// 构造仅包含受影响行数的空结果集（用于 BEGIN / COMMIT / ROLLBACK）。
 fn empty_affected_result(rows_affected: u64) -> QueryResult {
     let mut summary = HashMap::new();
@@ -2622,6 +2723,7 @@ fn empty_affected_result(rows_affected: u64) -> QueryResult {
         total_size: usize::try_from(rows_affected).unwrap_or(0),
         records: vec![summary],
         column_types: None,
+        result_meta: None,
     }
 }
 
@@ -2690,6 +2792,7 @@ where
             total_size: usize::try_from(rows_affected).unwrap_or(0),
             records: vec![summary],
             column_types: None,
+            result_meta: None,
         });
     }
 
@@ -2734,6 +2837,13 @@ where
         records.push(item);
     }
 
+    let result_meta = build_mysql_result_edit_meta(
+        trimmed_query,
+        inferred_table.as_deref(),
+        inferred_primary_key.as_deref(),
+        &records,
+    );
+
     Ok(QueryResult {
         total_size: if has_paginated_clause {
             total_size
@@ -2742,6 +2852,7 @@ where
         },
         records,
         column_types,
+        result_meta: Some(result_meta),
     })
 }
 

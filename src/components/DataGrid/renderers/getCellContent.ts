@@ -2,6 +2,7 @@ import { GridCellKind } from "@glideapps/glide-data-grid";
 import type { GridCell, GridColumn, Item } from "@glideapps/glide-data-grid";
 import { buildCellThemeOverride, buildRowThemeOverride } from "../logic/rowTheme.ts";
 import type { GridAdapter } from "../../../drivers/types.ts";
+import type { DataGridDiffOverlay } from "../types.ts";
 import {
   isCellEditableByMeta,
   isRequiredOnCreate
@@ -41,6 +42,8 @@ type CreateGetCellContentParams = {
   currentOffset?: number;
   // 只读单元格是否允许双击打开 Overlay（仅查看不可编辑）。
   allowReadonlyOverlay?: boolean;
+  // Diff 对比高亮叠加层（数据源无关）。
+  diffOverlay?: DataGridDiffOverlay;
 };
 
 // 构建单元格读取函数：只负责“按坐标返回展示单元格”。
@@ -55,7 +58,8 @@ export function createGetCellContent({
   gridAdapter,
   getRecordKey,
   currentOffset = 0,
-  allowReadonlyOverlay = false
+  allowReadonlyOverlay = false,
+  diffOverlay
 }: CreateGetCellContentParams): (cell: Item) => GridCell {
   const nullPlaceholderText = gridAdapter.nullPlaceholder;
   return ([col, row]) => {
@@ -68,11 +72,22 @@ export function createGetCellContent({
     const isPendingDeleteRow = pendingDeleteRecordSet.has(recordId);
     // 新建行统一浅绿色高亮，便于用户识别“待提交新增”的记录。
     const isNewRowHighlight = isNewRow;
+    // 读取行级 Diff 状态（若存在）。
+    const diffRowStatus = diffOverlay?.rowStatusByKey?.[recordId];
     // 行级样式：用于选择列/序号列等非业务字段单元格。
-    const rowThemeOverride = buildRowThemeOverride(isSelectedRow, isPendingDeleteRow, isNewRowHighlight);
+    const rowThemeOverride = buildRowThemeOverride(isSelectedRow, isPendingDeleteRow, isNewRowHighlight, diffRowStatus);
 
     if (columnId === "__index") {
-      const text = String(Math.max(0, Math.floor(currentOffset || 0)) + row + 1);
+      const baseIndexText = String(Math.max(0, Math.floor(currentOffset || 0)) + row + 1);
+      const diffPrefix =
+        diffRowStatus === "added"
+          ? "+ "
+          : diffRowStatus === "modified"
+            ? "~ "
+            : diffRowStatus === "deleted"
+              ? "- "
+              : "";
+      const text = `${diffPrefix}${baseIndexText}`;
       return {
         kind: GridCellKind.Text,
         data: text,
@@ -87,12 +102,13 @@ export function createGetCellContent({
 
     const metadata = fieldMetadataMap[columnId] || {};
     const strategy = gridAdapter.resolveFieldStrategy(metadata);
-    const editable = isCellEditableByMeta(metadata, isNewRow);
+    const editable = diffRowStatus === "deleted" ? false : isCellEditableByMeta(metadata, isNewRow);
     const requiredNewField = isRequiredOnCreate(metadata, isNewRow);
     const raw = record[columnId];
     const displayState = gridAdapter.resolveDisplayValue(raw, metadata);
     const cellValue = displayState.value;
     const isDirty = dirtyCellSet.has(`${recordId}:${columnId}`);
+    const isDiffCellChanged = Boolean(diffOverlay?.cellDiffByKey?.[`${recordId}:${columnId}`]);
     const isRequiredEmpty = requiredNewField && gridAdapter.isBlankValue(raw);
     const isNullishValue = displayState.useNullPlaceholder;
 
@@ -101,7 +117,9 @@ export function createGetCellContent({
       isRequiredEmpty,
       isSelectedRow,
       isPendingDeleteRow,
-      isNewRowHighlight
+      isNewRowHighlight,
+      diffRowStatus,
+      isDiffCellChanged
     );
     // 空值仅在展示态使用淡化样式，避免把编辑器里的输入文字也渲染成灰色。
     const nullPlaceholderStyle: "normal" | "faded" = isNullishValue ? "faded" : "normal";

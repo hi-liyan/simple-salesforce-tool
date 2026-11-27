@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Plus, Sparkles, Table2, X } from "lucide-react";
+import { Plus, RotateCcw, Save, Sparkles, Table2, Trash2, X } from "lucide-react";
 import { useAiStore } from "../../../../store/useAiStore";
 import { ContextMenu, type ContextMenuEntry } from "../../../../components/ContextMenu";
 import { DataGrid } from "../../../../components/DataGrid";
@@ -25,6 +25,22 @@ import {
   resolveFieldMetadataForExecutor
 } from "../logic/consoleQueryUtils.ts";
 import { ConsoleToolbar, type ConsoleTransactionMode } from "./ConsoleToolbar";
+import { ConsoleDiffBoard } from "./ConsoleDiffBoard";
+import { ConsoleMutationPreviewModal } from "./ConsoleMutationPreviewModal";
+import {
+  normalizeSqlFingerprint,
+  type ConsoleDiffBaseline,
+  type ConsoleResultBlock
+} from "../logic/consoleDiffEngine.ts";
+import {
+  applyConsoleCellEdit,
+  buildConsoleBaselineMap,
+  buildConsoleMutationPayload,
+  resolveConsoleResultEditability,
+  toggleConsoleDeleteRows,
+  type ConsoleBlockEditDraft
+} from "../logic/consoleResultEdit.ts";
+import type { MutationPreviewSqlItem, RecordUpdatePayload } from "../../../../types";
 
 type SoqlExecutorWorkspaceProps = {
   // 全部可用数据源列表：供控制台右侧数据源选择器绑定与切换。
@@ -108,11 +124,39 @@ export function SoqlExecutorWorkspace({
   // 编辑器内每条语句的执行状态映射（用于行首 Gutter 展示 loading / 对勾 / 红叉）。
   const [statementStatuses, setStatementStatuses] = useState<Record<number, StatementExecutionStatus>>({});
   // 多语句执行结果集列表。
-  const [multiResultSets, setMultiResultSets] = useState<
-    Array<{ statementIndex: number; sql: string; result?: QueryResult; error?: string; durationMs: number }>
-  >([]);
+  const [multiResultSets, setMultiResultSets] = useState<ConsoleResultBlock[]>([]);
   // 当前激活的多结果集下标。
   const [activeResultSetIndex, setActiveResultSetIndex] = useState(0);
+  // 查询 Diff 控制台基线快照（仅存内存，不持久化）。
+  const [diffBaseline, setDiffBaseline] = useState<ConsoleDiffBaseline | null>(null);
+  // 按语句下标隔离的控制台结果编辑草稿。
+  const [draftsByStatement, setDraftsByStatement] = useState<Record<number, ConsoleBlockEditDraft>>({});
+  // 按语句下标隔离的选中行 ID 列表。
+  const [selectedRowIdsByStatement, setSelectedRowIdsByStatement] = useState<Record<number, string[]>>({});
+  // 控制台两阶段提交 SQL 预览弹窗状态。
+  const [mutationPreview, setMutationPreview] = useState<{
+    open: boolean;
+    statementIndex: number;
+    sourceTable: string;
+    loading: boolean;
+    error: string;
+    planId?: string;
+    planHash?: string;
+    items: MutationPreviewSqlItem[];
+    payload: {
+      creates: Record<string, unknown>[];
+      updates: RecordUpdatePayload[];
+      deletes: string[];
+    };
+  }>({
+    open: false,
+    statementIndex: 0,
+    sourceTable: "",
+    loading: false,
+    error: "",
+    items: [],
+    payload: { creates: [], updates: [], deletes: [] }
+  });
   // 对象字段缓存：按需 describe 后用于上下文补全。
   const [objectFieldsMap, setObjectFieldsMap] = useState<Record<string, string[]>>({});
   // 对象 describe 缓存：用于结果表字段 label/type 映射。
@@ -538,6 +582,17 @@ export function SoqlExecutorWorkspace({
 
       const normalizedResult = normalizeQueryResult(guarded.result || { totalSize: 0, records: [] });
       const actualExecutedSql = guarded.executedSql || executeSoql;
+      const stmtIdx = statementIndex ?? 0;
+      const nextBlock: ConsoleResultBlock = {
+        statementIndex: stmtIdx,
+        sql: actualExecutedSql,
+        sqlFingerprint: normalizeSqlFingerprint(actualExecutedSql),
+        result: normalizedResult,
+        durationMs: guarded.durationMs
+      };
+      setMultiResultSets([nextBlock]);
+      setActiveResultSetIndex(0);
+      resetBlockEditDraft(stmtIdx, actualExecutedSql, normalizedResult);
 
       if (statementIndex !== undefined) {
         setStatementStatuses({ [statementIndex]: "success" });
@@ -634,16 +689,12 @@ export function SoqlExecutorWorkspace({
     batchCancelledRef.current = false;
     setStatementStatuses({});
     setMultiResultSets([]);
+    setDraftsByStatement({});
+    setSelectedRowIdsByStatement({});
     setActiveResultSetIndex(0);
     patchActiveTab((tab) => ({ ...tab, loading: true, notice: null, showBottomPanel: true }));
 
-    const collectedItems: Array<{
-      statementIndex: number;
-      sql: string;
-      result?: QueryResult;
-      error?: string;
-      durationMs: number;
-    }> = [];
+    const collectedItems: ConsoleResultBlock[] = [];
     let hasSchemaDdl = false;
 
     try {
@@ -692,9 +743,11 @@ export function SoqlExecutorWorkspace({
           collectedItems.push({
             statementIndex: stmt.index,
             sql: actualExecutedSql,
-            result: guarded.result || { totalSize: 0, records: [] },
+            sqlFingerprint: normalizeSqlFingerprint(actualExecutedSql),
+            result: normalizedResult,
             durationMs: guarded.durationMs
           });
+          resetBlockEditDraft(stmt.index, actualExecutedSql, normalizedResult);
 
           // 行内注释：当前语句执行成功，标记绿色对勾并增量更新结果集。
           setStatementStatuses((prev) => ({ ...prev, [stmt.index]: "success" }));
@@ -727,6 +780,7 @@ export function SoqlExecutorWorkspace({
           collectedItems.push({
             statementIndex: stmt.index,
             sql: stmt.sql,
+            sqlFingerprint: normalizeSqlFingerprint(stmt.sql),
             error: errMsg,
             durationMs: 0
           });
@@ -762,6 +816,237 @@ export function SoqlExecutorWorkspace({
       patchActiveTab((tab) => ({ ...tab, loading: false }));
       void refreshTransactionStatus();
     }
+  }
+
+  // 重置指定结果块的编辑草稿与选中状态。
+  function resetBlockEditDraft(statementIndex: number, sql: string, result: QueryResult) {
+    const editability = resolveConsoleResultEditability(sql, result, objectDescribeMap, driver.gridAdapter);
+    const baselineRecords = buildConsoleBaselineMap(
+      result.records,
+      editability.primaryKeyField,
+      driver.gridAdapter
+    );
+    setDraftsByStatement((prev) => ({
+      ...prev,
+      [statementIndex]: {
+        baselineRecords,
+        dirtyCellKeys: [],
+        pendingDeleteRecordIds: [],
+        records: result.records
+      }
+    }));
+    setSelectedRowIdsByStatement((prev) => ({ ...prev, [statementIndex]: [] }));
+  }
+
+  // 处理控制台结果表格单元格编辑：写入对应结果块草稿。
+  function handleBlockCellEdit(statementIndex: number, rowIndex: number, columnName: string, value: unknown) {
+    const block = multiResultSets.find((item) => item.statementIndex === statementIndex);
+    const targetResult = block?.result || activeTab?.result;
+    if (!targetResult) return;
+    const sql = block?.sql || activeTab?.soqlDraft || "";
+    const editability = resolveConsoleResultEditability(sql, targetResult, objectDescribeMap, driver.gridAdapter);
+    if (!editability.editable) return;
+
+    setDraftsByStatement((prev) => {
+      const currentDraft: ConsoleBlockEditDraft = prev[statementIndex] || {
+        baselineRecords: buildConsoleBaselineMap(
+          targetResult.records,
+          editability.primaryKeyField,
+          driver.gridAdapter
+        ),
+        dirtyCellKeys: [],
+        pendingDeleteRecordIds: [],
+        records: targetResult.records
+      };
+      return {
+        ...prev,
+        [statementIndex]: applyConsoleCellEdit(
+          currentDraft,
+          rowIndex,
+          columnName,
+          value,
+          editability.primaryKeyField,
+          driver.gridAdapter
+        )
+      };
+    });
+  }
+
+  // 切换指定结果块的行选中状态。
+  function handleBlockToggleRows(statementIndex: number, checked: boolean, recordIds: string[]) {
+    setSelectedRowIdsByStatement((prev) => ({
+      ...prev,
+      [statementIndex]: checked ? recordIds : []
+    }));
+    if (activeTab?.consoleMode !== "diff") {
+      patchActiveTab((tab) => ({
+        ...tab,
+        selectedRecordIds: checked ? recordIds : []
+      }));
+    }
+  }
+
+  // 标记或取消标记选中行为待删除。
+  function handleBlockToggleDelete(statementIndex: number) {
+    const selectedIds = selectedRowIdsByStatement[statementIndex] || [];
+    if (selectedIds.length === 0) return;
+    setDraftsByStatement((prev) => {
+      const currentDraft = prev[statementIndex];
+      if (!currentDraft) return prev;
+      return {
+        ...prev,
+        [statementIndex]: toggleConsoleDeleteRows(currentDraft, selectedIds)
+      };
+    });
+  }
+
+  // 放弃指定结果块的未保存修改。
+  function handleDiscardBlockChanges(statementIndex: number) {
+    const block = multiResultSets.find((item) => item.statementIndex === statementIndex);
+    const targetResult = block?.result || activeTab?.result;
+    if (!targetResult) return;
+    resetBlockEditDraft(statementIndex, block?.sql || activeTab?.soqlDraft || "", targetResult);
+  }
+
+  // 保存指定结果块的控制台修改：支持两阶段预览提交与直提交。
+  async function handleSaveBlockChanges(statementIndex: number) {
+    if (!activeTab || !effectiveSourceId) return;
+    const block = multiResultSets.find((item) => item.statementIndex === statementIndex);
+    const targetResult = block?.result || activeTab.result;
+    const sql = block?.sql || activeTab.soqlDraft;
+    const editability = resolveConsoleResultEditability(sql, targetResult, objectDescribeMap, driver.gridAdapter);
+    if (!editability.editable || !editability.sourceTable) {
+      patchActiveTab((tab) => ({
+        ...tab,
+        notice: { type: "error", message: editability.readonlyReason || "当前结果集不可编辑。" }
+      }));
+      return;
+    }
+
+    const draft = draftsByStatement[statementIndex];
+    if (!draft) return;
+    const payload = buildConsoleMutationPayload(draft, editability.primaryKeyField, driver.gridAdapter);
+    if (payload.creates.length === 0 && payload.updates.length === 0 && payload.deletes.length === 0) {
+      return;
+    }
+
+    if (driver.capabilities.supportsMutationPreview) {
+      setMutationPreview({
+        open: true,
+        statementIndex,
+        sourceTable: editability.sourceTable,
+        loading: true,
+        error: "",
+        items: [],
+        payload
+      });
+      try {
+        const prepared = await api.prepareMutationPlan({
+          sourceId: effectiveSourceId,
+          objectName: editability.sourceTable,
+          creates: payload.creates,
+          updates: payload.updates,
+          deletes: payload.deletes
+        });
+        setMutationPreview((prev) => ({
+          ...prev,
+          loading: false,
+          planId: prepared.planId,
+          planHash: prepared.planHash,
+          items: prepared.previewItems
+        }));
+      } catch (error) {
+        setMutationPreview((prev) => ({
+          ...prev,
+          loading: false,
+          error: `生成预览 SQL 失败：${String(error)}`
+        }));
+      }
+      return;
+    }
+
+    // 行内注释：不支持两阶段预览的驱动（如 Salesforce），直接调用统一保存接口。
+    try {
+      await api.saveRecordsWithDeletes({
+        sourceId: effectiveSourceId,
+        objectName: editability.sourceTable,
+        creates: payload.creates,
+        updates: payload.updates,
+        deletes: payload.deletes
+      });
+      patchActiveTab((tab) => ({
+        ...tab,
+        notice: { type: "success", message: "控制台修改已保存，正在刷新结果..." }
+      }));
+      await executeCurrentOrSelected();
+    } catch (error) {
+      patchActiveTab((tab) => ({
+        ...tab,
+        notice: { type: "error", message: `保存失败：${String(error)}` }
+      }));
+    }
+  }
+
+  // 确认执行两阶段预览计划并刷新结果集。
+  async function handleConfirmMutationPreview() {
+    if (!activeTab || !mutationPreview.planId || !mutationPreview.planHash) return;
+    setMutationPreview((prev) => ({ ...prev, loading: true, error: "" }));
+    try {
+      const result = await api.commitMutationPlan(mutationPreview.planId, mutationPreview.planHash);
+      const failedItems = result.items.filter((item) => !item.success);
+      if (failedItems.length > 0) {
+        const firstErr = failedItems[0]?.error || "部分记录提交失败";
+        setMutationPreview((prev) => ({ ...prev, loading: false, error: firstErr }));
+        return;
+      }
+      const totalCommitted = result.createCount + result.updateCount + result.deleteCount;
+      setMutationPreview({
+        open: false,
+        statementIndex: 0,
+        sourceTable: "",
+        loading: false,
+        error: "",
+        items: [],
+        payload: { creates: [], updates: [], deletes: [] }
+      });
+      patchActiveTab((tab) => ({
+        ...tab,
+        notice: { type: "success", message: `成功提交 ${totalCommitted} 条控制台变更，正在刷新...` }
+      }));
+      await executeCurrentOrSelected();
+    } catch (error) {
+      setMutationPreview((prev) => ({
+        ...prev,
+        loading: false,
+        error: `提交变更失败：${String(error)}`
+      }));
+    }
+  }
+
+  // 将当前多结果集固定为 Diff 对比基线快照。
+  function handlePinDiffBaseline() {
+    if (multiResultSets.length === 0) return;
+    setDiffBaseline({
+      capturedAt: new Date().toISOString(),
+      blocks: multiResultSets
+        .filter((item) => !item.error && item.result)
+        .map((item) => ({
+          statementIndex: item.statementIndex,
+          sqlFingerprint: item.sqlFingerprint,
+          sourceTable: item.result?.resultMeta?.sourceTable,
+          primaryKeyFields: item.result?.resultMeta?.primaryKeyFields || [],
+          records: (item.result?.records || []).map((rec) => ({ ...rec }))
+        }))
+    });
+    patchActiveTab((tab) => ({
+      ...tab,
+      notice: { type: "success", message: "已将当前多表结果锁定为对比基线。" }
+    }));
+  }
+
+  // 清除 Diff 对比基线快照。
+  function handleClearDiffBaseline() {
+    setDiffBaseline(null);
   }
 
   // 右键关闭 Tabs 辅助方法。
@@ -1016,7 +1301,7 @@ export function SoqlExecutorWorkspace({
               >
                 日志
               </button>
-              {multiResultSets.length > 1 && (
+              {activeTab.consoleMode !== "diff" && multiResultSets.length > 1 && (
                 <div className="ml-2 flex items-center gap-1 overflow-x-auto">
                   {multiResultSets.map((item, idx) => (
                     <button
@@ -1039,6 +1324,73 @@ export function SoqlExecutorWorkspace({
                   ))}
                 </div>
               )}
+              {(() => {
+                if (activeTab.consoleMode === "diff" || bottomView !== "result") return null;
+                const activeBlock = multiResultSets[activeResultSetIndex];
+                const stmtIdx = activeBlock?.statementIndex ?? 0;
+                const targetResult = activeBlock?.result || activeTab.result;
+                const sql = activeBlock?.sql || activeTab.soqlDraft;
+                const editability = resolveConsoleResultEditability(
+                  sql,
+                  targetResult,
+                  objectDescribeMap,
+                  driver.gridAdapter
+                );
+                const draft = draftsByStatement[stmtIdx];
+                const dirtyCount =
+                  (draft?.dirtyCellKeys.length || 0) + (draft?.pendingDeleteRecordIds.length || 0);
+                const selectedIds = selectedRowIdsByStatement[stmtIdx] || activeTab.selectedRecordIds;
+
+                return (
+                  <div className="ml-2 flex items-center gap-1.5">
+                    {editability.editable ? (
+                      <>
+                        <span className="rounded bg-sky-500/12 px-1.5 py-0.5 text-[10.5px] text-sky-700">
+                          可编辑
+                        </span>
+                        {selectedIds.length > 0 && (
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-xs text-rose-600"
+                            onClick={() => handleBlockToggleDelete(stmtIdx)}
+                            title="标记或取消标记选中行为待删除"
+                          >
+                            <Trash2 size={11} />
+                            <span>删行 ({selectedIds.length})</span>
+                          </button>
+                        )}
+                        {dirtyCount > 0 && (
+                          <>
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-xs"
+                              onClick={() => handleDiscardBlockChanges(stmtIdx)}
+                            >
+                              <RotateCcw size={11} />
+                              <span>放弃</span>
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-primary btn-xs"
+                              onClick={() => void handleSaveBlockChanges(stmtIdx)}
+                            >
+                              <Save size={11} />
+                              <span>保存 ({dirtyCount})</span>
+                            </button>
+                          </>
+                        )}
+                      </>
+                    ) : targetResult.records.length > 0 ? (
+                      <span
+                        className="rounded bg-base-200 px-1.5 py-0.5 text-[10.5px] text-neutral/60"
+                        title={editability.readonlyReason}
+                      >
+                        只读
+                      </span>
+                    ) : null}
+                  </div>
+                );
+              })()}
               <div className="flex-1" />
               <button
                 className="btn btn-circle btn-ghost btn-xs"
@@ -1052,36 +1404,78 @@ export function SoqlExecutorWorkspace({
             {/* 底部结果内容区。 */}
             <div className="min-h-0 flex-1">
               {bottomView === "result" ? (
-                <DataGrid
-                  result={gridResult}
-                  visibleColumns={visibleColumns}
-                  fieldMetadataMap={fieldMetadataMap}
-                  readOnlyMode={true}
-                  dirtyCellKeys={[]}
-                  selectedRecordIds={activeTab.selectedRecordIds}
-                  displayTimezone={salesforceTimezone}
-                  gridAdapter={getDataSourceDriver(effectiveSourceType).gridAdapter}
-                  preserveColumnOrder={preserveRawColumns}
-                  pendingDeleteRecordIds={[]}
-                  enableReadonlyCellHint={false}
-                  allowReadonlyOverlay={true}
-                  scrollStateKey={`console:${activeTab.id}`}
-                  onToggleAll={(checked, recordIds) => {
-                    patchActiveTab((tab) => ({
-                      ...tab,
-                      selectedRecordIds: checked ? recordIds : []
-                    }));
-                  }}
-                  onEditCell={() => {
-                    // 执行器结果表为只读。
-                  }}
-                  onShowMessage={(message) => {
-                    patchActiveTab((tab) => ({
-                      ...tab,
-                      notice: { type: "error", message }
-                    }));
-                  }}
-                />
+                activeTab.consoleMode === "diff" ? (
+                  <ConsoleDiffBoard
+                    tabId={activeTab.id}
+                    sourceId={effectiveSourceId}
+                    gridAdapter={driver.gridAdapter}
+                    displayTimezone={salesforceTimezone}
+                    preserveColumnOrder={preserveRawColumns}
+                    blocks={multiResultSets}
+                    baseline={diffBaseline}
+                    draftsByStatement={draftsByStatement}
+                    selectedRowIdsByStatement={selectedRowIdsByStatement}
+                    objectDescribeMap={objectDescribeMap}
+                    loading={activeTab.loading}
+                    onPinBaseline={handlePinDiffBaseline}
+                    onClearBaseline={handleClearDiffBaseline}
+                    onRerunAll={() => void executeCurrentOrSelected()}
+                    onEditCell={handleBlockCellEdit}
+                    onToggleRows={handleBlockToggleRows}
+                    onToggleDeleteSelected={handleBlockToggleDelete}
+                    onSaveBlockChanges={(stmtIdx) => void handleSaveBlockChanges(stmtIdx)}
+                    onDiscardBlockChanges={handleDiscardBlockChanges}
+                    onShowMessage={(message) => {
+                      patchActiveTab((tab) => ({
+                        ...tab,
+                        notice: { type: "error", message }
+                      }));
+                    }}
+                  />
+                ) : (() => {
+                  const activeBlock = multiResultSets[activeResultSetIndex];
+                  const stmtIdx = activeBlock?.statementIndex ?? 0;
+                  const draft = draftsByStatement[stmtIdx];
+                  const effectiveGridResult = draft
+                    ? { ...gridResult, records: draft.records }
+                    : gridResult;
+                  const editability = resolveConsoleResultEditability(
+                    activeBlock?.sql || activeTab.soqlDraft,
+                    activeBlock?.result || activeTab.result,
+                    objectDescribeMap,
+                    driver.gridAdapter
+                  );
+                  return (
+                    <DataGrid
+                      result={effectiveGridResult}
+                      visibleColumns={visibleColumns}
+                      fieldMetadataMap={fieldMetadataMap}
+                      readOnlyMode={!editability.editable}
+                      readOnlyReasonText={editability.readonlyReason}
+                      dirtyCellKeys={draft?.dirtyCellKeys || []}
+                      selectedRecordIds={selectedRowIdsByStatement[stmtIdx] || activeTab.selectedRecordIds}
+                      displayTimezone={salesforceTimezone}
+                      sourceId={effectiveSourceId}
+                      objectName={editability.sourceTable || extractPrimaryObjectName(activeBlock?.sql || activeTab.soqlDraft)}
+                      gridAdapter={driver.gridAdapter}
+                      preserveColumnOrder={preserveRawColumns}
+                      pendingDeleteRecordIds={draft?.pendingDeleteRecordIds || []}
+                      enableReadonlyCellHint={false}
+                      allowReadonlyOverlay={true}
+                      scrollStateKey={`console:${activeTab.id}`}
+                      onToggleAll={(checked, recordIds) => handleBlockToggleRows(stmtIdx, checked, recordIds)}
+                      onEditCell={(rowIndex, columnName, value) =>
+                        handleBlockCellEdit(stmtIdx, rowIndex, columnName, value)
+                      }
+                      onShowMessage={(message) => {
+                        patchActiveTab((tab) => ({
+                          ...tab,
+                          notice: { type: "error", message }
+                        }));
+                      }}
+                    />
+                  );
+                })()
               ) : (
                 <div className="h-full overflow-auto p-3">
                   {activeTab.logs.length === 0 ? (
@@ -1124,6 +1518,29 @@ export function SoqlExecutorWorkspace({
           </div>
         )}
       </div>
+
+      {/* 控制台两阶段提交 SQL 预览弹窗。 */}
+      <ConsoleMutationPreviewModal
+        open={mutationPreview.open}
+        targetTitle={mutationPreview.sourceTable}
+        loading={mutationPreview.loading}
+        error={mutationPreview.error}
+        items={mutationPreview.items}
+        summary={{
+          creates: mutationPreview.payload.creates.length,
+          updates: mutationPreview.payload.updates.length,
+          deletes: mutationPreview.payload.deletes.length
+        }}
+        onClose={() =>
+          setMutationPreview((prev) => ({
+            ...prev,
+            open: false,
+            loading: false,
+            error: ""
+          }))
+        }
+        onConfirm={() => void handleConfirmMutationPreview()}
+      />
     </div>
   );
 }

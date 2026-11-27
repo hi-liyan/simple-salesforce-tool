@@ -210,7 +210,16 @@ export function QueryPanel({ viewState, actions }: QueryPanelProps) {
               focusedSourceId: "",
               selectedSourceId: viewState.selectedSourceId
             });
-            actions.onOpenConsole(targetSource || undefined); // 行内注释：按当前工作区上下文数据源新建查询控制台 Tab。
+            actions.onOpenConsole(targetSource || undefined, undefined, "standard"); // 行内注释：按当前工作区上下文数据源新建标准查询控制台 Tab。
+          }}
+          onCreateDiffConsole={() => {
+            const targetSource = resolveConsoleTargetSource({
+              sources: viewState.sources,
+              activeWorkspaceSourceId: activeWorkspaceTreeTarget?.sourceId,
+              focusedSourceId: "",
+              selectedSourceId: viewState.selectedSourceId
+            });
+            actions.onOpenConsole(targetSource || undefined, undefined, "diff"); // 行内注释：按当前工作区上下文数据源新建查询 Diff 控制台 Tab。
           }}
           onOpenPlugin={(pluginId, title) => {
             usePluginTabsStore.getState().openPluginTab(pluginId, title); // 行内注释：支持同一插件多实例在工作区 Tab 中打开。

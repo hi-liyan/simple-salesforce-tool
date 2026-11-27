@@ -1,12 +1,15 @@
 import type { GridCell } from "@glideapps/glide-data-grid";
+import type { DataGridDiffRowStatus } from "../types.ts";
 
-// 根据元数据计算单元格样式（脏数据高亮 + 必填缺失红色提示）。
+// 根据元数据计算单元格样式（脏数据高亮 + 必填缺失红色提示 + Diff 对比高亮）。
 export function buildCellThemeOverride(
   isDirty: boolean,
   requiredMissing: boolean,
   selected: boolean,
   pendingDelete: boolean,
-  isNewRow: boolean
+  isNewRow: boolean,
+  diffRowStatus?: DataGridDiffRowStatus,
+  isDiffCellChanged?: boolean
 ): GridCell["themeOverride"] | undefined {
   if (selected) {
     return {
@@ -38,6 +41,31 @@ export function buildCellThemeOverride(
       bgCellMedium: "#ffe9a8"
     };
   }
+  if (diffRowStatus === "deleted") {
+    return {
+      bgCell: "#fdecec",
+      bgCellMedium: "#fbd6d6",
+      textDark: "#991b1b"
+    };
+  }
+  if (diffRowStatus === "added") {
+    return {
+      bgCell: "#eafaf0",
+      bgCellMedium: "#d3f4df"
+    };
+  }
+  if (isDiffCellChanged) {
+    return {
+      bgCell: "#ffefc7",
+      bgCellMedium: "#ffe099"
+    };
+  }
+  if (diffRowStatus === "modified") {
+    return {
+      bgCell: "#fffaf0",
+      bgCellMedium: "#fff4d9"
+    };
+  }
   return undefined;
 }
 
@@ -45,7 +73,8 @@ export function buildCellThemeOverride(
 export function buildRowThemeOverride(
   selected: boolean,
   pendingDelete: boolean,
-  isNewRow: boolean
+  isNewRow: boolean,
+  diffRowStatus?: DataGridDiffRowStatus
 ): GridCell["themeOverride"] | undefined {
   if (selected) {
     return {
@@ -63,6 +92,25 @@ export function buildRowThemeOverride(
     return {
       bgCell: "#ebfaef",
       bgCellMedium: "#d5f3dc"
+    };
+  }
+  if (diffRowStatus === "deleted") {
+    return {
+      bgCell: "#fdecec",
+      bgCellMedium: "#fbd6d6",
+      textDark: "#991b1b"
+    };
+  }
+  if (diffRowStatus === "added") {
+    return {
+      bgCell: "#eafaf0",
+      bgCellMedium: "#d3f4df"
+    };
+  }
+  if (diffRowStatus === "modified") {
+    return {
+      bgCell: "#fff5db",
+      bgCellMedium: "#ffebba"
     };
   }
   return undefined;

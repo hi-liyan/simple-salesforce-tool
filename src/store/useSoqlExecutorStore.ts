@@ -14,10 +14,15 @@ export type AiConversationItem = {
   soql?: string;
 };
 
+// 控制台运行模式：standard=标准查询控制台，diff=查询 Diff 控制台（支持多表同屏、基线快照与前后对比）。
+export type ConsoleMode = "standard" | "diff";
+
 // SOQL 执行器标签页完整状态：每个 console tab 永久绑定自己的数据源上下文。
 export type SoqlExecutorTab = SourceBindingMeta & {
   id: string;
   name: string;
+  // 控制台模式：缺省时视为标准查询控制台，兼容历史持久化数据。
+  consoleMode?: ConsoleMode;
   soqlDraft: string;
   selectedSoqlText: string;
   result: QueryResult;
@@ -68,13 +73,18 @@ function resolveConsoleLabelPrefix(sourceType?: string): string {
 }
 
 // 创建新的查询控制台标签默认值：写入创建时数据源上下文，确保后续执行不串源。
-export function createSoqlExecutorTab(index: number, sourceMeta: Partial<SourceBindingMeta> = {}): SoqlExecutorTab {
+export function createSoqlExecutorTab(
+  index: number,
+  sourceMeta: Partial<SourceBindingMeta> = {},
+  consoleMode: ConsoleMode = "standard"
+): SoqlExecutorTab {
   const normalizedSourceMeta = normalizeSourceBindingMeta(sourceMeta);
-  const labelPrefix = resolveConsoleLabelPrefix(normalizedSourceMeta.sourceType);
+  const labelPrefix = consoleMode === "diff" ? "DIFF" : resolveConsoleLabelPrefix(normalizedSourceMeta.sourceType);
   return {
     ...normalizedSourceMeta,
     id: `soql-tab-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     name: `${labelPrefix} ${index}`,
+    consoleMode,
     soqlDraft: "",
     selectedSoqlText: "",
     result: { totalSize: 0, records: [] },
@@ -106,6 +116,7 @@ function hydrateSoqlTab(persisted: Partial<PersistedSoqlTab>, fallbackSourceMeta
     ...normalizedSourceMeta,
     id: persisted.id || `soql-tab-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     name: persisted.name || resolveConsoleLabelPrefix(normalizedSourceMeta.sourceType),
+    consoleMode: persisted.consoleMode === "diff" ? "diff" : "standard",
     soqlDraft: persisted.soqlDraft || "",
     selectedSoqlText: persisted.selectedSoqlText || "",
     result: persisted.result || { totalSize: 0, records: [] },
@@ -171,8 +182,8 @@ type SoqlExecutorState = {
   setTabs: (tabs: SoqlExecutorTab[] | ((tabs: SoqlExecutorTab[]) => SoqlExecutorTab[])) => void;
   // 设置激活 Tab ID。
   setActiveTabId: (tabId: string | ((current: string) => string)) => void;
-  // 新建 Tab：创建时写入来源数据源上下文与可选初始 SQL。
-  createTab: (sourceMeta?: Partial<SourceBindingMeta>, initialSql?: string) => string;
+  // 新建 Tab：创建时写入来源数据源上下文、可选初始 SQL 与控制台模式。
+  createTab: (sourceMeta?: Partial<SourceBindingMeta>, initialSql?: string, consoleMode?: ConsoleMode) => string;
   // 关闭指定 Tab（批量）。
   closeTabsByIds: (tabIds: string[]) => void;
   // 关闭单个 Tab。
@@ -205,10 +216,10 @@ export const useSoqlExecutorStore = create<SoqlExecutorState>()(
           activeTabId: typeof tabId === "function" ? tabId(state.activeTabId) : tabId
         })),
 
-      createTab: (sourceMeta = {}, initialSql = "") => {
+      createTab: (sourceMeta = {}, initialSql = "", consoleMode = "standard") => {
         const { tabs } = get();
         const nextTab = {
-          ...createSoqlExecutorTab(tabs.length + 1, sourceMeta),
+          ...createSoqlExecutorTab(tabs.length + 1, sourceMeta, consoleMode),
           soqlDraft: initialSql || ""
         };
         set((state) => ({

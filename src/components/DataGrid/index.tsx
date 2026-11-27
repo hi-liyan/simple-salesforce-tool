@@ -21,6 +21,7 @@ import { useDataGridRuntimeScroll } from "../../store/useDataGridScrollStore";
 import { useDataGridHeaderSettingsStore } from "../../store/useDataGridHeaderSettingsStore";
 import { salesforceDriver } from "../../drivers/salesforce";
 import type { GridAdapter } from "../../drivers/types";
+import type { DataGridDiffOverlay } from "./types";
 import { api } from "../../api";
 
 export type DataGridProps = {
@@ -64,6 +65,8 @@ export type DataGridProps = {
   onPageNavigate?: (action: "first" | "previous" | "next" | "last") => void;
   // 运行态滚动状态 key：用于在当前会话内按 tab 记住横纵滚动位置。
   scrollStateKey?: string;
+  // Diff 对比叠加层：用于展示新增/修改/删除高亮。
+  diffOverlay?: DataGridDiffOverlay;
 };
 
 // 查询结果表：主入口只负责装配 hooks 与各模块能力。
@@ -93,7 +96,8 @@ export function DataGrid({
   allowReadonlyOverlay = true,
   onPageSizeChange,
   onPageNavigate,
-  scrollStateKey
+  scrollStateKey,
+  diffOverlay
 }: DataGridProps) {
   const records = result.records;
   // 表头显示偏好：控制是否在表头显示字段类型与字段注释/标签。
@@ -213,7 +217,8 @@ export function DataGrid({
         gridAdapter,
         getRecordKey,
         currentOffset,
-        allowReadonlyOverlay
+        allowReadonlyOverlay,
+        diffOverlay
       }),
     [
       columns,
@@ -226,7 +231,8 @@ export function DataGrid({
       gridAdapter,
       getRecordKey,
       currentOffset,
-      allowReadonlyOverlay
+      allowReadonlyOverlay,
+      diffOverlay
     ]
   );
 

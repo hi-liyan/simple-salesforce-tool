@@ -231,6 +231,7 @@ impl SalesforceClient {
             total_size: body.total_size,
             records: body.records,
             column_types: None,
+            result_meta: None,
         })
     }
 

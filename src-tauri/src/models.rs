@@ -419,6 +419,27 @@ pub struct QueryResult {
     /// 结果列运行时类型映射（键为结果列名，值为数据源类型文本；如无可省略）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub column_types: Option<HashMap<String, String>>,
+    /// 结果集可编辑性与来源表元信息（可选）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_meta: Option<QueryResultEditMeta>,
+}
+
+/// 查询结果集可编辑性元信息：由驱动层在查询执行时精准判定，供前端控制台结果编辑与 Diff 对齐使用。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct QueryResultEditMeta {
+    /// 结果集对应的物理表/对象名（多表/聚合/只读语句时为空）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_table: Option<String>,
+    /// 唯一行定位主键列列表（按优先级排列）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub primary_key_fields: Vec<String>,
+    /// 当前结果集是否允许行内编辑。
+    #[serde(default)]
+    pub editable: bool,
+    /// 不可编辑时的只读原因说明。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub readonly_reason: Option<String>,
 }
 
 /// 工作区标签 DTO。

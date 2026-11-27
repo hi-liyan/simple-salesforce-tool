@@ -1,4 +1,4 @@
-import { ChevronRight, Plus, Puzzle, Table2, TerminalSquare } from "lucide-react";
+import { ChevronRight, GitCompareArrows, Plus, Puzzle, Table2, TerminalSquare } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ReusableTabs } from "../../../../components/tabs/ReusableTabs";
@@ -21,6 +21,8 @@ type QueryWorkspaceTabsProps = {
   onCloseTabs: (tabIds: string[]) => void;
   // 新建查询控制台 Tab 回调。
   onCreateConsole: () => void;
+  // 新建查询 Diff 控制台 Tab 回调。
+  onCreateDiffConsole: () => void;
   // 打开插件 Tab 回调（支持同插件多实例）。
   onOpenPlugin: (pluginId: string, title: string) => void;
 };
@@ -34,6 +36,7 @@ export function QueryWorkspaceTabs({
   onCloseTab,
   onCloseTabs,
   onCreateConsole,
+  onCreateDiffConsole,
   onOpenPlugin
 }: QueryWorkspaceTabsProps) {
   // + 按钮 DOM 引用：用于锚定主下拉菜单坐标。
@@ -180,6 +183,20 @@ export function QueryWorkspaceTabs({
               >
                 <TerminalSquare size={13} className="shrink-0 text-primary/80" />
                 <span className="flex-1">新建查询</span>
+              </button>
+
+              {/* 查询 Diff 控制台选项：新建支持多表同屏、基线快照与前后对比的控制台 Tab。 */}
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[12px] text-neutral transition-colors hover:bg-base-200/80"
+                onMouseEnter={() => setPluginSubmenuPosition(null)}
+                onClick={() => {
+                  closeMenu();
+                  onCreateDiffConsole(); // 行内注释：触发新建查询 Diff 控制台 Tab。
+                }}
+              >
+                <GitCompareArrows size={13} className="shrink-0 text-amber-600" />
+                <span className="flex-1">查询 Diff 控制台</span>
               </button>
 
               {/* 插件子菜单入口：有启用插件时在右侧弹出插件列表。 */}

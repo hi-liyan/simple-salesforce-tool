@@ -171,7 +171,15 @@ impl<'a> QueryService<'a> {
                 };
 
                 match exec_res {
-                    Ok(result) => {
+                    Ok(mut result) => {
+                        // 行内注释：若数据源开启了只读锁定，强制覆盖结果集为不可编辑，确保前后端安全边界一致。
+                        if read_only {
+                            if let Some(meta) = result.result_meta.as_mut() {
+                                meta.editable = false;
+                                meta.readonly_reason =
+                                    Some("当前数据源已开启只读锁定，禁止行内编辑。".to_string());
+                            }
+                        }
                         audit_service.record_sql_execution(&SqlExecutionAuditRecord {
                             source_id: source.id.clone(),
                             source_name: source.name.clone(),

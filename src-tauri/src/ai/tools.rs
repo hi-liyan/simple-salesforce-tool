@@ -504,6 +504,7 @@ async fn run_execute_query(ctx: &AgentToolContext<'_>, args: &Value) -> Result<S
         total_size: 0,
         records: Vec::new(),
         column_types: None,
+        result_meta: None,
     });
     let sample_rows: Vec<_> = result.records.into_iter().take(30).collect();
     Ok(json!({

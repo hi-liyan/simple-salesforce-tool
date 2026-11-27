@@ -41,7 +41,11 @@ type UseQueryPanelActionsInput = {
   // 打开认证窗口。
   openAuthWindow: () => void;
   // 创建控制台 Tab。
-  createSoqlConsoleTab: (sourceMeta?: Partial<SourceBindingMeta>, initialSql?: string) => string;
+  createSoqlConsoleTab: (
+    sourceMeta?: Partial<SourceBindingMeta>,
+    initialSql?: string,
+    consoleMode?: "standard" | "diff"
+  ) => string;
   // 激活工作区 Tab。
   setActiveWorkspaceTabId: (workspaceTabId: string) => void;
   // 拖拽排序工作区 Tabs。
@@ -166,18 +170,22 @@ export function useQueryPanelActions({
     () => ({
       onSetViewMode: setViewMode,
       onOpenAuthWindow: openAuthWindow,
-      onOpenConsole: (source, initialSql) => {
+      onOpenConsole: (source, initialSql, consoleMode = "standard") => {
         const resolvedSource = source || resolveDefaultConsoleSource?.() || null;
         const targetSourceId = resolvedSource?.id || selectedSourceId;
         const targetSourceType = String(resolvedSource?.sourceType || selectedSourceType || "");
         const targetSourceName = resolvedSource?.name || selectedSourceName;
         const targetSourceColor = resolvedSource ? getSourceColor(resolvedSource) : selectedSourceColor;
-        const nextConsoleTabId = createSoqlConsoleTab({
-          sourceId: targetSourceId,
-          sourceType: targetSourceType,
-          sourceName: targetSourceName,
-          sourceColor: targetSourceColor
-        }, initialSql); // 每次点击都新建并激活一个控制台 Tab。
+        const nextConsoleTabId = createSoqlConsoleTab(
+          {
+            sourceId: targetSourceId,
+            sourceType: targetSourceType,
+            sourceName: targetSourceName,
+            sourceColor: targetSourceColor
+          },
+          initialSql,
+          consoleMode
+        ); // 每次点击都新建并激活一个控制台 Tab。
         setActiveWorkspaceTabId(buildConsoleWorkspaceTabId(nextConsoleTabId)); // 激活新建的 console 工作区 Tab。
         setViewMode("query"); // 保持在统一 Query 工作区内切换，不跳离当前布局。
       },
