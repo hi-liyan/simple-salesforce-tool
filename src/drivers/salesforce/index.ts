@@ -63,6 +63,20 @@ export const salesforceDriver: DataSourceDriver = {
       if (["int", "double", "currency", "percent", "number"].includes(t)) return "number";
       return "text";
     },
+    resolveHeaderDisplayLines: (fieldName, metadata, runtimeType) => {
+      // Salesforce 表头第二行展示字段数据类型。
+      const rawType = [metadata.type, metadata.dataType, runtimeType]
+        .find((item) => typeof item === "string" && item.trim().length > 0);
+      const typeText = typeof rawType === "string" && rawType.trim() ? rawType.trim() : null;
+      // Salesforce 无 SQL comment，第三行展示与字段名不同的业务标签（label）。
+      const rawLabel = typeof metadata.label === "string" ? metadata.label.trim() : "";
+      const commentText = rawLabel && rawLabel !== fieldName ? rawLabel : null;
+      return {
+        primary: fieldName,
+        typeText,
+        commentText
+      };
+    },
     supportsOpenRecordPage: true
   },
   connectionSchema: {

@@ -503,6 +503,7 @@ async fn run_execute_query(ctx: &AgentToolContext<'_>, args: &Value) -> Result<S
     let result = response.result.unwrap_or(crate::models::QueryResult {
         total_size: 0,
         records: Vec::new(),
+        column_types: None,
     });
     let sample_rows: Vec<_> = result.records.into_iter().take(30).collect();
     Ok(json!({

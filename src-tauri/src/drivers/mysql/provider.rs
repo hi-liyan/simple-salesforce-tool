@@ -479,6 +479,7 @@ impl MySqlProvider {
             return Ok(QueryResult {
                 total_size: usize::try_from(rows_affected).unwrap_or(0),
                 records: vec![summary],
+                column_types: None,
             });
         }
 
@@ -510,6 +511,7 @@ impl MySqlProvider {
             .await
             .map_err(|error| AppError::Db(format!("执行 MySQL 查询失败: {error}")))?;
 
+        let column_types = extract_mysql_result_column_types(&rows, inferred_column_types.as_ref());
         let mut records = Vec::with_capacity(rows.len());
         for row in rows {
             let mut item = row_to_json_record(&row, inferred_column_types.as_ref());
@@ -531,6 +533,7 @@ impl MySqlProvider {
                 records.len()
             },
             records,
+            column_types,
         })
     }
 
@@ -1704,6 +1707,31 @@ fn push_bind_json_value(builder: &mut QueryBuilder<'_, MySql>, value: &Value) {
     };
 }
 
+/// 从查询结果首行提取各列运行时类型映射（优先保留表元数据中的精确列类型）。
+fn extract_mysql_result_column_types(
+    rows: &[MySqlRow],
+    actual_column_types: Option<&HashMap<String, String>>,
+) -> Option<HashMap<String, String>> {
+    let first_row = rows.first()?;
+    let mut map = HashMap::with_capacity(first_row.columns().len());
+    for column in first_row.columns() {
+        let name = column.name().to_string();
+        let resolved = actual_column_types
+            .and_then(|types| types.get(&name))
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| column.type_info().name().to_ascii_lowercase());
+        if !resolved.is_empty() {
+            map.insert(name, resolved);
+        }
+    }
+    if map.is_empty() {
+        None
+    } else {
+        Some(map)
+    }
+}
+
 /// 列表查询时单单元格内联返回的最大字符数，超出则截断并按需按主键拉取完整内容。
 const MAX_INLINE_CELL_CHARS: usize = 4096;
 
@@ -2338,6 +2366,7 @@ fn empty_affected_result(rows_affected: u64) -> QueryResult {
     QueryResult {
         total_size: usize::try_from(rows_affected).unwrap_or(0),
         records: vec![summary],
+        column_types: None,
     }
 }
 
@@ -2405,6 +2434,7 @@ where
         return Ok(QueryResult {
             total_size: usize::try_from(rows_affected).unwrap_or(0),
             records: vec![summary],
+            column_types: None,
         });
     }
 
@@ -2435,6 +2465,7 @@ where
         .await
         .map_err(|error| AppError::Db(format!("执行 MySQL 查询失败: {error}")))?;
 
+    let column_types = extract_mysql_result_column_types(&rows, inferred_column_types.as_ref());
     let mut records = Vec::with_capacity(rows.len());
     for row in rows {
         let mut item = row_to_json_record(&row, inferred_column_types.as_ref());
@@ -2455,6 +2486,7 @@ where
             records.len()
         },
         records,
+        column_types,
     })
 }
 

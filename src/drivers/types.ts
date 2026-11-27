@@ -58,6 +58,12 @@ export interface GridAdapter {
   formatDatetimeDisplay: (value: unknown, timezone?: string | null) => string;
   // 解析字段编辑与渲染策略。
   resolveFieldStrategy: (fieldMeta: Partial<ObjectField> & Record<string, unknown>) => GridFieldStrategy;
+  // 解析表头展示行（字段名、类型、注释/标签）：由驱动适配层统一收口，避免表格组件硬编码数据源分支。
+  resolveHeaderDisplayLines?: (
+    fieldName: string,
+    metadata: Record<string, unknown>,
+    runtimeType?: string
+  ) => { primary: string; typeText: string | null; commentText: string | null };
   // 是否支持打开云端记录详情页。
   supportsOpenRecordPage: boolean;
 }

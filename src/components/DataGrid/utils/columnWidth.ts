@@ -1,16 +1,30 @@
-import { buildHeaderDisplayLines } from "../renderers/drawHeader.ts";
+import {
+  buildHeaderDisplayLines,
+  HEADER_COMMENT_FONT,
+  HEADER_PRIMARY_FONT,
+  HEADER_SECONDARY_FONT
+} from "../renderers/drawHeader.ts";
+import type { GridAdapter } from "../../../drivers/types.ts";
 import { isMysqlCellDraftValue, resolveMysqlDisplayValue } from "../../../features/main/QueryPanel/logic/mysqlValueSemantics.ts";
 import { stringifyCellValue } from "./value.ts";
 
 type EstimateAutoColumnWidthInput = {
   // 当前字段名：用于构建表头主标题。
   fieldName: string;
-  // 当前字段元数据：用于读取 label 等辅助展示信息。
+  // 当前字段元数据：用于读取类型与注释/标签信息。
   metadata: Record<string, unknown>;
   // 当前结果集记录：仅采样前 N 行用于估算默认列宽。
   records: Record<string, unknown>[];
   // 采样行数上限：避免大结果集初始化测量过重。
   sampleRowCount: number;
+  // 数据源表格适配器。
+  gridAdapter?: Pick<GridAdapter, "resolveHeaderDisplayLines">;
+  // 结果集运行时列类型。
+  runtimeType?: string;
+  // 是否展示表头字段类型行。
+  showTypeLine?: boolean;
+  // 是否展示表头字段注释行。
+  showCommentLine?: boolean;
 };
 
 // 列宽测量右侧预留：覆盖单元格左右 padding 与轻微呼吸空间。
@@ -54,19 +68,31 @@ export function estimateAutoColumnWidth({
   fieldName,
   metadata,
   records,
-  sampleRowCount
+  sampleRowCount,
+  gridAdapter,
+  runtimeType,
+  showTypeLine = true,
+  showCommentLine = true
 }: EstimateAutoColumnWidthInput): number {
   const ctx =
     typeof document !== "undefined"
       ? document.createElement("canvas").getContext("2d")
       : null;
 
-  const lines = buildHeaderDisplayLines(fieldName, metadata);
-  const headerPrimaryWidth = measureTextWidth(lines.primary, "600 12px sans-serif", ctx);
-  const headerSecondaryWidth = lines.secondary
-    ? measureTextWidth(lines.secondary, "500 11px sans-serif", ctx)
+  const lines = buildHeaderDisplayLines(fieldName, metadata, {
+    gridAdapter,
+    runtimeType,
+    showTypeLine,
+    showCommentLine
+  });
+  const headerPrimaryWidth = measureTextWidth(lines.primary, HEADER_PRIMARY_FONT, ctx);
+  const headerTypeWidth = lines.typeText
+    ? measureTextWidth(lines.typeText, HEADER_SECONDARY_FONT, ctx)
     : 0;
-  let maxWidth = Math.max(headerPrimaryWidth, headerSecondaryWidth);
+  const headerCommentWidth = lines.commentText
+    ? measureTextWidth(lines.commentText, HEADER_COMMENT_FONT, ctx)
+    : 0;
+  let maxWidth = Math.max(headerPrimaryWidth, headerTypeWidth, headerCommentWidth);
 
   records.slice(0, sampleRowCount).forEach((record) => {
     const text = stringifyColumnWidthValue(record[fieldName], metadata);

@@ -87,6 +87,22 @@ export const mysqlDriver: DataSourceDriver = {
       }
       return "text";
     },
+    resolveHeaderDisplayLines: (fieldName, metadata, runtimeType) => {
+      // MySQL 表头第二行优先展示精确 columnType，其次回退 mysqlDataType/type/运行时类型。
+      const rawType = [metadata.columnType, metadata.mysqlDataType, metadata.type, runtimeType]
+        .find((item) => typeof item === "string" && item.trim().length > 0);
+      const trimmedType = typeof rawType === "string" ? rawType.trim() : "";
+      const typeText = trimmedType
+        ? (/^enum\s*\(/i.test(trimmedType) ? "enum" : trimmedType)
+        : null;
+      // MySQL 表头第三行展示字段注释（comment）。
+      const rawComment = typeof metadata.comment === "string" ? metadata.comment.trim() : "";
+      return {
+        primary: fieldName,
+        typeText,
+        commentText: rawComment || null
+      };
+    },
     supportsOpenRecordPage: false
   },
   connectionSchema: {

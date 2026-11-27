@@ -1,12 +1,13 @@
 import { useMemo, useState } from "react";
-import { Info, Search, Settings, ShieldCheck, Sparkles, Terminal, TerminalSquare, X } from "lucide-react";
+import { Info, Search, Settings, ShieldCheck, Sparkles, Table2, Terminal, TerminalSquare, X } from "lucide-react";
 import { AboutSettingsSection } from "./sections/AboutSettingsSection";
 import { CliSettingsSection } from "./sections/CliSettingsSection";
+import { DataGridSettingsSection } from "./sections/DataGridSettingsSection";
 import { LlmSettingsSection } from "./sections/LlmSettingsSection";
 import { QuerySafetySection } from "./sections/QuerySafetySection";
 import { TerminalSettingsSection } from "./sections/TerminalSettingsSection";
 
-export type SettingsSectionKey = "query-safety" | "terminal" | "cli" | "llm" | "about";
+export type SettingsSectionKey = "query-safety" | "data-grid" | "terminal" | "cli" | "llm" | "about";
 
 type SettingsModalProps = {
   // 是否打开设置中心弹窗。
@@ -24,6 +25,7 @@ const SETTINGS_NAV_ITEMS: {
   icon: typeof Settings;
 }[] = [
   { key: "query-safety", label: "查询与安全", keywords: "limit 安全 生产 审计 脱敏", icon: ShieldCheck },
+  { key: "data-grid", label: "数据表格", keywords: "datagrid header type comment 表头 类型 注释", icon: Table2 },
   { key: "terminal", label: "终端与 Shell", keywords: "terminal shell powershell bash zsh", icon: TerminalSquare },
   { key: "cli", label: "Salesforce CLI", keywords: "cli sf sfdx path oauth", icon: Terminal },
   { key: "llm", label: "AI 与大模型", keywords: "ai llm openai model api key", icon: Sparkles },
@@ -110,6 +112,7 @@ export function SettingsModal({ open, onClose, initialSection = "query-safety" }
           {/* 右侧设置分区内容。 */}
           <div className="min-h-0 flex-1 overflow-y-auto p-5">
             {activeKey === "query-safety" && <QuerySafetySection />}
+            {activeKey === "data-grid" && <DataGridSettingsSection />}
             {activeKey === "terminal" && <TerminalSettingsSection />}
             {activeKey === "cli" && <CliSettingsSection />}
             {activeKey === "llm" && <LlmSettingsSection />}

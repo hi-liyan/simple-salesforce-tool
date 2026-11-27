@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EditableGridCell, EditListItem, Item } from "@glideapps/glide-data-grid";
 import "@glideapps/glide-data-grid/dist/index.css";
 import { resolveSalesforceTimezone } from "./utils/datetime";
@@ -18,6 +18,7 @@ import { useDataGridMenuActions } from "./hooks/useDataGridMenuActions";
 import { DataGridSurface } from "./components/DataGridSurface";
 import { LargeCellViewerModal } from "./components/LargeCellViewerModal";
 import { useDataGridRuntimeScroll } from "../../store/useDataGridScrollStore";
+import { useDataGridHeaderSettingsStore } from "../../store/useDataGridHeaderSettingsStore";
 import { salesforceDriver } from "../../drivers/salesforce";
 import type { GridAdapter } from "../../drivers/types";
 import { api } from "../../api";
@@ -93,6 +94,14 @@ export function DataGrid({
   scrollStateKey
 }: DataGridProps) {
   const records = result.records;
+  // 表头显示偏好：控制是否在表头显示字段类型与字段注释/标签。
+  const showHeaderFieldType = useDataGridHeaderSettingsStore((state) => state.showHeaderFieldType);
+  const showHeaderFieldComment = useDataGridHeaderSettingsStore((state) => state.showHeaderFieldComment);
+  const hydrateHeaderSettings = useDataGridHeaderSettingsStore((state) => state.hydrate);
+  useEffect(() => {
+    void hydrateHeaderSettings();
+  }, [hydrateHeaderSettings]);
+
   // 当前表格运行态滚动位置：按 key 绑定，仅在本次运行内保留。
   const { scrollOffsetX, scrollOffsetY, onScrollOffsetChange } = useDataGridRuntimeScroll(scrollStateKey);
   // 生效元数据：只读模式下统一覆写 createable/updateable，避免误触发编辑链路。
@@ -121,12 +130,15 @@ export function DataGrid({
     [effectiveFieldMetadataMap, gridAdapter]
   );
 
-  const { columns, setColumnWidths, headerMinWidths, selectableIds } = useDataGridColumns({
+  const { columns, setColumnWidths, headerMinWidths, headerLineReservation, selectableIds } = useDataGridColumns({
     visibleColumns,
     preserveColumnOrder,
     showHeaderMetadata,
     records,
     fieldMetadataMap: effectiveFieldMetadataMap,
+    columnTypes: result.columnTypes,
+    showHeaderFieldType,
+    showHeaderFieldComment,
     gridAdapter,
     currentOffset
   });
@@ -341,9 +353,24 @@ export function DataGrid({
     () =>
       createDrawHeader({
         fieldMetadataMap: effectiveFieldMetadataMap,
-        showHeaderMetadata
+        columnTypes: result.columnTypes,
+        gridAdapter,
+        showHeaderMetadata,
+        showTypeLine: showHeaderFieldType,
+        showCommentLine: showHeaderFieldComment,
+        reserveTypeLine: headerLineReservation.reserveTypeLine,
+        reserveCommentLine: headerLineReservation.reserveCommentLine
       }),
-    [effectiveFieldMetadataMap, showHeaderMetadata]
+    [
+      effectiveFieldMetadataMap,
+      result.columnTypes,
+      gridAdapter,
+      showHeaderMetadata,
+      showHeaderFieldType,
+      showHeaderFieldComment,
+      headerLineReservation.reserveTypeLine,
+      headerLineReservation.reserveCommentLine
+    ]
   );
 
   if (records.length === 0) {
@@ -379,6 +406,7 @@ export function DataGrid({
         setHoveredHeaderMeta={setHoveredHeaderMeta}
         setColumnWidths={setColumnWidths}
         headerMinWidths={headerMinWidths}
+        headerHeight={headerLineReservation.headerHeight}
         activeEditorCellRef={activeEditorCellRef}
         setActiveEditorCell={setActiveEditorCell}
         canOpenRecordPage={Boolean(sourceId && objectName && rowContextMenu?.recordId)}

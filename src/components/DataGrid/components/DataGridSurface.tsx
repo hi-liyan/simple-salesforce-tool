@@ -73,6 +73,8 @@ type DataGridSurfaceProps = {
   setColumnWidths: React.Dispatch<React.SetStateAction<Record<string, number>>>;
   // 表头最小列宽：用于约束拖拽缩小，保证表头文本不被“缩放压扁”。
   headerMinWidths: Record<string, number>;
+  // 表头动态高度：随字段名、类型、注释可见行数自适应。
+  headerHeight?: number;
   // 激活单元格 ref：供编辑器分发读取。
   activeEditorCellRef: React.MutableRefObject<Item | null>;
   // 激活单元格状态写入。
@@ -174,6 +176,7 @@ export function DataGridSurface({
   setHoveredHeaderMeta,
   setColumnWidths,
   headerMinWidths,
+  headerHeight = DATA_GRID_HEADER_HEIGHT,
   activeEditorCellRef,
   setActiveEditorCell,
   canOpenRecordPage,
@@ -480,9 +483,9 @@ export function DataGridSurface({
           // 列宽边界：约束最小/最大宽度，避免布局极端变形。
           minColumnWidth={44}
           maxColumnWidth={900}
-          // 行高与表头高度：表头提高到双行，支持 Field Name/Label 分行显示。
+          // 行高与表头高度：表头随字段名、类型、注释实际行数自适应。
           rowHeight={DATA_GRID_ROW_HEIGHT}
-          headerHeight={DATA_GRID_HEADER_HEIGHT}
+          headerHeight={headerHeight}
           // 平滑滚动：提升大数据量横向/纵向浏览体验。
           smoothScrollX
           smoothScrollY
@@ -504,7 +507,7 @@ export function DataGridSurface({
           <div
             className="pointer-events-none absolute inset-x-0 z-[1] border-t border-base-300 bg-base-100"
             style={{
-              top: DATA_GRID_HEADER_HEIGHT + records.length * DATA_GRID_ROW_HEIGHT,
+              top: headerHeight + records.length * DATA_GRID_ROW_HEIGHT,
               bottom: scrollbarGutter
             }}
           />
@@ -514,7 +517,7 @@ export function DataGridSurface({
           <div
             className="pointer-events-none absolute right-0 z-[1] bg-base-100"
             style={{
-              top: DATA_GRID_HEADER_HEIGHT,
+              top: headerHeight,
               left: totalColumnsWidth,
               bottom: scrollbarGutter
             }}

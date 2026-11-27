@@ -69,10 +69,12 @@ export type CurrentUserContext = {
   localeSidKey: string | null;
 };
 
-// SOQL 查询结果。
+// SOQL/SQL 查询结果。
 export type QueryResult = {
   totalSize: number;
   records: Record<string, unknown>[];
+  // 结果列运行时类型映射（键为列名，值为数据源类型文本；可选）。
+  columnTypes?: Record<string, string>;
 };
 
 // 对象 DDL 信息（关系型数据源专用）。

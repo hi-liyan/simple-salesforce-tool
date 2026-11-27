@@ -230,6 +230,7 @@ impl SalesforceClient {
         Ok(QueryResult {
             total_size: body.total_size,
             records: body.records,
+            column_types: None,
         })
     }
 

@@ -416,6 +416,9 @@ pub struct QueryResult {
     pub total_size: usize,
     /// 记录列表（键为字段名，值为 JSON 值）。
     pub records: Vec<HashMap<String, Value>>,
+    /// 结果列运行时类型映射（键为结果列名，值为数据源类型文本；如无可省略）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub column_types: Option<HashMap<String, String>>,
 }
 
 /// 工作区标签 DTO。

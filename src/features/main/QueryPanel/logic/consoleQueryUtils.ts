@@ -44,18 +44,21 @@ export function isSchemaChangingDdl(sql: string): boolean {
   return /^(create|alter|drop|truncate|rename)\b/i.test(stripped);
 }
 
-// 执行器字段 metadata 解析：优先复用 describe 原始 metadata，其次按结果样本推断类型。
+// 执行器字段 metadata 解析：优先复用 describe 原始 metadata，其次使用结果集运行时类型，最后按样本推断类型。
 export function resolveFieldMetadataForExecutor(
   fieldName: string,
   primaryObjectName: string,
   objectDescribeMap: Record<string, ObjectDescribe>,
-  records: Record<string, unknown>[]
+  records: Record<string, unknown>[],
+  columnTypes?: Record<string, string>
 ): Record<string, unknown> | null {
+  const runtimeColumnType = columnTypes?.[fieldName]?.trim() || "";
   const exactField = resolveObjectFieldMetadataByName(fieldName, primaryObjectName, objectDescribeMap);
   if (exactField) {
     return {
       ...(exactField.metadata || {}),
-      type: exactField.dataType || (exactField.metadata?.type as string) || ""
+      type: exactField.dataType || (exactField.metadata?.type as string) || runtimeColumnType,
+      ...(runtimeColumnType && !exactField.metadata?.columnType ? { columnType: runtimeColumnType } : {})
     };
   }
 
@@ -65,9 +68,17 @@ export function resolveFieldMetadataForExecutor(
     if (suffixField) {
       return {
         ...(suffixField.metadata || {}),
-        type: suffixField.dataType || (suffixField.metadata?.type as string) || ""
+        type: suffixField.dataType || (suffixField.metadata?.type as string) || runtimeColumnType,
+        ...(runtimeColumnType && !suffixField.metadata?.columnType ? { columnType: runtimeColumnType } : {})
       };
     }
+  }
+
+  if (runtimeColumnType) {
+    return {
+      type: runtimeColumnType,
+      columnType: runtimeColumnType
+    };
   }
 
   const inferredType = inferFieldTypeFromRecords(fieldName, records);
@@ -210,7 +221,11 @@ function isSalesforceChildQueryNode(value: unknown): boolean {
 export function normalizeQueryResult(input: QueryResult): QueryResult {
   const records = Array.isArray(input?.records) ? input.records : [];
   const totalSize = typeof input?.totalSize === "number" ? input.totalSize : records.length;
-  return { totalSize, records };
+  const columnTypes =
+    input?.columnTypes && typeof input.columnTypes === "object" && !Array.isArray(input.columnTypes)
+      ? input.columnTypes
+      : undefined;
+  return columnTypes ? { totalSize, records, columnTypes } : { totalSize, records };
 }
 
 // 日志时间格式化。

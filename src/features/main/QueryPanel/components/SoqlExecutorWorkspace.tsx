@@ -4,7 +4,7 @@ import { useAiStore } from "../../../../store/useAiStore";
 import { ContextMenu, type ContextMenuEntry } from "../../../../components/ContextMenu";
 import { DataGrid } from "../../../../components/DataGrid";
 import { NoticeAlert } from "../../../../components/NoticeAlert";
-import { CodeMirrorQueryEditor } from "../../../../components/codemirror/CodeMirrorQueryEditor";
+import { CodeMirrorQueryEditor, type StatementExecutionStatus } from "../../../../components/codemirror/CodeMirrorQueryEditor";
 import { formatBasicSql, splitSqlStatementsWithRanges } from "../../../../components/codemirror/sqlCompletion";
 import { api } from "../../../../api";
 import { getDataSourceDriver } from "../../../../drivers/registry";
@@ -64,7 +64,7 @@ export function SoqlExecutorWorkspace({
   selectedSourceId,
   selectedSourceType,
   salesforceTimezone,
-  loadingText,
+  loadingText: _loadingText,
   objects,
   workspaceNotice,
   onCloseWorkspaceNotice,
@@ -103,6 +103,10 @@ export function SoqlExecutorWorkspace({
   const selectionSyncTimerRef = useRef<number | null>(null);
   // 当前进行中查询 ID（用于慢查询中断）。
   const activeQueryIdRef = useRef<string | null>(null);
+  // 批量顺序执行中断标记：用户点击停止执行时终止后续语句队列。
+  const batchCancelledRef = useRef(false);
+  // 编辑器内每条语句的执行状态映射（用于行首 Gutter 展示 loading / 对勾 / 红叉）。
+  const [statementStatuses, setStatementStatuses] = useState<Record<number, StatementExecutionStatus>>({});
   // 多语句执行结果集列表。
   const [multiResultSets, setMultiResultSets] = useState<
     Array<{ statementIndex: number; sql: string; result?: QueryResult; error?: string; durationMs: number }>
@@ -321,12 +325,13 @@ export function SoqlExecutorWorkspace({
         fieldName,
         primaryObjectName,
         objectDescribeMap,
-        gridResult.records
+        gridResult.records,
+        gridResult.columnTypes
       );
       acc[fieldName] = resolvedMetadata || {};
       return acc;
     }, {} as Record<string, Record<string, unknown>>);
-  }, [activeTab?.soqlDraft, visibleColumns, objectDescribeMap, gridResult.records]);
+  }, [activeTab?.soqlDraft, visibleColumns, objectDescribeMap, gridResult.records, gridResult.columnTypes]);
 
   function patchActiveTab(updater: (tab: SoqlExecutorTab) => SoqlExecutorTab) {
     if (!activeTab) return;
@@ -343,6 +348,7 @@ export function SoqlExecutorWorkspace({
     }
     const nextSource = sources.find((item) => item.id === nextSourceId);
     if (!nextSource) return;
+    setStatementStatuses({});
     patchActiveTab((tab) => ({
       ...tab,
       sourceId: nextSource.id,
@@ -431,12 +437,22 @@ export function SoqlExecutorWorkspace({
     }
   }
 
-  // 中断当前正在执行的慢查询。
+  // 中断当前正在执行的慢查询，并终止后续批量语句队列。
   async function stopActiveQuery() {
+    batchCancelledRef.current = true;
     const queryId = activeQueryIdRef.current;
     if (!queryId) return;
     try {
       await api.cancelQuery(queryId);
+      setStatementStatuses((prev) => {
+        const next = { ...prev };
+        for (const [key, value] of Object.entries(next)) {
+          if (value === "running") {
+            next[Number(key)] = "error";
+          }
+        }
+        return next;
+      });
       patchActiveTab((tab) => ({
         ...tab,
         loading: false,
@@ -454,7 +470,7 @@ export function SoqlExecutorWorkspace({
   }
 
   // 执行单条 SQL/SOQL 语句（支持 Gutter 单条点击、EXPLAIN 与安全网关确认）。
-  async function executeSingleStatement(rawSql: string, options?: { explain?: boolean }) {
+  async function executeSingleStatement(rawSql: string, options?: { explain?: boolean }, statementIndex?: number) {
     if (!activeTab) return;
     if (!effectiveSourceId) {
       patchActiveTab((tab) => ({
@@ -476,6 +492,11 @@ export function SoqlExecutorWorkspace({
     const executeSoql = options?.explain ? `EXPLAIN ${trimmedSql.replace(/;+$/, "")}` : trimmedSql;
     const queryId = `q-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     activeQueryIdRef.current = queryId;
+    if (statementIndex !== undefined) {
+      setStatementStatuses({ [statementIndex]: "running" });
+    } else {
+      setStatementStatuses({});
+    }
     patchActiveTab((tab) => ({ ...tab, loading: true, notice: null }));
 
     try {
@@ -495,6 +516,9 @@ export function SoqlExecutorWorkspace({
         const reason = String(guarded.guardDecision?.reason || "检测到高危 SQL 操作，是否继续执行？");
         const confirmed = window.confirm(`${reason}\n\n待执行语句：\n${executeSoql}`);
         if (!confirmed) {
+          if (statementIndex !== undefined) {
+            setStatementStatuses({ [statementIndex]: "idle" });
+          }
           patchActiveTab((tab) => ({
             ...tab,
             loading: false,
@@ -515,6 +539,9 @@ export function SoqlExecutorWorkspace({
       const normalizedResult = normalizeQueryResult(guarded.result || { totalSize: 0, records: [] });
       const actualExecutedSql = guarded.executedSql || executeSoql;
 
+      if (statementIndex !== undefined) {
+        setStatementStatuses({ [statementIndex]: "success" });
+      }
       patchActiveTab((tab) => ({
         ...tab,
         result: normalizedResult,
@@ -534,6 +561,9 @@ export function SoqlExecutorWorkspace({
         onDdlExecuted?.(effectiveSourceId);
       }
     } catch (error) {
+      if (statementIndex !== undefined) {
+        setStatementStatuses({ [statementIndex]: "error" });
+      }
       patchActiveTab((tab) => ({
         ...tab,
         loading: false,
@@ -571,13 +601,13 @@ export function SoqlExecutorWorkspace({
       return;
     }
     if (statements.length === 1 || options?.explain || !driver.capabilities.supportsMultiStatement) {
-      await executeSingleStatement(statements[0].sql, options);
+      await executeSingleStatement(statements[0].sql, options, statements[0].index);
       return;
     }
     await executeBatchStatements(activeTab.soqlDraft);
   }
 
-  // 批量执行全部语句并渲染多结果集 Tab。
+  // 逐条顺序执行全部语句：实时更新每条语句行首状态，遇错即停并保留已执行结果。
   async function executeBatchStatements(sqlBatch: string) {
     if (!activeTab) return;
     if (!effectiveSourceId) {
@@ -597,61 +627,139 @@ export function SoqlExecutorWorkspace({
       return;
     }
     if (statements.length === 1 || !driver.capabilities.supportsMultiStatement) {
-      await executeSingleStatement(statements[0].sql);
+      await executeSingleStatement(statements[0].sql, undefined, statements[0].index);
       return;
     }
 
-    const queryId = `q-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    activeQueryIdRef.current = queryId;
-    patchActiveTab((tab) => ({ ...tab, loading: true, notice: null }));
+    batchCancelledRef.current = false;
+    setStatementStatuses({});
+    setMultiResultSets([]);
+    setActiveResultSetIndex(0);
+    patchActiveTab((tab) => ({ ...tab, loading: true, notice: null, showBottomPanel: true }));
+
+    const collectedItems: Array<{
+      statementIndex: number;
+      sql: string;
+      result?: QueryResult;
+      error?: string;
+      durationMs: number;
+    }> = [];
+    let hasSchemaDdl = false;
 
     try {
-      const rawItems = await api.executeMultiStatementQuery(effectiveSourceId, sqlBatch, false, activeTab.id);
-      const items = rawItems.map((entry) => ({
-        statementIndex: entry.index,
-        sql: entry.sql,
-        result: entry.response?.result || undefined,
-        error: entry.error || undefined,
-        durationMs: entry.response?.durationMs ?? 0
-      }));
-      setMultiResultSets(items);
-      setActiveResultSetIndex(0);
-      const firstValid = items.find((item) => item.result)?.result || { totalSize: 0, records: [] };
-      const normalizedResult = normalizeQueryResult(firstValid);
-      const totalDuration = items.reduce((acc, item) => acc + item.durationMs, 0);
-      const errorCount = items.filter((item) => Boolean(item.error)).length;
+      for (const stmt of statements) {
+        if (batchCancelledRef.current) break;
 
-      patchActiveTab((tab) => ({
-        ...tab,
-        result: normalizedResult,
-        loading: false,
-        selectedRecordIds: [],
-        showBottomPanel: true,
-        notice: null,
-        logs: [
-          buildSoqlLog(errorCount === 0, sqlBatch, `多语句执行 ${items.length} 条，耗时 ${totalDuration}ms。`, undefined, queryLanguageLabel),
-          ...tab.logs
-        ].slice(0, 200)
-      }));
-      setBottomView(errorCount > 0 ? "logs" : "result");
+        const queryId = `q-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        activeQueryIdRef.current = queryId;
+        // 行内注释：标记当前正在执行的语句，行首 Gutter 显示 loading。
+        setStatementStatuses((prev) => ({ ...prev, [stmt.index]: "running" }));
 
-      if (items.some((item) => !item.error && isSchemaChangingDdl(item.sql))) {
+        try {
+          const primaryObjectName = extractPrimaryObjectName(stmt.sql);
+          let guarded = await api.executeGuardedQuery(
+            effectiveSourceId,
+            stmt.sql,
+            primaryObjectName || undefined,
+            false,
+            queryId,
+            activeTab.id
+          );
+
+          if (guarded.status === "confirmation_required") {
+            const reason = String(guarded.guardDecision?.reason || "检测到高危 SQL 操作，是否继续执行？");
+            const confirmed = window.confirm(`${reason}\n\n待执行语句：\n${stmt.sql}`);
+            if (!confirmed) {
+              setStatementStatuses((prev) => ({ ...prev, [stmt.index]: "idle" }));
+              patchActiveTab((tab) => ({
+                ...tab,
+                notice: { type: "error", message: `已取消执行第 ${stmt.index + 1} 条高危语句，后续语句已中止。` }
+              }));
+              break;
+            }
+            guarded = await api.executeGuardedQuery(
+              effectiveSourceId,
+              stmt.sql,
+              primaryObjectName || undefined,
+              true,
+              queryId,
+              activeTab.id
+            );
+          }
+
+          const normalizedResult = normalizeQueryResult(guarded.result || { totalSize: 0, records: [] });
+          const actualExecutedSql = guarded.executedSql || stmt.sql;
+          collectedItems.push({
+            statementIndex: stmt.index,
+            sql: actualExecutedSql,
+            result: guarded.result || { totalSize: 0, records: [] },
+            durationMs: guarded.durationMs
+          });
+
+          // 行内注释：当前语句执行成功，标记绿色对勾并增量更新结果集。
+          setStatementStatuses((prev) => ({ ...prev, [stmt.index]: "success" }));
+          setMultiResultSets([...collectedItems]);
+          setActiveResultSetIndex(collectedItems.length - 1);
+          setBottomView("result");
+
+          patchActiveTab((tab) => ({
+            ...tab,
+            result: normalizedResult,
+            selectedRecordIds: [],
+            showBottomPanel: true,
+            logs: [
+              buildSoqlLog(
+                true,
+                actualExecutedSql,
+                `第 ${stmt.index + 1} 条执行成功（${guarded.durationMs}ms），返回 ${normalizedResult.totalSize} 条。`,
+                undefined,
+                queryLanguageLabel
+              ),
+              ...tab.logs
+            ].slice(0, 200)
+          }));
+
+          if (isSchemaChangingDdl(stmt.sql)) {
+            hasSchemaDdl = true;
+          }
+        } catch (error) {
+          const errMsg = String(error);
+          collectedItems.push({
+            statementIndex: stmt.index,
+            sql: stmt.sql,
+            error: errMsg,
+            durationMs: 0
+          });
+
+          // 行内注释：当前语句执行失败，标记红叉并立即终止后续语句执行。
+          setStatementStatuses((prev) => ({ ...prev, [stmt.index]: "error" }));
+          setMultiResultSets([...collectedItems]);
+          setBottomView("logs");
+
+          patchActiveTab((tab) => ({
+            ...tab,
+            showBottomPanel: true,
+            logs: [
+              buildSoqlLog(
+                false,
+                stmt.sql,
+                `第 ${stmt.index + 1} 条执行失败，已停止后续语句。`,
+                errMsg,
+                queryLanguageLabel
+              ),
+              ...tab.logs
+            ].slice(0, 200)
+          }));
+          break;
+        }
+      }
+
+      if (hasSchemaDdl) {
         onDdlExecuted?.(effectiveSourceId);
       }
-    } catch (error) {
-      patchActiveTab((tab) => ({
-        ...tab,
-        loading: false,
-        showBottomPanel: true,
-        notice: null,
-        logs: [
-          buildSoqlLog(false, sqlBatch, `批量执行 ${queryLanguageLabel} 失败。`, String(error), queryLanguageLabel),
-          ...tab.logs
-        ].slice(0, 200)
-      }));
-      setBottomView("logs");
     } finally {
       activeQueryIdRef.current = null;
+      patchActiveTab((tab) => ({ ...tab, loading: false }));
       void refreshTransactionStatus();
     }
   }
@@ -823,11 +931,13 @@ export function SoqlExecutorWorkspace({
         onFormat={() => {
           const formatted = formatBasicSql(activeTab.soqlDraft);
           if (formatted) {
+            setStatementStatuses({});
             patchActiveTab((tab) => ({ ...tab, soqlDraft: formatted }));
           }
         }}
         onToggleWordWrap={() => setWordWrapEnabled((prev) => !prev)}
         onClear={() => {
+          setStatementStatuses({});
           patchActiveTab((tab) => ({ ...tab, soqlDraft: "", selectedSoqlText: "" }));
         }}
         onChangeSource={handleChangeTabSource}
@@ -843,6 +953,7 @@ export function SoqlExecutorWorkspace({
             language={queryLanguage}
             value={activeTab.soqlDraft}
             onChange={(value) => {
+              setStatementStatuses({});
               patchActiveTab((tab) => ({ ...tab, soqlDraft: value }));
             }}
             onSelectionTextChange={(selectionText) => {
@@ -857,8 +968,8 @@ export function SoqlExecutorWorkspace({
                 );
               }, 80);
             }}
-            onExecuteStatement={(sql) => {
-              void executeSingleStatement(sql);
+            onExecuteStatement={(sql, statement) => {
+              void executeSingleStatement(sql, undefined, statement.index);
             }}
             onExecuteCurrent={() => {
               void executeCurrentOrSelected();
@@ -866,6 +977,7 @@ export function SoqlExecutorWorkspace({
             onExecuteAll={() => {
               void executeBatchStatements(activeTab.soqlDraft);
             }}
+            statementStatuses={statementStatuses}
             fieldNames={fallbackFieldNames}
             objectNames={objectNames}
             objectFieldsMap={objectFieldsMap}
@@ -1012,14 +1124,6 @@ export function SoqlExecutorWorkspace({
           </div>
         )}
       </div>
-
-      {/* 加载遮罩：执行 SQL/SOQL 时展示。 */}
-      {activeTab.loading && (
-        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-white/70">
-          <span className="loading loading-spinner" style={{ width: 42, height: 42 }} />
-          <span className="text-[12px] text-neutral/70">{loadingText}</span>
-        </div>
-      )}
     </div>
   );
 }

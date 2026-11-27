@@ -1,6 +1,12 @@
 import { useMemo, useState } from "react";
 import type { GridColumn } from "@glideapps/glide-data-grid";
-import { buildHeaderDisplayLines } from "../renderers/drawHeader.ts";
+import {
+  buildHeaderDisplayLines,
+  HEADER_COMMENT_FONT,
+  HEADER_PRIMARY_FONT,
+  HEADER_SECONDARY_FONT,
+  resolveHeaderLineReservation
+} from "../renderers/drawHeader.ts";
 import { estimateAutoColumnWidth } from "../utils/columnWidth.ts";
 import type { GridAdapter } from "../../../drivers/types.ts";
 
@@ -20,6 +26,12 @@ type UseDataGridColumnsParams = {
   records: Record<string, unknown>[];
   // 字段元数据映射：用于识别主键列。
   fieldMetadataMap: Record<string, Record<string, unknown>>;
+  // 结果集运行时列类型映射。
+  columnTypes?: Record<string, string>;
+  // 是否展示表头字段类型行。
+  showHeaderFieldType?: boolean;
+  // 是否展示表头字段注释行。
+  showHeaderFieldComment?: boolean;
   // 数据源表格适配器：用于统一解析主键列。
   gridAdapter: GridAdapter;
   // 当前分页偏移量：用于让序号列宽度按“真实最大序号”自适应。
@@ -107,6 +119,9 @@ export function useDataGridColumns({
   showHeaderMetadata,
   records,
   fieldMetadataMap,
+  columnTypes,
+  showHeaderFieldType = true,
+  showHeaderFieldComment = true,
   gridAdapter,
   currentOffset = 0
 }: UseDataGridColumnsParams) {
@@ -116,6 +131,20 @@ export function useDataGridColumns({
   const displayColumns = useMemo(
     () => resolveDisplayColumns(visibleColumns, preserveColumnOrder),
     [visibleColumns, preserveColumnOrder]
+  );
+
+  // 基于全量列计算表头行位保留与动态表头高度，避免横向滚动时高度跳动。
+  const headerLineReservation = useMemo(
+    () =>
+      resolveHeaderLineReservation({
+        displayColumns,
+        fieldMetadataMap,
+        columnTypes,
+        gridAdapter,
+        showTypeLine: showHeaderFieldType,
+        showCommentLine: showHeaderFieldComment
+      }),
+    [displayColumns, fieldMetadataMap, columnTypes, gridAdapter, showHeaderFieldType, showHeaderFieldComment]
   );
 
   // 表头最小列宽：使用 Canvas 测量表头文案宽度，保证表头不会因列过窄被“缩放压扁”。
@@ -145,22 +174,40 @@ export function useDataGridColumns({
 
     for (const column of displayColumns) {
       const metadata = fieldMetadataMap[column] || {};
-      const lines = buildHeaderDisplayLines(column, metadata);
-      const primaryWidth = measureTextWidth(lines.primary, "600 12px sans-serif");
-      const secondaryWidth = lines.secondary
-        ? measureTextWidth(lines.secondary, "500 11px sans-serif")
+      const lines = buildHeaderDisplayLines(column, metadata, {
+        gridAdapter,
+        runtimeType: columnTypes?.[column],
+        showTypeLine: showHeaderFieldType,
+        showCommentLine: showHeaderFieldComment
+      });
+      const primaryWidth = measureTextWidth(lines.primary, HEADER_PRIMARY_FONT);
+      const typeWidth = lines.typeText
+        ? measureTextWidth(lines.typeText, HEADER_SECONDARY_FONT)
+        : 0;
+      const commentWidth = lines.commentText
+        ? measureTextWidth(lines.commentText, HEADER_COMMENT_FONT)
         : 0;
 
       // 左侧 8px + 文案最大宽度 + 右侧预留（含 info icon 空间）= 列的最小宽度。
       const rightPadding = showHeaderMetadata ? 24 : 8;
-      const minWidth = Math.ceil(8 + Math.max(primaryWidth, secondaryWidth) + rightPadding);
+      const minWidth = Math.ceil(8 + Math.max(primaryWidth, typeWidth, commentWidth) + rightPadding);
 
       // 约束边界：与 DataEditor maxColumnWidth 对齐，避免极端长字段名导致不可控布局。
       widths[column] = Math.min(900, Math.max(44, minWidth));
     }
 
     return widths;
-  }, [currentOffset, displayColumns, fieldMetadataMap, records.length, showHeaderMetadata]);
+  }, [
+    currentOffset,
+    displayColumns,
+    fieldMetadataMap,
+    columnTypes,
+    gridAdapter,
+    records.length,
+    showHeaderMetadata,
+    showHeaderFieldType,
+    showHeaderFieldComment
+  ]);
 
   // 内容驱动的默认列宽：按“表头 + 前 N 行采样内容”估算，替代固定 180/280 宽度。
   const autoColumnWidths = useMemo(() => {
@@ -170,11 +217,23 @@ export function useDataGridColumns({
         fieldName: column,
         metadata: fieldMetadataMap[column] || {},
         records,
-        sampleRowCount: DEFAULT_COLUMN_WIDTH_SAMPLE_ROWS
+        sampleRowCount: DEFAULT_COLUMN_WIDTH_SAMPLE_ROWS,
+        gridAdapter,
+        runtimeType: columnTypes?.[column],
+        showTypeLine: showHeaderFieldType,
+        showCommentLine: showHeaderFieldComment
       });
     }
     return widths;
-  }, [displayColumns, fieldMetadataMap, records]);
+  }, [
+    displayColumns,
+    fieldMetadataMap,
+    columnTypes,
+    gridAdapter,
+    records,
+    showHeaderFieldType,
+    showHeaderFieldComment
+  ]);
 
   const columns = useMemo<GridColumn[]>(
     () =>
@@ -219,6 +278,7 @@ export function useDataGridColumns({
     columnWidths,
     setColumnWidths,
     headerMinWidths,
+    headerLineReservation,
     selectableIds
   };
 }
