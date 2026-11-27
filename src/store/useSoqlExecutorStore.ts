@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { getDataSourceDriver } from "../drivers/registry.ts";
 import type { Notice, QueryResult, SourceBindingMeta, TabLog } from "../types/index.ts";
 import { createDebouncedTauriJsonStorage } from "./tauriStorage.ts";
 
@@ -60,13 +61,20 @@ function normalizeSourceBindingMeta(sourceMeta: Partial<SourceBindingMeta> = {})
   };
 }
 
-// 创建新的 SOQL 执行器标签默认值：写入创建时数据源上下文，确保后续执行不串源。
+// 根据数据源驱动能力解析控制台默认标签前缀（SQL / SOQL，禁止硬编码数据源分支）。
+function resolveConsoleLabelPrefix(sourceType?: string): string {
+  const queryLanguage = getDataSourceDriver(sourceType).capabilities.queryLanguage;
+  return queryLanguage === "soql" ? "SOQL" : "SQL";
+}
+
+// 创建新的查询控制台标签默认值：写入创建时数据源上下文，确保后续执行不串源。
 export function createSoqlExecutorTab(index: number, sourceMeta: Partial<SourceBindingMeta> = {}): SoqlExecutorTab {
   const normalizedSourceMeta = normalizeSourceBindingMeta(sourceMeta);
+  const labelPrefix = resolveConsoleLabelPrefix(normalizedSourceMeta.sourceType);
   return {
     ...normalizedSourceMeta,
     id: `soql-tab-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    name: `SOQL ${index}`,
+    name: `${labelPrefix} ${index}`,
     soqlDraft: "",
     selectedSoqlText: "",
     result: { totalSize: 0, records: [] },
@@ -97,7 +105,7 @@ function hydrateSoqlTab(persisted: Partial<PersistedSoqlTab>, fallbackSourceMeta
     ...persisted,
     ...normalizedSourceMeta,
     id: persisted.id || `soql-tab-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    name: persisted.name || "SOQL",
+    name: persisted.name || resolveConsoleLabelPrefix(normalizedSourceMeta.sourceType),
     soqlDraft: persisted.soqlDraft || "",
     selectedSoqlText: persisted.selectedSoqlText || "",
     result: persisted.result || { totalSize: 0, records: [] },

@@ -320,7 +320,7 @@ export function useQueryExecution({
         notice: { type: "success", message: `${activeTab.objectName} 执行${queryLanguageLabel}成功，共 ${result.totalSize} 条。` }
       }));
       appendTabLog(activeTabBindingKey, {
-        action: "SOQL",
+        action: queryLanguageLabel === "SOQL" ? "SOQL" : "SQL",
         success: true,
         request: activeTab.soqlDraft,
         summary: `执行${queryLanguageLabel}成功，返回 ${result.totalSize} 条。`
@@ -333,7 +333,7 @@ export function useQueryExecution({
         notice: { type: "error", message: `执行${queryLanguageLabel}失败：${String(error)}` }
       }));
       appendTabLog(activeTabBindingKey, {
-        action: "SOQL",
+        action: queryLanguageLabel === "SOQL" ? "SOQL" : "SQL",
         success: false,
         request: activeTab.soqlDraft,
         summary: `执行${queryLanguageLabel}失败。`,

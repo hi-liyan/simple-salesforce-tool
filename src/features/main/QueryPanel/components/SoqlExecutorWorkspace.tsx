@@ -302,7 +302,7 @@ export function SoqlExecutorWorkspace({
     if (!activeTab) return [];
     if (preserveRawColumns) {
       const latestSuccessfulQueryText =
-        activeTab.logs.find((item) => item.action === "SOQL" && item.success)?.request || activeTab.soqlDraft;
+        activeTab.logs.find((item) => (item.action === "SOQL" || item.action === "SQL") && item.success)?.request || activeTab.soqlDraft;
       const primaryObjectName = extractPrimaryObjectName(latestSuccessfulQueryText);
       return resolveMysqlConsoleVisibleColumns({
         queryText: latestSuccessfulQueryText,
@@ -388,14 +388,14 @@ export function SoqlExecutorWorkspace({
         ...tab,
         showBottomPanel: true,
         notice: { type: "success", message: "事务已提交 (COMMIT)。" },
-        logs: [buildSoqlLog(true, "COMMIT;", "手动事务已提交。"), ...tab.logs].slice(0, 200)
+        logs: [buildSoqlLog(true, "COMMIT;", "手动事务已提交。", undefined, queryLanguageLabel), ...tab.logs].slice(0, 200)
       }));
     } catch (error) {
       patchActiveTab((tab) => ({
         ...tab,
         showBottomPanel: true,
         notice: { type: "error", message: `提交事务失败：${String(error)}` },
-        logs: [buildSoqlLog(false, "COMMIT;", "提交事务失败。", String(error)), ...tab.logs].slice(0, 200)
+        logs: [buildSoqlLog(false, "COMMIT;", "提交事务失败。", String(error), queryLanguageLabel), ...tab.logs].slice(0, 200)
       }));
     } finally {
       setTxBusy(false);
@@ -417,14 +417,14 @@ export function SoqlExecutorWorkspace({
         ...tab,
         showBottomPanel: true,
         notice: { type: "success", message: "事务已回滚 (ROLLBACK)。" },
-        logs: [buildSoqlLog(true, "ROLLBACK;", "手动事务已回滚。"), ...tab.logs].slice(0, 200)
+        logs: [buildSoqlLog(true, "ROLLBACK;", "手动事务已回滚。", undefined, queryLanguageLabel), ...tab.logs].slice(0, 200)
       }));
     } catch (error) {
       patchActiveTab((tab) => ({
         ...tab,
         showBottomPanel: true,
         notice: { type: "error", message: `回滚事务失败：${String(error)}` },
-        logs: [buildSoqlLog(false, "ROLLBACK;", "回滚事务失败。", String(error)), ...tab.logs].slice(0, 200)
+        logs: [buildSoqlLog(false, "ROLLBACK;", "回滚事务失败。", String(error), queryLanguageLabel), ...tab.logs].slice(0, 200)
       }));
     } finally {
       setTxBusy(false);
@@ -523,7 +523,7 @@ export function SoqlExecutorWorkspace({
         showBottomPanel: true,
         notice: null,
         logs: [
-          buildSoqlLog(true, actualExecutedSql, `执行成功（${guarded.durationMs}ms），返回 ${normalizedResult.totalSize} 条。`),
+          buildSoqlLog(true, actualExecutedSql, `执行成功（${guarded.durationMs}ms），返回 ${normalizedResult.totalSize} 条。`, undefined, queryLanguageLabel),
           ...tab.logs
         ].slice(0, 200)
       }));
@@ -540,7 +540,7 @@ export function SoqlExecutorWorkspace({
         showBottomPanel: true,
         notice: null,
         logs: [
-          buildSoqlLog(false, executeSoql, `执行 ${queryLanguageLabel} 失败。`, String(error)),
+          buildSoqlLog(false, executeSoql, `执行 ${queryLanguageLabel} 失败。`, String(error), queryLanguageLabel),
           ...tab.logs
         ].slice(0, 200)
       }));
@@ -629,7 +629,7 @@ export function SoqlExecutorWorkspace({
         showBottomPanel: true,
         notice: null,
         logs: [
-          buildSoqlLog(errorCount === 0, sqlBatch, `多语句执行 ${items.length} 条，耗时 ${totalDuration}ms。`),
+          buildSoqlLog(errorCount === 0, sqlBatch, `多语句执行 ${items.length} 条，耗时 ${totalDuration}ms。`, undefined, queryLanguageLabel),
           ...tab.logs
         ].slice(0, 200)
       }));
@@ -645,7 +645,7 @@ export function SoqlExecutorWorkspace({
         showBottomPanel: true,
         notice: null,
         logs: [
-          buildSoqlLog(false, sqlBatch, `批量执行 ${queryLanguageLabel} 失败。`, String(error)),
+          buildSoqlLog(false, sqlBatch, `批量执行 ${queryLanguageLabel} 失败。`, String(error), queryLanguageLabel),
           ...tab.logs
         ].slice(0, 200)
       }));

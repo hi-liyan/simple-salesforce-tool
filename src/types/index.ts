@@ -254,7 +254,7 @@ export type Notice = {
 export type TabLog = {
   id: string;
   timestamp: string;
-  action: "QUERY" | "SOQL" | "DELETE" | "UPSERT" | "DISCARD";
+  action: "QUERY" | "SQL" | "SOQL" | "DELETE" | "UPSERT" | "DISCARD";
   success: boolean;
   request: string;
   summary: string;

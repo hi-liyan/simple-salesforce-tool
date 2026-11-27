@@ -1,11 +1,17 @@
 import type { ObjectDescribe, QueryResult, TabLog } from "../../../../types";
 
-// 构建控制台执行日志条目。
-export function buildSoqlLog(success: boolean, request: string, summary: string, errorMessage?: string): TabLog {
+// 构建控制台执行日志条目（按驱动查询语言动态标记 SQL / SOQL）。
+export function buildSoqlLog(
+  success: boolean,
+  request: string,
+  summary: string,
+  errorMessage?: string,
+  action: "SQL" | "SOQL" = "SOQL"
+): TabLog {
   return {
     id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     timestamp: new Date().toISOString(),
-    action: "SOQL",
+    action,
     success,
     request,
     summary,
