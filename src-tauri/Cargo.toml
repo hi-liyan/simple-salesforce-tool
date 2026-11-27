@@ -1,6 +1,6 @@
 [package]
 name = "simple-salesforce-tool"
-version = "0.9.0"
+version = "0.10.0"
 description = "Production-ready multi-source Salesforce desktop tool"
 authors = ["liyan", "codex"]
 license = "MIT"
