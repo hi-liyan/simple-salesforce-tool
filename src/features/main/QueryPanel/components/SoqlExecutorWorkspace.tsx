@@ -27,6 +27,8 @@ import {
 import { ConsoleToolbar, type ConsoleTransactionMode } from "./ConsoleToolbar";
 import { ConsoleDiffBoard } from "./ConsoleDiffBoard";
 import { ConsoleMutationPreviewModal } from "./ConsoleMutationPreviewModal";
+import { SavedSqlLibraryModal } from "./SavedSqlLibraryModal";
+import { SavedSqlSaveModal } from "./SavedSqlSaveModal";
 import {
   normalizeSqlFingerprint,
   type ConsoleDiffBaseline,
@@ -40,7 +42,7 @@ import {
   toggleConsoleDeleteRows,
   type ConsoleBlockEditDraft
 } from "../logic/consoleResultEdit.ts";
-import type { MutationPreviewSqlItem, RecordUpdatePayload } from "../../../../types";
+import type { MutationPreviewSqlItem, RecordUpdatePayload, SavedSqlQuery } from "../../../../types";
 
 type SoqlExecutorWorkspaceProps = {
   // 全部可用数据源列表：供控制台右侧数据源选择器绑定与切换。
@@ -157,6 +159,14 @@ export function SoqlExecutorWorkspace({
     items: [],
     payload: { creates: [], updates: [], deletes: [] }
   });
+  // 保存常用 SQL 弹窗状态。
+  const [saveSqlModalOpen, setSaveSqlModalOpen] = useState(false);
+  // 编辑已保存 SQL 条目（为空表示新建）。
+  const [editingSavedSql, setEditingSavedSql] = useState<SavedSqlQuery | null>(null);
+  // 已保存 SQL 检索库弹窗状态。
+  const [savedSqlLibraryOpen, setSavedSqlLibraryOpen] = useState(false);
+  // 编辑器光标插入文本请求信号。
+  const [insertTextRequest, setInsertTextRequest] = useState<{ text: string; nonce: number } | null>(null);
   // 对象字段缓存：按需 describe 后用于上下文补全。
   const [objectFieldsMap, setObjectFieldsMap] = useState<Record<string, string[]>>({});
   // 对象 describe 缓存：用于结果表字段 label/type 映射。
@@ -1225,6 +1235,11 @@ export function SoqlExecutorWorkspace({
           setStatementStatuses({});
           patchActiveTab((tab) => ({ ...tab, soqlDraft: "", selectedSoqlText: "" }));
         }}
+        onSaveSql={() => {
+          setEditingSavedSql(null);
+          setSaveSqlModalOpen(true);
+        }}
+        onOpenSavedSqlLibrary={() => setSavedSqlLibraryOpen(true)}
         onChangeSource={handleChangeTabSource}
         onChangeTransactionMode={(mode) => void handleChangeTransactionMode(mode)}
         onCommitTransaction={() => void handleCommitTransaction()}
@@ -1267,6 +1282,7 @@ export function SoqlExecutorWorkspace({
             objectNames={objectNames}
             objectFieldsMap={objectFieldsMap}
             wordWrapMode={wordWrapEnabled ? "on" : "off"}
+            insertTextRequest={insertTextRequest}
             placeholder={`输入 ${queryLanguageLabel}，点击行首 ▶ 可按条执行，或按 Ctrl/Cmd + Enter 执行`}
             height="100%"
             className="h-full rounded-none border-0"
@@ -1540,6 +1556,70 @@ export function SoqlExecutorWorkspace({
           }))
         }
         onConfirm={() => void handleConfirmMutationPreview()}
+      />
+
+      {/* 保存/编辑常用 SQL 弹窗。 */}
+      <SavedSqlSaveModal
+        open={saveSqlModalOpen}
+        editingItem={editingSavedSql}
+        fullSql={activeTab.soqlDraft}
+        selectedSql={selectedSoqlTextRef.current.trim() || activeTab.selectedSoqlText.trim()}
+        queryLanguage={queryLanguage}
+        sourceId={effectiveSourceId}
+        sourceName={effectiveSource?.name || activeTab.sourceName}
+        onClose={() => {
+          setSaveSqlModalOpen(false);
+          setEditingSavedSql(null);
+        }}
+        onSaved={(saved) => {
+          patchActiveTab((tab) => ({
+            ...tab,
+            notice: { type: "success", message: `已保存常用 SQL「${saved.name}」。` }
+          }));
+        }}
+      />
+
+      {/* 已保存常用 SQL 检索库弹窗。 */}
+      <SavedSqlLibraryModal
+        open={savedSqlLibraryOpen}
+        queryLanguage={queryLanguage}
+        sourceId={effectiveSourceId}
+        sourceName={effectiveSource?.name || activeTab.sourceName}
+        onClose={() => setSavedSqlLibraryOpen(false)}
+        onInsertAtCursor={(item) => {
+          setInsertTextRequest({ text: item.sqlText, nonce: Date.now() });
+        }}
+        onReplaceEditor={(item) => {
+          setStatementStatuses({});
+          patchActiveTab((tab) => ({
+            ...tab,
+            soqlDraft: item.sqlText,
+            selectedSoqlText: ""
+          }));
+        }}
+        onOpenInNewConsole={(item, mode) => {
+          storeCreateTab(
+            effectiveSource
+              ? {
+                  sourceId: effectiveSource.id,
+                  sourceType: String(effectiveSource.sourceType || "salesforce"),
+                  sourceName: effectiveSource.name,
+                  sourceColor: getSourceColor(effectiveSource)
+                }
+              : {
+                  sourceId: activeTab.sourceId,
+                  sourceType: activeTab.sourceType,
+                  sourceName: activeTab.sourceName,
+                  sourceColor: activeTab.sourceColor
+                },
+            item.sqlText,
+            mode
+          );
+        }}
+        onEditItem={(item) => {
+          setEditingSavedSql(item);
+          setSaveSqlModalOpen(true);
+        }}
       />
     </div>
   );

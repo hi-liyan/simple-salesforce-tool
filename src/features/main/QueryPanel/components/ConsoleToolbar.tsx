@@ -1,4 +1,4 @@
-import { Check, Eraser, FastForward, Gauge, ListChecks, Play, Sparkles, Square, Undo2, WrapText } from "lucide-react";
+import { BookMarked, BookmarkPlus, Check, Eraser, FastForward, Gauge, ListChecks, Play, Sparkles, Square, Undo2, WrapText } from "lucide-react";
 import { useState } from "react";
 import { DataSourceSelector } from "../../../../components/DataSourceSelector";
 import type { SalesforceSource } from "../../../../types";
@@ -47,6 +47,10 @@ type ConsoleToolbarProps = {
   onToggleWordWrap: () => void;
   // 清空编辑器。
   onClear: () => void;
+  // 保存当前或选中 SQL。
+  onSaveSql?: () => void;
+  // 打开已保存 SQL 检索库。
+  onOpenSavedSqlLibrary?: () => void;
   // 切换当前控制台绑定数据源。
   onChangeSource: (sourceId: string) => void;
   // 切换当前事务模式。
@@ -79,6 +83,8 @@ export function ConsoleToolbar({
   onFormat,
   onToggleWordWrap,
   onClear,
+  onSaveSql,
+  onOpenSavedSqlLibrary,
   onChangeSource,
   onChangeTransactionMode,
   onCommitTransaction,
@@ -198,6 +204,35 @@ export function ConsoleToolbar({
         >
           <Eraser size={14} />
         </button>
+
+        {/* 保存常用 SQL 与已保存 SQL 库按钮。 */}
+        {onSaveSql && (
+          <>
+            <div className="mx-1 h-4 w-[1px] bg-base-300" />
+            <button
+              type="button"
+              className={iconButtonClass}
+              disabled={!hasContent}
+              title="保存常用 SQL（支持保存全部或选中 SQL）"
+              aria-label="保存常用 SQL"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={onSaveSql}
+            >
+              <BookmarkPlus size={14} />
+            </button>
+          </>
+        )}
+        {onOpenSavedSqlLibrary && (
+          <button
+            type="button"
+            className={iconButtonClass}
+            title="查询已保存 SQL"
+            aria-label="查询已保存 SQL"
+            onClick={onOpenSavedSqlLibrary}
+          >
+            <BookMarked size={14} />
+          </button>
+        )}
 
         {/* DBX 风格交互式事务控制区：仅支持事务的数据源展示。 */}
         {supportsInteractiveTransaction && (

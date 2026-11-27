@@ -95,7 +95,7 @@ mod tests {
         let user_version: i64 = storage
             .read(|conn| Ok(conn.query_row("PRAGMA user_version", [], |row| row.get(0))?))
             .unwrap();
-        assert_eq!(user_version, 5, "新库必须自动迁移到最新版本号");
+        assert_eq!(user_version, 6, "新库必须自动迁移到最新版本号");
         let new_db_path = open_or_bootstrap_storage(&root).unwrap();
         assert!(new_db_path.ends_with("app.db"));
     }

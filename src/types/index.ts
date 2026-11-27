@@ -82,6 +82,41 @@ export type QueryResultEditMeta = {
   readonlyReason?: string;
 };
 
+// 控制台已保存常用 SQL 条目。
+export type SavedSqlQuery = {
+  id: string;
+  name: string;
+  description: string;
+  sqlText: string;
+  queryLanguage: string;
+  sourceId?: string | null;
+  isPinned: boolean;
+  useCount: number;
+  lastUsedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+// 新建或更新已保存 SQL 载荷。
+export type SavedSqlUpsertPayload = {
+  id?: string | null;
+  name: string;
+  description?: string | null;
+  sqlText: string;
+  queryLanguage: string;
+  sourceId?: string | null;
+  isPinned?: boolean;
+};
+
+// 查询已保存 SQL 过滤参数。
+export type SavedSqlListParams = {
+  keyword?: string;
+  queryLanguage?: string;
+  sourceId?: string;
+  onlyCurrentSource?: boolean;
+  pinnedOnly?: boolean;
+};
+
 export type QueryResult = {
   totalSize: number;
   records: Record<string, unknown>[];

@@ -203,6 +203,8 @@ export type CodeMirrorQueryEditorProps = {
   objectFieldsMap?: Record<string, string[]>;
   // 自动换行模式。
   wordWrapMode?: "off" | "on" | "wordWrapColumn" | "bounded";
+  // 外部触发在光标/选区处插入文本的请求信号。
+  insertTextRequest?: { text: string; nonce: number } | null;
   // 额外样式类名。
   className?: string;
 };
@@ -327,6 +329,7 @@ export function CodeMirrorQueryEditor({
   objectNames = [],
   objectFieldsMap = {},
   wordWrapMode = "on",
+  insertTextRequest = null,
   className = ""
 }: CodeMirrorQueryEditorProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -603,6 +606,19 @@ export function CodeMirrorQueryEditor({
       effects: setStatementStatusesEffect.of(statementStatuses)
     });
   }, [statementStatuses]);
+
+  // 响应外部光标插入请求：在当前光标/选区位置插入片段并将光标移至末尾。
+  useEffect(() => {
+    if (!insertTextRequest || !insertTextRequest.text) return;
+    const view = viewRef.current;
+    if (!view) return;
+    const { from, to } = view.state.selection.main;
+    view.dispatch({
+      changes: { from, to, insert: insertTextRequest.text },
+      selection: { anchor: from + insertTextRequest.text.length }
+    });
+    view.focus();
+  }, [insertTextRequest]);
 
   return (
     <div

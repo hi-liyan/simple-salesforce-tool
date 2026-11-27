@@ -41,6 +41,11 @@ const MIGRATIONS: &[Migration] = &[
         id: "2026-11-27-v5-virtual-views",
         up: migrate_v5_virtual_views,
     },
+    Migration {
+        version: 6,
+        id: "2026-11-27-v6-saved-sql",
+        up: migrate_v6_saved_sql,
+    },
 ];
 
 /// 执行版本化增量迁移：基于 `PRAGMA user_version` 在事务内幂等推进。
@@ -280,6 +285,31 @@ fn migrate_v5_virtual_views(tx: &Transaction<'_>) -> Result<(), AppError> {
     Ok(())
 }
 
+/// V6 迁移：新增控制台已保存常用 SQL 表 `saved_sql_queries`（支持 SQL 说明、置顶与语言/数据源作用域）。
+fn migrate_v6_saved_sql(tx: &Transaction<'_>) -> Result<(), AppError> {
+    tx.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS saved_sql_queries (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            sql_text TEXT NOT NULL,
+            query_language TEXT NOT NULL DEFAULT 'mysql',
+            source_id TEXT NULL REFERENCES data_sources(id) ON DELETE SET NULL,
+            is_pinned INTEGER NOT NULL DEFAULT 0,
+            use_count INTEGER NOT NULL DEFAULT 0,
+            last_used_at TEXT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_saved_sql_lang_pinned
+            ON saved_sql_queries(query_language, is_pinned DESC, updated_at DESC);
+        "#,
+    )?;
+    Ok(())
+}
+
 /// 判断是否已存在无 `user_version` 的旧版 v2 `schema_meta`。
 fn has_existing_v2_schema_meta(connection: &Connection) -> Result<bool, AppError> {
     let has_table: Option<String> = connection
@@ -398,7 +428,7 @@ mod tests {
         let user_version: i64 = storage
             .read(|conn| Ok(conn.query_row("PRAGMA user_version", [], |row| row.get(0))?))
             .unwrap();
-        assert_eq!(user_version, 5, "迁移完成后应推进到最新版本 5");
+        assert_eq!(user_version, 6, "迁移完成后应推进到最新版本 6");
 
         // 验证 V2 新建表与索引已就位，且未产生 stale backup。
         let has_stale_backup = fs::read_dir(&root)

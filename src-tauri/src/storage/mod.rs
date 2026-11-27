@@ -8,6 +8,7 @@ pub mod metadata_repo;
 pub mod migrations;
 pub mod plugin_repo;
 pub mod pragma;
+pub mod saved_sql_repo;
 pub mod schema;
 pub mod secret_crypto;
 pub mod secret_repo;

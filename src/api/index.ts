@@ -32,6 +32,9 @@ import type {
   RecordSaveWithDeletePayload,
   SalesforceObject,
   SalesforceSource,
+  SavedSqlListParams,
+  SavedSqlQuery,
+  SavedSqlUpsertPayload,
   SourceSecretView,
   SourceUpsertPayload,
   SystemLogPage,
@@ -111,6 +114,19 @@ export const api = {
   upsertVirtualView: (payload: VirtualViewUpsertPayload) =>
     invokeApi<VirtualView>("upsert_virtual_view", { payload }),
   deleteVirtualView: (id: string) => invokeApi<void>("delete_virtual_view", { id }),
+  // 查询控制台已保存常用 SQL 列表。
+  listSavedSql: (filter?: SavedSqlListParams) =>
+    invokeApi<SavedSqlQuery[]>("list_saved_sql", { filter: filter || {} }),
+  // 新建或更新已保存常用 SQL。
+  upsertSavedSql: (payload: SavedSqlUpsertPayload) =>
+    invokeApi<SavedSqlQuery>("upsert_saved_sql", { payload }),
+  // 切换已保存 SQL 置顶状态。
+  toggleSavedSqlPin: (id: string, isPinned: boolean) =>
+    invokeApi<SavedSqlQuery>("toggle_saved_sql_pin", { id, isPinned }),
+  // 标记已保存 SQL 被使用一次。
+  markSavedSqlUsed: (id: string) => invokeApi<void>("mark_saved_sql_used", { id }),
+  // 删除指定的已保存 SQL。
+  deleteSavedSql: (id: string) => invokeApi<void>("delete_saved_sql", { id }),
   refreshObjects: (sourceId: string) => invokeApi<SalesforceObject[]>("refresh_objects", { sourceId }),
   openObjectListPage: (sourceId: string, objectName: string) =>
     invokeApi<void>("open_object_list_page", { sourceId, objectName }),

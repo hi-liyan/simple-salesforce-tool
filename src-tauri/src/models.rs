@@ -442,6 +442,81 @@ pub struct QueryResultEditMeta {
     pub readonly_reason: Option<String>,
 }
 
+/// 控制台已保存常用 SQL 条目：支持多语句脚本、SQL 说明、语言/数据源作用域与置顶。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedSqlQuery {
+    /// 主键 ID（UUID）。
+    pub id: String,
+    /// 标题/名称。
+    pub name: String,
+    /// SQL 用途说明。
+    pub description: String,
+    /// 保存的 SQL/SOQL 正文（支持单条、选中片段或多条语句）。
+    pub sql_text: String,
+    /// 查询语言标识（如 "mysql"、"soql"）。
+    pub query_language: String,
+    /// 可选绑定的数据源 ID（为空表示同语言所有数据源通用）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_id: Option<String>,
+    /// 是否置顶。
+    pub is_pinned: bool,
+    /// 使用次数统计。
+    pub use_count: i64,
+    /// 最近使用时间（RFC3339）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_used_at: Option<String>,
+    /// 创建时间（RFC3339）。
+    pub created_at: String,
+    /// 更新时间（RFC3339）。
+    pub updated_at: String,
+}
+
+/// 新建或更新已保存 SQL 的请求载荷。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedSqlUpsertPayload {
+    /// 目标 ID（新建时为空）。
+    #[serde(default)]
+    pub id: Option<String>,
+    /// 标题/名称。
+    pub name: String,
+    /// SQL 用途说明（可选）。
+    #[serde(default)]
+    pub description: Option<String>,
+    /// SQL/SOQL 正文。
+    pub sql_text: String,
+    /// 查询语言标识（如 "mysql"、"soql"）。
+    pub query_language: String,
+    /// 可选绑定的数据源 ID。
+    #[serde(default)]
+    pub source_id: Option<String>,
+    /// 是否置顶。
+    #[serde(default)]
+    pub is_pinned: bool,
+}
+
+/// 查询已保存 SQL 列表的过滤参数。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedSqlListParams {
+    /// 关键词模糊搜索（同时匹配名称、SQL 说明与 SQL 正文）。
+    #[serde(default)]
+    pub keyword: Option<String>,
+    /// 按查询语言过滤（可选）。
+    #[serde(default)]
+    pub query_language: Option<String>,
+    /// 按数据源 ID 过滤（传入时仅返回绑定该源或通用条目；若 `only_current_source` 为 true 则仅返回绑定该源条目）。
+    #[serde(default)]
+    pub source_id: Option<String>,
+    /// 是否仅限当前数据源。
+    #[serde(default)]
+    pub only_current_source: bool,
+    /// 是否仅看置顶条目。
+    #[serde(default)]
+    pub pinned_only: bool,
+}
+
 /// 工作区标签 DTO。
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
