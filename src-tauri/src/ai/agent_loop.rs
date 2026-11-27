@@ -89,10 +89,16 @@ fn build_agent_system_prompt(
     prompt
 }
 
-/// 组装本轮用户输入上下文（选区、编辑器草稿、`@` 引用对象与报错信息）。
+/// 组装本轮用户输入上下文（工作区状态、选区、编辑器草稿、`@` 引用对象、图片提示与报错信息）。
 fn build_user_prompt_with_context(req: &AiAgentStreamRequest) -> String {
     let mut sections = Vec::new();
 
+    if !req.workspace_context_summary.trim().is_empty() {
+        sections.push(format!(
+            "[当前工作区状态]:\n{}",
+            req.workspace_context_summary.trim()
+        ));
+    }
     if !req.mentioned_objects.is_empty() {
         sections.push(format!(
             "[用户引用的对象/表]: {}",
@@ -107,6 +113,10 @@ fn build_user_prompt_with_context(req: &AiAgentStreamRequest) -> String {
     } else if !req.current_editor_sql.trim().is_empty() {
         let clipped: String = req.current_editor_sql.trim().chars().take(4000).collect();
         sections.push(format!("[当前编辑器内容]:\n```sql\n{clipped}\n```"));
+    }
+    if !req.images.is_empty() {
+        let names: Vec<&str> = req.images.iter().map(|img| img.name.as_str()).collect();
+        sections.push(format!("[随消息附带的图片]: {}", names.join(", ")));
     }
     if !req.error_message.trim().is_empty() {
         sections.push(format!("[最近一次执行报错]:\n{}", req.error_message.trim()));
@@ -153,6 +163,7 @@ fn maybe_compact_messages(messages: &mut Vec<AgentChatMessage>) -> Option<(usize
             tool_calls: Vec::new(),
             tool_call_id: None,
             tool_name: None,
+            images: Vec::new(),
         },
     );
 
@@ -261,6 +272,7 @@ async fn run_agent_stream_inner(
         tool_calls: Vec::new(),
         tool_call_id: None,
         tool_name: None,
+        images: request.images.clone(),
     });
 
     let max_turns = request.max_turns.unwrap_or(DEFAULT_MAX_TURNS).clamp(5, 40);
@@ -358,6 +370,7 @@ async fn run_agent_stream_inner(
             tool_calls: turn_output.tool_calls.clone(),
             tool_call_id: None,
             tool_name: None,
+            images: Vec::new(),
         });
 
         // 拆分为可并行只读工具与串行查询工具，兼顾速度与连接安全。
@@ -420,6 +433,7 @@ async fn run_agent_stream_inner(
                 tool_calls: Vec::new(),
                 tool_call_id: Some(result.tool_call_id),
                 tool_name: Some(result.tool_name),
+                images: Vec::new(),
             });
         }
 

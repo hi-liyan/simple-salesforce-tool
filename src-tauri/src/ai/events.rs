@@ -54,7 +54,17 @@ pub struct ToolResult {
     pub is_error: bool,
 }
 
-/// 内部多轮对话消息（兼容纯文本、模型工具调用与工具结果回传）。
+/// 用户消息携带的图片附件（Data URL 形式）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiImageAttachment {
+    /// 图片文件名。
+    pub name: String,
+    /// 图片 Data URL（如 `data:image/png;base64,...`）。
+    pub data_url: String,
+}
+
+/// 内部多轮对话消息（兼容纯文本、多模态图片、模型工具调用与工具结果回传）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentChatMessage {
@@ -71,6 +81,9 @@ pub struct AgentChatMessage {
     /// 当 role == "tool" 时关联的工具名。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_name: Option<String>,
+    /// 用户消息携带的图片附件列表（仅多模态 user 消息使用）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<AiImageAttachment>,
 }
 
 /// 流式推送给前端的 Agent 事件（参考 dbx `AgentEvent` 协议）。
@@ -157,6 +170,12 @@ pub struct AiAgentStreamRequest {
     /// 当前上下文对象/表提示（及 `@` 引用的对象列表）。
     #[serde(default)]
     pub mentioned_objects: Vec<String>,
+    /// 当前工作区状态摘要（当前 Tab 类型、表名、筛选条件与查询结果摘要）。
+    #[serde(default)]
+    pub workspace_context_summary: String,
+    /// 当前轮次用户附加的图片列表（多模态视觉输入）。
+    #[serde(default)]
+    pub images: Vec<AiImageAttachment>,
     /// 最近一次执行报错信息（用于 Fix with AI）。
     #[serde(default)]
     pub error_message: String,

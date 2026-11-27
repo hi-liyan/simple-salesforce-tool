@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { AlertTriangle, Check, ChevronDown, ChevronRight, Copy, Play, PlusSquare, Replace, ShieldAlert, Wrench } from "lucide-react";
-import type { AiChatMessage } from "../../types/ai";
+import type { AiChatMessage, AiMessageImage } from "../../types/ai";
 import { AiMarkdownContent } from "./AiMarkdownContent";
 
 type AiMessageListProps = {
@@ -10,6 +10,8 @@ type AiMessageListProps = {
   statusText: string;
   // 是否正在生成。
   streaming: boolean;
+  // 点击对话中的图片缩略图进行大图预览。
+  onPreviewImage?: (image: AiMessageImage) => void;
   // 替换当前控制台 SQL。
   onReplaceSql: (sql: string) => void;
   // 新建控制台并填入 SQL。
@@ -56,6 +58,7 @@ export function AiMessageList({
   messages,
   statusText,
   streaming,
+  onPreviewImage,
   onReplaceSql,
   onOpenNewConsole,
   onExecuteSql,
@@ -101,7 +104,31 @@ export function AiMessageList({
                   : "w-full border border-base-300/80 bg-base-200/35 text-base-content"
               }`}
             >
-              {/* 用户消息关联的结构化引用标签（@对象 / 选区 / 附件）。 */}
+              {/* 用户消息携带的图片缩略图列表（点击可放大预览）。 */}
+              {isUser && msg.images && msg.images.length > 0 && (
+                <div className="mb-1.5 flex flex-wrap gap-1.5">
+                  {msg.images.map((img) => (
+                    <button
+                      key={img.id}
+                      type="button"
+                      title={`点击预览 ${img.name}`}
+                      onClick={() => onPreviewImage?.(img)}
+                      className="group relative overflow-hidden rounded-lg border border-primary-content/25 bg-primary-content/10 transition-opacity hover:opacity-90"
+                    >
+                      <img
+                        src={img.dataUrl}
+                        alt={img.name}
+                        className="h-16 w-16 object-cover"
+                      />
+                      <span className="absolute inset-x-0 bottom-0 truncate bg-black/55 px-1 py-0.5 text-[9px] text-white">
+                        {img.name}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* 用户消息关联的结构化引用标签（@对象 / 选区 / 文本附件）。 */}
               {isUser && msg.mentions && msg.mentions.length > 0 && (
                 <div className="mb-1.5 flex flex-wrap gap-1">
                   {msg.mentions.map((badge, badgeIdx) => (

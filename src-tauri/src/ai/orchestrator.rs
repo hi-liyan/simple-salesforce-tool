@@ -40,6 +40,7 @@ impl AiOrchestrator {
             tool_calls: Vec::new(),
             tool_call_id: None,
             tool_name: None,
+            images: Vec::new(),
         }];
         let output = stream_model_turn(
             &temp_cfg,

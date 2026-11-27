@@ -72,6 +72,24 @@ fn normalize_base_url(raw: &str) -> String {
     raw.trim().trim_end_matches('/').to_string()
 }
 
+/// 解析 `data:<mime>;base64,<data>` 格式的图片 Data URL，返回 `(media_type, base64_data)`。
+fn parse_image_data_url(data_url: &str) -> Option<(String, String)> {
+    let trimmed = data_url.trim();
+    let rest = trimmed.strip_prefix("data:")?;
+    let (meta, payload) = rest.split_once(',')?;
+    // 仅处理显式声明为 base64 的图片 Data URL。
+    if !meta.to_ascii_lowercase().contains(";base64") || payload.trim().is_empty() {
+        return None;
+    }
+    let media_type = meta
+        .split(';')
+        .next()
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+        .unwrap_or("image/png");
+    Some((media_type.to_string(), payload.trim().to_string()))
+}
+
 /// 构建共享 HTTP 客户端。
 fn build_http_client(timeout_ms: i64) -> Result<Client, AppError> {
     let ms = timeout_ms.clamp(3_000, 300_000) as u64;
@@ -277,6 +295,24 @@ where
                 "role": "tool",
                 "tool_call_id": msg.tool_call_id.clone().unwrap_or_default(),
                 "content": msg.content
+            }));
+        } else if msg.role == "user" && !msg.images.is_empty() {
+            // 构造 OpenAI Vision 多模态 content 数组（文本 + image_url）。
+            let mut parts = vec![json!({
+                "type": "text",
+                "text": msg.content
+            })];
+            for img in &msg.images {
+                if !img.data_url.trim().is_empty() {
+                    parts.push(json!({
+                        "type": "image_url",
+                        "image_url": { "url": img.data_url }
+                    }));
+                }
+            }
+            wire_messages.push(json!({
+                "role": msg.role,
+                "content": parts
             }));
         } else {
             wire_messages.push(json!({
@@ -496,6 +532,26 @@ where
                     "content": msg.content
                 }]
             }));
+        } else if msg.role == "user" && !msg.images.is_empty() {
+            // 构造 Anthropic Messages 多模态 content 块（image base64 + text）。
+            let mut blocks = Vec::new();
+            for img in &msg.images {
+                if let Some((media_type, data)) = parse_image_data_url(&img.data_url) {
+                    blocks.push(json!({
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": media_type,
+                            "data": data
+                        }
+                    }));
+                }
+            }
+            blocks.push(json!({
+                "type": "text",
+                "text": msg.content
+            }));
+            wire_messages.push(json!({ "role": msg.role, "content": blocks }));
         } else {
             wire_messages.push(json!({ "role": msg.role, "content": msg.content }));
         }

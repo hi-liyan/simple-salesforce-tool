@@ -2,10 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { History, Maximize2, Minimize2, Plus, Settings, Sparkles, X } from "lucide-react";
 import { aiApi } from "../../api/ai";
+import { getDataSourceDriver } from "../../drivers/registry";
+import { useObjectsQuery } from "../../queries/salesforce";
 import { useAiStore } from "../../store/useAiStore";
 import type {
   AgentEvent,
   AiChatMessage,
+  AiMessageImage,
   AiMessageMentionBadge,
   AiToolStep,
   AiWorkspaceContextBridge
@@ -50,6 +53,8 @@ export function AiAssistantPanel({
     conversations,
     promptTemplates,
     activeConversationId,
+    boundSourceId,
+    sourceFollowsWorkspace,
     messages,
     streaming,
     activeStreamSessionId,
@@ -59,6 +64,7 @@ export function AiAssistantPanel({
     setMode,
     setAction,
     setSelectedConfigId,
+    setBoundSourceId,
     setStatusText,
     setStreamingState,
     bumpGenerationEpoch,
@@ -79,9 +85,39 @@ export function AiAssistantPanel({
   const [attachments, setAttachments] = useState<AiPromptAttachment[]>([]);
   const [selectedTemplateIds, setSelectedTemplateIds] = useState<string[]>([]);
   const [queuedPrompt, setQueuedPrompt] = useState<AiQueuedPrompt | null>(null);
-  const [previewImage, setPreviewImage] = useState<AiPromptAttachment | null>(null);
+  const [previewImage, setPreviewImage] = useState<{ name: string; dataUrl?: string } | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [inlineWarning, setInlineWarning] = useState("");
+
+  // 解析 AI 助手当前生效的数据源（新建会话默认跟随工作区，手动切换或发送首条消息后锁定）。
+  const lockedSource = useMemo(
+    () => (boundSourceId ? workspaceBridge.sources.find((s) => s.id === boundSourceId) || null : null),
+    [boundSourceId, workspaceBridge.sources]
+  );
+  const isUsingLockedSource = !sourceFollowsWorkspace && Boolean(lockedSource);
+  const effectiveSourceId = isUsingLockedSource ? lockedSource!.id : workspaceBridge.sourceId;
+  const effectiveSourceName = isUsingLockedSource ? lockedSource!.name : workspaceBridge.sourceName;
+  const effectiveSourceType = isUsingLockedSource
+    ? String(lockedSource!.sourceType || "salesforce")
+    : workspaceBridge.sourceType;
+  const effectiveQueryLanguage = useMemo(
+    () => getDataSourceDriver(effectiveSourceType).capabilities.queryLanguage,
+    [effectiveSourceType]
+  );
+
+  // 当 AI 锁定了与主工作区不同的数据源时，独立拉取该数据源的对象列表供 `@` 引用。
+  const needSeparateObjects =
+    Boolean(effectiveSourceId) && effectiveSourceId !== workspaceBridge.sourceId;
+  const { data: separateObjects = [] } = useObjectsQuery(
+    needSeparateObjects ? effectiveSourceId : ""
+  );
+  const effectiveAvailableObjects = useMemo(
+    () =>
+      needSeparateObjects
+        ? separateObjects.map((obj) => obj.name)
+        : workspaceBridge.availableObjects,
+    [needSeparateObjects, separateObjects, workspaceBridge.availableObjects]
+  );
 
   // 提取当前会话中的历史用户提问列表（供 `ArrowUp` 回溯）。
   const promptHistory = useMemo(
@@ -97,6 +133,16 @@ export function AiAssistantPanel({
   const activeEpochRef = useRef(0);
   const bridgeRef = useRef(workspaceBridge);
   bridgeRef.current = workspaceBridge;
+  const effectiveSourceRef = useRef({
+    id: effectiveSourceId,
+    name: effectiveSourceName,
+    followsWorkspace: sourceFollowsWorkspace
+  });
+  effectiveSourceRef.current = {
+    id: effectiveSourceId,
+    name: effectiveSourceName,
+    followsWorkspace: sourceFollowsWorkspace
+  };
 
   useEffect(() => {
     void loadConfigs();
@@ -144,9 +190,17 @@ export function AiAssistantPanel({
       confirmedSourceId?: string;
     }) => {
       const bridge = bridgeRef.current;
-      if (!bridge.sourceId) {
-        setInlineWarning("请先在左侧数据源树选择一个数据源，或新建数据源后再发送。");
+      const sourceSnap = effectiveSourceRef.current;
+      const targetSourceId = options.confirmedSourceId || sourceSnap.id;
+      const targetSourceName =
+        bridge.sources.find((s) => s.id === targetSourceId)?.name || sourceSnap.name;
+      if (!targetSourceId) {
+        setInlineWarning("请先在上方或左侧选择一个数据源，或新建数据源后再发送。");
         return false;
+      }
+      // 首次发送消息时自动锁定当前会话数据源，避免后续切换工作区 Tab 意外改变对话目标源。
+      if (sourceSnap.followsWorkspace) {
+        setBoundSourceId(targetSourceId, false);
       }
       setInlineWarning("");
 
@@ -167,16 +221,26 @@ export function AiAssistantPanel({
       const chipMentions = options.mentions ?? [];
       const chipSelections = options.selections ?? [];
       const turnAttachments = options.turnAttachments ?? [];
+      const imageAttachments = turnAttachments.filter(
+        (a) => a.kind === "image" && Boolean(a.dataUrl)
+      );
 
-      // 组装用户气泡上展示的结构化引用标签。
+      // 组装用户气泡上展示的结构化引用标签（图片以独立缩略图展示，不重复生成纯文本标签）。
       const messageBadges: AiMessageMentionBadge[] = [
         ...chipMentions.map((m) => ({ kind: "object" as const, label: m.raw })),
         ...chipSelections.map((s) => ({ kind: "selection" as const, label: s.label })),
-        ...turnAttachments.map((a) => ({
-          kind: a.kind === "image" ? ("image" as const) : ("file" as const),
-          label: a.name
-        }))
+        ...turnAttachments
+          .filter((a) => a.kind !== "image")
+          .map((a) => ({
+            kind: "file" as const,
+            label: a.name
+          }))
       ];
+      const messageImages: AiMessageImage[] = imageAttachments.map((a) => ({
+        id: a.id,
+        name: a.name,
+        dataUrl: a.dataUrl!
+      }));
 
       // 组装附加文本上下文（附件与选区内容）。
       const textAttachmentSections = turnAttachments
@@ -210,6 +274,7 @@ export function AiAssistantPanel({
         role: "user",
         content: options.promptText || "[上下文引用]",
         mentions: messageBadges.length > 0 ? messageBadges : undefined,
+        images: messageImages.length > 0 ? messageImages : undefined,
         createdAt: new Date().toISOString()
       };
       const placeholderAssistant: AiChatMessage = {
@@ -293,7 +358,7 @@ export function AiAssistantPanel({
                         writeConfirmation: {
                           sql: payload.sql,
                           reason: payload.reason,
-                          sourceId: bridge.sourceId,
+                          sourceId: targetSourceId,
                           status: "pending"
                         }
                       }
@@ -339,17 +404,21 @@ export function AiAssistantPanel({
         });
 
         const currentState = useAiStore.getState();
+        const isSameAsWorkspace = targetSourceId === bridge.sourceId;
         await aiApi.startAgentStream({
           sessionId,
-          sourceId: bridge.sourceId,
+          sourceId: targetSourceId,
           configId: currentState.selectedConfigId || null,
           mode: currentState.mode,
           action: currentState.action,
           prompt: effectivePrompt || "请结合上方挂载的上下文进行分析与解答。",
           history: historySnapshot,
-          currentEditorSql: bridge.currentEditorSql,
-          selectedEditorSql: combinedSelectedSql || bridge.selectedEditorSql,
+          currentEditorSql: isSameAsWorkspace ? bridge.currentEditorSql : "",
+          selectedEditorSql:
+            combinedSelectedSql || (isSameAsWorkspace ? bridge.selectedEditorSql : ""),
           mentionedObjects: mergedMentionedObjects,
+          workspaceContextSummary: isSameAsWorkspace ? bridge.workspaceContextSummary : "",
+          images: messageImages.map((img) => ({ name: img.name, dataUrl: img.dataUrl })),
           errorMessage: options.errorMessage || "",
           customInstructions: selectedTemplateInstructions,
           confirmedWriteSql: options.confirmedWriteSql ?? null,
@@ -371,7 +440,7 @@ export function AiAssistantPanel({
         if (useAiStore.getState().generationEpoch === epoch) {
           setStreamingState(false);
           setStatusText("");
-          void persistCurrentConversation(bridge.sourceId, bridge.sourceName);
+          void persistCurrentConversation(targetSourceId, targetSourceName);
         }
       }
     },
@@ -382,6 +451,7 @@ export function AiAssistantPanel({
       promptTemplates,
       scheduleDeltaFlush,
       selectedTemplateIds,
+      setBoundSourceId,
       setMessages,
       setStatusText,
       setStreamingState
@@ -447,8 +517,8 @@ export function AiAssistantPanel({
     const hasContext =
       selectedMentions.length > 0 || selectedSelections.length > 0 || attachments.length > 0;
     if ((!trimmed && !hasContext) || streaming) return;
-    if (!bridgeRef.current.sourceId) {
-      setInlineWarning("请先在左侧数据源树选择一个数据源，或新建数据源后再发送。");
+    if (!effectiveSourceRef.current.id) {
+      setInlineWarning("请先在上方或左侧选择一个数据源，或新建数据源后再发送。");
       return;
     }
     const snapshot = {
@@ -491,9 +561,9 @@ export function AiAssistantPanel({
         <div className="flex min-w-0 items-center gap-1.5">
           <Sparkles size={14} className="shrink-0 text-primary" />
           <span className="truncate font-semibold">AI 助手</span>
-          {workspaceBridge.sourceName && (
-            <span className="max-w-[96px] truncate rounded bg-base-200 px-1.5 py-0.5 text-[10px] text-neutral/75">
-              {workspaceBridge.sourceName}
+          {effectiveSourceName && (
+            <span className="max-w-[110px] truncate rounded bg-base-200 px-1.5 py-0.5 text-[10px] text-neutral/75">
+              {effectiveSourceName}
             </span>
           )}
         </div>
@@ -578,10 +648,15 @@ export function AiAssistantPanel({
         messages={messages}
         statusText={statusText}
         streaming={streaming}
-        onReplaceSql={workspaceBridge.onReplaceEditorSql}
-        onOpenNewConsole={workspaceBridge.onOpenNewConsoleWithSql}
-        onExecuteSql={workspaceBridge.onExecuteSqlDirect}
+        onPreviewImage={(img) => setPreviewImage(img)}
+        onReplaceSql={(sql) => workspaceBridge.onReplaceEditorSql(sql, effectiveSourceId)}
+        onOpenNewConsole={(sql) => workspaceBridge.onOpenNewConsoleWithSql(sql, effectiveSourceId)}
+        onExecuteSql={(sql) => workspaceBridge.onExecuteSqlDirect(sql, effectiveSourceId)}
         onConfirmWriteSql={(messageId, sql, sourceId) => {
+          if (effectiveSourceId && sourceId && effectiveSourceId !== sourceId) {
+            setInlineWarning("当前数据源已切换，请先切回原数据源后再确认执行该写操作。");
+            return;
+          }
           setMessages((prev) =>
             prev.map((m) =>
               m.id === messageId && m.writeConfirmation
@@ -610,9 +685,24 @@ export function AiAssistantPanel({
       <AiPromptInput
         value={inputDraft}
         onChange={setInputDraft}
-        sourceName={workspaceBridge.sourceName}
-        queryLanguage={workspaceBridge.queryLanguage}
-        hasSource={Boolean(workspaceBridge.sourceId)}
+        sources={workspaceBridge.sources}
+        effectiveSourceId={effectiveSourceId}
+        sourceName={effectiveSourceName}
+        sourceType={effectiveSourceType}
+        queryLanguage={effectiveQueryLanguage}
+        sourceFollowsWorkspace={sourceFollowsWorkspace}
+        workspaceSourceName={workspaceBridge.sourceName}
+        onSelectSourceId={(nextSourceId) => {
+          if (streaming) return;
+          if (!nextSourceId) {
+            setBoundSourceId("", true);
+          } else {
+            setBoundSourceId(nextSourceId, false);
+          }
+          setSelectedMentions([]);
+          setInlineWarning("");
+        }}
+        hasSource={Boolean(effectiveSourceId)}
         mode={mode}
         onModeChange={setMode}
         action={action}
@@ -620,7 +710,7 @@ export function AiAssistantPanel({
         configs={configs}
         selectedConfigId={selectedConfigId}
         onSelectConfigId={setSelectedConfigId}
-        availableObjects={workspaceBridge.availableObjects}
+        availableObjects={effectiveAvailableObjects}
         selectedMentions={selectedMentions}
         onChangeMentions={setSelectedMentions}
         selectedSelections={selectedSelections}

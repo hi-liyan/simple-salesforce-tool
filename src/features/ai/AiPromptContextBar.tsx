@@ -1,12 +1,28 @@
-import { useEffect, useRef } from "react";
-import { BookText, Check, ChevronDown, Database, Layers } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { BookText, Check, ChevronDown, Database, Layers, Link2, Lock } from "lucide-react";
+import { getDataSourceDriver } from "../../drivers/registry";
 import type { AiPromptTemplateRecord } from "../../types/ai";
+import type { SalesforceSource } from "../../types";
 
 type AiPromptContextBarProps = {
+  // 全部可用数据源列表。
+  sources: SalesforceSource[];
+  // 当前 AI 助手实际生效的数据源 ID。
+  effectiveSourceId: string;
   // 当前绑定数据源名称。
   sourceName: string;
+  // 当前数据源类型。
+  sourceType: string;
   // 当前数据源查询语言（如 sql / soql）。
   queryLanguage: string;
+  // 当前会话是否处于“跟随工作区”模式。
+  sourceFollowsWorkspace: boolean;
+  // 主工作区当前数据源名称（用于“跟随当前工作区”选项提示）。
+  workspaceSourceName: string;
+  // 是否正在流式生成（流式生成期间禁用切换数据源）。
+  streaming: boolean;
+  // 切换数据源回调（传入空字符串表示恢复跟随当前工作区）。
+  onSelectSourceId: (sourceId: string) => void;
   // 自定义提示词模板列表。
   promptTemplates: AiPromptTemplateRecord[];
   // 当前已勾选作为上下文指令的模板 ID 列表。
@@ -25,8 +41,15 @@ type AiPromptContextBarProps = {
 
 // 顶部上下文栏（参考 DBX `data-ai-composer-context-row`）：展示当前数据源上下文、模板多选与引用计数。
 export function AiPromptContextBar({
+  sources,
+  effectiveSourceId,
   sourceName,
+  sourceType,
   queryLanguage,
+  sourceFollowsWorkspace,
+  workspaceSourceName,
+  streaming,
+  onSelectSourceId,
   promptTemplates,
   selectedTemplateIds,
   onToggleTemplateId,
@@ -36,19 +59,37 @@ export function AiPromptContextBar({
   contextItemCount
 }: AiPromptContextBarProps) {
   const popoverRootRef = useRef<HTMLDivElement | null>(null);
+  const sourcePopoverRef = useRef<HTMLDivElement | null>(null);
+  const [sourcePopoverOpen, setSourcePopoverOpen] = useState(false);
 
-  // 点击弹层外部时自动关闭模板选择器。
+  // 按 sortOrder 与名称稳定排序数据源列表。
+  const sortedSources = useMemo(
+    () =>
+      [...sources].sort((a, b) => {
+        const diff = (a.sortOrder || 0) - (b.sortOrder || 0);
+        if (diff !== 0) return diff;
+        return a.name.localeCompare(b.name, "zh-CN");
+      }),
+    [sources]
+  );
+
+  // 点击弹层外部时自动关闭模板选择器或数据源选择器。
   useEffect(() => {
-    if (!templatePopoverOpen) return;
+    if (!templatePopoverOpen && !sourcePopoverOpen) return;
     function handlePointerDown(event: MouseEvent) {
-      if (!popoverRootRef.current?.contains(event.target as Node)) {
+      const target = event.target as Node;
+      if (templatePopoverOpen && !popoverRootRef.current?.contains(target)) {
         onTemplatePopoverOpenChange(false);
+      }
+      if (sourcePopoverOpen && !sourcePopoverRef.current?.contains(target)) {
+        setSourcePopoverOpen(false);
       }
     }
     document.addEventListener("mousedown", handlePointerDown);
     return () => document.removeEventListener("mousedown", handlePointerDown);
-  }, [templatePopoverOpen, onTemplatePopoverOpenChange]);
+  }, [templatePopoverOpen, sourcePopoverOpen, onTemplatePopoverOpenChange]);
 
+  const activeDriver = sourceType ? getDataSourceDriver(sourceType) : null;
   const templateLabel =
     selectedTemplateIds.length > 0 ? `模板 (${selectedTemplateIds.length})` : "模板";
 
@@ -57,17 +98,101 @@ export function AiPromptContextBar({
       data-ai-composer-context-row
       className="mb-1.5 flex min-w-0 flex-wrap items-center gap-1.5 text-[11px] text-neutral/75"
     >
-      {/* 当前绑定数据源与语言标识。 */}
-      <div
-        title={sourceName ? `${sourceName} (${queryLanguage.toUpperCase()})` : "未选择数据源"}
-        className="inline-flex min-w-0 max-w-[170px] items-center gap-1 rounded-md border border-base-300/80 bg-base-200/45 px-2 py-0.5 text-[10px]"
-      >
-        <Database size={11} className="shrink-0 text-primary/80" />
-        <span className="truncate font-medium">{sourceName || "未绑定数据源"}</span>
-        {queryLanguage && (
-          <span className="shrink-0 rounded bg-base-100 px-1 text-[9px] uppercase text-neutral/60">
-            {queryLanguage}
-          </span>
+      {/* 独立数据源切换选择器（默认新建会话跟随工作区，手动切换后锁定到目标源）。 */}
+      <div ref={sourcePopoverRef} className="relative min-w-0">
+        <button
+          type="button"
+          disabled={streaming}
+          title={
+            sourceName
+              ? `${sourceName} (${queryLanguage.toUpperCase()}) · ${
+                  sourceFollowsWorkspace ? "跟随当前工作区" : "已锁定数据源"
+                }（点击切换）`
+              : "点击选择数据源"
+          }
+          onClick={() => setSourcePopoverOpen((v) => !v)}
+          className={`inline-flex min-w-0 max-w-[210px] items-center gap-1 rounded-md border px-2 py-0.5 text-[10px] transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+            sourcePopoverOpen
+              ? "border-primary/50 bg-primary/10 text-primary"
+              : "border-base-300/80 bg-base-200/45 hover:bg-base-200/80"
+          }`}
+        >
+          {activeDriver ? (
+            <span
+              className={`inline-flex shrink-0 items-center rounded px-1 py-[0.5px] text-[8.5px] font-semibold ${activeDriver.badgeClassName}`}
+            >
+              {activeDriver.badgeLabel}
+            </span>
+          ) : (
+            <Database size={11} className="shrink-0 text-primary/80" />
+          )}
+          <span className="truncate font-medium">{sourceName || "选择数据源"}</span>
+          {!sourceFollowsWorkspace && effectiveSourceId && (
+            <Lock size={9} className="shrink-0 text-primary/80" />
+          )}
+          <ChevronDown size={10} className="shrink-0 opacity-60" />
+        </button>
+
+        {sourcePopoverOpen && (
+          <div className="absolute bottom-full left-0 z-30 mb-1.5 w-64 rounded-xl border border-base-300 bg-base-100 p-1.5 shadow-xl">
+            <div className="px-2 py-1 text-[10px] font-medium text-neutral/55">
+              切换当前会话数据源
+            </div>
+            {/* 跟随当前工作区选项 */}
+            <button
+              type="button"
+              onClick={() => {
+                onSelectSourceId("");
+                setSourcePopoverOpen(false);
+              }}
+              className={`mb-1 flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-[11px] hover:bg-base-200/70 ${
+                sourceFollowsWorkspace ? "bg-primary/10 font-medium text-primary" : ""
+              }`}
+            >
+              <span className="flex min-w-0 items-center gap-1.5">
+                <Link2 size={11} className="shrink-0 text-primary" />
+                <span className="truncate">
+                  跟随当前工作区{workspaceSourceName ? ` (${workspaceSourceName})` : ""}
+                </span>
+              </span>
+              {sourceFollowsWorkspace && <Check size={11} className="shrink-0" />}
+            </button>
+            <div className="my-1 border-t border-base-300/70" />
+            <div className="max-h-56 space-y-0.5 overflow-y-auto">
+              {sortedSources.length === 0 && (
+                <div className="px-2 py-2 text-center text-[10px] text-neutral/55">
+                  暂无可用数据源
+                </div>
+              )}
+              {sortedSources.map((src) => {
+                const driver = getDataSourceDriver(src.sourceType);
+                const selected = !sourceFollowsWorkspace && src.id === effectiveSourceId;
+                return (
+                  <button
+                    key={src.id}
+                    type="button"
+                    onClick={() => {
+                      onSelectSourceId(src.id);
+                      setSourcePopoverOpen(false);
+                    }}
+                    className={`flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-[11px] hover:bg-base-200/70 ${
+                      selected ? "bg-primary/10 font-medium text-primary" : ""
+                    }`}
+                  >
+                    <span className="flex min-w-0 items-center gap-1.5">
+                      <span
+                        className={`inline-flex min-w-[38px] shrink-0 items-center justify-center rounded px-1 py-[1px] text-[9px] font-semibold ${driver.badgeClassName}`}
+                      >
+                        {driver.badgeLabel}
+                      </span>
+                      <span className="truncate">{src.name}</span>
+                    </span>
+                    {selected && <Check size={11} className="shrink-0" />}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         )}
       </div>
 

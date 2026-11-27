@@ -5,6 +5,7 @@ import type {
   AiPromptTemplateRecord,
   AiSkillAction
 } from "../../types/ai";
+import type { SalesforceSource } from "../../types";
 import { AiPromptBottomBar } from "./AiPromptBottomBar";
 import { AiPromptChipsBar } from "./AiPromptChipsBar";
 import { AiPromptContextBar } from "./AiPromptContextBar";
@@ -29,9 +30,15 @@ type AiPromptInputProps = {
   // 当前输入文本。
   value: string;
   onChange: (value: string) => void;
-  // 当前数据源名称与查询语言。
+  // 全部可用数据源与当前 AI 会话数据源绑定状态。
+  sources: SalesforceSource[];
+  effectiveSourceId: string;
   sourceName: string;
+  sourceType: string;
   queryLanguage: string;
+  sourceFollowsWorkspace: boolean;
+  workspaceSourceName: string;
+  onSelectSourceId: (sourceId: string) => void;
   hasSource: boolean;
   // 当前模式与技能动作。
   mode: AiAssistantMode;
@@ -79,8 +86,14 @@ type AiPromptInputProps = {
 export function AiPromptInput({
   value,
   onChange,
+  sources,
+  effectiveSourceId,
   sourceName,
+  sourceType,
   queryLanguage,
+  sourceFollowsWorkspace,
+  workspaceSourceName,
+  onSelectSourceId,
   hasSource,
   mode,
   onModeChange,
@@ -421,10 +434,17 @@ export function AiPromptInput({
           </div>
         )}
 
-        {/* 1. 顶部上下文栏（数据源、上下文计数、模板多选）。 */}
+        {/* 1. 顶部上下文栏（独立数据源切换、上下文计数、模板多选）。 */}
         <AiPromptContextBar
+          sources={sources}
+          effectiveSourceId={effectiveSourceId}
           sourceName={sourceName}
+          sourceType={sourceType}
           queryLanguage={queryLanguage}
+          sourceFollowsWorkspace={sourceFollowsWorkspace}
+          workspaceSourceName={workspaceSourceName}
+          streaming={streaming}
+          onSelectSourceId={onSelectSourceId}
           promptTemplates={promptTemplates}
           selectedTemplateIds={selectedTemplateIds}
           onToggleTemplateId={onToggleTemplateId}

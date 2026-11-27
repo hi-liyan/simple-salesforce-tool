@@ -1,3 +1,5 @@
+import type { SalesforceSource } from "./index";
+
 // AI 助手运行模式：ask 为只读问答与语句生成，agent 为可调用查询/诊断工具的多轮循环。
 export type AiAssistantMode = "ask" | "agent";
 
@@ -63,10 +65,17 @@ export type AiToolStep = {
   status: "running" | "done" | "error";
 };
 
-// 消息关联的结构化引用标签（用于在对话气泡中回显 @对象、选区与附件）。
+// 消息关联的结构化引用标签（用于在对话气泡中回显 @对象、选区与文本附件）。
 export type AiMessageMentionBadge = {
   kind: "object" | "selection" | "file" | "image";
   label: string;
+};
+
+// 对话消息内嵌的图片缩略图与预览数据。
+export type AiMessageImage = {
+  id: string;
+  name: string;
+  dataUrl: string;
 };
 
 // 前端展示与持久化用的单条 AI 对话消息。
@@ -75,6 +84,7 @@ export type AiChatMessage = {
   role: "user" | "assistant";
   content: string;
   mentions?: AiMessageMentionBadge[];
+  images?: AiMessageImage[];
   reasoning?: string;
   toolSteps?: AiToolStep[];
   writeConfirmation?: {
@@ -124,6 +134,8 @@ export type AiAgentStreamRequest = {
   currentEditorSql: string;
   selectedEditorSql: string;
   mentionedObjects: string[];
+  workspaceContextSummary?: string;
+  images?: Array<{ name: string; dataUrl: string }>;
   errorMessage: string;
   customInstructions: string;
   confirmedWriteSql?: string | null;
@@ -137,10 +149,12 @@ export type AiWorkspaceContextBridge = {
   sourceName: string;
   sourceType: string;
   queryLanguage: string;
+  sources: SalesforceSource[];
   currentEditorSql: string;
   selectedEditorSql: string;
+  workspaceContextSummary: string;
   availableObjects: string[];
-  onReplaceEditorSql: (sql: string) => void;
-  onOpenNewConsoleWithSql: (sql: string) => void;
-  onExecuteSqlDirect: (sql: string) => void;
+  onReplaceEditorSql: (sql: string, targetSourceId?: string) => void;
+  onOpenNewConsoleWithSql: (sql: string, targetSourceId?: string) => void;
+  onExecuteSqlDirect: (sql: string, targetSourceId?: string) => void;
 };

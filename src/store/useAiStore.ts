@@ -41,6 +41,10 @@ type AiStoreState = {
   promptTemplates: AiPromptTemplateRecord[];
   // 当前激活会话 ID。
   activeConversationId: string;
+  // 当前会话独立绑定的数据源 ID（为空且 sourceFollowsWorkspace=true 时跟随当前工作区）。
+  boundSourceId: string;
+  // 新建会话初始标记：是否在未锁定前跟随当前工作区数据源。
+  sourceFollowsWorkspace: boolean;
   // 当前会话消息列表。
   messages: AiChatMessage[];
   // 是否正在流式生成中。
@@ -61,6 +65,7 @@ type AiStoreState = {
   setMode: (mode: AiAssistantMode) => void;
   setAction: (action: AiSkillAction) => void;
   setSelectedConfigId: (configId: string) => void;
+  setBoundSourceId: (sourceId: string, followWorkspace?: boolean) => void;
   setStatusText: (text: string) => void;
   setStreamingState: (streaming: boolean, sessionId?: string) => void;
   bumpGenerationEpoch: () => number;
@@ -99,6 +104,8 @@ export const useAiStore = create<AiStoreState>((set, get) => ({
   conversations: [],
   promptTemplates: [],
   activeConversationId: `conv-${Date.now()}`,
+  boundSourceId: "",
+  sourceFollowsWorkspace: true,
   messages: [],
   streaming: false,
   activeStreamSessionId: "",
@@ -113,6 +120,8 @@ export const useAiStore = create<AiStoreState>((set, get) => ({
   setMode: (mode) => set({ mode }),
   setAction: (action) => set({ action }),
   setSelectedConfigId: (configId) => set({ selectedConfigId: configId }),
+  setBoundSourceId: (sourceId, followWorkspace = false) =>
+    set({ boundSourceId: sourceId, sourceFollowsWorkspace: followWorkspace }),
   setStatusText: (text) => set({ statusText: text }),
   setStreamingState: (streaming, sessionId = "") =>
     set({ streaming, activeStreamSessionId: streaming ? sessionId : "" }),
@@ -147,6 +156,8 @@ export const useAiStore = create<AiStoreState>((set, get) => ({
     const nextEpoch = get().generationEpoch + 1;
     set({
       activeConversationId: `conv-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      boundSourceId: "",
+      sourceFollowsWorkspace: true,
       messages: [],
       streaming: false,
       activeStreamSessionId: "",
@@ -157,8 +168,11 @@ export const useAiStore = create<AiStoreState>((set, get) => ({
 
   openConversation: (record) => {
     const nextEpoch = get().generationEpoch + 1;
+    const restoredSourceId = (record.sourceId || "").trim();
     set({
       activeConversationId: record.id,
+      boundSourceId: restoredSourceId,
+      sourceFollowsWorkspace: !restoredSourceId,
       mode: record.mode === "agent" ? "agent" : "ask",
       messages: parseMessagesJson(record.messagesJson),
       streaming: false,

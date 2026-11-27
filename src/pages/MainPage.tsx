@@ -502,7 +502,7 @@ export function MainPage() {
   const registeredPlugins = useMemo(() => listPlugins(), [pluginCenterOpen, pluginRegistryTick]);
   const registeredDrivers = useMemo(() => listDataSourceDrivers(), []);
 
-  // 构建 AI 助手工作区上下文桥接：实时同步当前激活 Tab（Data / Console）的数据源、草稿、选区与写回/执行动作。
+  // 构建 AI 助手工作区上下文桥接：同步当前激活 Tab（Data / Console）的数据源、工作区状态摘要与按目标数据源的写回回调。
   const aiWorkspaceBridge = useMemo<AiWorkspaceContextBridge>(() => {
     const activeConsoleTab =
       consoleTabs.find((tab) => tab.id === activeConsoleTabId) || consoleTabs[0] || null;
@@ -525,30 +525,91 @@ export function MainPage() {
     );
     const driver = getDataSourceDriver(boundSourceType);
 
+    // 格式化当前激活 Tab 的查询结果摘要（列名、总条数与前 3 行预览）。
+    const formatResultSummary = (records: Record<string, unknown>[], totalSize: number) => {
+      if (!records || records.length === 0) {
+        return totalSize > 0 ? `共 ${totalSize} 条（当前页暂无数据）` : "暂无查询结果";
+      }
+      const cols = Object.keys(records[0] || {}).filter((k) => k !== "attributes").slice(0, 20);
+      const sampleRows = records.slice(0, 3).map((row) => {
+        const raw = JSON.stringify(row);
+        return raw.length > 220 ? `${raw.slice(0, 220)}...` : raw;
+      });
+      return `已加载 ${records.length} 条（总计 ${totalSize} 条）；字段：[${cols.join(", ")}]；前 ${sampleRows.length} 行样本：${sampleRows.join(" | ")}`;
+    };
+
+    // 组装工作区状态摘要，供 AI 了解当前激活视图、表名、筛选条件与查询结果。
+    const summaryParts: string[] = [];
+    if (isConsoleActive && activeConsoleTab) {
+      summaryParts.push(`当前激活视图：查询控制台 Tab（${activeConsoleTab.name}，数据源：${activeConsoleTab.sourceName || boundSource?.name || ""}）`);
+      if (activeConsoleTab.result) {
+        summaryParts.push(
+          `控制台查询结果：${formatResultSummary(activeConsoleTab.result.records || [], activeConsoleTab.result.totalSize || 0)}`
+        );
+      }
+      if (activeConsoleTab.notice?.type === "error" && activeConsoleTab.notice.message) {
+        summaryParts.push(`控制台最近报错：${activeConsoleTab.notice.message}`);
+      }
+    } else if (activeDataTab) {
+      summaryParts.push(`当前激活视图：数据表 Tab（表/对象：${activeDataTab.objectName}，数据源：${activeDataTab.sourceName || boundSource?.name || ""}）`);
+      const filterDesc = [
+        activeDataTab.whereClause ? `WHERE ${activeDataTab.whereClause}` : "",
+        activeDataTab.sortClause
+          ? `ORDER BY ${activeDataTab.sortClause}`
+          : activeDataTab.sortField
+            ? `ORDER BY ${activeDataTab.sortField} ${activeDataTab.sortDirection}`
+            : "",
+        activeDataTab.limit ? `LIMIT ${activeDataTab.limit}` : ""
+      ]
+        .filter(Boolean)
+        .join(" ");
+      if (filterDesc) {
+        summaryParts.push(`当前查询条件：${filterDesc}`);
+      }
+      if (activeDataTab.result) {
+        summaryParts.push(
+          `表格当前结果：${formatResultSummary(activeDataTab.result.records || [], activeDataTab.result.totalSize || 0)}`
+        );
+      }
+      if (activeDataTab.notice?.type === "error" && activeDataTab.notice.message) {
+        summaryParts.push(`表格最近报错：${activeDataTab.notice.message}`);
+      }
+    }
+
+    // 解析回写/执行时的目标数据源（优先使用 AI 面板当前锁定的数据源）。
+    const resolveTargetSource = (targetSourceId?: string) =>
+      (targetSourceId ? queryPanelViewState.sources.find((s) => s.id === targetSourceId) : null) ||
+      boundSource ||
+      undefined;
+
     return {
       sourceId: boundSourceId,
       sourceName: boundSource?.name || activeDataTab?.sourceName || activeConsoleTab?.sourceName || "",
       sourceType: boundSourceType,
       queryLanguage: driver.capabilities.queryLanguage,
+      sources: queryPanelViewState.sources,
       currentEditorSql: activeConsoleTab?.soqlDraft || activeDataTab?.currentSoql || "",
       selectedEditorSql: activeConsoleTab?.selectedSoqlText || "",
+      workspaceContextSummary: summaryParts.join("\n"),
       availableObjects: queryPanelViewState.objects.map((obj) => obj.name),
-      onReplaceEditorSql: (sql) => {
-        if (activeConsoleTab) {
+      onReplaceEditorSql: (sql, targetSourceId) => {
+        const targetSource = resolveTargetSource(targetSourceId);
+        // 仅当当前激活控制台与 AI 目标数据源一致时直接替换；跨库时自动新建目标数据源控制台以防误覆盖。
+        if (activeConsoleTab && (!targetSource || activeConsoleTab.sourceId === targetSource.id)) {
           patchConsoleTab(activeConsoleTab.id, (tab) => ({ ...tab, soqlDraft: sql }));
           queryPanelActions.onSetViewMode("query");
           return;
         }
         queryPanelActions.onSetViewMode("query");
-        queryPanelActions.onOpenConsole(boundSource || undefined, sql);
+        queryPanelActions.onOpenConsole(targetSource, sql);
       },
-      onOpenNewConsoleWithSql: (sql) => {
+      onOpenNewConsoleWithSql: (sql, targetSourceId) => {
         queryPanelActions.onSetViewMode("query");
-        queryPanelActions.onOpenConsole(boundSource || undefined, sql);
+        queryPanelActions.onOpenConsole(resolveTargetSource(targetSourceId), sql);
       },
-      onExecuteSqlDirect: (sql) => {
+      onExecuteSqlDirect: (sql, targetSourceId) => {
         queryPanelActions.onSetViewMode("query");
-        queryPanelActions.onOpenConsole(boundSource || undefined, sql);
+        queryPanelActions.onOpenConsole(resolveTargetSource(targetSourceId), sql);
       }
     };
   }, [
