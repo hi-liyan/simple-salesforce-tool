@@ -101,6 +101,20 @@ export function AiMessageList({
                   : "w-full border border-base-300/80 bg-base-200/35 text-base-content"
               }`}
             >
+              {/* 用户消息关联的结构化引用标签（@对象 / 选区 / 附件）。 */}
+              {isUser && msg.mentions && msg.mentions.length > 0 && (
+                <div className="mb-1.5 flex flex-wrap gap-1">
+                  {msg.mentions.map((badge, badgeIdx) => (
+                    <span
+                      key={`${badge.kind}-${badge.label}-${badgeIdx}`}
+                      className="inline-flex max-w-full items-center truncate rounded bg-primary-content/20 px-1.5 py-0.5 font-mono text-[10px] text-primary-content"
+                    >
+                      {badge.label}
+                    </span>
+                  ))}
+                </div>
+              )}
+
               {/* 思考过程折叠区（仅深度思考模型返回 reasoning 时显示）。 */}
               {!isUser && msg.reasoning && (
                 <div className="mb-2 rounded-lg border border-base-300/70 bg-base-100/70 px-2.5 py-1.5">

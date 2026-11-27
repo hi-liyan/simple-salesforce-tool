@@ -63,11 +63,18 @@ export type AiToolStep = {
   status: "running" | "done" | "error";
 };
 
+// 消息关联的结构化引用标签（用于在对话气泡中回显 @对象、选区与附件）。
+export type AiMessageMentionBadge = {
+  kind: "object" | "selection" | "file" | "image";
+  label: string;
+};
+
 // 前端展示与持久化用的单条 AI 对话消息。
 export type AiChatMessage = {
   id: string;
   role: "user" | "assistant";
   content: string;
+  mentions?: AiMessageMentionBadge[];
   reasoning?: string;
   toolSteps?: AiToolStep[];
   writeConfirmation?: {

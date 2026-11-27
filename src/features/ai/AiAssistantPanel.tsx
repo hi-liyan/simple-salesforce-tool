@@ -1,12 +1,24 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { History, Maximize2, Minimize2, Plus, Settings, Sparkles, X } from "lucide-react";
 import { aiApi } from "../../api/ai";
 import { useAiStore } from "../../store/useAiStore";
-import type { AgentEvent, AiChatMessage, AiToolStep, AiWorkspaceContextBridge } from "../../types/ai";
+import type {
+  AgentEvent,
+  AiChatMessage,
+  AiMessageMentionBadge,
+  AiToolStep,
+  AiWorkspaceContextBridge
+} from "../../types/ai";
 import { AiConversationDrawer } from "./AiConversationDrawer";
 import { AiMessageList } from "./AiMessageList";
 import { AiPromptInput } from "./AiPromptInput";
+import type {
+  AiEditorSelectionChip,
+  AiPromptAttachment,
+  AiPromptMentionChip,
+  AiQueuedPrompt
+} from "./aiPromptUtils";
 
 type AiAssistantPanelProps = {
   // 当前工作区上下文桥接（数据源、编辑器内容、写回与执行回调）。
@@ -62,8 +74,20 @@ export function AiAssistantPanel({
   } = useAiStore();
 
   const [inputDraft, setInputDraft] = useState("");
+  const [selectedMentions, setSelectedMentions] = useState<AiPromptMentionChip[]>([]);
+  const [selectedSelections, setSelectedSelections] = useState<AiEditorSelectionChip[]>([]);
+  const [attachments, setAttachments] = useState<AiPromptAttachment[]>([]);
+  const [selectedTemplateIds, setSelectedTemplateIds] = useState<string[]>([]);
+  const [queuedPrompt, setQueuedPrompt] = useState<AiQueuedPrompt | null>(null);
+  const [previewImage, setPreviewImage] = useState<AiPromptAttachment | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [inlineWarning, setInlineWarning] = useState("");
+
+  // 提取当前会话中的历史用户提问列表（供 `ArrowUp` 回溯）。
+  const promptHistory = useMemo(
+    () => messages.filter((m) => m.role === "user" && m.content.trim().length > 0).map((m) => m.content),
+    [messages]
+  );
 
   // 帧合批缓冲：避免高频 text_delta / reasoning_delta 每字节触发 React 重渲染。
   const pendingTextDeltaRef = useRef("");
@@ -107,10 +131,13 @@ export function AiAssistantPanel({
     deltaFlushFrameRef.current = window.requestAnimationFrame(flushBufferedDeltas);
   }, [flushBufferedDeltas]);
 
-  // 发起一轮流式 Agent 对话（支持普通发送与确认写操作重放）。
+  // 发起一轮流式 Agent 对话（支持普通发送、结构化上下文与确认写操作重放）。
   const dispatchAgentTurn = useCallback(
     async (options: {
       promptText: string;
+      mentions?: AiPromptMentionChip[];
+      selections?: AiEditorSelectionChip[];
+      turnAttachments?: AiPromptAttachment[];
       errorMessage?: string;
       selectedSql?: string;
       confirmedWriteSql?: string;
@@ -137,10 +164,52 @@ export function AiAssistantPanel({
         .slice(-16)
         .map((m) => ({ role: m.role, content: m.content }));
 
+      const chipMentions = options.mentions ?? [];
+      const chipSelections = options.selections ?? [];
+      const turnAttachments = options.turnAttachments ?? [];
+
+      // 组装用户气泡上展示的结构化引用标签。
+      const messageBadges: AiMessageMentionBadge[] = [
+        ...chipMentions.map((m) => ({ kind: "object" as const, label: m.raw })),
+        ...chipSelections.map((s) => ({ kind: "selection" as const, label: s.label })),
+        ...turnAttachments.map((a) => ({
+          kind: a.kind === "image" ? ("image" as const) : ("file" as const),
+          label: a.name
+        }))
+      ];
+
+      // 组装附加文本上下文（附件与选区内容）。
+      const textAttachmentSections = turnAttachments
+        .filter((a) => a.kind === "text" && a.content)
+        .map((a) => `[附件 ${a.name}]:\n\`\`\`\n${a.content}\n\`\`\``);
+      const effectivePrompt = [options.promptText.trim(), ...textAttachmentSections]
+        .filter(Boolean)
+        .join("\n\n");
+
+      const combinedSelectedSql = [
+        options.selectedSql || "",
+        ...chipSelections.map((s) => s.sql)
+      ]
+        .filter((s) => s.trim().length > 0)
+        .join("\n\n");
+
+      const mergedMentionedObjects = Array.from(
+        new Set([
+          ...chipMentions.map((m) => m.name),
+          ...extractMentionedObjects(options.promptText)
+        ])
+      );
+
+      const selectedTemplateInstructions = promptTemplates
+        .filter((tpl) => selectedTemplateIds.includes(tpl.id))
+        .map((tpl) => `【${tpl.name}】\n${tpl.content}`)
+        .join("\n\n");
+
       const userMessage: AiChatMessage = {
         id: `msg-usr-${Date.now()}`,
         role: "user",
-        content: options.promptText,
+        content: options.promptText || "[上下文引用]",
+        mentions: messageBadges.length > 0 ? messageBadges : undefined,
         createdAt: new Date().toISOString()
       };
       const placeholderAssistant: AiChatMessage = {
@@ -276,13 +345,13 @@ export function AiAssistantPanel({
           configId: currentState.selectedConfigId || null,
           mode: currentState.mode,
           action: currentState.action,
-          prompt: options.promptText,
+          prompt: effectivePrompt || "请结合上方挂载的上下文进行分析与解答。",
           history: historySnapshot,
           currentEditorSql: bridge.currentEditorSql,
-          selectedEditorSql: options.selectedSql ?? bridge.selectedEditorSql,
-          mentionedObjects: extractMentionedObjects(options.promptText),
+          selectedEditorSql: combinedSelectedSql || bridge.selectedEditorSql,
+          mentionedObjects: mergedMentionedObjects,
           errorMessage: options.errorMessage || "",
-          customInstructions: "",
+          customInstructions: selectedTemplateInstructions,
           confirmedWriteSql: options.confirmedWriteSql ?? null,
           confirmedSourceId: options.confirmedSourceId ?? null
         });
@@ -310,12 +379,27 @@ export function AiAssistantPanel({
       bumpGenerationEpoch,
       flushBufferedDeltas,
       persistCurrentConversation,
+      promptTemplates,
       scheduleDeltaFlush,
+      selectedTemplateIds,
       setMessages,
       setStatusText,
       setStreamingState
     ]
   );
+
+  // 当流式生成结束且存在排队输入时，自动消费下一条排队任务。
+  useEffect(() => {
+    if (streaming || !queuedPrompt) return;
+    const next = queuedPrompt;
+    setQueuedPrompt(null);
+    void dispatchAgentTurn({
+      promptText: next.text,
+      mentions: next.mentions,
+      selections: next.selections,
+      turnAttachments: next.attachments
+    });
+  }, [dispatchAgentTurn, queuedPrompt, streaming]);
 
   // 响应外部工作区快捷意图（如“AI 修复报错”或“发送选中 SQL 到 AI”）。
   useEffect(() => {
@@ -331,20 +415,65 @@ export function AiAssistantPanel({
         selectedSql: intent.selectedSql
       });
     } else {
-      setInputDraft(intent.prompt);
+      // 参考 DBX #10058：编辑器选区挂载为独立 Chip，不污染用户输入正文。
+      if (intent.selectedSql && intent.selectedSql.trim()) {
+        const lineCount = intent.selectedSql.trim().split(/\r?\n/).length;
+        setSelectedSelections((prev) => [
+          ...prev,
+          {
+            id: `sel-${Date.now()}`,
+            label: `编辑器选区 (${lineCount} 行)`,
+            sql: intent.selectedSql!,
+            truncated: false
+          }
+        ]);
+      }
+      if (intent.prompt) {
+        setInputDraft(intent.prompt);
+      }
     }
   }, [clearLaunchIntent, dispatchAgentTurn, pendingLaunchIntent, setAction, setMode]);
 
+  // 清空当前输入区与结构化上下文。
+  function clearComposerInputs() {
+    setInputDraft("");
+    setSelectedMentions([]);
+    setSelectedSelections([]);
+    setAttachments([]);
+  }
+
   function handleSend() {
     const trimmed = inputDraft.trim();
-    if (!trimmed || streaming) return;
+    const hasContext =
+      selectedMentions.length > 0 || selectedSelections.length > 0 || attachments.length > 0;
+    if ((!trimmed && !hasContext) || streaming) return;
     if (!bridgeRef.current.sourceId) {
       setInlineWarning("请先在左侧数据源树选择一个数据源，或新建数据源后再发送。");
       return;
     }
+    const snapshot = {
+      promptText: trimmed,
+      mentions: [...selectedMentions],
+      selections: [...selectedSelections],
+      turnAttachments: [...attachments]
+    };
     setInlineWarning("");
-    setInputDraft("");
-    void dispatchAgentTurn({ promptText: trimmed });
+    clearComposerInputs();
+    void dispatchAgentTurn(snapshot);
+  }
+
+  function handleQueueSend() {
+    const trimmed = inputDraft.trim();
+    const hasContext =
+      selectedMentions.length > 0 || selectedSelections.length > 0 || attachments.length > 0;
+    if (!trimmed && !hasContext) return;
+    setQueuedPrompt({
+      text: trimmed,
+      mentions: [...selectedMentions],
+      selections: [...selectedSelections],
+      attachments: [...attachments]
+    });
+    clearComposerInputs();
   }
 
   function handleStop() {
@@ -370,20 +499,6 @@ export function AiAssistantPanel({
         </div>
 
         <div className="flex shrink-0 items-center gap-0.5">
-          {configs.length > 0 && (
-            <select
-              value={selectedConfigId}
-              onChange={(e) => setSelectedConfigId(e.target.value)}
-              title="切换 AI 模型配置"
-              className="mr-1 h-6 max-w-[110px] truncate rounded-md border border-base-300 bg-base-100 px-1.5 text-[10px] outline-none"
-            >
-              {configs.map((cfg) => (
-                <option key={cfg.id} value={cfg.id}>
-                  {cfg.name}
-                </option>
-              ))}
-            </select>
-          )}
           <button
             type="button"
             title="新建对话"
@@ -491,20 +606,82 @@ export function AiAssistantPanel({
         }}
       />
 
-      {/* 底部输入区。 */}
+      {/* 底部输入区（对齐 DBX 复合 Composer 容器）。 */}
       <AiPromptInput
         value={inputDraft}
         onChange={setInputDraft}
+        sourceName={workspaceBridge.sourceName}
+        queryLanguage={workspaceBridge.queryLanguage}
+        hasSource={Boolean(workspaceBridge.sourceId)}
         mode={mode}
         onModeChange={setMode}
         action={action}
         onActionChange={setAction}
+        configs={configs}
+        selectedConfigId={selectedConfigId}
+        onSelectConfigId={setSelectedConfigId}
         availableObjects={workspaceBridge.availableObjects}
+        selectedMentions={selectedMentions}
+        onChangeMentions={setSelectedMentions}
+        selectedSelections={selectedSelections}
+        onChangeSelections={setSelectedSelections}
+        attachments={attachments}
+        onChangeAttachments={setAttachments}
+        onPreviewImage={setPreviewImage}
         promptTemplates={promptTemplates}
+        selectedTemplateIds={selectedTemplateIds}
+        onToggleTemplateId={(id) =>
+          setSelectedTemplateIds((prev) =>
+            prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+          )
+        }
+        onDeselectAllTemplates={() => setSelectedTemplateIds([])}
+        promptHistory={promptHistory}
+        queuedPrompt={queuedPrompt}
+        onEditQueuedPrompt={() => {
+          if (!queuedPrompt) return;
+          setInputDraft(queuedPrompt.text);
+          setSelectedMentions(queuedPrompt.mentions);
+          setSelectedSelections(queuedPrompt.selections);
+          setAttachments(queuedPrompt.attachments);
+          setQueuedPrompt(null);
+        }}
+        onCancelQueuedPrompt={() => setQueuedPrompt(null)}
+        onAttachmentWarning={(msg) => setInlineWarning(msg)}
         streaming={streaming}
         onSend={handleSend}
+        onQueueSend={handleQueueSend}
         onStop={handleStop}
       />
+
+      {/* 图片附件大图预览弹窗。 */}
+      {previewImage && previewImage.dataUrl && (
+        <div
+          onClick={() => setPreviewImage(null)}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="max-h-[85vh] max-w-3xl overflow-hidden rounded-xl border border-base-300 bg-base-100 p-3 shadow-2xl"
+          >
+            <div className="mb-2 flex items-center justify-between gap-4">
+              <span className="truncate text-[12px] font-medium">{previewImage.name}</span>
+              <button
+                type="button"
+                onClick={() => setPreviewImage(null)}
+                className="rounded p-1 text-neutral/60 hover:bg-base-200 hover:text-neutral"
+              >
+                <X size={14} />
+              </button>
+            </div>
+            <img
+              src={previewImage.dataUrl}
+              alt={previewImage.name}
+              className="max-h-[75vh] max-w-full rounded-lg object-contain"
+            />
+          </div>
+        </div>
+      )}
 
       {/* 历史会话抽屉。 */}
       {historyOpen && (
