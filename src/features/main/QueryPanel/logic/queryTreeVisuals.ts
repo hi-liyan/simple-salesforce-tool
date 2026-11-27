@@ -9,11 +9,16 @@ export type QueryTreeVisualKind =
   | "group-users"
   | "group-tables"
   | "group-views"
+  | "group-routines"
+  | "group-triggers"
+  | "group-events"
+  | "group-virtual-views"
   | "group-columns"
   | "group-keys"
   | "group-indexes"
   | "group-generic"
   | "object-mysql-table"
+  | "object-mysql-view"
   | "object-queryable"
   | "object-readonly"
   | "column-pk"
@@ -23,7 +28,14 @@ export type QueryTreeVisualKind =
   | "key-fk"
   | "index-pk"
   | "index-unique"
-  | "index-normal";
+  | "index-normal"
+  | "item-collation"
+  | "item-user"
+  | "item-routine-proc"
+  | "item-routine-func"
+  | "item-trigger"
+  | "item-event"
+  | "item-virtual-view";
 
 // 左侧树文字徽标定义：统一控制文案与色调，避免组件内散落判断。
 export type QueryTreeBadgeMeta = {
@@ -44,11 +56,24 @@ export function resolveQueryTreeVisualKind(node: QueryTreeNode): QueryTreeVisual
 
   if (node.kind === "group") {
     if (node.groupType === "tables") return "group-tables";
+    if (node.groupType === "views") return "group-views";
+    if (node.groupType === "routines") return "group-routines";
+    if (node.groupType === "triggers") return "group-triggers";
+    if (node.groupType === "events") return "group-events";
     if (node.groupType === "collations") return "group-collations";
     if (node.groupType === "users") return "group-users";
-    if (node.groupType === "virtual-views") return "group-views";
+    if (node.groupType === "virtual-views") return "group-virtual-views";
     return "group-generic";
   }
+
+  if (node.kind === "collation") return "item-collation";
+  if (node.kind === "user") return "item-user";
+  if (node.kind === "routine") {
+    return node.routineType.toUpperCase() === "FUNCTION" ? "item-routine-func" : "item-routine-proc";
+  }
+  if (node.kind === "trigger") return "item-trigger";
+  if (node.kind === "event") return "item-event";
+  if (node.kind === "virtual-view") return "item-virtual-view";
 
   if (node.kind === "object-folder") {
     if (node.folderType === "columns") return "group-columns";
@@ -74,7 +99,7 @@ export function resolveQueryTreeVisualKind(node: QueryTreeNode): QueryTreeVisual
   }
 
   if (String(node.sourceType || "").toLowerCase() === "mysql") {
-    return "object-mysql-table";
+    return node.objectGroupType === "views" ? "object-mysql-view" : "object-mysql-table";
   }
 
   return node.queryable ? "object-queryable" : "object-readonly";
@@ -91,12 +116,20 @@ export function resolveQueryTreeBadgeMeta(kind: QueryTreeVisualKind): QueryTreeB
       return { text: "DB", tone: "neutral" };
     case "group-tables":
       return { text: "TB", tone: "amber" };
+    case "group-views":
+      return { text: "VW", tone: "blue" };
+    case "group-routines":
+      return { text: "RT", tone: "blue" };
+    case "group-triggers":
+      return { text: "TR", tone: "orange" };
+    case "group-events":
+      return { text: "EV", tone: "green" };
     case "group-collations":
       return { text: "CL", tone: "neutral" };
     case "group-users":
       return { text: "US", tone: "neutral" };
-    case "group-views":
-      return { text: "VW", tone: "orange" };
+    case "group-virtual-views":
+      return { text: "VV", tone: "orange" };
     case "group-columns":
       return { text: "CL", tone: "neutral" };
     case "group-keys":
@@ -107,6 +140,22 @@ export function resolveQueryTreeBadgeMeta(kind: QueryTreeVisualKind): QueryTreeB
       return { text: "GR", tone: "neutral" };
     case "object-mysql-table":
       return { text: "T", tone: "amber" };
+    case "object-mysql-view":
+      return { text: "V", tone: "blue" };
+    case "item-collation":
+      return { text: "CL", tone: "neutral" };
+    case "item-user":
+      return { text: "U", tone: "neutral" };
+    case "item-routine-proc":
+      return { text: "P", tone: "blue" };
+    case "item-routine-func":
+      return { text: "F", tone: "green" };
+    case "item-trigger":
+      return { text: "TG", tone: "orange" };
+    case "item-event":
+      return { text: "EV", tone: "green" };
+    case "item-virtual-view":
+      return { text: "VV", tone: "orange" };
     case "object-readonly":
       return { text: "NQ", tone: "muted" };
     case "column-pk":

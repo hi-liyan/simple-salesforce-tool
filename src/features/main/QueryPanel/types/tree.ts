@@ -31,6 +31,8 @@ export type QueryTreeNode =
       sourceId: string;
       sourceType: string;
       objectName: string;
+      // 所属分组类型（如 "tables" / "views"），用于区分表与真实视图的展开及菜单行为。
+      objectGroupType?: string;
       label: string;
       // 表/对象注释（可选）。
       comment?: string;
@@ -84,6 +86,76 @@ export type QueryTreeNode =
       detail: string;
       label: string;
       expandable: false;
+    }
+  | {
+      id: string;
+      kind: "collation";
+      sourceId: string;
+      sourceType: string;
+      collationName: string;
+      charset: string;
+      isDefault: boolean;
+      label: string;
+      expandable: false;
+    }
+  | {
+      id: string;
+      kind: "user";
+      sourceId: string;
+      sourceType: string;
+      username: string;
+      host: string;
+      accountLabel: string;
+      label: string;
+      expandable: false;
+    }
+  | {
+      id: string;
+      kind: "routine";
+      sourceId: string;
+      sourceType: string;
+      routineName: string;
+      routineType: string;
+      dataType?: string | null;
+      comment?: string | null;
+      label: string;
+      expandable: false;
+    }
+  | {
+      id: string;
+      kind: "trigger";
+      sourceId: string;
+      sourceType: string;
+      triggerName: string;
+      tableName: string;
+      timing: string;
+      event: string;
+      label: string;
+      expandable: false;
+    }
+  | {
+      id: string;
+      kind: "event";
+      sourceId: string;
+      sourceType: string;
+      eventName: string;
+      eventType: string;
+      status: string;
+      comment?: string | null;
+      label: string;
+      expandable: false;
+    }
+  | {
+      id: string;
+      kind: "virtual-view";
+      sourceId: string;
+      sourceType: string;
+      viewId: string;
+      viewName: string;
+      sqlText: string;
+      description?: string | null;
+      label: string;
+      expandable: false;
     };
 
 // 树 provider 上下文：封装颜色读取与对象列表获取能力。
@@ -114,6 +186,12 @@ export type SourceTreeState = {
   objectDdlByKey: Record<string, ObjectDdl>;
   // 各表/对象字段列表加载态（key 为 `${sourceId}:${objectName}`）。
   objectFieldsLoadingByKey: Record<string, boolean>;
+  // 各非 tables 分组（views/routines/triggers/events/collations/users/virtual-views）子节点缓存（key 为 `${sourceId}:${groupType}`）。
+  groupItemsByKey: Record<string, QueryTreeNode[]>;
+  // 各分组节点按需加载态（key 为 `${sourceId}:${groupType}`）。
+  groupLoadingByKey: Record<string, boolean>;
+  // 各分组节点加载错误信息（key 为 `${sourceId}:${groupType}`）。
+  groupErrorByKey: Record<string, string>;
   // 各数据源加载态。
   sourceLoadingById: Record<string, boolean>;
   // 各数据源刷新态。

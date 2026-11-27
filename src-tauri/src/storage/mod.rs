@@ -13,6 +13,7 @@ pub mod secret_crypto;
 pub mod secret_repo;
 pub mod source_repo;
 pub mod tx;
+pub mod virtual_view_repo;
 pub mod workspace_repo;
 
 use rusqlite::{Connection, OpenFlags};

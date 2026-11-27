@@ -3,7 +3,7 @@ import type { MouseEvent as ReactMouseEvent } from "react";
 import { api } from "../../../../api";
 import { ContextMenu, type ContextMenuEntry } from "../../../../components/ContextMenu";
 import { getDataSourceDriver } from "../../../../drivers/registry";
-import type { BackupScope, SalesforceObject, SalesforceSource } from "../../../../types";
+import type { BackupScope, SalesforceObject, SalesforceSource, VirtualView } from "../../../../types";
 import { useSourceTreeState, type QueryTreeRenderNode } from "../hooks/useSourceTreeState.ts";
 import { buildSourceSurfacePalette, getSourceColor } from "../logic/sourceColor.ts";
 import type { QuerySourceObjectSearchResult } from "../logic/sourceObjectSearch.ts";
@@ -13,6 +13,8 @@ import { TableDesignerModal } from "../../../table-designer/TableDesignerModal.t
 import { DataExportModal } from "../../../data-export/DataExportModal.tsx";
 import { DatabaseBackupModal } from "../../../data-export/DatabaseBackupModal.tsx";
 import { QuerySourceTreeNode } from "./QuerySourceTreeNode";
+import { SchemaDdlModal } from "./SchemaDdlModal.tsx";
+import { VirtualViewModal } from "./VirtualViewModal.tsx";
 
 type QuerySourceTreeProps = {
   // 全部数据源。
@@ -190,6 +192,22 @@ export function QuerySourceTree({
     tableName?: string;
   }>({ open: false, sourceId: "", sourceName: "", scope: "database" });
 
+  // 本地自定义虚拟视图新建/编辑弹窗状态。
+  const [virtualViewModal, setVirtualViewModal] = useState<{
+    open: boolean;
+    sourceId: string;
+    editingView: VirtualView | null;
+  }>({ open: false, sourceId: "", editingView: null });
+
+  // 存储过程/触发器/事件 DDL 查看弹窗状态。
+  const [schemaDdlModal, setSchemaDdlModal] = useState<{
+    open: boolean;
+    title: string;
+    ddlText: string;
+    loading: boolean;
+    errorText: string;
+  }>({ open: false, title: "", ddlText: "", loading: false, errorText: "" });
+
   const {
     treeData,
     treeState,
@@ -199,6 +217,7 @@ export function QuerySourceTree({
     refreshFocusedSource,
     refreshSourceById,
     refreshObjectColumns,
+    refreshGroupItems,
     collapseSourceNodes,
     locateNodeByTarget: locateTreeNodeByTarget,
     searchFocusedSourceObjects,
@@ -209,6 +228,9 @@ export function QuerySourceTree({
     selectedSourceObjects: objects,
     selectedSourceObjectsLoading: objectsLoading,
     onOpenObject,
+    onOpenVirtualView: (viewNode, source) => {
+      onOpenConsole?.(source, viewNode.sqlText);
+    },
     onNotQueryableObjectClick,
     onFocusedSourceChange
   });
@@ -368,6 +390,13 @@ export function QuerySourceTree({
             onNotify?.(`已刷新数据源 ${source.name}`, "success");
           })();
         },
+        onRefreshGroup: (source, groupType) => {
+          setNodeContextMenu(null);
+          void (async () => {
+            await refreshGroupItems(source.id, groupType);
+            onNotify?.(`已刷新 ${groupType} 列表`, "success");
+          })();
+        },
         onTestSourceConnection: (source) => {
           setNodeContextMenu(null);
           void (async () => {
@@ -489,6 +518,68 @@ export function QuerySourceTree({
         onOpenCloudEditPage: (source, objectItem) => {
           setNodeContextMenu(null);
           void api.openObjectEditPage(source.id, objectItem.name);
+        },
+        onViewSchemaObjectDdl: (source, objectKind, objectName, routineType) => {
+          setNodeContextMenu(null);
+          const kindLabel =
+            objectKind === "routine"
+              ? routineType?.toUpperCase() === "FUNCTION"
+                ? "函数"
+                : "存储过程"
+              : objectKind === "trigger"
+                ? "触发器"
+                : "定时事件";
+          setSchemaDdlModal({
+            open: true,
+            title: `${kindLabel} ${objectName} 定义`,
+            ddlText: "",
+            loading: true,
+            errorText: ""
+          });
+          void api
+            .getSchemaObjectDdl(source.id, objectKind, objectName, routineType)
+            .then((ddl) => {
+              setSchemaDdlModal((prev) => ({ ...prev, ddlText: ddl, loading: false }));
+            })
+            .catch((error) => {
+              setSchemaDdlModal((prev) => ({
+                ...prev,
+                loading: false,
+                errorText: String(error)
+              }));
+            });
+        },
+        onCreateVirtualView: (source) => {
+          setNodeContextMenu(null);
+          setVirtualViewModal({ open: true, sourceId: source.id, editingView: null });
+        },
+        onEditVirtualView: (source, viewNode) => {
+          setNodeContextMenu(null);
+          setVirtualViewModal({
+            open: true,
+            sourceId: source.id,
+            editingView: {
+              id: viewNode.viewId,
+              sourceId: source.id,
+              name: viewNode.viewName,
+              sqlText: viewNode.sqlText,
+              description: viewNode.description ?? null,
+              createdAt: "",
+              updatedAt: ""
+            }
+          });
+        },
+        onDeleteVirtualView: (source, viewNode) => {
+          setNodeContextMenu(null);
+          void (async () => {
+            try {
+              await api.deleteVirtualView(viewNode.viewId);
+              await refreshGroupItems(source.id, "virtual-views");
+              onNotify?.(`已删除虚拟视图 ${viewNode.viewName}`, "success");
+            } catch (error) {
+              onNotify?.(`删除虚拟视图失败：${String(error)}`, "error");
+            }
+          })();
         }
       }
     });
@@ -502,6 +593,7 @@ export function QuerySourceTree({
     onOpenObject,
     onRefreshMysqlObjectMetadata,
     onRefreshSourceWorkspace,
+    refreshGroupItems,
     refreshObjectColumns,
     refreshSourceById
   ]);
@@ -575,6 +667,28 @@ export function QuerySourceTree({
         tableName={backupModal.tableName}
         onClose={() => setBackupModal((prev) => ({ ...prev, open: false }))}
         onShowMessage={(message) => onNotify?.(message, "success")}
+      />
+
+      {/* 本地自定义虚拟视图新建/编辑弹窗 */}
+      <VirtualViewModal
+        open={virtualViewModal.open}
+        sourceId={virtualViewModal.sourceId}
+        editingView={virtualViewModal.editingView}
+        onClose={() => setVirtualViewModal((prev) => ({ ...prev, open: false }))}
+        onSaved={(saved) => {
+          void refreshGroupItems(saved.sourceId, "virtual-views");
+          onNotify?.(`已保存虚拟视图 ${saved.name}`, "success");
+        }}
+      />
+
+      {/* 存储过程/触发器/定时事件 DDL 只读查看弹窗 */}
+      <SchemaDdlModal
+        open={schemaDdlModal.open}
+        title={schemaDdlModal.title}
+        ddlText={schemaDdlModal.ddlText}
+        loading={schemaDdlModal.loading}
+        errorText={schemaDdlModal.errorText}
+        onClose={() => setSchemaDdlModal((prev) => ({ ...prev, open: false }))}
       />
     </div>
   );

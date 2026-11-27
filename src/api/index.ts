@@ -10,6 +10,11 @@ import type {
   CliPathSettings,
   CliPathStatus,
   CurrentUserContext,
+  DatabaseCollation,
+  DatabaseEvent,
+  DatabaseRoutine,
+  DatabaseTrigger,
+  DatabaseUser,
   ExportDataRequest,
   ExportResult,
   LlmSettings,
@@ -39,6 +44,8 @@ import type {
   TerminalCommandUpsertPayload,
   TerminalSessionInfo,
   TerminalShellOption,
+  VirtualView,
+  VirtualViewUpsertPayload,
   WorkspaceSnapshotDto
 } from "../types/index.ts";
 
@@ -92,6 +99,18 @@ export const api = {
   saveColumnVisibility: (sourceId: string, objectName: string, visibility: Record<string, boolean>) =>
     invokeApi<void>("save_column_visibility", { sourceId, objectName, visibility }),
   listObjects: (sourceId: string) => invokeApi<SalesforceObject[]>("list_objects", { sourceId }),
+  listViews: (sourceId: string) => invokeApi<SalesforceObject[]>("list_views", { sourceId }),
+  listCollations: (sourceId: string) => invokeApi<DatabaseCollation[]>("list_collations", { sourceId }),
+  listUsers: (sourceId: string) => invokeApi<DatabaseUser[]>("list_users", { sourceId }),
+  listRoutines: (sourceId: string) => invokeApi<DatabaseRoutine[]>("list_routines", { sourceId }),
+  listTriggers: (sourceId: string) => invokeApi<DatabaseTrigger[]>("list_triggers", { sourceId }),
+  listEvents: (sourceId: string) => invokeApi<DatabaseEvent[]>("list_events", { sourceId }),
+  getSchemaObjectDdl: (sourceId: string, objectKind: string, objectName: string, routineType?: string) =>
+    invokeApi<string>("get_schema_object_ddl", { sourceId, objectKind, objectName, routineType }),
+  listVirtualViews: (sourceId: string) => invokeApi<VirtualView[]>("list_virtual_views", { sourceId }),
+  upsertVirtualView: (payload: VirtualViewUpsertPayload) =>
+    invokeApi<VirtualView>("upsert_virtual_view", { payload }),
+  deleteVirtualView: (id: string) => invokeApi<void>("delete_virtual_view", { id }),
   refreshObjects: (sourceId: string) => invokeApi<SalesforceObject[]>("refresh_objects", { sourceId }),
   openObjectListPage: (sourceId: string, objectName: string) =>
     invokeApi<void>("open_object_list_page", { sourceId, objectName }),

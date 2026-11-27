@@ -725,6 +725,64 @@ export type ExportResult = {
   durationMs: number;
 };
 
+// 数据库字符集排序规则元信息。
+export type DatabaseCollation = {
+  name: string;
+  charset: string;
+  isDefault: boolean;
+};
+
+// 数据库用户账号元信息。
+export type DatabaseUser = {
+  username: string;
+  host: string;
+  accountLabel: string;
+};
+
+// 数据库存储过程/函数元信息。
+export type DatabaseRoutine = {
+  name: string;
+  routineType: "PROCEDURE" | "FUNCTION" | string;
+  dataType?: string | null;
+  comment?: string | null;
+};
+
+// 数据库触发器元信息。
+export type DatabaseTrigger = {
+  name: string;
+  tableName: string;
+  timing: string;
+  event: string;
+};
+
+// 数据库定时事件元信息。
+export type DatabaseEvent = {
+  name: string;
+  eventType: string;
+  status: string;
+  comment?: string | null;
+};
+
+// 本地自定义虚拟视图（存储于 SQLite）。
+export type VirtualView = {
+  id: string;
+  sourceId: string;
+  name: string;
+  sqlText: string;
+  description?: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+// 新建/更新本地虚拟视图请求载荷。
+export type VirtualViewUpsertPayload = {
+  id?: string | null;
+  sourceId: string;
+  name: string;
+  sqlText: string;
+  description?: string | null;
+};
+
 // 数据库备份范围。
 export type BackupScope = "database" | "table";
 

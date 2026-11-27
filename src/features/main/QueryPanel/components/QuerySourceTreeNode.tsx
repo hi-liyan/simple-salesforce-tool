@@ -83,6 +83,12 @@ function areQuerySourceTreeNodePropsEqual(prevProps: QuerySourceTreeNodeProps, n
   const nextObjKey = nextNode.kind === "object" ? `${nextNode.sourceId}:${nextNode.objectName}` : "";
   const prevObjLoading = prevObjKey ? Boolean(prevProps.treeState.objectFieldsLoadingByKey[prevObjKey]) : false;
   const nextObjLoading = nextObjKey ? Boolean(nextProps.treeState.objectFieldsLoadingByKey[nextObjKey]) : false;
+  const prevGroupKey = prevNode.kind === "group" ? `${prevNode.sourceId}:${prevNode.groupType}` : "";
+  const nextGroupKey = nextNode.kind === "group" ? `${nextNode.sourceId}:${nextNode.groupType}` : "";
+  const prevGroupLoading = prevGroupKey ? Boolean(prevProps.treeState.groupLoadingByKey[prevGroupKey]) : false;
+  const nextGroupLoading = nextGroupKey ? Boolean(nextProps.treeState.groupLoadingByKey[nextGroupKey]) : false;
+  const prevGroupError = prevGroupKey ? prevProps.treeState.groupErrorByKey[prevGroupKey] || "" : "";
+  const nextGroupError = nextGroupKey ? nextProps.treeState.groupErrorByKey[nextGroupKey] || "" : "";
 
   return (
     prevNode === nextNode
@@ -100,6 +106,8 @@ function areQuerySourceTreeNodePropsEqual(prevProps: QuerySourceTreeNodeProps, n
     && prevIsActiveObject === nextIsActiveObject
     && prevSourceLoading === nextSourceLoading
     && prevObjLoading === nextObjLoading
+    && prevGroupLoading === nextGroupLoading
+    && prevGroupError === nextGroupError
     && prevSourceAuthPending === nextSourceAuthPending
     && prevSourceError === nextSourceError
   );
@@ -128,7 +136,19 @@ function QuerySourceTreeNodeComponent({
   const isObjectNode = data.kind === "object";
   const isObjectFolderNode = data.kind === "object-folder";
   const isColumnNode = data.kind === "column";
-  const isMetaLeafNode = isColumnNode || data.kind === "key" || data.kind === "index";
+  const isMetaLeafNode =
+    isColumnNode
+    || data.kind === "key"
+    || data.kind === "index"
+    || data.kind === "collation"
+    || data.kind === "user"
+    || data.kind === "routine"
+    || data.kind === "trigger"
+    || data.kind === "event"
+    || data.kind === "virtual-view";
+  const groupCacheKey = data.kind === "group" ? `${data.sourceId}:${data.groupType}` : "";
+  const groupLoading = groupCacheKey ? Boolean(treeState.groupLoadingByKey[groupCacheKey]) : false;
+  const groupError = groupCacheKey ? treeState.groupErrorByKey[groupCacheKey] || "" : "";
   const objectBindingKey = isObjectNode ? buildObjectTabBindingKey(data.sourceId, data.objectName) : "";
   const isFocusedSource = isSourceNode && treeState.focusedSourceId === sourceId;
   const isActiveObject = isObjectNode && (activeTabObjectName === objectBindingKey || activeTabObjectName === data.objectName);
@@ -273,6 +293,37 @@ function QuerySourceTreeNodeComponent({
           )}
           {(data.kind === "key" || data.kind === "index") && data.detail && (
             <span className="shrink-0 font-mono text-[10px] text-neutral/50">{data.detail}</span>
+          )}
+          {data.kind === "collation" && (
+            <span className="shrink-0 font-mono text-[10px] text-neutral/50">
+              {data.charset}{data.isDefault ? " · default" : ""}
+            </span>
+          )}
+          {data.kind === "routine" && (
+            <span className="shrink-0 font-mono text-[10px] text-neutral/50">
+              {data.dataType ? `${data.routineType.toLowerCase()} -> ${data.dataType}` : data.routineType.toLowerCase()}
+            </span>
+          )}
+          {data.kind === "trigger" && (
+            <span className="shrink-0 font-mono text-[10px] text-neutral/50">
+              {data.timing} {data.event} ON {data.tableName}
+            </span>
+          )}
+          {data.kind === "event" && (
+            <span className="shrink-0 font-mono text-[10px] text-neutral/50">
+              {data.eventType} · {data.status}
+            </span>
+          )}
+          {data.kind === "virtual-view" && data.description && (
+            <span className="whitespace-nowrap text-[11px] text-base-content/45">{data.description}</span>
+          )}
+          {groupLoading && (
+            <span className="loading loading-spinner shrink-0 text-neutral/50" style={{ width: 11, height: 11 }} />
+          )}
+          {!groupLoading && groupError && (
+            <span className="shrink-0 text-[10px] text-error" title={groupError}>
+              加载失败
+            </span>
           )}
           {objectFieldsLoading && (
             <span className="loading loading-spinner shrink-0 text-neutral/50" style={{ width: 11, height: 11 }} />

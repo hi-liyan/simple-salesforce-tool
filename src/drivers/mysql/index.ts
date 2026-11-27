@@ -34,6 +34,10 @@ export const mysqlDriver: DataSourceDriver = {
     useGroupNodes: true,
     groups: [
       { groupType: "tables", label: "tables" },
+      { groupType: "views", label: "views" },
+      { groupType: "routines", label: "routines" },
+      { groupType: "triggers", label: "triggers" },
+      { groupType: "events", label: "events" },
       { groupType: "collations", label: "collations" },
       { groupType: "users", label: "users" },
       { groupType: "virtual-views", label: "virtual views" }
@@ -233,6 +237,10 @@ export const mysqlDriver: DataSourceDriver = {
   }),
   defaultTreeGroups: [
     { groupType: "tables", label: "tables" },
+    { groupType: "views", label: "views" },
+    { groupType: "routines", label: "routines" },
+    { groupType: "triggers", label: "triggers" },
+    { groupType: "events", label: "events" },
     { groupType: "collations", label: "collations" },
     { groupType: "users", label: "users" },
     { groupType: "virtual-views", label: "virtual views" }

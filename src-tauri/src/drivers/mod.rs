@@ -12,7 +12,8 @@ use serde_json::Value;
 
 use crate::error::AppError;
 use crate::models::{
-    CurrentUserContext, MutationExecutionResult, ObjectDdl, ObjectDescribe, QueryResult,
+    CurrentUserContext, DatabaseCollation, DatabaseEvent, DatabaseRoutine, DatabaseTrigger,
+    DatabaseUser, MutationExecutionResult, ObjectDdl, ObjectDescribe, QueryResult,
     RecordUpdatePayload, SalesforceObject, SalesforceSource, SourceUpsertPayload,
 };
 
@@ -129,6 +130,70 @@ pub trait DataSourceDriver: Send + Sync {
         &'a self,
         source: &'a SalesforceSource,
     ) -> BoxFuture<'a, Result<Vec<SalesforceObject>, AppError>>;
+
+    /// 拉取数据源下的真实视图列表（默认返回空列表）。
+    fn list_views<'a>(
+        &'a self,
+        _source: &'a SalesforceSource,
+    ) -> BoxFuture<'a, Result<Vec<SalesforceObject>, AppError>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+
+    /// 拉取数据源支持的字符集排序规则列表（默认返回空列表）。
+    fn list_collations<'a>(
+        &'a self,
+        _source: &'a SalesforceSource,
+    ) -> BoxFuture<'a, Result<Vec<DatabaseCollation>, AppError>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+
+    /// 拉取数据源用户账号列表（默认返回空列表）。
+    fn list_users<'a>(
+        &'a self,
+        _source: &'a SalesforceSource,
+    ) -> BoxFuture<'a, Result<Vec<DatabaseUser>, AppError>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+
+    /// 拉取数据源存储过程与函数列表（默认返回空列表）。
+    fn list_routines<'a>(
+        &'a self,
+        _source: &'a SalesforceSource,
+    ) -> BoxFuture<'a, Result<Vec<DatabaseRoutine>, AppError>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+
+    /// 拉取数据源触发器列表（默认返回空列表）。
+    fn list_triggers<'a>(
+        &'a self,
+        _source: &'a SalesforceSource,
+    ) -> BoxFuture<'a, Result<Vec<DatabaseTrigger>, AppError>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+
+    /// 拉取数据源定时事件列表（默认返回空列表）。
+    fn list_events<'a>(
+        &'a self,
+        _source: &'a SalesforceSource,
+    ) -> BoxFuture<'a, Result<Vec<DatabaseEvent>, AppError>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+
+    /// 读取指定存储过程/函数、触发器或定时事件的 DDL 定义。
+    fn get_schema_object_ddl<'a>(
+        &'a self,
+        _source: &'a SalesforceSource,
+        _object_kind: &'a str,
+        _object_name: &'a str,
+        _routine_type: Option<&'a str>,
+    ) -> BoxFuture<'a, Result<String, AppError>> {
+        let kind = self.kind();
+        Box::pin(async move {
+            Err(AppError::Biz(format!(
+                "数据源类型 {kind} 不支持查看该对象 DDL"
+            )))
+        })
+    }
 
     /// 读取指定对象/表的字段与关系元数据。
     fn describe_object<'a>(

@@ -1,5 +1,16 @@
 import { getDataSourceDriver } from "../../../../drivers/registry.ts";
-import type { ObjectDdl, ObjectField, SalesforceObject, SalesforceSource } from "../../../../types/index.ts";
+import type {
+  DatabaseCollation,
+  DatabaseEvent,
+  DatabaseRoutine,
+  DatabaseTrigger,
+  DatabaseUser,
+  ObjectDdl,
+  ObjectField,
+  SalesforceObject,
+  SalesforceSource,
+  VirtualView
+} from "../../../../types/index.ts";
 import type { QueryObjectFolderType, QueryTreeNode, QueryTreeProviderContext } from "../types/tree.ts";
 
 // 构造 source 根节点：统一供左侧树第一层渲染使用。
@@ -47,12 +58,131 @@ export async function buildDriverSourceChildren(
 export function buildGroupObjectChildren(
   sourceId: string,
   sourceType: string,
-  objects: SalesforceObject[]
+  objects: SalesforceObject[],
+  objectGroupType = "tables"
 ): QueryTreeNode[] {
   const driver = getDataSourceDriver(sourceType);
   return objects.map((item) =>
-    buildObjectNode(sourceId, sourceType, item, driver.treeConfig.supportsColumnExpansion)
+    buildObjectNode(sourceId, sourceType, item, driver.treeConfig.supportsColumnExpansion, objectGroupType)
   );
+}
+
+// 构造排序规则（collations）分组下的子节点列表。
+export function buildGroupCollationChildren(
+  sourceId: string,
+  sourceType: string,
+  collations: DatabaseCollation[]
+): QueryTreeNode[] {
+  return collations.map((item) => ({
+    id: `collation:${sourceId}:${item.name}`,
+    kind: "collation",
+    sourceId,
+    sourceType,
+    collationName: item.name,
+    charset: item.charset,
+    isDefault: item.isDefault,
+    label: item.name,
+    expandable: false
+  }));
+}
+
+// 构造数据库用户（users）分组下的子节点列表。
+export function buildGroupUserChildren(
+  sourceId: string,
+  sourceType: string,
+  users: DatabaseUser[]
+): QueryTreeNode[] {
+  return users.map((item) => ({
+    id: `user:${sourceId}:${item.accountLabel}`,
+    kind: "user",
+    sourceId,
+    sourceType,
+    username: item.username,
+    host: item.host,
+    accountLabel: item.accountLabel,
+    label: item.accountLabel,
+    expandable: false
+  }));
+}
+
+// 构造存储过程/函数（routines）分组下的子节点列表。
+export function buildGroupRoutineChildren(
+  sourceId: string,
+  sourceType: string,
+  routines: DatabaseRoutine[]
+): QueryTreeNode[] {
+  return routines.map((item) => ({
+    id: `routine:${sourceId}:${item.routineType}:${item.name}`,
+    kind: "routine",
+    sourceId,
+    sourceType,
+    routineName: item.name,
+    routineType: item.routineType,
+    dataType: item.dataType,
+    comment: item.comment,
+    label: item.name,
+    expandable: false
+  }));
+}
+
+// 构造触发器（triggers）分组下的子节点列表。
+export function buildGroupTriggerChildren(
+  sourceId: string,
+  sourceType: string,
+  triggers: DatabaseTrigger[]
+): QueryTreeNode[] {
+  return triggers.map((item) => ({
+    id: `trigger:${sourceId}:${item.name}`,
+    kind: "trigger",
+    sourceId,
+    sourceType,
+    triggerName: item.name,
+    tableName: item.tableName,
+    timing: item.timing,
+    event: item.event,
+    label: item.name,
+    expandable: false
+  }));
+}
+
+// 构造定时事件（events）分组下的子节点列表。
+export function buildGroupEventChildren(
+  sourceId: string,
+  sourceType: string,
+  events: DatabaseEvent[]
+): QueryTreeNode[] {
+  return events.map((item) => ({
+    id: `event:${sourceId}:${item.name}`,
+    kind: "event",
+    sourceId,
+    sourceType,
+    eventName: item.name,
+    eventType: item.eventType,
+    status: item.status,
+    comment: item.comment,
+    label: item.name,
+    expandable: false
+  }));
+}
+
+// 构造本地虚拟视图（virtual-views）分组下的子节点列表。
+export function buildGroupVirtualViewChildren(
+  sourceId: string,
+  sourceType: string,
+  views: VirtualView[]
+): QueryTreeNode[] {
+  return views.map((item) => ({
+    id: `virtual-view:${sourceId}:${item.id}`,
+    kind: "virtual-view",
+    sourceId,
+    sourceType,
+    viewId: item.id,
+    viewName: item.name,
+    sqlText: item.sqlText,
+    description: item.description,
+    label: item.name,
+    expandable: false
+  }));
 }
 
 // 构造表/对象下的字段（Columns）子节点列表。
@@ -254,7 +384,8 @@ function buildObjectNode(
   sourceId: string,
   sourceType: string,
   objectItem: SalesforceObject,
-  supportsColumnExpansion: boolean
+  supportsColumnExpansion: boolean,
+  objectGroupType = "tables"
 ): QueryTreeNode {
   const trimmedComment = objectItem.comment?.trim() || ""; // 行内注释：过滤纯空白注释，避免节点渲染空占位。
   return {
@@ -263,6 +394,7 @@ function buildObjectNode(
     sourceId,
     sourceType,
     objectName: objectItem.name,
+    objectGroupType,
     label: objectItem.label || objectItem.name,
     comment: trimmedComment || undefined,
     queryable: objectItem.queryable,

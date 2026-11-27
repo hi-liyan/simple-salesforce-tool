@@ -10,6 +10,8 @@ export type SourceTreeContextMenuHandlers = {
   onOpenConsole: (source: SalesforceSource, initialSql?: string) => void;
   // 刷新整个数据源结构。
   onRefreshSource: (source: SalesforceSource) => void;
+  // 刷新指定分组列表。
+  onRefreshGroup?: (source: SalesforceSource, groupType: string) => void;
   // 测试数据源连接。
   onTestSourceConnection: (source: SalesforceSource) => void;
   // 折叠指定数据源下的所有展开节点。
@@ -42,6 +44,25 @@ export type SourceTreeContextMenuHandlers = {
   onBackupDatabase?: (source: SalesforceSource) => void;
   // 打开单表备份弹窗（仅支持备份的驱动）。
   onBackupTable?: (source: SalesforceSource, tableName: string) => void;
+  // 查看存储过程/函数、触发器或定时事件的 DDL 定义。
+  onViewSchemaObjectDdl?: (
+    source: SalesforceSource,
+    objectKind: "routine" | "trigger" | "event",
+    objectName: string,
+    routineType?: string
+  ) => void;
+  // 新建本地虚拟视图。
+  onCreateVirtualView?: (source: SalesforceSource) => void;
+  // 编辑本地虚拟视图。
+  onEditVirtualView?: (
+    source: SalesforceSource,
+    viewNode: Extract<QueryTreeNode, { kind: "virtual-view" }>
+  ) => void;
+  // 删除本地虚拟视图。
+  onDeleteVirtualView?: (
+    source: SalesforceSource,
+    viewNode: Extract<QueryTreeNode, { kind: "virtual-view" }>
+  ) => void;
 };
 
 type BuildTreeContextMenuInput = {
@@ -141,7 +162,10 @@ export function buildSourceTreeContextMenuEntries({
       {
         id: "group-refresh",
         label: "刷新列表",
-        onClick: () => handlers.onRefreshSource(source)
+        onClick: () =>
+          handlers.onRefreshGroup
+            ? handlers.onRefreshGroup(source, node.groupType)
+            : handlers.onRefreshSource(source)
       },
       {
         id: "group-open-console",
@@ -156,6 +180,16 @@ export function buildSourceTreeContextMenuEntries({
           id: "group-create-table",
           label: "新建表",
           onClick: () => handlers.onCreateTable?.(source)
+        }
+      );
+    }
+    if (node.groupType === "virtual-views" && handlers.onCreateVirtualView) {
+      groupEntries.push(
+        { id: "group-virtual-view-sep", type: "separator" },
+        {
+          id: "group-create-virtual-view",
+          label: "新建虚拟视图...",
+          onClick: () => handlers.onCreateVirtualView?.(source)
         }
       );
     }
@@ -216,6 +250,136 @@ export function buildSourceTreeContextMenuEntries({
     ];
   }
 
+  if (node.kind === "collation") {
+    return [
+      {
+        id: "collation-copy-name",
+        label: "复制排序规则名",
+        onClick: () => handlers.onCopyText(node.collationName, `排序规则 ${node.collationName}`)
+      },
+      {
+        id: "collation-copy-charset",
+        label: "复制字符集名",
+        onClick: () => handlers.onCopyText(node.charset, `字符集 ${node.charset}`)
+      }
+    ];
+  }
+
+  if (node.kind === "user") {
+    return [
+      {
+        id: "user-copy-account",
+        label: "复制账号名",
+        onClick: () => handlers.onCopyText(node.accountLabel, `账号 ${node.accountLabel}`)
+      },
+      {
+        id: "user-show-grants",
+        label: "新建查询控制台 (SHOW GRANTS)",
+        onClick: () => handlers.onOpenConsole(source, `SHOW GRANTS FOR ${node.accountLabel};`)
+      }
+    ];
+  }
+
+  if (node.kind === "routine") {
+    const isFunc = node.routineType.toUpperCase() === "FUNCTION";
+    const callSnippet = isFunc ? `SELECT ${node.routineName}();` : `CALL ${node.routineName}();`;
+    return [
+      ...(handlers.onViewSchemaObjectDdl
+        ? [
+            {
+              id: "routine-view-ddl",
+              label: "查看定义 DDL",
+              onClick: () =>
+                handlers.onViewSchemaObjectDdl?.(source, "routine", node.routineName, node.routineType)
+            }
+          ]
+        : []),
+      {
+        id: "routine-open-call",
+        label: "新建调用查询",
+        onClick: () => handlers.onOpenConsole(source, callSnippet)
+      },
+      { id: "routine-copy-sep", type: "separator" },
+      {
+        id: "routine-copy-name",
+        label: "复制名称",
+        onClick: () => handlers.onCopyText(node.routineName, node.routineName)
+      }
+    ];
+  }
+
+  if (node.kind === "trigger") {
+    return [
+      ...(handlers.onViewSchemaObjectDdl
+        ? [
+            {
+              id: "trigger-view-ddl",
+              label: "查看定义 DDL",
+              onClick: () => handlers.onViewSchemaObjectDdl?.(source, "trigger", node.triggerName)
+            }
+          ]
+        : []),
+      {
+        id: "trigger-copy-name",
+        label: "复制触发器名",
+        onClick: () => handlers.onCopyText(node.triggerName, `触发器 ${node.triggerName}`)
+      }
+    ];
+  }
+
+  if (node.kind === "event") {
+    return [
+      ...(handlers.onViewSchemaObjectDdl
+        ? [
+            {
+              id: "event-view-ddl",
+              label: "查看定义 DDL",
+              onClick: () => handlers.onViewSchemaObjectDdl?.(source, "event", node.eventName)
+            }
+          ]
+        : []),
+      {
+        id: "event-copy-name",
+        label: "复制事件名",
+        onClick: () => handlers.onCopyText(node.eventName, `事件 ${node.eventName}`)
+      }
+    ];
+  }
+
+  if (node.kind === "virtual-view") {
+    return [
+      {
+        id: "virtual-view-open-console",
+        label: "在查询控制台打开",
+        onClick: () => handlers.onOpenConsole(source, node.sqlText)
+      },
+      ...(handlers.onEditVirtualView
+        ? [
+            {
+              id: "virtual-view-edit",
+              label: "编辑虚拟视图...",
+              onClick: () => handlers.onEditVirtualView?.(source, node)
+            }
+          ]
+        : []),
+      {
+        id: "virtual-view-copy-sql",
+        label: "复制 SQL",
+        onClick: () => handlers.onCopyText(node.sqlText, `虚拟视图 ${node.viewName} SQL`)
+      },
+      ...(handlers.onDeleteVirtualView
+        ? [
+            { id: "virtual-view-delete-sep", type: "separator" as const },
+            {
+              id: "virtual-view-delete",
+              label: "删除虚拟视图",
+              onClick: () => handlers.onDeleteVirtualView?.(source, node)
+            }
+          ]
+        : [])
+    ];
+  }
+
   // Object / Table 节点菜单。
   const targetObject: SalesforceObject = objectItem || {
     name: node.objectName,
@@ -272,7 +436,7 @@ export function buildSourceTreeContextMenuEntries({
     });
   }
 
-  if (driver.capabilities.supportsTableDesigner && handlers.onEditTable) {
+  if (driver.capabilities.supportsTableDesigner && handlers.onEditTable && node.objectGroupType !== "views") {
     objectEntries.push({
       id: "object-edit-table",
       label: "编辑表结构",

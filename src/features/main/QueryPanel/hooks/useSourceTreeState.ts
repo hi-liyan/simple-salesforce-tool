@@ -16,7 +16,13 @@ import { resolveNodeDoubleClickAction } from "../logic/sourceTreeInteractions.ts
 import { searchSourceObjects, type QuerySourceObjectSearchResult } from "../logic/sourceObjectSearch.ts";
 import {
   buildDriverSourceChildren,
+  buildGroupCollationChildren,
+  buildGroupEventChildren,
   buildGroupObjectChildren,
+  buildGroupRoutineChildren,
+  buildGroupTriggerChildren,
+  buildGroupUserChildren,
+  buildGroupVirtualViewChildren,
   buildObjectColumnChildren,
   buildObjectSubFolderChildren,
   buildSourceRootNodes
@@ -61,6 +67,8 @@ type UseSourceTreeStateInput = {
   selectedSourceObjectsLoading: boolean;
   // 打开对象回调。
   onOpenObject: (item: SalesforceObject, source?: SalesforceSource) => void;
+  // 打开本地虚拟视图回调。
+  onOpenVirtualView?: (viewNode: Extract<QueryTreeNode, { kind: "virtual-view" }>, source: SalesforceSource) => void;
   // 不可查询对象提示。
   onNotQueryableObjectClick?: (item: SalesforceObject) => void;
   // 当前聚焦数据源变化通知：供侧边栏搜索范围与动作按钮实时同步。
@@ -86,6 +94,8 @@ type UseSourceTreeStateResult = {
   refreshSourceById: (sourceId: string) => Promise<void>;
   // 刷新单个对象/表的字段结构缓存。
   refreshObjectColumns: (sourceId: string, objectName: string) => Promise<ObjectField[]>;
+  // 刷新指定分组（如 views/routines/triggers/events/collations/users/virtual-views）下的子节点列表。
+  refreshGroupItems: (sourceId: string, groupType: string) => Promise<QueryTreeNode[]>;
   // 折叠指定数据源下的所有展开节点。
   collapseSourceNodes: (sourceId: string) => void;
   // 定位指定 source/object 到左侧树。
@@ -108,6 +118,9 @@ function createEmptyTreeState(focusedSourceId: string, selectedNodeId = ""): Sou
     objectFieldsByKey: {},
     objectDdlByKey: {},
     objectFieldsLoadingByKey: {},
+    groupItemsByKey: {},
+    groupLoadingByKey: {},
+    groupErrorByKey: {},
     sourceLoadingById: {},
     sourceRefreshingById: {},
     sourceErrorById: {},
@@ -122,6 +135,7 @@ export function useSourceTreeState({
   selectedSourceObjects,
   selectedSourceObjectsLoading,
   onOpenObject,
+  onOpenVirtualView,
   onNotQueryableObjectClick,
   onFocusedSourceChange
 }: UseSourceTreeStateInput): UseSourceTreeStateResult {
@@ -376,9 +390,11 @@ export function useSourceTreeState({
           if (!isLatestSourceRequest()) return objects;
 
           setTreeState((current) => {
-            // 强刷数据源时，清理该数据源下已缓存的表字段与 DDL，保证结构变化后重新展开能拉到最新结构。
+            // 强刷数据源时，清理该数据源下已缓存的表字段、DDL 与各非 tables 分组列表。
             const nextObjectFieldsByKey = { ...current.objectFieldsByKey };
             const nextObjectDdlByKey = { ...current.objectDdlByKey };
+            const nextGroupItemsByKey = { ...current.groupItemsByKey };
+            const nextGroupErrorByKey = { ...current.groupErrorByKey };
             if (forceRefresh) {
               Object.keys(nextObjectFieldsByKey).forEach((key) => {
                 if (key.startsWith(`${sourceId}:`)) {
@@ -388,6 +404,16 @@ export function useSourceTreeState({
               Object.keys(nextObjectDdlByKey).forEach((key) => {
                 if (key.startsWith(`${sourceId}:`)) {
                   delete nextObjectDdlByKey[key];
+                }
+              });
+              Object.keys(nextGroupItemsByKey).forEach((key) => {
+                if (key.startsWith(`${sourceId}:`)) {
+                  delete nextGroupItemsByKey[key];
+                }
+              });
+              Object.keys(nextGroupErrorByKey).forEach((key) => {
+                if (key.startsWith(`${sourceId}:`)) {
+                  delete nextGroupErrorByKey[key];
                 }
               });
             }
@@ -406,7 +432,9 @@ export function useSourceTreeState({
                 [sourceId]: children
               },
               objectFieldsByKey: nextObjectFieldsByKey,
-              objectDdlByKey: nextObjectDdlByKey
+              objectDdlByKey: nextObjectDdlByKey,
+              groupItemsByKey: nextGroupItemsByKey,
+              groupErrorByKey: nextGroupErrorByKey
             };
           });
           return objects;
@@ -523,10 +551,97 @@ export function useSourceTreeState({
     [treeState.objectFieldsByKey]
   );
 
+  // 懒加载或强制刷新非 tables 分组（views/routines/triggers/events/collations/users/virtual-views）下的子节点列表。
+  const loadGroupItems = useCallback(
+    async (source: SalesforceSource, groupType: string, forceRefresh = false): Promise<QueryTreeNode[]> => {
+      const groupKey = `${source.id}:${groupType}`;
+      if (!forceRefresh && treeState.groupItemsByKey[groupKey]) {
+        return treeState.groupItemsByKey[groupKey];
+      }
+
+      setTreeState((current) => ({
+        ...current,
+        groupLoadingByKey: {
+          ...current.groupLoadingByKey,
+          [groupKey]: true
+        },
+        groupErrorByKey: {
+          ...current.groupErrorByKey,
+          [groupKey]: ""
+        }
+      }));
+
+      try {
+        const sourceType = String(source.sourceType || "salesforce");
+        let nodes: QueryTreeNode[] = [];
+
+        if (groupType === "views") {
+          const views = await api.listViews(source.id);
+          nodes = buildGroupObjectChildren(source.id, sourceType, views, "views");
+        } else if (groupType === "collations") {
+          const collations = await api.listCollations(source.id);
+          nodes = buildGroupCollationChildren(source.id, sourceType, collations);
+        } else if (groupType === "users") {
+          const users = await api.listUsers(source.id);
+          nodes = buildGroupUserChildren(source.id, sourceType, users);
+        } else if (groupType === "routines") {
+          const routines = await api.listRoutines(source.id);
+          nodes = buildGroupRoutineChildren(source.id, sourceType, routines);
+        } else if (groupType === "triggers") {
+          const triggers = await api.listTriggers(source.id);
+          nodes = buildGroupTriggerChildren(source.id, sourceType, triggers);
+        } else if (groupType === "events") {
+          const events = await api.listEvents(source.id);
+          nodes = buildGroupEventChildren(source.id, sourceType, events);
+        } else if (groupType === "virtual-views") {
+          const virtualViews = await api.listVirtualViews(source.id);
+          nodes = buildGroupVirtualViewChildren(source.id, sourceType, virtualViews);
+        }
+
+        setTreeState((current) => ({
+          ...current,
+          groupItemsByKey: {
+            ...current.groupItemsByKey,
+            [groupKey]: nodes
+          },
+          groupLoadingByKey: {
+            ...current.groupLoadingByKey,
+            [groupKey]: false
+          }
+        }));
+        return nodes;
+      } catch (error) {
+        setTreeState((current) => ({
+          ...current,
+          groupLoadingByKey: {
+            ...current.groupLoadingByKey,
+            [groupKey]: false
+          },
+          groupErrorByKey: {
+            ...current.groupErrorByKey,
+            [groupKey]: String(error)
+          }
+        }));
+        return [];
+      }
+    },
+    [treeState.groupItemsByKey]
+  );
+
   // 确保 source/group/object 节点展开：先写入展开态，再按需补拉子节点。
   const ensureNodeExpanded = useCallback(
     async (node: QueryTreeNode) => {
-      if (node.kind === "column" || node.kind === "key" || node.kind === "index") {
+      if (
+        node.kind === "column"
+        || node.kind === "key"
+        || node.kind === "index"
+        || node.kind === "collation"
+        || node.kind === "user"
+        || node.kind === "routine"
+        || node.kind === "trigger"
+        || node.kind === "event"
+        || node.kind === "virtual-view"
+      ) {
         return;
       }
 
@@ -544,6 +659,11 @@ export function useSourceTreeState({
         && node.groupType === "tables"
         && !treeState.sourceObjectsById[node.sourceId]
         && !treeState.sourceLoadingById[node.sourceId];
+      const groupCacheKey = node.kind === "group" && node.groupType !== "tables" ? `${node.sourceId}:${node.groupType}` : "";
+      const shouldLoadGroupItems =
+        Boolean(groupCacheKey)
+        && !treeState.groupItemsByKey[groupCacheKey]
+        && !treeState.groupLoadingByKey[groupCacheKey];
       const objectCacheKey =
         node.kind === "object" || node.kind === "object-folder"
           ? `${node.sourceId}:${node.objectName}`
@@ -562,6 +682,8 @@ export function useSourceTreeState({
 
         if (shouldLoadSourceChildren || shouldLoadGroupObjects) {
           await loadSourceChildren(source, false);
+        } else if (shouldLoadGroupItems && node.kind === "group") {
+          await loadGroupItems(source, node.groupType, false);
         } else if (shouldLoadObjectFields && (node.kind === "object" || node.kind === "object-folder")) {
           await loadObjectFields(source, node.objectName, false);
         }
@@ -570,9 +692,12 @@ export function useSourceTreeState({
     [
       focusSource,
       isNodeExpanded,
+      loadGroupItems,
       loadObjectFields,
       loadSourceChildren,
       sourceMap,
+      treeState.groupItemsByKey,
+      treeState.groupLoadingByKey,
       treeState.objectFieldsByKey,
       treeState.objectFieldsLoadingByKey,
       treeState.sourceLoadingById,
@@ -630,11 +755,18 @@ export function useSourceTreeState({
   const onNodeDoubleClick = useCallback(async (node: QueryTreeNode) => {
     const doubleClickAction = resolveNodeDoubleClickAction(node);
     if (doubleClickAction === "open") {
+      if (node.kind === "virtual-view") {
+        const source = sourceMap.get(node.sourceId);
+        if (source) {
+          onOpenVirtualView?.(node, source);
+        }
+        return;
+      }
       openObjectNode(node);
       return;
     }
     await toggleNode(node);
-  }, [openObjectNode, toggleNode]);
+  }, [onOpenVirtualView, openObjectNode, sourceMap, toggleNode]);
 
   // 刷新指定数据源。
   const refreshSourceById = useCallback(async (sourceId: string) => {
@@ -655,6 +787,17 @@ export function useSourceTreeState({
     if (!source) return [];
     return await loadObjectFields(source, objectName, true);
   }, [loadObjectFields, sourceMap]);
+
+  // 刷新指定分组（views/routines/triggers/events/collations/users/virtual-views）的子节点列表。
+  const refreshGroupItems = useCallback(async (sourceId: string, groupType: string) => {
+    const source = sourceMap.get(sourceId);
+    if (!source) return [];
+    if (groupType === "tables") {
+      await loadSourceChildren(source, true);
+      return [];
+    }
+    return await loadGroupItems(source, groupType, true);
+  }, [loadGroupItems, loadSourceChildren, sourceMap]);
 
   // 折叠指定数据源下的所有展开节点。
   const collapseSourceNodes = useCallback((sourceId: string) => {
@@ -777,7 +920,11 @@ export function useSourceTreeState({
       }
       const fields = treeState.objectFieldsByKey[cacheKey] || [];
       const driver = getDataSourceDriver(node.sourceType);
-      const subFolders = driver.treeConfig.objectSubFolders || [];
+      const rawSubFolders = driver.treeConfig.objectSubFolders || [];
+      // 真实视图仅保留 columns 子目录，避免展示无意义的 keys/indexes 占位目录。
+      const subFolders = node.objectGroupType === "views"
+        ? rawSubFolders.filter((folder) => folder === "columns")
+        : rawSubFolders;
 
       if (subFolders.length > 0) {
         const ddl = treeState.objectDdlByKey[cacheKey] || null;
@@ -815,17 +962,41 @@ export function useSourceTreeState({
             return attachObjectColumns(child);
           }
           if (child.kind !== "group") return child;
-          const groupObjects = child.groupType === "tables"
-            ? buildGroupObjectChildren(child.sourceId, child.sourceType, treeState.sourceObjectsById[child.sourceId] || [])
-            : [];
+          if (child.groupType === "tables") {
+            const hasLoadedTables = Object.prototype.hasOwnProperty.call(treeState.sourceObjectsById, child.sourceId);
+            const groupObjects = buildGroupObjectChildren(
+              child.sourceId,
+              child.sourceType,
+              treeState.sourceObjectsById[child.sourceId] || [],
+              "tables"
+            );
+            return {
+              ...child,
+              count: hasLoadedTables ? groupObjects.length : undefined,
+              children: groupObjects.map(attachObjectColumns)
+            };
+          }
+          const groupKey = `${child.sourceId}:${child.groupType}`;
+          const hasLoadedGroup = Object.prototype.hasOwnProperty.call(treeState.groupItemsByKey, groupKey);
+          const groupChildren = (treeState.groupItemsByKey[groupKey] || []).map((item) =>
+            item.kind === "object" ? attachObjectColumns(item) : item
+          );
           return {
             ...child,
-            children: groupObjects.map(attachObjectColumns)
+            count: hasLoadedGroup ? groupChildren.length : undefined,
+            children: groupChildren
           };
         })
       };
     });
-  }, [sources, treeState.objectDdlByKey, treeState.objectFieldsByKey, treeState.sourceObjectsById, treeState.sourceTreeChildrenById]);
+  }, [
+    sources,
+    treeState.groupItemsByKey,
+    treeState.objectDdlByKey,
+    treeState.objectFieldsByKey,
+    treeState.sourceObjectsById,
+    treeState.sourceTreeChildrenById
+  ]);
 
   // 将本地树 UI 状态持久化到 store，供切换 panel 与重启后恢复。
   useEffect(() => {
@@ -877,6 +1048,7 @@ export function useSourceTreeState({
     refreshFocusedSource,
     refreshSourceById,
     refreshObjectColumns,
+    refreshGroupItems,
     collapseSourceNodes,
     locateNodeByTarget,
     searchFocusedSourceObjects,

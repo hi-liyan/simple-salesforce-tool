@@ -52,10 +52,28 @@ test("buildSourceRootNodes: 应按 sortOrder 输出全部 source 节点并携带
   );
 });
 
-test("buildMySqlRootChildren: 应生成 tables、collations、users、virtual views 分组", async () => {
+test("buildMySqlRootChildren: 应生成全部 MySQL 分组（tables/views/routines/triggers/events/collations/users/virtual views）", async () => {
   const nodes = await buildMySqlRootChildren(createSource({ id: "mysql-1", sourceType: "mysql" }), createContext());
-  assert.deepEqual(nodes.map((item) => item.label), ["tables", "collations", "users", "virtual views"]);
-  assert.deepEqual(nodes.map((item) => item.groupType), ["tables", "collations", "users", "virtual-views"]);
+  assert.deepEqual(nodes.map((item) => item.label), [
+    "tables",
+    "views",
+    "routines",
+    "triggers",
+    "events",
+    "collations",
+    "users",
+    "virtual views"
+  ]);
+  assert.deepEqual(nodes.map((item) => item.groupType), [
+    "tables",
+    "views",
+    "routines",
+    "triggers",
+    "events",
+    "collations",
+    "users",
+    "virtual-views"
+  ]);
 });
 
 test("buildSalesforceRootChildren: 应将对象映射为 object 节点", async () => {

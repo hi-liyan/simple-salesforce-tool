@@ -1064,3 +1064,105 @@ pub struct AiCapabilities {
     /// 可用工具列表。
     pub tools: Vec<String>,
 }
+
+/// 数据库字符集排序规则元信息（用于左侧树 collations 分组展示）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseCollation {
+    /// 排序规则名称（如 `utf8mb4_unicode_ci`）。
+    pub name: String,
+    /// 所属字符集（如 `utf8mb4`）。
+    pub charset: String,
+    /// 是否为该字符集的默认排序规则。
+    pub is_default: bool,
+}
+
+/// 数据库用户账号元信息（用于左侧树 users 分组展示）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseUser {
+    /// 用户名。
+    pub username: String,
+    /// 允许登录的主机（如 `%`、`localhost`）。
+    pub host: String,
+    /// 标准化账号标签（如 `'root'@'localhost'`）。
+    pub account_label: String,
+}
+
+/// 数据库存储过程/函数元信息（用于左侧树 routines 分组展示）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseRoutine {
+    /// 存储过程或函数名称。
+    pub name: String,
+    /// 类型标识：`PROCEDURE` 或 `FUNCTION`。
+    pub routine_type: String,
+    /// 返回值类型（仅函数有值）。
+    pub data_type: Option<String>,
+    /// 备注说明。
+    pub comment: Option<String>,
+}
+
+/// 数据库触发器元信息（用于左侧树 triggers 分组展示）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseTrigger {
+    /// 触发器名称。
+    pub name: String,
+    /// 关联表名。
+    pub table_name: String,
+    /// 触发时机：`BEFORE` 或 `AFTER`。
+    pub timing: String,
+    /// 触发事件：`INSERT` / `UPDATE` / `DELETE`。
+    pub event: String,
+}
+
+/// 数据库定时事件元信息（用于左侧树 events 分组展示）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseEvent {
+    /// 事件名称。
+    pub name: String,
+    /// 事件调度类型：`ONE TIME` 或 `RECURRING`。
+    pub event_type: String,
+    /// 当前状态：`ENABLED` / `DISABLED` / `SLAVESIDE_DISABLED`。
+    pub status: String,
+    /// 备注说明。
+    pub comment: Option<String>,
+}
+
+/// 本地自定义虚拟视图（存储于 SQLite，不修改远端数据库）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VirtualView {
+    /// 虚拟视图主键 UUID。
+    pub id: String,
+    /// 所属数据源 ID。
+    pub source_id: String,
+    /// 虚拟视图名称。
+    pub name: String,
+    /// 关联 SQL 查询语句。
+    pub sql_text: String,
+    /// 可选描述说明。
+    pub description: Option<String>,
+    /// 创建时间（RFC3339）。
+    pub created_at: String,
+    /// 更新时间（RFC3339）。
+    pub updated_at: String,
+}
+
+/// 新建/更新本地虚拟视图请求载荷。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VirtualViewUpsertPayload {
+    /// 编辑时传入现有虚拟视图 ID；新建时为空。
+    pub id: Option<String>,
+    /// 所属数据源 ID。
+    pub source_id: String,
+    /// 虚拟视图名称。
+    pub name: String,
+    /// 关联 SQL 查询语句。
+    pub sql_text: String,
+    /// 可选描述说明。
+    pub description: Option<String>,
+}

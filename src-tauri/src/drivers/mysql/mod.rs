@@ -12,6 +12,7 @@ use crate::drivers::{
 };
 use crate::error::AppError;
 use crate::models::{
+    DatabaseCollation, DatabaseEvent, DatabaseRoutine, DatabaseTrigger, DatabaseUser,
     MutationExecutionResult, ObjectDdl, ObjectDescribe, QueryResult, RecordUpdatePayload,
     SalesforceObject, SalesforceSource, SourceUpsertPayload,
 };
@@ -128,6 +129,62 @@ impl DataSourceDriver for MySqlDriver {
         source: &'a SalesforceSource,
     ) -> BoxFuture<'a, Result<Vec<SalesforceObject>, AppError>> {
         Box::pin(async move { self.inner.list_objects(source).await })
+    }
+
+    fn list_views<'a>(
+        &'a self,
+        source: &'a SalesforceSource,
+    ) -> BoxFuture<'a, Result<Vec<SalesforceObject>, AppError>> {
+        Box::pin(async move { self.inner.list_views(source).await })
+    }
+
+    fn list_collations<'a>(
+        &'a self,
+        source: &'a SalesforceSource,
+    ) -> BoxFuture<'a, Result<Vec<DatabaseCollation>, AppError>> {
+        Box::pin(async move { self.inner.list_collations(source).await })
+    }
+
+    fn list_users<'a>(
+        &'a self,
+        source: &'a SalesforceSource,
+    ) -> BoxFuture<'a, Result<Vec<DatabaseUser>, AppError>> {
+        Box::pin(async move { self.inner.list_users(source).await })
+    }
+
+    fn list_routines<'a>(
+        &'a self,
+        source: &'a SalesforceSource,
+    ) -> BoxFuture<'a, Result<Vec<DatabaseRoutine>, AppError>> {
+        Box::pin(async move { self.inner.list_routines(source).await })
+    }
+
+    fn list_triggers<'a>(
+        &'a self,
+        source: &'a SalesforceSource,
+    ) -> BoxFuture<'a, Result<Vec<DatabaseTrigger>, AppError>> {
+        Box::pin(async move { self.inner.list_triggers(source).await })
+    }
+
+    fn list_events<'a>(
+        &'a self,
+        source: &'a SalesforceSource,
+    ) -> BoxFuture<'a, Result<Vec<DatabaseEvent>, AppError>> {
+        Box::pin(async move { self.inner.list_events(source).await })
+    }
+
+    fn get_schema_object_ddl<'a>(
+        &'a self,
+        source: &'a SalesforceSource,
+        object_kind: &'a str,
+        object_name: &'a str,
+        routine_type: Option<&'a str>,
+    ) -> BoxFuture<'a, Result<String, AppError>> {
+        Box::pin(async move {
+            self.inner
+                .get_schema_object_ddl(source, object_kind, object_name, routine_type)
+                .await
+        })
     }
 
     fn describe_object<'a>(

@@ -13,7 +13,8 @@ use crate::drivers::connection_manager::ConnectionManager;
 use crate::drivers::TransactionMode;
 use crate::error::AppError;
 use crate::models::{
-    CurrentUserContext, MutationExecutionItem, MutationExecutionResult, MutationPreviewSqlItem,
+    CurrentUserContext, DatabaseCollation, DatabaseEvent, DatabaseRoutine, DatabaseTrigger,
+    DatabaseUser, MutationExecutionItem, MutationExecutionResult, MutationPreviewSqlItem,
     ObjectDdl, ObjectDescribe, ObjectField, QueryResult, RecordUpdatePayload, SalesforceObject,
     SalesforceSource,
 };
@@ -313,6 +314,260 @@ impl MySqlProvider {
         Ok(items)
     }
 
+    /// 读取真实视图列表并映射为统一对象结构（支持展开列与只读数据查询）。
+    pub async fn list_views(
+        &self,
+        source: &SalesforceSource,
+    ) -> Result<Vec<SalesforceObject>, AppError> {
+        let config = MySqlSourceConfig::from_source(source)?;
+        let pool = self.acquire_pool(source, &config).await?;
+
+        let rows = sqlx::query(
+            r#"
+            SELECT table_name, table_comment
+            FROM information_schema.tables
+            WHERE table_schema = ? AND table_type = 'VIEW'
+            ORDER BY table_name ASC
+            "#,
+        )
+        .bind(&config.database)
+        .fetch_all(&pool)
+        .await
+        .map_err(|error| AppError::Db(format!("读取 MySQL 视图列表失败: {error}")))?;
+
+        let mut items = Vec::with_capacity(rows.len());
+        for row in rows {
+            let view_name = decode_row_string(&row, 0usize, "视图名")?;
+            let view_comment = decode_optional_row_string(&row, 1usize)
+                .and_then(|comment| (!comment.trim().is_empty() && comment != "VIEW").then_some(comment));
+            items.push(SalesforceObject {
+                name: view_name.clone(),
+                label: view_name,
+                comment: view_comment,
+                queryable: true,
+                createable: false,
+                updateable: false,
+                deletable: false,
+            });
+        }
+        Ok(items)
+    }
+
+    /// 读取 MySQL 字符集排序规则列表。
+    pub async fn list_collations(
+        &self,
+        source: &SalesforceSource,
+    ) -> Result<Vec<DatabaseCollation>, AppError> {
+        let config = MySqlSourceConfig::from_source(source)?;
+        let pool = self.acquire_pool(source, &config).await?;
+
+        let rows = sqlx::query(
+            r#"
+            SELECT collation_name, character_set_name, is_default
+            FROM information_schema.collations
+            ORDER BY collation_name ASC
+            "#,
+        )
+        .fetch_all(&pool)
+        .await
+        .map_err(|error| AppError::Db(format!("读取 MySQL 排序规则列表失败: {error}")))?;
+
+        let mut items = Vec::with_capacity(rows.len());
+        for row in rows {
+            let name = decode_row_string(&row, 0usize, "排序规则名")?;
+            let charset = decode_row_string(&row, 1usize, "字符集")?;
+            let is_default = decode_optional_row_string(&row, 2usize)
+                .map(|flag| flag.eq_ignore_ascii_case("YES"))
+                .unwrap_or(false);
+            items.push(DatabaseCollation {
+                name,
+                charset,
+                is_default,
+            });
+        }
+        Ok(items)
+    }
+
+    /// 读取 MySQL 用户账号列表。
+    pub async fn list_users(
+        &self,
+        source: &SalesforceSource,
+    ) -> Result<Vec<DatabaseUser>, AppError> {
+        let config = MySqlSourceConfig::from_source(source)?;
+        let pool = self.acquire_pool(source, &config).await?;
+
+        let rows = sqlx::query(
+            r#"
+            SELECT CAST(User AS CHAR) AS username, CAST(Host AS CHAR) AS host
+            FROM mysql.user
+            ORDER BY User ASC, Host ASC
+            "#,
+        )
+        .fetch_all(&pool)
+        .await
+        .map_err(|error| AppError::Db(format!("读取 MySQL 用户列表失败: {error}")))?;
+
+        let mut items = Vec::with_capacity(rows.len());
+        for row in rows {
+            let username = decode_optional_row_string(&row, 0usize).unwrap_or_default();
+            let host = decode_optional_row_string(&row, 1usize).unwrap_or_else(|| "%".to_string());
+            let account_label = format!("'{username}'@'{host}'");
+            items.push(DatabaseUser {
+                username,
+                host,
+                account_label,
+            });
+        }
+        Ok(items)
+    }
+
+    /// 读取当前库下的存储过程与函数列表。
+    pub async fn list_routines(
+        &self,
+        source: &SalesforceSource,
+    ) -> Result<Vec<DatabaseRoutine>, AppError> {
+        let config = MySqlSourceConfig::from_source(source)?;
+        let pool = self.acquire_pool(source, &config).await?;
+
+        let rows = sqlx::query(
+            r#"
+            SELECT routine_name, routine_type, data_type, routine_comment
+            FROM information_schema.routines
+            WHERE routine_schema = ?
+            ORDER BY routine_type ASC, routine_name ASC
+            "#,
+        )
+        .bind(&config.database)
+        .fetch_all(&pool)
+        .await
+        .map_err(|error| AppError::Db(format!("读取 MySQL 存储过程/函数列表失败: {error}")))?;
+
+        let mut items = Vec::with_capacity(rows.len());
+        for row in rows {
+            let name = decode_row_string(&row, 0usize, "Routine 名称")?;
+            let routine_type = decode_row_string(&row, 1usize, "Routine 类型")?;
+            let data_type = decode_optional_row_string(&row, 2usize)
+                .and_then(|val| (!val.trim().is_empty()).then_some(val));
+            let comment = decode_optional_row_string(&row, 3usize)
+                .and_then(|val| (!val.trim().is_empty()).then_some(val));
+            items.push(DatabaseRoutine {
+                name,
+                routine_type,
+                data_type,
+                comment,
+            });
+        }
+        Ok(items)
+    }
+
+    /// 读取当前库下的触发器列表。
+    pub async fn list_triggers(
+        &self,
+        source: &SalesforceSource,
+    ) -> Result<Vec<DatabaseTrigger>, AppError> {
+        let config = MySqlSourceConfig::from_source(source)?;
+        let pool = self.acquire_pool(source, &config).await?;
+
+        let rows = sqlx::query(
+            r#"
+            SELECT trigger_name, event_object_table, action_timing, event_manipulation
+            FROM information_schema.triggers
+            WHERE trigger_schema = ?
+            ORDER BY trigger_name ASC
+            "#,
+        )
+        .bind(&config.database)
+        .fetch_all(&pool)
+        .await
+        .map_err(|error| AppError::Db(format!("读取 MySQL 触发器列表失败: {error}")))?;
+
+        let mut items = Vec::with_capacity(rows.len());
+        for row in rows {
+            items.push(DatabaseTrigger {
+                name: decode_row_string(&row, 0usize, "触发器名")?,
+                table_name: decode_row_string(&row, 1usize, "触发器所属表")?,
+                timing: decode_row_string(&row, 2usize, "触发时机")?,
+                event: decode_row_string(&row, 3usize, "触发事件")?,
+            });
+        }
+        Ok(items)
+    }
+
+    /// 读取当前库下的定时事件列表。
+    pub async fn list_events(
+        &self,
+        source: &SalesforceSource,
+    ) -> Result<Vec<DatabaseEvent>, AppError> {
+        let config = MySqlSourceConfig::from_source(source)?;
+        let pool = self.acquire_pool(source, &config).await?;
+
+        let rows = sqlx::query(
+            r#"
+            SELECT event_name, event_type, status, event_comment
+            FROM information_schema.events
+            WHERE event_schema = ?
+            ORDER BY event_name ASC
+            "#,
+        )
+        .bind(&config.database)
+        .fetch_all(&pool)
+        .await
+        .map_err(|error| AppError::Db(format!("读取 MySQL 定时事件列表失败: {error}")))?;
+
+        let mut items = Vec::with_capacity(rows.len());
+        for row in rows {
+            let comment = decode_optional_row_string(&row, 3usize)
+                .and_then(|val| (!val.trim().is_empty()).then_some(val));
+            items.push(DatabaseEvent {
+                name: decode_row_string(&row, 0usize, "事件名")?,
+                event_type: decode_row_string(&row, 1usize, "事件类型")?,
+                status: decode_row_string(&row, 2usize, "事件状态")?,
+                comment,
+            });
+        }
+        Ok(items)
+    }
+
+    /// 读取存储过程/函数、触发器或定时事件的 DDL 定义。
+    pub async fn get_schema_object_ddl(
+        &self,
+        source: &SalesforceSource,
+        object_kind: &str,
+        object_name: &str,
+        routine_type: Option<&str>,
+    ) -> Result<String, AppError> {
+        let safe_name = ensure_safe_identifier(object_name, "对象名")?;
+        let config = MySqlSourceConfig::from_source(source)?;
+        let pool = self.acquire_pool(source, &config).await?;
+
+        let (sql, col_index) = match object_kind.to_ascii_lowercase().as_str() {
+            "routine" => {
+                let kind_kw = if routine_type
+                    .unwrap_or("PROCEDURE")
+                    .eq_ignore_ascii_case("FUNCTION")
+                {
+                    "FUNCTION"
+                } else {
+                    "PROCEDURE"
+                };
+                (format!("SHOW CREATE {kind_kw} `{safe_name}`"), 2usize)
+            }
+            "trigger" => (format!("SHOW CREATE TRIGGER `{safe_name}`"), 2usize),
+            "event" => (format!("SHOW CREATE EVENT `{safe_name}`"), 3usize),
+            other => {
+                return Err(AppError::Biz(format!("不支持的对象 DDL 类型: {other}")));
+            }
+        };
+
+        let row = sqlx::query(&sql)
+            .fetch_one(&pool)
+            .await
+            .map_err(|error| AppError::Db(format!("读取对象 DDL 失败: {error}")))?;
+
+        decode_optional_row_string(&row, col_index).ok_or_else(|| {
+            AppError::Biz("未能获取 DDL 内容（可能缺少 SHOW_ROUTINE 或对应权限）".to_string())
+        })
+    }
     /// 读取指定表的列定义并映射为统一字段结构。
     pub async fn describe_object(
         &self,

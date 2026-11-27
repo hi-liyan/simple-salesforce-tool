@@ -15,13 +15,14 @@ use crate::command_storage as db;
 use crate::error::AppError;
 use crate::models::{
     AiCapabilities, AiChatTurnV2Request, AiChatTurnV2Response, CliPathProbe, CliPathSettings,
-    CliPathStatus, CurrentUserContext, LlmSettings, LlmSettingsView, MutationExecutionResult,
+    CliPathStatus, CurrentUserContext, DatabaseCollation, DatabaseEvent, DatabaseRoutine,
+    DatabaseTrigger, DatabaseUser, LlmSettings, LlmSettingsView, MutationExecutionResult,
     MutationPreviewSqlItem, ObjectDdl, ObjectDescribe, QueryResult, RecordMutationPayload,
     RecordSavePayload, RecordSaveWithDeletePayload, RecordUpdatePayload, SalesforceObject,
     SalesforceSource, SaveLlmSettingsPayload, SourceSecretView, SourceUpsertPayload, SystemLogPage,
     TerminalCommandGroup, TerminalCommandGroupUpsertPayload, TerminalCommandItem,
     TerminalCommandReorderPayload, TerminalCommandUpsertPayload, TerminalShellSettings,
-    WorkspaceSnapshotDto,
+    VirtualView, VirtualViewUpsertPayload, WorkspaceSnapshotDto,
 };
 use crate::providers::{
     preview_create_record_sql, preview_delete_record_sql, preview_save_records_with_deletes_items,
@@ -423,6 +424,7 @@ pub async fn get_object_ddl(
     }
 }
 
+/// 异步读取运行时数据源（含解密凭证），避免在命令主线程直接阻塞等待 SQLite 读锁。
 /// 解析字段配置的 Child Relationship Name(优先使用 Tooling API)。
 #[tauri::command]
 pub async fn resolve_field_child_relationship_name(
@@ -512,5 +514,198 @@ pub async fn resolve_field_child_relationship_name(
             Err(message)
         }
     }
+}
+
+/// 异步读取运行时数据源（含解密凭证），避免在命令主线程直接阻塞等待 SQLite 读锁。
+async fn load_runtime_source_async(
+    app: &tauri::AppHandle,
+    source_id: String,
+) -> Result<SalesforceSource, String> {
+    let app_handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle.state::<AppState>();
+        SourceService::new(&state.storage)
+            .get_runtime_source(&source_id)
+            .map_err(AppError::to_string_error)
+    })
+    .await
+    .map_err(|error| format!("读取数据源任务执行失败: {error}"))?
+}
+
+/// 拉取指定数据源下的真实视图列表。
+#[tauri::command]
+pub async fn list_views(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    source_id: String,
+) -> Result<Vec<SalesforceObject>, String> {
+    let source = load_runtime_source_async(&app, source_id).await?;
+    let driver = state
+        .driver_registry
+        .get(&source.source_type)
+        .map_err(AppError::to_string_error)?;
+    driver
+        .list_views(&source)
+        .await
+        .map_err(AppError::to_string_error)
+}
+
+/// 拉取指定数据源下的字符集排序规则列表。
+#[tauri::command]
+pub async fn list_collations(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    source_id: String,
+) -> Result<Vec<DatabaseCollation>, String> {
+    let source = load_runtime_source_async(&app, source_id).await?;
+    let driver = state
+        .driver_registry
+        .get(&source.source_type)
+        .map_err(AppError::to_string_error)?;
+    driver
+        .list_collations(&source)
+        .await
+        .map_err(AppError::to_string_error)
+}
+
+/// 拉取指定数据源下的数据库用户账号列表。
+#[tauri::command]
+pub async fn list_users(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    source_id: String,
+) -> Result<Vec<DatabaseUser>, String> {
+    let source = load_runtime_source_async(&app, source_id).await?;
+    let driver = state
+        .driver_registry
+        .get(&source.source_type)
+        .map_err(AppError::to_string_error)?;
+    driver
+        .list_users(&source)
+        .await
+        .map_err(AppError::to_string_error)
+}
+
+/// 拉取指定数据源下的存储过程与函数列表。
+#[tauri::command]
+pub async fn list_routines(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    source_id: String,
+) -> Result<Vec<DatabaseRoutine>, String> {
+    let source = load_runtime_source_async(&app, source_id).await?;
+    let driver = state
+        .driver_registry
+        .get(&source.source_type)
+        .map_err(AppError::to_string_error)?;
+    driver
+        .list_routines(&source)
+        .await
+        .map_err(AppError::to_string_error)
+}
+
+/// 拉取指定数据源下的触发器列表。
+#[tauri::command]
+pub async fn list_triggers(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    source_id: String,
+) -> Result<Vec<DatabaseTrigger>, String> {
+    let source = load_runtime_source_async(&app, source_id).await?;
+    let driver = state
+        .driver_registry
+        .get(&source.source_type)
+        .map_err(AppError::to_string_error)?;
+    driver
+        .list_triggers(&source)
+        .await
+        .map_err(AppError::to_string_error)
+}
+
+/// 拉取指定数据源下的定时事件列表。
+#[tauri::command]
+pub async fn list_events(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    source_id: String,
+) -> Result<Vec<DatabaseEvent>, String> {
+    let source = load_runtime_source_async(&app, source_id).await?;
+    let driver = state
+        .driver_registry
+        .get(&source.source_type)
+        .map_err(AppError::to_string_error)?;
+    driver
+        .list_events(&source)
+        .await
+        .map_err(AppError::to_string_error)
+}
+
+/// 读取存储过程/函数、触发器或定时事件的 DDL 定义。
+#[tauri::command]
+pub async fn get_schema_object_ddl(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    source_id: String,
+    object_kind: String,
+    object_name: String,
+    routine_type: Option<String>,
+) -> Result<String, String> {
+    let source = load_runtime_source_async(&app, source_id).await?;
+    let driver = state
+        .driver_registry
+        .get(&source.source_type)
+        .map_err(AppError::to_string_error)?;
+    driver
+        .get_schema_object_ddl(&source, &object_kind, &object_name, routine_type.as_deref())
+        .await
+        .map_err(AppError::to_string_error)
+}
+
+/// 列出指定数据源下的全部本地自定义虚拟视图。
+#[tauri::command]
+pub async fn list_virtual_views(
+    app: tauri::AppHandle,
+    source_id: String,
+) -> Result<Vec<VirtualView>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        state
+            .storage
+            .read(|conn| crate::storage::virtual_view_repo::list_virtual_views(conn, &source_id))
+            .map_err(AppError::to_string_error)
+    })
+    .await
+    .map_err(|error| format!("读取虚拟视图列表任务失败: {error}"))?
+}
+
+/// 新建或更新本地自定义虚拟视图。
+#[tauri::command]
+pub async fn upsert_virtual_view(
+    app: tauri::AppHandle,
+    payload: VirtualViewUpsertPayload,
+) -> Result<VirtualView, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        state
+            .storage
+            .write(|conn| crate::storage::virtual_view_repo::upsert_virtual_view(conn, &payload))
+            .map_err(AppError::to_string_error)
+    })
+    .await
+    .map_err(|error| format!("保存虚拟视图任务失败: {error}"))?
+}
+
+/// 删除指定本地自定义虚拟视图。
+#[tauri::command]
+pub async fn delete_virtual_view(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        state
+            .storage
+            .write(|conn| crate::storage::virtual_view_repo::delete_virtual_view(conn, &id))
+            .map_err(AppError::to_string_error)
+    })
+    .await
+    .map_err(|error| format!("删除虚拟视图任务失败: {error}"))?
 }
 

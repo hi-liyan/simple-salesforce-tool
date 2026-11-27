@@ -49,9 +49,13 @@ test("resolveQueryTreeVisualKind: 应为 Salesforce 与 MySQL 数据源返回不
 
 test("resolveQueryTreeVisualKind: 应为 MySQL 分组返回稳定的树节点图标类型", () => {
   assert.equal(resolveQueryTreeVisualKind(createNode({ kind: "group", groupType: "tables" })), "group-tables");
+  assert.equal(resolveQueryTreeVisualKind(createNode({ kind: "group", groupType: "views" })), "group-views");
+  assert.equal(resolveQueryTreeVisualKind(createNode({ kind: "group", groupType: "routines" })), "group-routines");
+  assert.equal(resolveQueryTreeVisualKind(createNode({ kind: "group", groupType: "triggers" })), "group-triggers");
+  assert.equal(resolveQueryTreeVisualKind(createNode({ kind: "group", groupType: "events" })), "group-events");
   assert.equal(resolveQueryTreeVisualKind(createNode({ kind: "group", groupType: "collations" })), "group-collations");
   assert.equal(resolveQueryTreeVisualKind(createNode({ kind: "group", groupType: "users" })), "group-users");
-  assert.equal(resolveQueryTreeVisualKind(createNode({ kind: "group", groupType: "virtual-views" })), "group-views");
+  assert.equal(resolveQueryTreeVisualKind(createNode({ kind: "group", groupType: "virtual-views" })), "group-virtual-views");
   assert.equal(resolveQueryTreeVisualKind(createNode({ kind: "group", groupType: "unknown" })), "group-generic");
 });
 
@@ -65,7 +69,8 @@ test("resolveQueryTreeBadgeMeta: 应返回稳定的小徽标文案与色调", ()
   assert.deepEqual(resolveQueryTreeBadgeMeta("source-salesforce"), { text: "SF", tone: "green" });
   assert.deepEqual(resolveQueryTreeBadgeMeta("source-mysql"), { text: "MY", tone: "blue" });
   assert.deepEqual(resolveQueryTreeBadgeMeta("group-tables"), { text: "TB", tone: "amber" });
-  assert.deepEqual(resolveQueryTreeBadgeMeta("group-views"), { text: "VW", tone: "orange" });
+  assert.deepEqual(resolveQueryTreeBadgeMeta("group-views"), { text: "VW", tone: "blue" });
+  assert.deepEqual(resolveQueryTreeBadgeMeta("group-virtual-views"), { text: "VV", tone: "orange" });
   assert.deepEqual(resolveQueryTreeBadgeMeta("object-mysql-table"), { text: "T", tone: "amber" });
   assert.deepEqual(resolveQueryTreeBadgeMeta("object-readonly"), { text: "NQ", tone: "muted" });
   assert.deepEqual(resolveQueryTreeBadgeMeta("key-pk"), { text: "PK", tone: "amber" });
