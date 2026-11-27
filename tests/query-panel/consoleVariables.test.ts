@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { splitSqlStatementsWithRanges } from "../../src/components/codemirror/sqlCompletion.ts";
 import { mysqlDriver } from "../../src/drivers/mysql/index.ts";
 import { salesforceDriver } from "../../src/drivers/salesforce/index.ts";
 import {
@@ -192,4 +193,16 @@ test("formats SOQL date literals without quotes", () => {
   if (res.ok) {
     assert.equal(res.executedSql, "SELECT Id FROM Account WHERE CreatedDate > 2026-11-27T00:00:00Z");
   }
+});
+
+test("splitSqlStatementsWithRanges does not treat #{} placeholder as MySQL # comment", () => {
+  const doc = [
+    "SELECT DRIVER_ID did FROM drivers WHERE DRIVER_PHONE = #{driverPhone};",
+    "",
+    "SELECT * FROM orders where DRIVER_ID = #{did};"
+  ].join("\n");
+  const stmts = splitSqlStatementsWithRanges(doc);
+  assert.equal(stmts.length, 2);
+  assert.equal(stmts[0].sql, "SELECT DRIVER_ID did FROM drivers WHERE DRIVER_PHONE = #{driverPhone}");
+  assert.equal(stmts[1].sql, "SELECT * FROM orders where DRIVER_ID = #{did}");
 });

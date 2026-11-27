@@ -204,7 +204,8 @@ export function splitSqlStatementsWithRanges(doc: string): SqlStatementRange[] {
       continue;
     }
 
-    if ((ch === "-" && next === "-") || ch === "#") {
+    // 行内注释：MySQL `#` 单行注释需排除 `#{varName}` 占位符，避免吞掉后续分号。
+    if ((ch === "-" && next === "-") || (ch === "#" && next !== "{")) {
       inLineComment = true;
       if (ch === "-") i += 1;
       continue;
