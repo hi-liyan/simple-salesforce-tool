@@ -27,8 +27,16 @@ import {
 import { ConsoleToolbar, type ConsoleTransactionMode } from "./ConsoleToolbar";
 import { ConsoleDiffBoard } from "./ConsoleDiffBoard";
 import { ConsoleMutationPreviewModal } from "./ConsoleMutationPreviewModal";
+import { ConsoleVariablesPanel } from "./ConsoleVariablesPanel";
 import { SavedSqlLibraryModal } from "./SavedSqlLibraryModal";
 import { SavedSqlSaveModal } from "./SavedSqlSaveModal";
+import {
+  extractContextVariablesFromResult,
+  mergeConsoleContextVariables,
+  resolveAndBindConsoleVariables,
+  scanSqlPlaceholders,
+  type ConsoleContextVariableEntry
+} from "../logic/consoleVariables.ts";
 import {
   normalizeSqlFingerprint,
   type ConsoleDiffBaseline,
@@ -179,6 +187,13 @@ export function SoqlExecutorWorkspace({
   }>({ mode: "auto", inTransaction: false, uncommittedSqls: [] });
   // 事务提交/回滚/模式切换进行中。
   const [txBusy, setTxBusy] = useState(false);
+  // 当前 Tab 内存态查询上下文变量（不持久化，切换数据源或关闭 Tab 后清空）。
+  const [contextVariables, setContextVariables] = useState<Record<string, ConsoleContextVariableEntry>>({});
+  // 右侧变量面板显隐状态与用户手动收起标记。
+  const [variablesPanelOpen, setVariablesPanelOpen] = useState(false);
+  const [variablesPanelUserDismissed, setVariablesPanelUserDismissed] = useState(false);
+  // 校验失败时高亮的右侧变量名。
+  const [highlightedVarName, setHighlightedVarName] = useState<string | null>(null);
 
   // 当前激活标签数据。
   const activeTab = useMemo(
@@ -265,11 +280,32 @@ export function SoqlExecutorWorkspace({
     selectedSoqlTextRef.current = activeTab?.selectedSoqlText || "";
   }, [activeTab?.id, activeTab?.selectedSoqlText]);
 
-  // 切换数据源后清空旧元数据缓存，避免跨源污染。
+  // 切换数据源后清空旧元数据与查询上下文缓存，避免跨源污染。
   useEffect(() => {
     setObjectFieldsMap({});
     setObjectDescribeMap({});
+    setContextVariables({});
+    setHighlightedVarName(null);
   }, [effectiveSourceId]);
+
+  // 实时扫描当前编辑器文本中的 #{varName} 占位符；首次识别到变量时自动展开右侧变量面板。
+  const detectedPlaceholders = useMemo(
+    () => scanSqlPlaceholders(activeTab?.soqlDraft || ""),
+    [activeTab?.soqlDraft]
+  );
+  const uniquePlaceholderCount = useMemo(
+    () => new Set(detectedPlaceholders.map((item) => item.name)).size,
+    [detectedPlaceholders]
+  );
+
+  useEffect(() => {
+    if (uniquePlaceholderCount > 0 && !variablesPanelUserDismissed) {
+      setVariablesPanelOpen(true);
+    }
+    if (uniquePlaceholderCount === 0 && Object.keys(contextVariables).length === 0) {
+      setVariablesPanelUserDismissed(false);
+    }
+  }, [uniquePlaceholderCount, variablesPanelUserDismissed, contextVariables]);
 
   // 底部面板高度拖拽逻辑。
   useEffect(() => {
@@ -543,7 +579,41 @@ export function SoqlExecutorWorkspace({
       return;
     }
 
-    const executeSoql = options?.explain ? `EXPLAIN ${trimmedSql.replace(/;+$/, "")}` : trimmedSql;
+    const rawTemplateSql = options?.explain ? `EXPLAIN ${trimmedSql.replace(/;+$/, "")}` : trimmedSql;
+    const bindResult = resolveAndBindConsoleVariables({
+      sql: rawTemplateSql,
+      contextVariables,
+      manualVariables: activeTab.manualVariables || {},
+      objectDescribeMap,
+      driver
+    });
+    if (!bindResult.ok) {
+      const firstError = bindResult.errors[0];
+      const fullErrorMsg = bindResult.errors
+        .map((item) => `${item.message}\n修改建议：${item.suggestion}`)
+        .join("\n\n");
+      setHighlightedVarName(firstError?.variableName || null);
+      setVariablesPanelUserDismissed(false);
+      setVariablesPanelOpen(true);
+      if (statementIndex !== undefined) {
+        setStatementStatuses({ [statementIndex]: "error" });
+      }
+      patchActiveTab((tab) => ({
+        ...tab,
+        loading: false,
+        showBottomPanel: true,
+        notice: { type: "error", message: firstError ? `${firstError.message} ${firstError.suggestion}` : "变量校验失败。" },
+        logs: [
+          buildSoqlLog(false, rawTemplateSql, "变量约束校验失败。", fullErrorMsg, queryLanguageLabel),
+          ...tab.logs
+        ].slice(0, 200)
+      }));
+      setBottomView("logs");
+      return;
+    }
+
+    setHighlightedVarName(null);
+    const executeSoql = bindResult.executedSql;
     const queryId = `q-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     activeQueryIdRef.current = queryId;
     if (statementIndex !== undefined) {
@@ -564,7 +634,8 @@ export function SoqlExecutorWorkspace({
         primaryObjectName || undefined,
         false,
         queryId,
-        activeTab.id
+        activeTab.id,
+        bindResult.rawSql
       );
       if (guarded.status === "confirmation_required") {
         const reason = String(guarded.guardDecision?.reason || "检测到高危 SQL 操作，是否继续执行？");
@@ -586,13 +657,28 @@ export function SoqlExecutorWorkspace({
           primaryObjectName || undefined,
           true,
           queryId,
-          activeTab.id
+          activeTab.id,
+          bindResult.rawSql
         );
       }
 
       const normalizedResult = normalizeQueryResult(guarded.result || { totalSize: 0, records: [] });
       const actualExecutedSql = guarded.executedSql || executeSoql;
       const stmtIdx = statementIndex ?? 0;
+
+      // 行内注释：非 EXPLAIN 的 SELECT 查询执行成功后，将字段/别名注入当前 Tab 内存查询上下文。
+      if (!options?.explain) {
+        const extractedVars = extractContextVariablesFromResult({
+          sql: actualExecutedSql,
+          statementIndex: stmtIdx,
+          result: normalizedResult,
+          objectDescribeMap,
+          driver
+        });
+        if (extractedVars.length > 0) {
+          setContextVariables((prev) => mergeConsoleContextVariables(prev, extractedVars, stmtIdx));
+        }
+      }
       const nextBlock: ConsoleResultBlock = {
         statementIndex: stmtIdx,
         sql: actualExecutedSql,
@@ -706,30 +792,82 @@ export function SoqlExecutorWorkspace({
 
     const collectedItems: ConsoleResultBlock[] = [];
     let hasSchemaDdl = false;
+    // 行内注释：批量执行期间维护滚动上下文，确保第 N 条查询结果立即可被第 N+1 条引用。
+    let rollingContext = contextVariables;
 
     try {
       for (const stmt of statements) {
         if (batchCancelledRef.current) break;
 
+        const bindResult = resolveAndBindConsoleVariables({
+          sql: stmt.sql,
+          contextVariables: rollingContext,
+          manualVariables: activeTab.manualVariables || {},
+          objectDescribeMap,
+          driver
+        });
+        if (!bindResult.ok) {
+          const firstError = bindResult.errors[0];
+          const fullErrorMsg = bindResult.errors
+            .map((item) => `${item.message}\n修改建议：${item.suggestion}`)
+            .join("\n\n");
+          setHighlightedVarName(firstError?.variableName || null);
+          setVariablesPanelUserDismissed(false);
+          setVariablesPanelOpen(true);
+          collectedItems.push({
+            statementIndex: stmt.index,
+            sql: stmt.sql,
+            sqlFingerprint: normalizeSqlFingerprint(stmt.sql),
+            error: fullErrorMsg,
+            durationMs: 0
+          });
+          setStatementStatuses((prev) => ({ ...prev, [stmt.index]: "error" }));
+          setMultiResultSets([...collectedItems]);
+          setBottomView("logs");
+          patchActiveTab((tab) => ({
+            ...tab,
+            showBottomPanel: true,
+            notice: {
+              type: "error",
+              message: firstError
+                ? `第 ${stmt.index + 1} 条变量校验失败：${firstError.message} ${firstError.suggestion}`
+                : `第 ${stmt.index + 1} 条变量校验失败。`
+            },
+            logs: [
+              buildSoqlLog(
+                false,
+                stmt.sql,
+                `第 ${stmt.index + 1} 条变量约束校验失败，已停止后续语句。`,
+                fullErrorMsg,
+                queryLanguageLabel
+              ),
+              ...tab.logs
+            ].slice(0, 200)
+          }));
+          break;
+        }
+
+        const executeStmtSql = bindResult.executedSql;
         const queryId = `q-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         activeQueryIdRef.current = queryId;
         // 行内注释：标记当前正在执行的语句，行首 Gutter 显示 loading。
         setStatementStatuses((prev) => ({ ...prev, [stmt.index]: "running" }));
 
         try {
-          const primaryObjectName = extractPrimaryObjectName(stmt.sql);
+          const primaryObjectName = extractPrimaryObjectName(executeStmtSql);
           let guarded = await api.executeGuardedQuery(
             effectiveSourceId,
-            stmt.sql,
+            executeStmtSql,
             primaryObjectName || undefined,
             false,
             queryId,
-            activeTab.id
+            activeTab.id,
+            bindResult.rawSql
           );
 
           if (guarded.status === "confirmation_required") {
             const reason = String(guarded.guardDecision?.reason || "检测到高危 SQL 操作，是否继续执行？");
-            const confirmed = window.confirm(`${reason}\n\n待执行语句：\n${stmt.sql}`);
+            const confirmed = window.confirm(`${reason}\n\n待执行语句：\n${executeStmtSql}`);
             if (!confirmed) {
               setStatementStatuses((prev) => ({ ...prev, [stmt.index]: "idle" }));
               patchActiveTab((tab) => ({
@@ -740,16 +878,28 @@ export function SoqlExecutorWorkspace({
             }
             guarded = await api.executeGuardedQuery(
               effectiveSourceId,
-              stmt.sql,
+              executeStmtSql,
               primaryObjectName || undefined,
               true,
               queryId,
-              activeTab.id
+              activeTab.id,
+              bindResult.rawSql
             );
           }
 
           const normalizedResult = normalizeQueryResult(guarded.result || { totalSize: 0, records: [] });
-          const actualExecutedSql = guarded.executedSql || stmt.sql;
+          const actualExecutedSql = guarded.executedSql || executeStmtSql;
+          const extractedVars = extractContextVariablesFromResult({
+            sql: actualExecutedSql,
+            statementIndex: stmt.index,
+            result: normalizedResult,
+            objectDescribeMap,
+            driver
+          });
+          if (extractedVars.length > 0) {
+            rollingContext = mergeConsoleContextVariables(rollingContext, extractedVars, stmt.index);
+            setContextVariables(rollingContext);
+          }
           collectedItems.push({
             statementIndex: stmt.index,
             sql: actualExecutedSql,
@@ -1244,49 +1394,101 @@ export function SoqlExecutorWorkspace({
         onChangeTransactionMode={(mode) => void handleChangeTransactionMode(mode)}
         onCommitTransaction={() => void handleCommitTransaction()}
         onRollbackTransaction={() => void handleRollbackTransaction()}
+        variablesPanelOpen={variablesPanelOpen}
+        variableCount={uniquePlaceholderCount}
+        onToggleVariablesPanel={() => {
+          setVariablesPanelOpen((prev) => {
+            const next = !prev;
+            setVariablesPanelUserDismissed(!next);
+            return next;
+          });
+        }}
       />
 
-      {/* 主内容区：SQL/SOQL 编辑器（含左侧 Gutter 按条执行按钮）+ 底部结果/日志区。 */}
+      {/* 主内容区：SQL/SOQL 编辑器（含左侧 Gutter 按条执行按钮）+ 右侧变量面板 + 底部结果/日志区。 */}
       <div ref={splitContainerRef} className="min-h-0 flex flex-1 flex-col overflow-hidden">
-        <div className={activeTab.showBottomPanel ? "min-h-0 flex-1 border-b border-base-300" : "min-h-0 flex-1"}>
-          <CodeMirrorQueryEditor
-            language={queryLanguage}
-            value={activeTab.soqlDraft}
-            onChange={(value) => {
-              setStatementStatuses({});
-              patchActiveTab((tab) => ({ ...tab, soqlDraft: value }));
-            }}
-            onSelectionTextChange={(selectionText) => {
-              selectedSoqlTextRef.current = selectionText;
-              if (selectionSyncTimerRef.current !== null) {
-                window.clearTimeout(selectionSyncTimerRef.current);
-              }
-              selectionSyncTimerRef.current = window.setTimeout(() => {
-                selectionSyncTimerRef.current = null;
-                patchActiveTab((tab) =>
-                  tab.selectedSoqlText === selectionText ? tab : { ...tab, selectedSoqlText: selectionText }
-                );
-              }, 80);
-            }}
-            onExecuteStatement={(sql, statement) => {
-              void executeSingleStatement(sql, undefined, statement.index);
-            }}
-            onExecuteCurrent={() => {
-              void executeCurrentOrSelected();
-            }}
-            onExecuteAll={() => {
-              void executeBatchStatements(activeTab.soqlDraft);
-            }}
-            statementStatuses={statementStatuses}
-            fieldNames={fallbackFieldNames}
-            objectNames={objectNames}
-            objectFieldsMap={objectFieldsMap}
-            wordWrapMode={wordWrapEnabled ? "on" : "off"}
-            insertTextRequest={insertTextRequest}
-            placeholder={`输入 ${queryLanguageLabel}，点击行首 ▶ 可按条执行，或按 Ctrl/Cmd + Enter 执行`}
-            height="100%"
-            className="h-full rounded-none border-0"
-          />
+        <div className={activeTab.showBottomPanel ? "flex min-h-0 flex-1 overflow-hidden border-b border-base-300" : "flex min-h-0 flex-1 overflow-hidden"}>
+          <div className="min-w-0 flex-1 overflow-hidden">
+            <CodeMirrorQueryEditor
+              language={queryLanguage}
+              value={activeTab.soqlDraft}
+              onChange={(value) => {
+                setStatementStatuses({});
+                patchActiveTab((tab) => ({ ...tab, soqlDraft: value }));
+              }}
+              onSelectionTextChange={(selectionText) => {
+                selectedSoqlTextRef.current = selectionText;
+                if (selectionSyncTimerRef.current !== null) {
+                  window.clearTimeout(selectionSyncTimerRef.current);
+                }
+                selectionSyncTimerRef.current = window.setTimeout(() => {
+                  selectionSyncTimerRef.current = null;
+                  patchActiveTab((tab) =>
+                    tab.selectedSoqlText === selectionText ? tab : { ...tab, selectedSoqlText: selectionText }
+                  );
+                }, 80);
+              }}
+              onExecuteStatement={(sql, statement) => {
+                void executeSingleStatement(sql, undefined, statement.index);
+              }}
+              onExecuteCurrent={() => {
+                void executeCurrentOrSelected();
+              }}
+              onExecuteAll={() => {
+                void executeBatchStatements(activeTab.soqlDraft);
+              }}
+              statementStatuses={statementStatuses}
+              fieldNames={fallbackFieldNames}
+              objectNames={objectNames}
+              objectFieldsMap={objectFieldsMap}
+              wordWrapMode={wordWrapEnabled ? "on" : "off"}
+              insertTextRequest={insertTextRequest}
+              placeholder={`输入 ${queryLanguageLabel}，点击行首 ▶ 可按条执行，或按 Ctrl/Cmd + Enter 执行`}
+              height="100%"
+              className="h-full rounded-none border-0"
+            />
+          </div>
+
+          {variablesPanelOpen && (
+            <ConsoleVariablesPanel
+              sqlText={activeTab.soqlDraft}
+              occurrences={detectedPlaceholders}
+              contextVariables={contextVariables}
+              manualVariables={activeTab.manualVariables || {}}
+              objectDescribeMap={objectDescribeMap}
+              driver={driver}
+              highlightedVarName={highlightedVarName}
+              onChangeManualVariable={(varName, nextEntry) => {
+                setHighlightedVarName(null);
+                patchActiveTab((tab) => ({
+                  ...tab,
+                  manualVariables: {
+                    ...(tab.manualVariables || {}),
+                    [varName]: nextEntry
+                  }
+                }));
+              }}
+              onRemoveManualVariable={(varName) => {
+                setHighlightedVarName(null);
+                patchActiveTab((tab) => {
+                  const nextMap = { ...(tab.manualVariables || {}) };
+                  delete nextMap[varName];
+                  return {
+                    ...tab,
+                    manualVariables: nextMap
+                  };
+                });
+              }}
+              onClearContextVariables={() => {
+                setContextVariables({});
+                setHighlightedVarName(null);
+              }}
+              onClose={() => {
+                setVariablesPanelOpen(false);
+                setVariablesPanelUserDismissed(true);
+              }}
+            />
+          )}
         </div>
 
         {/* 底部结果日志区：支持拖拽高度、多结果集切换与日志查看。 */}

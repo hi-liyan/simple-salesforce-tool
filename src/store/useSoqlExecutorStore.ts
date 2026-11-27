@@ -1,8 +1,19 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { getDataSourceDriver } from "../drivers/registry.ts";
+import type { ConsoleVariableLogicalType } from "../drivers/types.ts";
 import type { Notice, QueryResult, SourceBindingMeta, TabLog } from "../types/index.ts";
 import { createDebouncedTauriJsonStorage } from "./tauriStorage.ts";
+
+// 控制台手工变量持久化条目：随 Tab 持久化，仅在当前 Tab 内有效，关闭 Tab 时销毁。
+export type ConsoleManualVariableEntry = {
+  // 用户输入的原始文本值（列表类型按换行或逗号分隔）。
+  value: string;
+  // 用户显式选择的类型（"auto" 表示随 SQL 左列或值自动推导）。
+  typeOverride?: ConsoleVariableLogicalType | "auto" | "list";
+  // 当上下文中存在同名变量时，是否强制使用手工输入覆写。
+  overrideContext?: boolean;
+};
 
 // AI 对话单条消息。
 export type AiConversationItem = {
@@ -37,6 +48,8 @@ export type SoqlExecutorTab = SourceBindingMeta & {
   aiLoading: boolean;
   aiMode: boolean;
   aiStreamRequestId: string;
+  // 当前 Tab 记忆的手工占位符变量映射：随 Tab 持久化，不跨 Tab。
+  manualVariables?: Record<string, ConsoleManualVariableEntry>;
 };
 
 // 控制台 Tab 持久化快照：按“完整页面状态”保存，恢复时重建瞬态标记。
@@ -98,7 +111,8 @@ export function createSoqlExecutorTab(
     aiMessages: [],
     aiLoading: false,
     aiMode: false,
-    aiStreamRequestId: ""
+    aiStreamRequestId: "",
+    manualVariables: {}
   };
 }
 

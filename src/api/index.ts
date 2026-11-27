@@ -233,14 +233,15 @@ export const api = {
   // 两阶段提交 Phase 2：按 planId + planHash 原样执行已预览计划。
   commitMutationPlan: (planId: string, planHash: string) =>
     invokeApi<MutationExecutionResult>("commit_mutation_plan", { planId, planHash }),
-  // 受安全网关保护的查询执行入口（支持 queryId 取消慢查询与 sessionId 会话事务绑定）。
+  // 受安全网关保护的查询执行入口（支持 queryId 取消慢查询与 sessionId 会话事务绑定，rawSql 保留原始模板用于审计）。
   executeGuardedQuery: (
     sourceId: string,
     queryText: string,
     objectName?: string,
     confirmed?: boolean,
     queryId?: string,
-    sessionId?: string
+    sessionId?: string,
+    rawSql?: string
   ) =>
     invokeApi<{
       status: "executed" | "confirmation_required";
@@ -248,7 +249,7 @@ export const api = {
       executedSql: string;
       durationMs: number;
       result?: QueryResult | null;
-    }>("execute_guarded_query", { sourceId, queryText, objectName, confirmed, queryId, sessionId }),
+    }>("execute_guarded_query", { sourceId, queryText, objectName, confirmed, queryId, sessionId, rawSql }),
   // 取消正在执行中的慢查询。
   cancelQuery: (queryId: string) => invokeApi<boolean>("cancel_query", { queryId }),
   // 读取指定控制台会话的交互式事务状态。

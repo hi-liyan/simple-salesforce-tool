@@ -1,4 +1,4 @@
-import { BookMarked, BookmarkPlus, Check, Eraser, FastForward, Gauge, ListChecks, Play, Sparkles, Square, Undo2, WrapText } from "lucide-react";
+import { BookMarked, BookmarkPlus, Braces, Check, Eraser, FastForward, Gauge, ListChecks, Play, Sparkles, Square, Undo2, WrapText } from "lucide-react";
 import { useState } from "react";
 import { DataSourceSelector } from "../../../../components/DataSourceSelector";
 import type { SalesforceSource } from "../../../../types";
@@ -59,6 +59,12 @@ type ConsoleToolbarProps = {
   onCommitTransaction?: () => void;
   // 回滚挂起事务。
   onRollbackTransaction?: () => void;
+  // 变量面板是否已展开。
+  variablesPanelOpen?: boolean;
+  // 当前识别到的占位符变量数量。
+  variableCount?: number;
+  // 切换右侧变量面板显示状态。
+  onToggleVariablesPanel?: () => void;
 };
 
 // 控制台顶部紧凑操作栏（参考 DBX 设计：纯小 Icon 按钮 + 事务控制 + 右侧数据源选择器）。
@@ -88,7 +94,10 @@ export function ConsoleToolbar({
   onChangeSource,
   onChangeTransactionMode,
   onCommitTransaction,
-  onRollbackTransaction
+  onRollbackTransaction,
+  variablesPanelOpen = false,
+  variableCount = 0,
+  onToggleVariablesPanel
 }: ConsoleToolbarProps) {
   // 是否展开未提交事务日志弹层。
   const [txLogOpen, setTxLogOpen] = useState(false);
@@ -330,8 +339,28 @@ export function ConsoleToolbar({
         )}
       </div>
 
-      {/* 右侧状态与数据源绑定选择器。 */}
+      {/* 右侧变量开关、状态与数据源绑定选择器。 */}
       <div className="flex items-center gap-2">
+        {onToggleVariablesPanel && (
+          <button
+            type="button"
+            className={`inline-flex h-7 items-center gap-1 rounded-md px-2 text-[11px] font-medium transition-colors ${
+              variablesPanelOpen
+                ? "bg-primary/12 text-primary"
+                : "text-neutral/70 hover:bg-base-200 hover:text-neutral"
+            }`}
+            onClick={onToggleVariablesPanel}
+            title="展开/收起右侧变量与上下文面板"
+          >
+            <Braces size={12} />
+            <span>变量</span>
+            {variableCount > 0 && (
+              <span className="rounded-full bg-primary/15 px-1.5 py-0 text-[10px] text-primary">
+                {variableCount}
+              </span>
+            )}
+          </button>
+        )}
         <span className="rounded bg-base-200 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-neutral/70">
           {queryLanguageLabel}
         </span>

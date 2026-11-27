@@ -135,5 +135,36 @@ export const salesforceDriver: DataSourceDriver = {
   hydrateSourceSecrets: (source, secretView) => ({
     ...source,
     accessToken: secretView.accessToken || ""
-  })
+  }),
+  normalizeConsoleFieldType: (rawType) => {
+    // 行内注释：将 Salesforce 字段类型归一化为控制台变量逻辑类型。
+    const base = String(rawType || "").trim().toLowerCase();
+    if (!base) return "unknown";
+    if (base === "null") return "null";
+    if (base === "boolean") return "boolean";
+    if (base === "date") return "date";
+    if (base === "datetime") return "datetime";
+    if (["int", "double", "currency", "percent", "number"].includes(base)) {
+      return "number";
+    }
+    return "string";
+  },
+  formatConsoleVariableLiteral: (value, varType) => {
+    if (value === null || value === undefined || varType === "null") return "null";
+    if (varType === "number") {
+      return String(value).trim();
+    }
+    if (varType === "boolean") {
+      if (typeof value === "boolean") return value ? "true" : "false";
+      const normalized = String(value).trim().toLowerCase();
+      return normalized === "true" || normalized === "1" ? "true" : "false";
+    }
+    if (varType === "date" || varType === "datetime") {
+      // 行内注释：SOQL 的日期与日期时间字面量不带单引号。
+      return String(value).trim();
+    }
+    // 行内注释：SOQL 字符串使用单引号包裹，并转义反斜杠与单引号。
+    const escaped = String(value).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+    return `'${escaped}'`;
+  }
 };

@@ -235,6 +235,42 @@ export const mysqlDriver: DataSourceDriver = {
       password: secretView.password || ""
     }
   }),
+  normalizeConsoleFieldType: (rawType) => {
+    // 行内注释：去除长度与无符号修饰（如 bigint(20) unsigned -> bigint），统一归类逻辑类型。
+    const base = String(rawType || "").trim().toLowerCase().split(/[\s(]/)[0];
+    if (!base) return "unknown";
+    if (base === "null") return "null";
+    if (base === "boolean" || base === "bool") return "boolean";
+    if (base === "date") return "date";
+    if (base === "datetime" || base === "timestamp") return "datetime";
+    if (["tinyint", "smallint", "mediumint", "int", "integer", "bigint", "decimal", "numeric", "newdecimal", "float", "double", "real", "year"].includes(base)) {
+      return "number";
+    }
+    if (["char", "varchar", "text", "tinytext", "mediumtext", "longtext", "enum", "set", "json", "uuid", "time"].includes(base)) {
+      return "string";
+    }
+    return "string";
+  },
+  formatConsoleVariableLiteral: (value, varType) => {
+    if (value === null || value === undefined || varType === "null") return "NULL";
+    if (varType === "number") {
+      // 行内注释：数值类型原样输出（去掉首尾空白），若为合法数字字符串直接返回。
+      return String(value).trim();
+    }
+    if (varType === "boolean") {
+      if (typeof value === "boolean") return value ? "TRUE" : "FALSE";
+      const normalized = String(value).trim().toLowerCase();
+      return normalized === "true" || normalized === "1" ? "TRUE" : "FALSE";
+    }
+    // 行内注释：MySQL 字符串与日期时间均使用单引号包裹，并转义反斜杠与单引号防注入。
+    const escaped = String(value)
+      .replace(/\\/g, "\\\\")
+      .replace(/'/g, "\\'")
+      .replace(/\0/g, "\\0")
+      .replace(/\n/g, "\\n")
+      .replace(/\r/g, "\\r");
+    return `'${escaped}'`;
+  },
   defaultTreeGroups: [
     { groupType: "tables", label: "tables" },
     { groupType: "views", label: "views" },

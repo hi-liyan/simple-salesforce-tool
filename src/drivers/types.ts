@@ -10,6 +10,9 @@ import type {
 } from "../types/index.ts";
 import type { QueryLanguage } from "../components/codemirror/sqlCompletion.ts";
 
+// 控制台变量统一逻辑类型：用于跨数据源约束校验与字面量安全格式化。
+export type ConsoleVariableLogicalType = "string" | "number" | "boolean" | "date" | "datetime" | "null" | "unknown";
+
 // DataGrid 字段策略类型。
 export type GridFieldStrategy = "picklist" | "date" | "datetime" | "number" | "boolean" | "text";
 
@@ -180,6 +183,10 @@ export interface DataSourceDriver {
   connectionSchema: DriverConnectionSchema;
   // 为设置页按需水合敏感凭证视图。
   hydrateSourceSecrets: (source: SalesforceSource, secretView: SourceSecretView) => SalesforceSource;
+  // 将底层字段类型字符串归一化为统一控制台变量逻辑类型。
+  normalizeConsoleFieldType?: (rawType: string) => ConsoleVariableLogicalType;
+  // 按数据源方言安全格式化控制台变量字面量（防注入转义与引号规则）。
+  formatConsoleVariableLiteral?: (value: unknown, varType: ConsoleVariableLogicalType) => string;
   // 数据源树默认分组（兼容旧字段，优先读取 treeConfig.groups）。
   defaultTreeGroups?: { groupType: string; label: string }[];
 }

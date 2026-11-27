@@ -31,6 +31,7 @@ pub async fn execute_guarded_query(
     confirmed: Option<bool>,
     query_id: Option<String>,
     session_id: Option<String>,
+    raw_sql: Option<String>,
 ) -> Result<GuardedQueryResponse, String> {
     let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
     if let Some(qid) = query_id.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
@@ -40,9 +41,10 @@ pub async fn execute_guarded_query(
     }
 
     let svc = QueryService::new(&state.storage, &state.driver_registry);
-    let fut = svc.execute_guarded_query_with_session(
+    let fut = svc.execute_guarded_query_with_session_and_raw(
         &source_id,
         &query_text,
+        raw_sql.as_deref(),
         object_name.as_deref(),
         confirmed.unwrap_or(false),
         session_id.as_deref(),

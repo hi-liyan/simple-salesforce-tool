@@ -80,6 +80,32 @@ impl<'a> QueryService<'a> {
         confirmed: bool,
         session_id: Option<&str>,
     ) -> Result<GuardedQueryResponse, AppError> {
+        self.execute_guarded_query_with_session_and_raw(
+            source_id,
+            query_text,
+            None,
+            object_name,
+            confirmed,
+            session_id,
+        )
+        .await
+    }
+
+    /// 执行受安全网关保护的查询（支持会话事务绑定与原始占位符模板审计），并强制记录 `sql_execution_audit`。
+    pub async fn execute_guarded_query_with_session_and_raw(
+        &self,
+        source_id: &str,
+        query_text: &str,
+        raw_sql: Option<&str>,
+        object_name: Option<&str>,
+        confirmed: bool,
+        session_id: Option<&str>,
+    ) -> Result<GuardedQueryResponse, AppError> {
+        // 行内注释：若未显式传入带占位符的原始模板，则以实际执行文本作为审计 raw_sql。
+        let audit_raw_sql = raw_sql
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(query_text);
         let source = SourceService::new(self.storage).get_runtime_source(source_id)?;
         let driver = self.driver_registry.get(&source.source_type)?;
         let environment = source
@@ -115,7 +141,7 @@ impl<'a> QueryService<'a> {
                     source_name: source.name.clone(),
                     environment,
                     operation_source: "console".to_string(),
-                    raw_sql: query_text.to_string(),
+                    raw_sql: audit_raw_sql.to_string(),
                     executed_sql: String::new(),
                     statement_type: statement_type.clone(),
                     risk_level: "blocked".to_string(),
@@ -185,7 +211,7 @@ impl<'a> QueryService<'a> {
                             source_name: source.name.clone(),
                             environment,
                             operation_source: "console".to_string(),
-                            raw_sql: query_text.to_string(),
+                            raw_sql: audit_raw_sql.to_string(),
                             executed_sql: query_text.to_string(),
                             statement_type: statement_type.clone(),
                             risk_level: risk_text.to_string(),
@@ -211,7 +237,7 @@ impl<'a> QueryService<'a> {
                             source_name: source.name.clone(),
                             environment,
                             operation_source: "console".to_string(),
-                            raw_sql: query_text.to_string(),
+                            raw_sql: audit_raw_sql.to_string(),
                             executed_sql: query_text.to_string(),
                             statement_type: statement_type.clone(),
                             risk_level: risk_text.to_string(),

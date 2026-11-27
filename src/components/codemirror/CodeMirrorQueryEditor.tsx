@@ -10,6 +10,8 @@ import {
   type DecorationSet,
   EditorView,
   GutterMarker,
+  ViewPlugin,
+  type ViewUpdate,
   drawSelection,
   gutter,
   highlightActiveLine,
@@ -19,6 +21,7 @@ import {
   lineNumbers,
   placeholder as cmPlaceholder
 } from "@codemirror/view";
+import { scanSqlPlaceholders } from "../../features/main/QueryPanel/logic/consoleVariables";
 import { api } from "../../api";
 import {
   createSqlCompletionSource,
@@ -301,6 +304,12 @@ const dbxLightTheme = EditorView.theme({
     backgroundColor: "rgba(22, 163, 74, 0.10)",
     borderRadius: "2px"
   },
+  ".cm-console-var-placeholder": {
+    color: "#b45309",
+    backgroundColor: "rgba(245, 158, 11, 0.14)",
+    borderRadius: "3px",
+    fontWeight: "500"
+  },
   ".cm-tooltip-autocomplete": {
     border: "1px solid #cbd5e1",
     borderRadius: "8px",
@@ -376,7 +385,11 @@ export function CodeMirrorQueryEditor({
         const text = view.state.doc.toString();
         if (!text.trim()) return [];
         try {
-          const diagnostics = await api.diagnoseSql(text, "mysql");
+          // 行内注释：送入 AST 语法诊断前将 #{varName} 替换为等长占位数字，避免误报语法红线。
+          const sanitizedText = text.replace(/#\{\s*[A-Za-z_][A-Za-z0-9_]*\s*\}/g, (match) =>
+            "1".padEnd(match.length, " ")
+          );
+          const diagnostics = await api.diagnoseSql(sanitizedText, "mysql");
           const doc = view.state.doc;
           return diagnostics.map((item) => {
             const lineNum = Math.min(Math.max(1, item.line), doc.lines);
@@ -478,6 +491,37 @@ export function CodeMirrorQueryEditor({
       }
     });
 
+    // 占位符高亮插件：实时标注 #{varName}，跳过注释与字符串字面量。
+    const placeholderHighlightPlugin = ViewPlugin.fromClass(
+      class {
+        decorations: DecorationSet;
+        constructor(view: EditorView) {
+          this.decorations = buildPlaceholderDecorations(view.state.doc.toString());
+        }
+        update(update: ViewUpdate) {
+          if (update.docChanged) {
+            this.decorations = buildPlaceholderDecorations(update.state.doc.toString());
+          }
+        }
+      },
+      {
+        decorations: (plugin) => plugin.decorations
+      }
+    );
+
+    function buildPlaceholderDecorations(docText: string): DecorationSet {
+      const builder = new RangeSetBuilder<Decoration>();
+      const occurrences = scanSqlPlaceholders(docText);
+      for (const occ of occurrences) {
+        builder.add(
+          occ.from,
+          occ.to,
+          Decoration.mark({ class: "cm-console-var-placeholder" })
+        );
+      }
+      return builder.finish();
+    }
+
     const state = EditorState.create({
       doc: value,
       extensions: [
@@ -492,6 +536,7 @@ export function CodeMirrorQueryEditor({
         syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
         dbxLightTheme,
         hoverStatementHighlightField,
+        placeholderHighlightPlugin,
         lintGutter(),
         astLinter,
         schemaHover,
