@@ -185,3 +185,28 @@ test("buildMysqlMutationPlan: 更新预览应显式标记 DEFAULT 字段写入",
   assert.deepEqual(plan.updates, [{ recordId: "1", values: { status: createMysqlDraftDefaultValue() } }]);
   assert.deepEqual(plan.previewItems[0]?.fields, [{ name: "status", kind: "default", value: "DEFAULT" }]);
 });
+
+test("buildMysqlMutationPlan: 修改非自增主键列时应保留新主键值到 SET，并使用基线旧主键值定位", () => {
+  const plan = buildMysqlMutationPlan({
+    records: [
+      {
+        __rowStableId: "mysql:DRIVER_ID:old-uuid",
+        __baselineKey: "mysql:DRIVER_ID:old-uuid",
+        DRIVER_ID: createMysqlDraftValue("new-uuid"),
+        USERNAME: "alice"
+      }
+    ],
+    baselineRecords: {
+      "mysql:DRIVER_ID:old-uuid": { DRIVER_ID: "old-uuid", USERNAME: "alice" }
+    },
+    dirtyCellKeys: ["mysql:DRIVER_ID:old-uuid:DRIVER_ID"],
+    pendingDeleteRecordIds: [],
+    editableFields: new Set(["DRIVER_ID", "USERNAME"]),
+    sourceType: "mysql",
+    mysqlPrimaryKeyField: "DRIVER_ID"
+  });
+
+  assert.deepEqual(plan.updates, [{ recordId: "old-uuid", values: { DRIVER_ID: "new-uuid" } }]);
+  assert.equal(plan.previewItems[0]?.rowLocator, "old-uuid");
+  assert.deepEqual(plan.previewItems[0]?.fields, [{ name: "DRIVER_ID", kind: "value", value: "new-uuid" }]);
+});

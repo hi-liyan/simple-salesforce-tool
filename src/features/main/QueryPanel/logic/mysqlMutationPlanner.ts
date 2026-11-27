@@ -50,9 +50,9 @@ export type MysqlMutationPlan = {
   missingRecordIdRows: number[];
 };
 
-// 判断字段是否为内部运行时字段。
+// 判断字段是否为内部运行时字段；仅排除双下划线开头的元信息字段，真实列白名单由 editableFields 控制。
 function isInternalField(fieldName: string): boolean {
-  return fieldName.startsWith("__") || fieldName === "Id";
+  return fieldName.startsWith("__");
 }
 
 // 将单个字段值转换成提交语义：omit=跳过，null/value=保留到 payload。
@@ -193,7 +193,7 @@ export function buildMysqlMutationPlan({
       if (splitIndex < 0) return;
       const key = cellKey.slice(0, splitIndex);
       const field = cellKey.slice(splitIndex + 1);
-      if (key !== stableRecordKey || field === "Id" || !editableFields.has(field)) return;
+      if (key !== stableRecordKey || isInternalField(field) || !editableFields.has(field)) return;
       dirtyFields.push(field);
     });
 

@@ -99,10 +99,9 @@ fn infer_mysql_field_write_capability(
     } else {
         None
     };
+    // 仅生成列与自增列禁止更新；普通主键列允许编辑，提交时按基线原始主键值定位行。
     let update_readonly_reason = if is_generated {
         Some("是生成列，值由数据库表达式维护。".to_string())
-    } else if is_primary_key {
-        Some("是主键列，提交时仅作为行定位条件，不能直接更新。".to_string())
     } else if is_auto_increment {
         Some("是自增列，更新时不可手工改写。".to_string())
     } else {
@@ -1447,13 +1446,14 @@ fn normalize_create_values(
     values
 }
 
-/// 归一化更新字段：移除前端兼容字段 Id 和主键本身。
+/// 归一化更新字段：仅在真实主键名不是 Id 时移除前端兼容字段 Id，保留真实主键列以便更新主键值。
 fn normalize_update_values(
     mut values: HashMap<String, Value>,
     primary_key: &str,
 ) -> HashMap<String, Value> {
-    values.remove("Id");
-    values.remove(primary_key);
+    if primary_key != "Id" {
+        values.remove("Id");
+    }
     values
 }
 
@@ -2523,11 +2523,11 @@ mod tests {
     }
 
     #[test]
-    fn build_update_preview_sql_skips_primary_key_and_id_fields() {
+    fn build_update_preview_sql_keeps_primary_key_and_skips_virtual_id_field() {
         let normalized = normalize_update_values(
             build_values(&[
                 ("Id", json!("A-100")),
-                ("order_id", json!("A-100")),
+                ("order_id", json!("A-101")),
                 ("status", json!("DONE")),
             ]),
             "order_id",
@@ -2538,7 +2538,7 @@ mod tests {
 
         assert_eq!(
             sql,
-            "UPDATE `orders` SET `status` = 'DONE' WHERE `order_id` = 'A-100';"
+            "UPDATE `orders` SET `order_id` = 'A-101', `status` = 'DONE' WHERE `order_id` = 'A-100';"
         );
     }
 
@@ -2555,7 +2555,7 @@ mod tests {
     #[test]
     fn build_update_preview_sql_returns_none_when_no_mutable_fields() {
         let normalized = normalize_update_values(
-            build_values(&[("Id", json!("A-100")), ("order_id", json!("A-100"))]),
+            build_values(&[("Id", json!("A-100"))]),
             "order_id",
         );
         let sql = build_update_preview_sql("orders", "order_id", "A-100", normalized)
@@ -2680,13 +2680,26 @@ mod tests {
     }
 
     #[test]
-    fn infer_mysql_field_write_capability_disables_primary_key_update() {
+    fn infer_mysql_field_write_capability_allows_non_auto_increment_primary_key_update() {
         let capability = infer_mysql_field_write_capability("PRI", "", None);
 
         assert_eq!(capability.createable, true);
-        assert_eq!(capability.updateable, false);
+        assert_eq!(capability.updateable, true);
+        assert_eq!(capability.update_readonly_reason, None);
         assert_eq!(capability.defaulted_on_create, false);
         assert_eq!(capability.is_primary_key, true);
+    }
+
+    #[test]
+    fn infer_mysql_field_write_capability_disables_auto_increment_primary_key_update() {
+        let capability = infer_mysql_field_write_capability("PRI", "auto_increment", None);
+
+        assert_eq!(capability.createable, false);
+        assert_eq!(capability.updateable, false);
+        assert!(capability.update_readonly_reason.is_some());
+        assert_eq!(capability.defaulted_on_create, true);
+        assert_eq!(capability.is_primary_key, true);
+        assert_eq!(capability.is_auto_increment, true);
     }
 
     #[test]
