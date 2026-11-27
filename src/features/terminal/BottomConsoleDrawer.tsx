@@ -6,7 +6,6 @@ import {
   Maximize2,
   Minimize2,
   Shield,
-  TerminalSquare,
   X
 } from "lucide-react";
 import { api } from "../../api";
@@ -236,12 +235,7 @@ export function BottomConsoleDrawer({ open, onClose, onOpen }: BottomConsoleDraw
 
       {/* 顶部 Tab 栏与 VSCode 风格操作按钮区。 */}
       <div className="flex h-9 shrink-0 items-center justify-between border-b border-base-300/80 bg-base-200/35 px-2">
-        <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
-          <div className="flex shrink-0 items-center gap-1 rounded-md bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary">
-            <TerminalSquare size={12} />
-            <span>终端</span>
-          </div>
-
+        <div className="flex min-w-0 flex-1 items-center overflow-hidden">
           <div className="min-w-0 flex-1 overflow-x-auto">
             <ReusableTabs
               tabs={orderedTabs.map((tab) => {
