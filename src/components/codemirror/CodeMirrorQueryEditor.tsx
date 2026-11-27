@@ -31,8 +31,29 @@ import {
   type SqlStatementRange
 } from "./sqlCompletion";
 
+// 语句执行状态类型：用于左侧 Gutter 展示每条语句的当前执行进度与结果。
+export type StatementExecutionStatus = "idle" | "running" | "success" | "error";
+
 // 语句悬停高亮范围 StateEffect：鼠标悬停 Gutter ▶ 按钮时高亮对应语句范围。
 const setHoverStatementRangeEffect = StateEffect.define<{ from: number; to: number } | null>();
+
+// 语句执行状态映射 StateEffect：由外部受控同步每条语句的执行状态。
+const setStatementStatusesEffect = StateEffect.define<Record<number, StatementExecutionStatus>>();
+
+// 语句执行状态 StateField：供 GutterMarker 读取当前每条语句的状态。
+const statementStatusesField = StateField.define<Record<number, StatementExecutionStatus>>({
+  create() {
+    return {};
+  },
+  update(value, tr) {
+    for (const effect of tr.effects) {
+      if (effect.is(setStatementStatusesEffect)) {
+        return effect.value;
+      }
+    }
+    return value;
+  }
+});
 
 // 语句悬停高亮 StateField：管理编辑器内当前悬停语句的 DecorationSet。
 const hoverStatementHighlightField = StateField.define<DecorationSet>({
@@ -60,14 +81,20 @@ const hoverStatementHighlightField = StateField.define<DecorationSet>({
   provide: (field) => EditorView.decorations.from(field)
 });
 
-// 左侧按条执行按钮 Marker：在每条 SQL 语句起始行渲染小型 ▶ 按钮。
+// 左侧按条执行按钮 Marker：在每条 SQL 语句起始行渲染状态图标（▶ / loading / ✔ / ✘）。
 class StatementRunGutterMarker extends GutterMarker {
   private readonly statement: SqlStatementRange;
+  private readonly status: StatementExecutionStatus;
   private readonly onExecute: (sql: string, statement: SqlStatementRange) => void;
 
-  constructor(statement: SqlStatementRange, onExecute: (sql: string, statement: SqlStatementRange) => void) {
+  constructor(
+    statement: SqlStatementRange,
+    status: StatementExecutionStatus,
+    onExecute: (sql: string, statement: SqlStatementRange) => void
+  ) {
     super();
     this.statement = statement;
+    this.status = status;
     this.onExecute = onExecute;
   }
 
@@ -76,18 +103,42 @@ class StatementRunGutterMarker extends GutterMarker {
       other instanceof StatementRunGutterMarker &&
       other.statement.from === this.statement.from &&
       other.statement.to === this.statement.to &&
-      other.statement.sql === this.statement.sql
+      other.statement.sql === this.statement.sql &&
+      other.status === this.status
     );
   }
 
   toDOM(view: EditorView): HTMLElement {
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.className = "cm-statement-run-btn";
-    btn.title = `执行第 ${this.statement.index + 1} 条语句`;
-    btn.setAttribute("aria-label", `执行第 ${this.statement.index + 1} 条语句`);
-    btn.innerHTML =
-      '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="display:block" aria-hidden="true"><polygon points="6,3 20,12 6,21"></polygon></svg>';
+    btn.className = `cm-statement-run-btn cm-statement-status-${this.status}`;
+
+    if (this.status === "running") {
+      // 行内注释：当前语句正在执行，渲染旋转加载图标。
+      btn.title = `正在执行第 ${this.statement.index + 1} 条语句...`;
+      btn.setAttribute("aria-label", `正在执行第 ${this.statement.index + 1} 条语句`);
+      btn.disabled = true;
+      btn.innerHTML =
+        '<svg class="cm-statement-spinner" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" style="display:block" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg>';
+    } else if (this.status === "success") {
+      // 行内注释：当前语句执行成功，渲染绿色对勾。
+      btn.title = `第 ${this.statement.index + 1} 条语句执行成功，点击重新执行`;
+      btn.setAttribute("aria-label", `第 ${this.statement.index + 1} 条语句执行成功`);
+      btn.innerHTML =
+        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" style="display:block" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+    } else if (this.status === "error") {
+      // 行内注释：当前语句执行失败，渲染红叉。
+      btn.title = `第 ${this.statement.index + 1} 条语句执行失败，点击重新执行`;
+      btn.setAttribute("aria-label", `第 ${this.statement.index + 1} 条语句执行失败`);
+      btn.innerHTML =
+        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" style="display:block" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
+    } else {
+      // 行内注释：默认待执行状态，渲染绿色播放三角。
+      btn.title = `执行第 ${this.statement.index + 1} 条语句`;
+      btn.setAttribute("aria-label", `执行第 ${this.statement.index + 1} 条语句`);
+      btn.innerHTML =
+        '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="display:block" aria-hidden="true"><polygon points="6,3 20,12 6,21"></polygon></svg>';
+    }
 
     btn.addEventListener("mouseenter", () => {
       view.dispatch({
@@ -112,6 +163,7 @@ class StatementRunGutterMarker extends GutterMarker {
     btn.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
+      if (this.status === "running") return;
       view.dispatch({
         effects: setHoverStatementRangeEffect.of(null)
       });
@@ -137,6 +189,8 @@ export type CodeMirrorQueryEditorProps = {
   onExecuteCurrent?: () => void;
   // 快捷键触发执行全部语句（Ctrl/Cmd + Shift + Enter）。
   onExecuteAll?: () => void;
+  // 每条语句的执行状态映射（按语句索引）。
+  statementStatuses?: Record<number, StatementExecutionStatus>;
   // 占位提示文本。
   placeholder?: string;
   // 容器高度。
@@ -217,6 +271,30 @@ const dbxLightTheme = EditorView.theme({
     backgroundColor: "rgba(22, 163, 74, 0.14)",
     transform: "scale(1.06)"
   },
+  ".cm-statement-status-running": {
+    color: "#0284c7",
+    cursor: "wait"
+  },
+  ".cm-statement-status-running:hover": {
+    backgroundColor: "rgba(2, 132, 199, 0.12)",
+    transform: "none"
+  },
+  ".cm-statement-status-success": {
+    color: "#16a34a"
+  },
+  ".cm-statement-status-error": {
+    color: "#dc2626"
+  },
+  ".cm-statement-status-error:hover": {
+    backgroundColor: "rgba(220, 38, 38, 0.12)"
+  },
+  "@keyframes cm-statement-spin": {
+    from: { transform: "rotate(0deg)" },
+    to: { transform: "rotate(360deg)" }
+  },
+  ".cm-statement-spinner": {
+    animation: "cm-statement-spin 0.9s linear infinite"
+  },
   ".cm-statement-hover-highlight": {
     backgroundColor: "rgba(22, 163, 74, 0.10)",
     borderRadius: "2px"
@@ -242,6 +320,7 @@ export function CodeMirrorQueryEditor({
   onExecuteStatement,
   onExecuteCurrent,
   onExecuteAll,
+  statementStatuses = {},
   placeholder = "",
   height = "220px",
   fieldNames = [],
@@ -363,23 +442,31 @@ export function CodeMirrorQueryEditor({
       };
     });
 
-    // 左侧按条执行 Gutter：扫描每条有效 SQL/SOQL 语句并在起始行渲染 ▶ 按钮。
+    // 左侧按条执行 Gutter：扫描每条有效 SQL/SOQL 语句并在起始行渲染状态图标按钮。
     const statementRunGutter = gutter({
       class: "cm-statement-run-gutter",
+      lineMarkerChange(update) {
+        return (
+          update.docChanged ||
+          update.transactions.some((tr) => tr.effects.some((effect) => effect.is(setStatementStatusesEffect)))
+        );
+      },
       markers(view) {
         if (!onExecuteStatementRef.current) return new RangeSetBuilder<GutterMarker>().finish();
         const builder = new RangeSetBuilder<GutterMarker>();
         const doc = view.state.doc;
+        const statuses = view.state.field(statementStatusesField);
         const statements = splitSqlStatementsWithRanges(doc.toString());
         let lastLineFrom = -1;
         for (const stmt of statements) {
           const line = doc.lineAt(Math.min(stmt.from, doc.length));
           if (line.from === lastLineFrom) continue; // 同一行多条语句仅在首条渲染一次执行按钮。
           lastLineFrom = line.from;
+          const status = statuses[stmt.index] ?? "idle";
           builder.add(
             line.from,
             line.from,
-            new StatementRunGutterMarker(stmt, (sql, statement) => {
+            new StatementRunGutterMarker(stmt, status, (sql, statement) => {
               onExecuteStatementRef.current?.(sql, statement);
             })
           );
@@ -391,6 +478,7 @@ export function CodeMirrorQueryEditor({
     const state = EditorState.create({
       doc: value,
       extensions: [
+        statementStatusesField,
         statementRunGutter,
         lineNumbers(),
         highlightActiveLineGutter(),
@@ -506,6 +594,15 @@ export function CodeMirrorQueryEditor({
       )
     });
   }, [placeholder]);
+
+  // 同步外部传入的每条语句执行状态，触发 Gutter 图标刷新。
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({
+      effects: setStatementStatusesEffect.of(statementStatuses)
+    });
+  }, [statementStatuses]);
 
   return (
     <div

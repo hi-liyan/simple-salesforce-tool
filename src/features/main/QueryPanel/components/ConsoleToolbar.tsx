@@ -225,39 +225,32 @@ export function ConsoleToolbar({
               </select>
             </div>
 
-            {/* Commit 提交事务按钮。 */}
-            <button
-              type="button"
-              className={`inline-flex h-7 items-center gap-1 rounded-md px-2 text-[11px] font-medium transition-colors ${
-                inTransaction
-                  ? "bg-emerald-500/12 text-emerald-700 hover:bg-emerald-500/20"
-                  : "cursor-not-allowed text-neutral/35"
-              }`}
-              disabled={!inTransaction || loading || transactionBusy}
-              title="提交当前事务 (COMMIT)"
-              aria-label="提交事务"
-              onClick={onCommitTransaction}
-            >
-              <Check size={13} />
-              <span>Commit</span>
-            </button>
+            {/* Commit / Rollback 事务控制按钮：仅在存在未提交事务时按纯 Icon 按钮展示。 */}
+            {inTransaction && (
+              <>
+                <button
+                  type="button"
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-emerald-500/12 text-emerald-700 transition-colors hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                  disabled={loading || transactionBusy}
+                  title="提交当前事务 (COMMIT)"
+                  aria-label="提交事务"
+                  onClick={onCommitTransaction}
+                >
+                  <Check size={14} />
+                </button>
 
-            {/* Rollback 回滚事务按钮。 */}
-            <button
-              type="button"
-              className={`inline-flex h-7 items-center gap-1 rounded-md px-2 text-[11px] font-medium transition-colors ${
-                inTransaction
-                  ? "bg-amber-500/12 text-amber-700 hover:bg-amber-500/20"
-                  : "cursor-not-allowed text-neutral/35"
-              }`}
-              disabled={!inTransaction || loading || transactionBusy}
-              title="回滚当前事务 (ROLLBACK)"
-              aria-label="回滚事务"
-              onClick={onRollbackTransaction}
-            >
-              <Undo2 size={13} />
-              <span>Rollback</span>
-            </button>
+                <button
+                  type="button"
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-amber-500/12 text-amber-700 transition-colors hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                  disabled={loading || transactionBusy}
+                  title="回滚当前事务 (ROLLBACK)"
+                  aria-label="回滚事务"
+                  onClick={onRollbackTransaction}
+                >
+                  <Undo2 size={14} />
+                </button>
+              </>
+            )}
 
             {/* 未提交语句列表（Transaction Log）徽标与弹层。 */}
             {inTransaction && (
